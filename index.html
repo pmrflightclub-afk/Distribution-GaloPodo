@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1f6f54" />
+  <title>GaloPodo</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🐴 GaloPodo</div>
+    <div class="chips">
+      <div class="fuel-chip" id="fuelChip" title="Prix du dernier plein (TVAC)">⛽ —</div>
+      <div class="fuel-chip" id="consoChip" title="Consommation moyenne">🚗 —</div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="accueil">Accueil</button>
+    <button class="tab" data-tab="clients">Clients</button>
+    <button class="tab" data-tab="tournees">Tournées</button>
+    <button class="tab" data-tab="calcul">Calcul</button>
+    <button class="tab" data-tab="reglages">Réglages</button>
+  </nav>
+
+  <!-- ============ ACCUEIL ============ -->
+  <main id="tab-accueil" class="tab-panel active">
+    <div class="actions"><button class="btn primary block big" id="btnNewTour">➕ Créer une tournée</button></div>
+    <section class="card">
+      <h2>Aujourd'hui &amp; à venir</h2>
+      <div id="homeTours" class="list"></div>
+      <p class="empty" id="homeToursEmpty">Aucune tournée active ou à venir.</p>
+    </section>
+    <div class="actions two">
+      <button class="btn" id="btnVehicule">🚗 Véhicule</button>
+      <button class="btn" data-goto="calcul">❓ Comment ça marche</button>
+    </div>
+  </main>
+
+  <!-- ============ CLIENTS ============ -->
+  <main id="tab-clients" class="tab-panel">
+    <div class="actions"><button class="btn primary block" id="btnNewClient">➕ Nouveau client</button></div>
+    <section class="card"><div id="clientsList" class="list"></div><p class="empty" id="clientsEmpty">Aucun client. Créez-en un.</p></section>
+  </main>
+
+  <!-- ============ TOURNÉES ============ -->
+  <main id="tab-tournees" class="tab-panel">
+    <div class="actions"><button class="btn primary block" id="btnNewTour2">➕ Créer une tournée</button></div>
+    <section class="card"><div id="toursList" class="list"></div><p class="empty" id="toursEmpty">Aucune tournée enregistrée.</p></section>
+  </main>
+
+  <!-- ============ TOURNÉE (page unique) ============ -->
+  <main id="tab-editeur" class="tab-panel">
+    <div class="editor-head"><button class="btn small" id="edBack">← Retour</button><span id="edTitle">Tournée</span><span class="badge" id="edStatusBadge"></span></div>
+    <p class="banner hidden" id="edLockBanner">🔒 Tournée clôturée — non modifiable.</p>
+
+    <section class="card">
+      <label>Date de la tournée<input type="date" id="edDate" /></label>
+      <p class="hint" id="edHome"></p>
+    </section>
+
+    <section class="card">
+      <div class="tiles">
+        <div class="tile"><span class="t-label">Km total (boucle)</span><span class="t-val" id="rKm">—</span></div>
+        <div class="tile"><span class="t-label">Durée estimée</span><span class="t-val" id="rMin">—</span></div>
+        <div class="tile"><span class="t-label">Total HT</span><span class="t-val" id="rHT">—</span></div>
+        <div class="tile"><span class="t-label">TVA</span><span class="t-val" id="rTVA">—</span></div>
+        <div class="tile strong"><span class="t-label">Total TTC</span><span class="t-val" id="rTTC">—</span></div>
+        <div class="tile"><span class="t-label">Marge / carburant</span><span class="t-val" id="rMarge">—</span></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Arrêts</h2><button class="btn small" id="edAddArret">+ Ajouter</button></div>
+      <div id="edArrets" class="arrets"></div>
+      <p class="empty" id="edArretsEmpty">Ajoutez un arrêt (par client ou par cheval).</p>
+      <p class="hint">Glissez la poignée ⠿ à gauche pour changer l'ordre des arrêts.</p>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Carte du trajet</h2><span><button class="btn small" id="edReloc">↻ Re-localiser</button> <button class="btn small" id="edMapBtn">Afficher la carte</button></span></div>
+      <div id="edMap" class="map"></div>
+      <p class="hint" id="edMapHint">Départ/retour 🏠 (domicile du pro) + arrêts numérotés dans l'ordre + tracé.</p>
+    </section>
+
+    <section class="card">
+      <h2>Répartition — facture <span class="live-dot" id="edLive" title="Mis à jour automatiquement">●</span></h2>
+      <div id="edInvoice"></div>
+      <p class="empty" id="edInvoiceEmpty">Ajoutez des arrêts pour voir la répartition.</p>
+      <div class="actions two"><button class="btn" id="copyBtn">Copier le récap</button><button class="btn" id="smsBtn">Partager</button></div>
+      <p class="hint">Le document copié/partagé est <b>anonymisé</b> (ni noms, ni adresses, ni chevaux) — chaque client ne voit que la répartition des montants.</p>
+    </section>
+
+    <div class="actions"><button class="btn primary block" id="edCalc" style="display:none">Calculer</button>
+      <p class="hint" style="text-align:center">🔄 Les frais se recalculent et s'enregistrent automatiquement à chaque changement.</p></div>
+    <p class="status" id="edStatus"></p>
+    <div class="actions"><button class="btn danger block" id="edDelete">Supprimer cette tournée</button></div>
+  </main>
+
+  <!-- ============ CALCUL ============ -->
+  <main id="tab-calcul" class="tab-panel"><div id="calculBody"></div></main>
+
+  <!-- ============ RÉGLAGES ============ -->
+  <main id="tab-reglages" class="tab-panel">
+    <section class="card">
+      <h2>Point de départ (domicile / base)</h2>
+      <div id="homeAddr"></div>
+      <button class="btn small" id="geocodeHome">Localiser cette adresse</button>
+      <p class="hint" id="homeGeoHint"></p>
+    </section>
+
+    <section class="card">
+      <h2>Véhicule &amp; carburant</h2>
+      <div class="row">
+        <label class="grow">Consommation (L / 100 km)<input type="number" id="setConso" step="0.1" min="0" /></label>
+        <label class="grow">Prix du dernier plein (€/L, TVAC)<input type="number" id="setPrixPlein" step="0.01" min="0" /></label>
+      </div>
+      <p class="hint" id="pleinBreakdown"></p>
+      <label>Taux de TVA (%)<input type="number" id="setTva" step="0.1" min="0" /></label>
+      <p class="hint">Prix du plein = TVAC (TVA incluse). Carburant HT/km = (conso ÷ 100) × prix ÷ (1 + TVA) = <b id="fuelPerKm">—</b>.</p>
+    </section>
+
+    <section class="card">
+      <h2>Tarifs par type — HTVA (indicatifs)</h2>
+      <div class="table-wrap"><table id="tarifTable">
+        <thead><tr><th>Type</th><th>Véhicule HT</th><th>Carburant HT</th><th>Tarif HT</th><th>TTC</th></tr></thead>
+        <tbody>
+          <tr><td>Tournée</td><td><input type="number" id="vehTournee" step="0.001" min="0" /></td><td id="fuelTournee">—</td><td id="totTournee" class="strong">—</td><td id="ttcTournee">—</td></tr>
+          <tr><td>Visite</td><td><input type="number" id="vehVisite" step="0.001" min="0" /></td><td id="fuelVisite">—</td><td id="totVisite" class="strong">—</td><td id="ttcVisite">—</td></tr>
+          <tr><td>Urgence</td><td><input type="number" id="vehUrgence" step="0.001" min="0" /></td><td id="fuelUrgence">—</td><td id="totUrgence" class="strong">—</td><td id="ttcUrgence">—</td></tr>
+        </tbody>
+      </table></div>
+      <p class="hint">Seule la part <b>véhicule</b> (HT) est fixe. Le carburant HT se recalcule à chaque plein. Le TTC = tarif HT × (1 + TVA).</p>
+    </section>
+
+    <section class="card">
+      <h2>Client proche &amp; répartition</h2>
+      <label>Répartition du kilométrage
+        <select id="setRepartition">
+          <option value="egal">Parts égales entre arrêts (équitable — défaut)</option>
+          <option value="prorata">Au prorata du segment</option>
+          <option value="parclient">Par client + seuil « client proche »</option>
+        </select>
+      </label>
+      <div class="row">
+        <label class="grow" id="lblSeuil">Seuil « client proche » (km)<input type="number" id="setSeuil" step="1" min="0" /></label>
+        <label class="grow" id="lblForfait">Forfait client proche (€ HT)<input type="number" id="setForfait" step="0.01" min="0" /></label>
+      </div>
+      <p class="hint" id="forfaitBreakdown"></p>
+      <p class="hint" id="seuilNote"></p>
+      <label>Rayon « même écurie » (km)<input type="number" id="setRayon" step="0.1" min="0" /></label>
+      <p class="hint">Le rayon signale deux arrêts très proches (même écurie ?).</p>
+    </section>
+
+    <section class="card">
+      <h2>Service de cartographie</h2>
+      <label>Fournisseur
+        <select id="setProvider">
+          <option value="osm">OpenStreetMap public (sans clé, usage léger)</option>
+          <option value="geoapify">Geoapify (avec clé, suggestions + quota)</option>
+        </select>
+      </label>
+      <label id="keyRow">Clé API Geoapify<input type="text" id="setKey" placeholder="Collez votre clé Geoapify" /></label>
+    </section>
+    <p class="status ok">Réglages enregistrés automatiquement. · <span id="appVersion"></span></p>
+  </main>
+
+  <div id="modal" class="modal-overlay hidden"><div class="modal" id="modalBox"></div></div>
+  <script src="app.js"></script>
+</body>
+</html>
