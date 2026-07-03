@@ -1,37 +1,34 @@
-# Déploiement — app installable + mises à jour auto
+# Déploiement — GaloPodo (installable + mises à jour auto)
 
-L'app est un site statique autonome (ce dossier). On l'héberge sur **GitHub Pages** (gratuit),
-on l'installe sur le téléphone/tablette via **« Ajouter à l'écran d'accueil »**, et elle
-**vérifie une nouvelle version au lancement**.
+Site statique autonome (ce dossier), hébergé sur **GitHub Pages** (gratuit), installable en PWA,
+avec **vérification de nouvelle version au lancement**.
 
-## 1. Créer le dépôt (une seule fois)
+Dépôt de distribution : **`pmrflightclub-afk/Distribution-GaloPodo`** (public).
 
-1. Sur GitHub : **New repository** → nom au choix (ex. `frais-tournee`) → **Public** → *sans* README.
-2. Donne-moi l'URL (ex. `https://github.com/tonpseudo/frais-tournee`). Je pousse **uniquement**
-   le contenu de ce dossier dedans (pas le reste du projet).
+## 1. Activer GitHub Pages (à faire une fois)
 
-## 2. Activer GitHub Pages
+Repo **Distribution-GaloPodo** → **Settings → Pages** → *Build and deployment* :
+**Source = « Deploy from a branch »** → branche **`main`**, dossier **`/ (root)`** → **Save**.
+Au bout d'1–2 min : `https://pmrflightclub-afk.github.io/Distribution-GaloPodo/`.
 
-Repo → **Settings → Pages** → *Build and deployment* : **Deploy from a branch** →
-branche `main`, dossier `/ (root)` → **Save**. Au bout d'1-2 min, l'URL publique apparaît :
-`https://tonpseudo.github.io/frais-tournee/`.
+> Si le déploiement « ne se fait pas » : c'est presque toujours que la **Source n'a pas été sauvegardée**
+> (l'API `/pages` renvoie alors 404). Refaire l'étape ci-dessus et vérifier que la branche contient bien
+> `index.html` **et le dossier `icons/`** à la racine.
 
-## 3. Installer sur le téléphone / la tablette
+## 2. Installer sur téléphone / tablette
 
-Ouvre cette URL dans **Chrome (Android)** ou **Safari (iOS)** → menu → **« Ajouter à l'écran
-d'accueil »**. L'app s'ouvre ensuite plein écran, fonctionne hors-ligne.
+Ouvrir l'URL dans **Chrome (Android)** ou **Safari (iOS)** → menu → **« Ajouter à l'écran d'accueil »**.
 
-## 4. Mises à jour automatiques
+## 3. Mises à jour automatiques
 
-- Dans `app.js` : `APP_VERSION` (version installée) et `UPDATE_REPO = 'tonpseudo/frais-tournee'`.
-- Au lancement, l'app interroge `releases/latest` du dépôt. Si la release est **plus récente**
-  que `APP_VERSION`, elle **purge le cache et recharge** (mise à jour) ; sinon elle **s'ouvre
-  normalement** (et si hors-ligne, elle s'ouvre normalement aussi).
+- Dans `app.js` : `APP_VERSION` (version installée) et `UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'`.
+- Au lancement, l'app interroge `releases/latest`. Si la release est **plus récente** que `APP_VERSION`,
+  elle **purge le cache et recharge** ; sinon ouverture normale (hors-ligne compris).
 
 ### Publier une nouvelle version
-1. Bump `APP_VERSION` (ex. `1.0.1`) + modifs.
-2. Push sur `main`.
-3. GitHub → **Releases → Draft a new release** → tag `v1.0.1` → **Publish**.
+1. Bump `APP_VERSION` (ex. `1.1.3`) + le nom du cache dans `sw.js`.
+2. `git push` sur `main`.
+3. GitHub → **Releases → Draft a new release** → tag `vX.Y.Z` → **Publish**.
    → Au prochain lancement, les appareils installés se mettent à jour tout seuls.
 
-> Astuce : le n° de version installée est affiché en bas de l'onglet **Réglages**.
+> Le n° de version installée est affiché en bas de l'onglet **Réglages**.

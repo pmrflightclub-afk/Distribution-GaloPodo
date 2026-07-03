@@ -1,51 +1,53 @@
-# Frais de tournée — mini-app PWA
+# GaloPodo — PWA de tournées & facturation (maréchal / pareur)
 
-Petite application autonome (aucun serveur) pour paramétrer une tournée, calculer les **km réels** et
-**répartir les frais de déplacement** (véhicule + carburant) sur chaque arrêt. Utilisable au téléphone.
+Application autonome (aucun serveur, données locales) pour préparer des **tournées**, calculer les **km réels
+routiers**, **répartir équitablement les frais de déplacement**, et **facturer** (déplacement + matériel +
+articles) avec TVA. Installable sur téléphone / tablette / PC.
+
+**Version : 1.1.2**
 
 ## Modèle de calcul
 
-Les tarifs de référence (€/km) **incluent déjà véhicule + carburant**, calibrés à un prix carburant de
-référence (par défaut **1,80 €/L**). L'app réajuste selon le **prix du dernier plein** :
+Tarif au km (HT) par type d'arrêt :
 
 ```
-€/km_ajusté(type) = tarif_réf(type) + (conso ÷ 100) × (prix_dernier_plein − prix_réf)
+tarif(type) = base_véhicule + carburant_HT
+            + (visite/urgence ? temps : 0) + (urgence ? supplément : 0)
+
+base_véhicule = amortissement/km + Σ frais_véhicule/km
+carburant_HT  = (conso ÷ 100) × prix_dernier_plein ÷ (1 + TVA)   # le plein est TVAC
+temps         = prix_heure ÷ km_heure                            # visite & urgence
 ```
 
-- **Type par arrêt** : tournée / visite / urgence → base au km différente.
-- **Client proche** : arrêt sous le seuil (km) → facturé au **forfait** (cas particulier).
-- Le reste du kilométrage de la boucle (domicile → arrêts → domicile, retour inclus) est réparti sur les
-  autres arrêts (parts égales ou au prorata du segment), puis divisé par le nombre de clients de l'arrêt.
-- **Carburant réel** affiché à titre indicatif = km_total × (conso ÷ 100) × prix_dernier_plein.
+- **Boucle complète** mesurée par l'API : domicile → arrêts → domicile (aller **et** retour inclus).
+- **Client proche** (mode « par client ») : sous le seuil → **forfait**, sorti du partage.
+- Répartition du km restant : **parts égales** / **prorata segment** / **par client**.
+- **Facture** par client › cheval, 3 blocs (Articles · Matériel · Déplacement), colonnes
+  *Prix unitaire · Base HT · TVA · TTC*. Matériel facturé uniquement si **parage** effectué.
+- **Remise** appliquée ligne par ligne, TVA recalculée sur le net (conforme Directive TVA 2006/112 art. 79).
+- Tuiles : Total HT/TVA/TTC, **Provision charge véhicule** (base+carburant+forfaits) et **Marge réelle**
+  (surplus temps/urgence).
 
 ## Cartographie (km réels)
 
-Deux fournisseurs, réglables dans l'app :
-- **OpenStreetMap public** (Nominatim + OSRM) — sans clé, usage léger (limité à ~1 requête/s, ToS OSM).
-- **Geoapify** — avec clé API (quota gratuit ~3000/jour). Restreindre la clé par domaine dans le dashboard.
+- **OpenStreetMap public** (Nominatim + OSRM) — sans clé, usage léger (~1 req/s).
+- **Geoapify** — avec clé API (quota gratuit), autocomplétion par champ.
 
-## Installer sur le téléphone
+## Sauvegarde / défauts
 
-Une PWA a besoin d'une URL **HTTPS**. Trois options :
+Réglages → **Sauvegarde / restauration** : export/import JSON de tous les réglages, articles, frais et données.
+La **config usine** (`FACTORY_SETTINGS` dans `app.js`) fixe les valeurs par défaut au tout premier lancement.
 
-1. **Hébergement statique gratuit** (le plus simple) : déposer ce dossier sur GitHub Pages / Netlify / Vercel
-   → ouvrir l'URL dans **Chrome (Android)** ou **Safari (iOS)** → menu **« Ajouter à l'écran d'accueil »**.
-2. **Sur le VPS** : servir ce dossier en statique (route dédiée).
-3. **APK** : empaqueter avec Capacitor si un vrai fichier d'installation est préféré.
+## Installer
 
-## Test en local (ordinateur)
-
-Servir le dossier (le protocole `file://` empêche le service worker) :
-
-```bash
-npx serve .        # ou : python -m http.server 8080
-```
-
-puis ouvrir `http://localhost:3000` (ou `:8080`).
+PWA servie en **HTTPS** (GitHub Pages) → Chrome (Android) / Safari (iOS) → **« Ajouter à l'écran d'accueil »**.
+Test local : `python -m http.server 8080` puis `http://localhost:8080` (le service worker exige http/https, pas `file://`).
 
 ## Fichiers
 
-- `index.html` — interface (onglets Tournée / Réglages)
-- `app.js` — logique (cartographie, calcul, répartition, persistance localStorage)
-- `styles.css` — mise en page mobile (thème clair/sombre auto)
-- `manifest.webmanifest` + `sw.js` + `icons/` — installation PWA et mode hors-ligne
+- `index.html` — interface (Accueil · Tournées · Gestion · Stats · Réglages).
+- `app.js` — logique (carto, calcul, répartition, facturation, persistance localStorage).
+- `styles.css` — thème par variables, responsive.
+- `manifest.webmanifest` + `sw.js` + `icons/` — installation PWA + hors-ligne.
+
+Documentation complète : voir `HOT-SacreSabot/00 Developpement/GaloPodo/`.

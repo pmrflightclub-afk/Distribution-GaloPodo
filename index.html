@@ -3,17 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#1f6f54" />
+  <meta name="theme-color" content="#e8722a" />
   <title>GaloPodo</title>
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">🐴 GaloPodo</div>
+    <div class="brand"><img class="brand-logo" src="icons/logo-mark.png" alt="GaloPodo" /> <span>GaloPodo</span></div>
     <div class="chips">
       <div class="fuel-chip" id="fuelChip" title="Prix du dernier plein (TVAC)">⛽ —</div>
       <div class="fuel-chip" id="consoChip" title="Consommation moyenne">🚗 —</div>
@@ -21,37 +22,41 @@
   </header>
 
   <nav class="tabs">
-    <button class="tab active" data-tab="accueil">Accueil</button>
-    <button class="tab" data-tab="clients">Clients</button>
-    <button class="tab" data-tab="tournees">Tournées</button>
-    <button class="tab" data-tab="calcul">Calcul</button>
-    <button class="tab" data-tab="reglages">Réglages</button>
+    <div class="tabs-inner">
+      <button class="tab active" data-tab="accueil">Accueil</button>
+      <button class="tab" data-tab="tournees">Tournées</button>
+      <button class="tab" data-tab="gestion">Gestion</button>
+      <button class="tab" data-tab="stats">Stats</button>
+      <button class="tab" data-tab="reglages">Réglages</button>
+    </div>
   </nav>
 
   <!-- ============ ACCUEIL ============ -->
   <main id="tab-accueil" class="tab-panel active">
     <div class="actions"><button class="btn primary block big" id="btnNewTour">➕ Créer une tournée</button></div>
     <section class="card">
-      <h2>Aujourd'hui &amp; à venir</h2>
-      <div id="homeTours" class="list"></div>
-      <p class="empty" id="homeToursEmpty">Aucune tournée active ou à venir.</p>
+      <h2>Aujourd'hui</h2>
+      <div id="homeToday" class="list"></div>
+      <p class="empty" id="homeTodayEmpty">Aucune tournée aujourd'hui.</p>
+    </section>
+    <section class="card">
+      <h2>À venir</h2>
+      <div id="homeUpcoming" class="list"></div>
+      <p class="empty" id="homeUpcomingEmpty">Aucune tournée à venir.</p>
     </section>
     <div class="actions two">
-      <button class="btn" id="btnVehicule">🚗 Véhicule</button>
-      <button class="btn" data-goto="calcul">❓ Comment ça marche</button>
+      <button class="btn" id="btnVehicule">📋 Déclarer un événement</button>
+      <button class="btn" data-goto="gestion" data-gsub="calcul">❓ Comment ça marche</button>
     </div>
-  </main>
-
-  <!-- ============ CLIENTS ============ -->
-  <main id="tab-clients" class="tab-panel">
-    <div class="actions"><button class="btn primary block" id="btnNewClient">➕ Nouveau client</button></div>
-    <section class="card"><div id="clientsList" class="list"></div><p class="empty" id="clientsEmpty">Aucun client. Créez-en un.</p></section>
   </main>
 
   <!-- ============ TOURNÉES ============ -->
   <main id="tab-tournees" class="tab-panel">
     <div class="actions"><button class="btn primary block" id="btnNewTour2">➕ Créer une tournée</button></div>
-    <section class="card"><div id="toursList" class="list"></div><p class="empty" id="toursEmpty">Aucune tournée enregistrée.</p></section>
+    <section class="card"><h2>Aujourd'hui</h2><div id="trToday" class="list"></div><p class="empty" id="trTodayEmpty">Aucune tournée aujourd'hui.</p></section>
+    <section class="card"><h2>À venir</h2><div id="trUpcoming" class="list"></div><p class="empty" id="trUpcomingEmpty">Aucune tournée à venir.</p></section>
+    <section class="card"><h2>Clôturées (4 dernières semaines)</h2><div id="trClosed" class="list"></div><p class="empty" id="trClosedEmpty">Aucune.</p></section>
+    <section class="card"><h2>Archives (plus de 4 semaines)</h2><div id="trArchive" class="list"></div><p class="empty" id="trArchiveEmpty">Aucune.</p></section>
   </main>
 
   <!-- ============ TOURNÉE (page unique) ============ -->
@@ -61,17 +66,24 @@
 
     <section class="card">
       <label>Date de la tournée<input type="date" id="edDate" /></label>
-      <p class="hint" id="edHome"></p>
+      <div class="card-head"><p class="hint" id="edHome" style="margin:0"></p><button class="btn small" id="edChangeHome">Changer le départ</button></div>
     </section>
 
     <section class="card">
-      <div class="tiles">
-        <div class="tile"><span class="t-label">Km total (boucle)</span><span class="t-val" id="rKm">—</span></div>
+      <div class="card-head"><h2>Carte du trajet</h2><span><button class="btn small" id="edReloc">↻ Re-localiser</button> <button class="btn small" id="edMapBtn">Afficher la carte</button></span></div>
+      <div id="edMap" class="map"></div>
+      <p class="hint" id="edMapHint">Départ/retour 🏠 (adresse de départ de la tournée) + arrêts numérotés dans l'ordre + tracé.</p>
+    </section>
+
+    <section class="card">
+      <div class="tiles tiles-3">
+        <div class="tile"><span class="t-label">Boucle (total tournée)</span><span class="t-val" id="rKm">—</span></div>
         <div class="tile"><span class="t-label">Durée estimée</span><span class="t-val" id="rMin">—</span></div>
         <div class="tile"><span class="t-label">Total HT</span><span class="t-val" id="rHT">—</span></div>
         <div class="tile"><span class="t-label">TVA</span><span class="t-val" id="rTVA">—</span></div>
         <div class="tile strong"><span class="t-label">Total TTC</span><span class="t-val" id="rTTC">—</span></div>
-        <div class="tile"><span class="t-label">Marge / carburant</span><span class="t-val" id="rMarge">—</span></div>
+        <div class="tile"><span class="t-label">Provision charge (véhicule)</span><span class="t-val" id="rMarge">—</span></div>
+        <div class="tile"><span class="t-label">Marge réelle (temps/urgence)</span><span class="t-val" id="rMargeReelle">—</span></div>
       </div>
     </section>
     <section class="card">
@@ -80,17 +92,18 @@
       <p class="empty" id="edArretsEmpty">Ajoutez un arrêt (par client ou par cheval).</p>
       <p class="hint">Glissez la poignée ⠿ à gauche pour changer l'ordre des arrêts.</p>
     </section>
+
     <section class="card">
-      <div class="card-head"><h2>Carte du trajet</h2><span><button class="btn small" id="edReloc">↻ Re-localiser</button> <button class="btn small" id="edMapBtn">Afficher la carte</button></span></div>
-      <div id="edMap" class="map"></div>
-      <p class="hint" id="edMapHint">Départ/retour 🏠 (domicile du pro) + arrêts numérotés dans l'ordre + tracé.</p>
+      <div class="card-head"><h2>Articles (facture)</h2><button class="btn small" id="edAddArticle">+ Ajouter</button></div>
+      <div id="edArticles" class="list"></div>
+      <p class="empty" id="edArticlesEmpty">Aucun article. Ajoutez des lignes facturables (plaques, produits…).</p>
     </section>
 
     <section class="card">
       <h2>Répartition — facture <span class="live-dot" id="edLive" title="Mis à jour automatiquement">●</span></h2>
       <div id="edInvoice"></div>
       <p class="empty" id="edInvoiceEmpty">Ajoutez des arrêts pour voir la répartition.</p>
-      <div class="actions two"><button class="btn" id="copyBtn">Copier le récap</button><button class="btn" id="smsBtn">Partager</button></div>
+      <div class="actions"><button class="btn block" id="copyBtn">Copier le récap</button></div>
       <p class="hint">Le document copié/partagé est <b>anonymisé</b> (ni noms, ni adresses, ni chevaux) — chaque client ne voit que la répartition des montants.</p>
     </section>
 
@@ -100,8 +113,147 @@
     <div class="actions"><button class="btn danger block" id="edDelete">Supprimer cette tournée</button></div>
   </main>
 
-  <!-- ============ CALCUL ============ -->
-  <main id="tab-calcul" class="tab-panel"><div id="calculBody"></div></main>
+  <!-- ============ GESTION (hub) ============ -->
+  <main id="tab-gestion" class="tab-panel">
+    <nav class="subtabs scroll" id="gestionSub">
+      <button class="subtab active" data-gsub="clients">Clients</button>
+      <button class="subtab" data-gsub="articles">Articles</button>
+      <button class="subtab" data-gsub="materiel">Frais matériel</button>
+      <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
+      <button class="subtab" data-gsub="adresses">Mes adresses</button>
+      <button class="subtab" data-gsub="calcul">Calcul</button>
+    </nav>
+
+    <div id="gsub-clients" class="subpanel active">
+      <div class="actions"><button class="btn primary block" id="btnNewClient">➕ Nouveau client</button></div>
+      <section class="card"><div id="clientsList" class="list"></div><p class="empty" id="clientsEmpty">Aucun client. Créez-en un.</p></section>
+    </div>
+
+    <div id="gsub-adresses" class="subpanel">
+      <div class="actions"><button class="btn primary block" id="btnAddAdresse">➕ Nouvelle adresse de départ</button></div>
+      <section class="card">
+        <p class="hint">Adresses de départ réutilisables (domicile, écurie, second point de départ…). Sélectionnez-en une dans une tournée via « Changer le départ ».</p>
+        <div id="adressesList" class="list"></div>
+        <p class="empty" id="adressesEmpty">Aucune adresse enregistrée.</p>
+      </section>
+    </div>
+
+    <div id="gsub-articles" class="subpanel">
+      <section class="card">
+        <h2>Forfaits pathologie (par cheval)</h2>
+        <div class="row">
+          <label class="grow">Fourbure<input type="number" id="setFourbure" step="0.01" min="0" /></label>
+          <label class="grow">Fourbure<input id="setFourbureTtc" /></label>
+        </div>
+        <div class="row">
+          <label class="grow">NPAS<input type="number" id="setNpas" step="0.01" min="0" /></label>
+          <label class="grow">NPAS<input id="setNpasTtc" /></label>
+        </div>
+        <p class="hint">Montants forfaitaires ajoutés au matériel d'un cheval quand la case est cochée (seulement si « Parage/Équil. » est coché).</p>
+      </section>
+      <section class="card">
+        <h2>Parage &amp; équilibrage (article auto)</h2>
+        <div class="row">
+          <label class="grow">TVA<input type="number" id="setParageTva" step="0.1" min="0" /></label>
+          <label class="grow">Prix<input type="number" id="setParagePrix" step="0.01" min="0" /></label>
+          <label class="grow">Prix<input id="setParageTtc" /></label>
+        </div>
+        <p class="hint">Cochez « Parage/Équil. » par cheval dans la tournée → une ligne d'article « Parage et équilibrage » est ajoutée automatiquement à la facture.</p>
+      </section>
+      <section class="card">
+        <h2>Tarifs par type — HTVA</h2>
+        <p class="hint">Le <b>temps de déplacement</b> (visite &amp; urgence) est calculé : prix à l'heure ÷ km par heure.</p>
+        <div class="row">
+          <label class="grow">Prix à l'heure<input type="number" id="setPrixHeure" step="0.5" min="0" /></label>
+          <label class="grow">Prix à l'heure<input id="setPrixHeureTtc" /></label>
+        </div>
+        <div class="row">
+          <label class="grow">Km par heure<input type="number" id="setKmHeure" step="1" min="1" /></label>
+          <label class="grow">Temps déplacement<input id="setTempsKmRo" /></label>
+        </div>
+        <p class="hint" id="tempsHint"></p>
+        <label>Supplément urgence<input type="number" id="setUrgenceSupp" step="0.01" min="0" /></label>
+        <p class="hint" id="urgHint"></p>
+        <div class="table-wrap"><table id="tarifTable">
+          <thead><tr><th>Type</th><th>Base véh.</th><th>Carb.</th><th>Temps</th><th>+Urg.</th><th>Tarif HT</th><th>TTC</th></tr></thead>
+          <tbody>
+            <tr><td>Tournée</td><td id="baseTournee">—</td><td id="fuelTournee">—</td><td>—</td><td>—</td><td id="totTournee" class="strong">—</td><td id="ttcTournee">—</td></tr>
+            <tr><td>Visite</td><td id="baseVisite">—</td><td id="fuelVisite">—</td><td id="tpsVisite">—</td><td>—</td><td id="totVisite" class="strong">—</td><td id="ttcVisite">—</td></tr>
+            <tr><td>Urgence</td><td id="baseUrgence">—</td><td id="fuelUrgence">—</td><td id="tpsUrgence">—</td><td id="urgUrgence">—</td><td id="totUrgence" class="strong">—</td><td id="ttcUrgence">—</td></tr>
+          </tbody>
+        </table></div>
+        <p class="hint">La <b>base véhicule</b> vient de <b>Gestion → Frais véhicule</b>. Le carburant HT se recalcule à chaque plein. TTC = tarif HT × (1 + TVA).</p>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Articles (catalogue)</h2><button class="btn small" id="btnNewArticleCat">+ Nouvel article</button></div>
+        <p class="hint">Catalogue réutilisable : ces articles se resélectionnent lors de l'ajout d'une ligne dans une tournée. Modifiez les champs directement dans la ligne.</p>
+        <div id="articlesCatList" class="edit-list"></div>
+        <p class="empty" id="articlesCatEmpty">Aucun article au catalogue.</p>
+      </section>
+    </div>
+
+    <div id="gsub-materiel" class="subpanel">
+      <section class="card">
+        <h2>Prix unitaire globalisé (par cheval)</h2>
+        <div class="row">
+          <label class="grow">Total matériel<input id="matUnitHT" /></label>
+          <label class="grow">Total matériel<input id="matUnitTTC" /></label>
+        </div>
+        <p class="hint">Somme de tous les matériels ci-dessous, appliquée à <b>chaque cheval paré</b> de chaque tournée.</p>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Frais de matériel (par cheval)</h2><button class="btn small" id="btnAddMateriel">+ Ajouter</button></div>
+        <p class="hint">Modifiez les champs directement dans la ligne.</p>
+        <div id="materielList" class="edit-list"></div>
+        <p class="empty" id="materielEmpty">Aucun matériel. Ajoutez râpes, gants, renette…</p>
+      </section>
+    </div>
+
+    <div id="gsub-vehicule" class="subpanel">
+      <section class="card">
+        <h2>Prix unitaire globalisé (base véhicule /km)</h2>
+        <div class="row">
+          <label class="grow">Base véhicule<input id="fraisUnitHT" /></label>
+          <label class="grow">Base véhicule<input id="fraisUnitTTC" /></label>
+        </div>
+        <p class="hint" id="kmIndicatif"></p>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Frais véhicule</h2><button class="btn small" id="btnAddFrais">+ Ajouter</button></div>
+        <p class="hint">Amortissement + chaque poste ci-dessous forment la base véhicule au km. Modifiez les champs directement dans la ligne.</p>
+        <div id="fraisList" class="edit-list"></div>
+        <p class="empty" id="fraisEmpty">Aucun frais. Ajoutez entretien, assurance, réparations…</p>
+      </section>
+    </div>
+
+    <div id="gsub-calcul" class="subpanel"><div id="calculBody"></div></div>
+  </main>
+
+  <!-- ============ STATS ============ -->
+  <main id="tab-stats" class="tab-panel">
+    <section class="card">
+      <h2>Utilisation du véhicule</h2>
+      <div class="tiles tiles-3" id="statTiles">
+        <div class="tile draggable" data-key="kmMonth"><span class="t-label">Km ce mois</span><span class="t-val" id="kmMonth">—</span></div>
+        <div class="tile draggable" data-key="kmYear"><span class="t-label">Km cette année</span><span class="t-val" id="kmYear">—</span></div>
+        <div class="tile draggable" data-key="kmOdo"><span class="t-label">Odomètre (total)</span><span class="t-val" id="kmOdo">—</span></div>
+        <div class="tile strong draggable" data-key="baseVeh"><span class="t-label">Base véhicule /km</span><span class="t-val" id="baseVeh">—</span></div>
+        <div class="tile draggable" data-key="tCarb"><span class="t-label">Carburant /km</span><span class="t-val" id="tCarb">—</span></div>
+        <div class="tile draggable" data-key="tTournee"><span class="t-label">Tarif tournée /km</span><span class="t-val" id="tTournee">—</span></div>
+      </div>
+      <p class="hint">Km & durée basés sur tes tournées ; « ce mois » repart de 0 le 1er. Glisse les tuiles pour les réordonner.</p>
+      <h3 class="rsub">Km &amp; heures — par client › cheval</h3>
+      <div id="kmParClient" class="list"></div>
+      <p class="empty" id="kmParClientEmpty">Aucune tournée calculée.</p>
+    </section>
+
+    <section class="card">
+      <h2>Analyse financière par client</h2>
+      <p class="hint">Totaux TTC cumulés sur toutes les tournées, séparés <b>Articles · Matériel · Déplacement</b>, détaillés par cheval.</p>
+      <div id="financeList" class="list"></div>
+      <p class="empty" id="financeEmpty">Aucune tournée calculée.</p>
+    </section>
+  </main>
 
   <!-- ============ RÉGLAGES ============ -->
   <main id="tab-reglages" class="tab-panel">
@@ -114,26 +266,45 @@
 
     <section class="card">
       <h2>Véhicule &amp; carburant</h2>
+      <label>Consommation<input type="number" id="setConso" step="0.1" min="0" /></label>
       <div class="row">
-        <label class="grow">Consommation (L / 100 km)<input type="number" id="setConso" step="0.1" min="0" /></label>
-        <label class="grow">Prix du dernier plein (€/L, TVAC)<input type="number" id="setPrixPlein" step="0.01" min="0" /></label>
+        <label class="grow">Prix du plein<input id="setPrixPleinHT" /></label>
+        <label class="grow">Prix du dernier plein<input type="number" id="setPrixPlein" step="0.01" min="0" /></label>
       </div>
       <p class="hint" id="pleinBreakdown"></p>
-      <label>Taux de TVA (%)<input type="number" id="setTva" step="0.1" min="0" /></label>
+      <div class="row">
+        <label class="grow">Pays (TVA)<select id="setPays"><option value="be">Belgique (21 %)</option><option value="fr">France (20 %)</option></select></label>
+        <label class="grow">Taux de TVA standard<input type="number" id="setTva" step="0.1" min="0" /></label>
+      </div>
       <p class="hint">Prix du plein = TVAC (TVA incluse). Carburant HT/km = (conso ÷ 100) × prix ÷ (1 + TVA) = <b id="fuelPerKm">—</b>.</p>
     </section>
 
     <section class="card">
-      <h2>Tarifs par type — HTVA (indicatifs)</h2>
-      <div class="table-wrap"><table id="tarifTable">
-        <thead><tr><th>Type</th><th>Véhicule HT</th><th>Carburant HT</th><th>Tarif HT</th><th>TTC</th></tr></thead>
-        <tbody>
-          <tr><td>Tournée</td><td><input type="number" id="vehTournee" step="0.001" min="0" /></td><td id="fuelTournee">—</td><td id="totTournee" class="strong">—</td><td id="ttcTournee">—</td></tr>
-          <tr><td>Visite</td><td><input type="number" id="vehVisite" step="0.001" min="0" /></td><td id="fuelVisite">—</td><td id="totVisite" class="strong">—</td><td id="ttcVisite">—</td></tr>
-          <tr><td>Urgence</td><td><input type="number" id="vehUrgence" step="0.001" min="0" /></td><td id="fuelUrgence">—</td><td id="totUrgence" class="strong">—</td><td id="ttcUrgence">—</td></tr>
-        </tbody>
-      </table></div>
-      <p class="hint">Seule la part <b>véhicule</b> (HT) est fixe. Le carburant HT se recalcule à chaque plein. Le TTC = tarif HT × (1 + TVA).</p>
+      <h2>Achat &amp; amortissement du véhicule (réglé une fois)</h2>
+      <div class="row">
+        <label class="grow">Prix d'achat<input type="number" id="setAchat" step="1" min="0" /></label>
+        <label class="grow">Prix d'achat<input id="setAchatTTC" /></label>
+      </div>
+      <div class="row">
+        <label class="grow">Durée de vie<input type="number" id="setDureeVie" step="1000" min="0" /></label>
+        <label class="grow">Amortissement<input id="setAmortHT" /></label>
+        <label class="grow">Amortissement<input id="setAmortTTC" /></label>
+      </div>
+      <p class="hint" id="amortHint"></p>
+    </section>
+
+    <section class="card">
+      <h2>Estimation de la durée</h2>
+      <div class="row">
+        <label class="grow">Méthode<select id="setDureeMode">
+          <option value="auto">Automatique (service de carte)</option>
+          <option value="vitesse">Vitesse moyenne fixe (km ÷ vitesse)</option>
+        </select></label>
+        <label class="grow" id="lblVitesse">Vitesse moyenne<input type="number" id="setVitesse" step="1" min="1" /></label>
+      </div>
+      <p class="hint">Le service de carte gratuit (OSM) surestime souvent la durée (vitesses prudentes, sans trafic). En « vitesse moyenne », la durée = km ÷ votre vitesse réelle.</p>
+      <button class="btn small" id="btnRefreshTours">↻ Actualiser les tournées (aujourd'hui + à venir)</button>
+      <p class="hint" id="refreshToursHint">Recalcule les durées et montants des tournées <b>d'aujourd'hui et à venir</b>. Les clôturées et archivées ne sont pas modifiées.</p>
     </section>
 
     <section class="card">
@@ -146,12 +317,22 @@
         </select>
       </label>
       <div class="row">
-        <label class="grow" id="lblSeuil">Seuil « client proche » (km)<input type="number" id="setSeuil" step="1" min="0" /></label>
-        <label class="grow" id="lblForfait">Forfait client proche (€ HT)<input type="number" id="setForfait" step="0.01" min="0" /></label>
+        <label class="grow" id="lblSeuil">Seuil « client proche »<input type="number" id="setSeuil" step="1" min="0" /></label>
+        <label class="grow" id="lblForfait">Forfait client proche<input type="number" id="setForfait" step="0.01" min="0" /></label>
+        <label class="grow">Forfait<input id="setForfaitTTC" /></label>
       </div>
+      <div class="row">
+        <label class="grow">Type de tarif déplacement<select id="setSeuilType"><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label>
+        <label class="grow">Tarif appliqué<input id="setSeuilTarif" /></label>
+      </div>
+      <div class="row">
+        <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepHT" /></label>
+        <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepTTC" /></label>
+      </div>
+      <p class="hint">Montant que l'app facturerait pour la distance du seuil <b>si aucun forfait</b> n'était fixé, selon le type de tarif choisi — pour vous aider à fixer votre forfait.</p>
       <p class="hint" id="forfaitBreakdown"></p>
       <p class="hint" id="seuilNote"></p>
-      <label>Rayon « même écurie » (km)<input type="number" id="setRayon" step="0.1" min="0" /></label>
+      <label>Rayon « même écurie »<input type="number" id="setRayon" step="0.1" min="0" /></label>
       <p class="hint">Le rayon signale deux arrêts très proches (même écurie ?).</p>
     </section>
 
@@ -164,6 +345,21 @@
         </select>
       </label>
       <label id="keyRow">Clé API Geoapify<input type="text" id="setKey" placeholder="Collez votre clé Geoapify" /></label>
+    </section>
+
+    <section class="card">
+      <h2>Apparence</h2>
+      <label>Couleur des boutons<input type="color" id="setAccent" /></label>
+      <div class="swatches" id="swatches"></div>
+      <label style="margin-top:12px">Couleur du fond de l'app<input type="color" id="setAppBg" /></label>
+      <div class="swatches" id="bgSwatches"></div>
+      <label style="margin-top:12px">Fond du logo (couleur perso)<input type="color" id="setLogoBg" /></label>
+      <div class="swatches" id="logoBgSwatches"></div>
+    </section>
+    <section class="card">
+      <h2>Sauvegarde &amp; transfert</h2>
+      <p class="hint">Exportez vos réglages, articles, frais et données (sauvegarde, transfert d'appareil, ou pour définir les valeurs par défaut de l'app). Importez une sauvegarde pour tout restaurer.</p>
+      <button class="btn small" id="btnBackup">💾 Sauvegarde / restauration</button>
     </section>
     <p class="status ok">Réglages enregistrés automatiquement. · <span id="appVersion"></span></p>
   </main>

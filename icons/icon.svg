@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="96" fill="#1f6f54"/>
-  <g fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M150 360 C150 300 190 270 256 270 C322 270 362 300 362 360"/>
-    <circle cx="150" cy="360" r="20" fill="#ffffff"/>
-    <circle cx="362" cy="360" r="20" fill="#ffffff"/>
-    <path d="M256 270 L256 190"/>
-    <path d="M210 190 L302 190"/>
-  </g>
-  <text x="256" y="452" font-family="Segoe UI, sans-serif" font-size="80" font-weight="700" fill="#ffffff" text-anchor="middle">€/km</text>
+  <rect width="512" height="512" rx="104" fill="#e8722a"/>
+  <!-- couronne / mont (orange foncé) -->
+  <path d="M92 432 L92 296 L150 338 L202 244 L256 318 L310 244 L362 338 L420 296 L420 432 Z" fill="#c65e17"/>
+  <!-- anneau (halo) -->
+  <ellipse cx="272" cy="138" rx="150" ry="52" fill="none" stroke="#241f1a" stroke-width="24"/>
+  <!-- flèche graphique -->
+  <polyline points="118,378 196,318 250,360 322,258 404,172" fill="none" stroke="#241f1a" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- pointe de flèche -->
+  <path d="M404 172 L346 192 M404 172 L386 230" fill="none" stroke="#241f1a" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
