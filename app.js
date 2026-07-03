@@ -11,7 +11,7 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.3';
+const APP_VERSION = '1.1.4';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 function isNewerVersion(a, b) {
   const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
@@ -524,10 +524,20 @@ function openModal(html) { $('modalBox').innerHTML = html; $('modal').classList.
 function closeModal() { $('modal').classList.add('hidden'); $('modalBox').innerHTML = ''; }
 
 // ---------- Navigation ----------
+// Recalcule les hauteurs des barres collantes (bandeau + onglets) → offsets sticky des sous-onglets.
+function updateStickyOffsets() {
+  const root = document.documentElement.style;
+  const tb = document.querySelector('.topbar'), tabs = $('mainTabs');
+  if (tb) root.setProperty('--topbar-h', tb.offsetHeight + 'px');
+  if (tabs) root.setProperty('--tabs-h', tabs.offsetHeight + 'px');
+}
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
   $('tab-' + name).classList.add('active'); window.scrollTo(0, 0);
+  const cur = document.querySelector('.tab[data-tab="' + name + '"]');
+  if (cur && $('navCurrentLabel')) $('navCurrentLabel').textContent = cur.textContent;
+  if ($('mainTabs')) $('mainTabs').classList.remove('open'); // referme le menu déroulant (mobile)
   if (name === 'accueil') renderHome();
   if (name === 'tournees') renderTours();
   if (name === 'gestion') showGestion(currentGsub);
@@ -774,7 +784,9 @@ function openEditor() {
   $('edStatusBadge').textContent = STATUS_LBL[st];
   $('edDate').value = currentTour.date; $('edDate').disabled = locked;
   const H = tourHome();
-  $('edHome').textContent = addrStr(H).trim() ? ('Départ / retour : ' + addrStr(H) + (currentTour.home && addrStr(currentTour.home).trim() ? ' (propre à cette tournée)' : ' (domicile)')) : 'Départ non défini — « Changer le départ » ou Réglages.';
+  const hasHome = addrStr(H).trim();
+  $('edHome').textContent = hasHome ? ('Départ / retour : ' + addrStr(H) + (currentTour.home && addrStr(currentTour.home).trim() ? ' (propre à cette tournée)' : ' (domicile)')) : '⚠️ Départ non défini — cliquez « Changer le départ », ou renseignez-le dans Gestion → Mes adresses → Point de départ.';
+  if ($('edHome')) $('edHome').classList.toggle('err', !hasHome);
   $('edLockBanner').classList.toggle('hidden', !locked);
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
@@ -782,7 +794,7 @@ function openEditor() {
   renderEditorArrets(locked);
   renderTourArticles();
   if (currentTour.result && currentTour.result.rows && currentTour.result.rows.length === currentTour.arrets.length) recomputeMoney();
-  else { renderResultUI(null); if (!locked && currentTour.arrets.length && S.home.lat) scheduleGeoRecalc(); }
+  else { renderResultUI(null); if (!locked && currentTour.arrets.length) scheduleGeoRecalc(); }
   $('edStatus').textContent = '';
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
   $('tab-editeur').classList.add('active'); window.scrollTo(0, 0);
@@ -1109,7 +1121,7 @@ function refreshActiveTours() {
 
 // Recalcul complet GÉOMÉTRIE + argent (API). silent = ne change pas d'onglet, statut discret.
 let _geoTimer = null;
-function scheduleGeoRecalc() { clearTimeout(_geoTimer); _geoTimer = setTimeout(() => { if (currentTour && currentTour.arrets.length && S.home.lat) calcTour(true); }, 700); }
+function scheduleGeoRecalc() { clearTimeout(_geoTimer); _geoTimer = setTimeout(() => { if (currentTour && currentTour.arrets.length) calcTour(true); }, 700); }
 
 async function calcTour(silent) {
   if (!currentTour) return; // tournée supprimée entre-temps → ne pas la ré-enregistrer
@@ -1125,7 +1137,8 @@ async function calcTour(silent) {
   }
   const H = tourHome();
   if (!H.lat && addrStr(H).trim()) { try { const g = await geocode(H); H.lat = g.lat; H.lon = g.lon; } catch { /* localisation impossible */ } }
-  if (!H.lat) { if (!silent) { st.className = 'status err'; st.textContent = 'Définissez l\'adresse de départ (bouton « Changer le départ » ou Réglages).'; } return; }
+  // Départ manquant : on le signale TOUJOURS (même en recalcul auto), sinon rien ne se passe en silence.
+  if (!H.lat) { st.className = 'status err'; st.textContent = addrStr(H).trim() ? 'Adresse de départ introuvable — vérifiez-la (« Changer le départ » ou Gestion → Mes adresses).' : '⚠️ Départ non défini : renseignez votre adresse de départ via « Changer le départ » ci-dessus, ou Gestion → Mes adresses → Point de départ.'; return; }
   try {
     st.textContent = silent ? 'Recalcul…' : 'Localisation des adresses…';
     for (const a of currentTour.arrets) { if (!a.addr.lat) { const g = await geocode(a.addr); a.addr.lat = g.lat; a.addr.lon = g.lon; if (S.provider === 'osm') await sleep(1100); } }
@@ -1906,6 +1919,10 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => { showTab(b.dataset.goto); if (b.dataset.gsub) showGestion(b.dataset.gsub); if (b.dataset.rsub) showReglages(b.dataset.rsub); }));
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
+  if ($('navToggle')) $('navToggle').addEventListener('click', (e) => { e.stopPropagation(); $('mainTabs').classList.toggle('open'); });
+  document.addEventListener('click', (e) => { const t = $('mainTabs'); if (t && t.classList.contains('open') && !t.contains(e.target)) t.classList.remove('open'); });
+  window.addEventListener('resize', updateStickyOffsets);
+  updateStickyOffsets(); setTimeout(updateStickyOffsets, 300);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 
   bindSettings(); refreshEverywhere(); renderHome();

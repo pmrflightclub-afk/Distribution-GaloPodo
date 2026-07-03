@@ -22,8 +22,9 @@
     </div>
   </header>
 
-  <nav class="tabs">
-    <div class="tabs-inner">
+  <nav class="tabs" id="mainTabs">
+    <button class="nav-current" id="navToggle" type="button" aria-expanded="false"><span id="navCurrentLabel">Accueil</span><span class="nav-caret">▾</span></button>
+    <div class="tabs-inner" id="tabsInner">
       <button class="tab active" data-tab="accueil">Accueil</button>
       <button class="tab" data-tab="tournees">Tournées</button>
       <button class="tab" data-tab="gestion">Gestion</button>
@@ -123,11 +124,11 @@
   <!-- ============ GESTION (hub) ============ -->
   <main id="tab-gestion" class="tab-panel">
     <nav class="subtabs scroll" id="gestionSub">
+      <button class="subtab" data-gsub="adresses">Mes adresses</button>
       <button class="subtab active" data-gsub="clients">Clients</button>
       <button class="subtab" data-gsub="articles">Articles</button>
       <button class="subtab" data-gsub="materiel">Frais matériel</button>
       <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
-      <button class="subtab" data-gsub="adresses">Mes adresses</button>
       <button class="subtab" data-gsub="sms">SMS</button>
     </nav>
 
