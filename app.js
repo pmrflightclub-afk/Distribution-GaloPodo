@@ -11,7 +11,7 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.2';
+const APP_VERSION = '1.1.3';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 function isNewerVersion(a, b) {
   const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
@@ -42,6 +42,17 @@ const LS = {
 };
 const uid = () => 'id' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
 
+// ---------- Brouillons : mémoire par formulaire/modale des saisies non encore enregistrées ----------
+// Clé par page/modale. Effacer un brouillon ne touche pas les autres.
+const DRAFTS = {
+  KEY: 'ftr.drafts',
+  all() { return LS.get(this.KEY, {}); },
+  get(k) { const d = this.all()[k]; return d ? d.data : null; },
+  set(k, data) { const a = this.all(); a[k] = { data, ts: Date.now() }; LS.set(this.KEY, a); },
+  clear(k) { const a = this.all(); if (a[k] !== undefined) { delete a[k]; LS.set(this.KEY, a); } },
+  has(k) { return this.all()[k] !== undefined; },
+};
+
 // ---------- Adresses structurées ----------
 const emptyAddr = () => ({ rue: '', numero: '', cp: '', localite: '', lat: null, lon: null });
 function toAddr(x) { if (!x) return emptyAddr(); if (typeof x === 'string') return Object.assign(emptyAddr(), { rue: x }); return Object.assign(emptyAddr(), x); }
@@ -52,8 +63,11 @@ const DEFAULTS = {
   home: emptyAddr(),
   consoL100: 9, prixPleinL: 2.0, tvaRate: 21,
   accentColor: '#e8722a',                      // couleur des boutons — orange par défaut
+  topbarColor: '',                             // couleur du bandeau principal (vide = suit accentColor)
+  navBarColor: '',                             // couleur de fond de la barre d'onglets (vide = couleur carte)
   appBg: '#0d0d0d',                            // fond de l'app (sombre) — noir par défaut, réglable
   logoBg: 'transparent',                       // fond derrière le logo (transparent/blanc/noir/couleur)
+  smsTemplate: 'Bonjour {client}, je passe aujourd\'hui pour {cheval}. J\'arrive dans environ {trajet}. À tout de suite !',
   frais: [],                                   // frais véhicule : {id, poste, nature:'recurrent'|'exceptionnel', montantHT, kmPrevus, kmDebut}
   amortissement: { achatHT: 0, dureeVieKm: 0 },// achat & amortissement (réglé une fois)
   tempsKm: 0, urgenceSuppKm: 0.16,             // supplément urgence €/km
@@ -83,6 +97,9 @@ if (typeof S.npasHT !== 'number') S.npasHT = 0;
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
 if (!S.accentColor) S.accentColor = '#e8722a';
+if (typeof S.topbarColor !== 'string') S.topbarColor = '';
+if (typeof S.navBarColor !== 'string') S.navBarColor = '';
+if (typeof S.smsTemplate !== 'string') S.smsTemplate = DEFAULTS.smsTemplate;
 if (!S.appBg) S.appBg = '#0d0d0d';
 if (!S.logoBg) S.logoBg = 'transparent';
 S.home = toAddr(S.home && S.home.adresse !== undefined ? { rue: S.home.adresse, lat: S.home.lat, lon: S.home.lon } : S.home);
@@ -241,22 +258,32 @@ function applyTheme() {
   const acc = S.accentColor || '#e8722a';
   root.setProperty('--accent', acc); root.setProperty('--accent-ink', idealInk(acc));
   const bg = S.appBg || '#0d0d0d'; root.setProperty('--bg', bg);
+  let card;
   if (lum(bg) < 0.45) { // fond sombre → palette sombre
-    root.setProperty('--card', '#1d1d1d'); root.setProperty('--ink', '#efe7de'); root.setProperty('--muted', '#a89a8c'); root.setProperty('--line', '#343434'); root.setProperty('--strong', '#f0b78a');
+    card = '#1d1d1d';
+    root.setProperty('--card', card); root.setProperty('--ink', '#efe7de'); root.setProperty('--muted', '#a89a8c'); root.setProperty('--line', '#343434'); root.setProperty('--strong', '#f0b78a');
     root.setProperty('--ro-bg', '#3a3833'); // champs calculés (lecture seule) : fond plus clair, texte inchangé
   } else {              // fond clair → palette claire
-    root.setProperty('--card', '#ffffff'); root.setProperty('--ink', '#241f1a'); root.setProperty('--muted', '#7a6f64'); root.setProperty('--line', '#e6dfd7'); root.setProperty('--strong', '#6b3410');
+    card = '#ffffff';
+    root.setProperty('--card', card); root.setProperty('--ink', '#241f1a'); root.setProperty('--muted', '#7a6f64'); root.setProperty('--line', '#e6dfd7'); root.setProperty('--strong', '#6b3410');
     root.setProperty('--ro-bg', '#e7e3dc');
   }
+  // Bandeau principal (topbar) : couleur propre, sinon suit l'accent
+  const top = S.topbarColor || acc; root.setProperty('--topbar', top); root.setProperty('--topbar-ink', idealInk(top));
+  // Barre d'onglets : couleur propre, sinon couleur de la carte
+  const nav = S.navBarColor || card; root.setProperty('--navbar', nav); root.setProperty('--navbar-ink', idealInk(nav));
   root.setProperty('--logo-bg', S.logoBg || 'transparent');
-  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', acc);
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', top);
 }
 function renderSwatchSet(boxId, presets, current, onPick) {
   const box = $(boxId); if (!box) return; box.innerHTML = '';
   presets.forEach((c) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'swatch' + (c.toLowerCase() === (current || '').toLowerCase() ? ' on' : '') + (c === 'transparent' ? ' sw-trans' : ''); if (c !== 'transparent') b.style.background = c; b.title = c; b.addEventListener('click', () => onPick(c)); box.appendChild(b); });
 }
 function refreshSwatches() {
+  const cardCol = () => (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff');
   renderSwatchSet('swatches', THEME_PRESETS, S.accentColor, (c) => { S.accentColor = c; if ($('setAccent')) $('setAccent').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
+  renderSwatchSet('topbarSwatches', THEME_PRESETS, S.topbarColor || S.accentColor, (c) => { S.topbarColor = c; if ($('setTopbar')) $('setTopbar').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
+  renderSwatchSet('navbarSwatches', BG_PRESETS, S.navBarColor || cardCol(), (c) => { S.navBarColor = c; if ($('setNavbar')) $('setNavbar').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
   renderSwatchSet('bgSwatches', BG_PRESETS, S.appBg, (c) => { S.appBg = c; if ($('setAppBg')) $('setAppBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
   renderSwatchSet('logoBgSwatches', LOGO_BG_PRESETS, S.logoBg, (c) => { S.logoBg = c; if (c !== 'transparent' && $('setLogoBg')) $('setLogoBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
 }
@@ -293,6 +320,7 @@ function saveTournees() { LS.set('ftr.tournees', tournees); }
 
 let currentTour = null;
 let _settingsPaints = {}; // fonctions de repeinture des champs numériques des Réglages
+let _deferredInstall = null; // évènement beforeinstallprompt (installation PWA)
 
 // ---------- Utilitaires ----------
 const $ = (id) => document.getElementById(id);
@@ -504,6 +532,17 @@ function showTab(name) {
   if (name === 'tournees') renderTours();
   if (name === 'gestion') showGestion(currentGsub);
   if (name === 'stats') renderStats();
+  if (name === 'reglages') showReglages(currentRsub);
+}
+
+// Sous-navigation Réglages : Configuration / Calcul / Thème
+let currentRsub = 'config';
+function showReglages(sub) {
+  currentRsub = sub || 'config';
+  document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.classList.toggle('active', b.dataset.rsub === currentRsub));
+  document.querySelectorAll('#tab-reglages .subpanel').forEach((p) => p.classList.toggle('active', p.id === 'rsub-' + currentRsub));
+  if (currentRsub === 'calcul') renderCalcul();
+  window.scrollTo(0, 0);
 }
 
 // Hub Gestion : sous-navigation Clients / Articles / Matériel / Frais véhicule / Calcul
@@ -517,7 +556,7 @@ function showGestion(sub) {
   if (currentGsub === 'articles') renderArticlesPage();
   if (currentGsub === 'materiel') renderMateriel();
   if (currentGsub === 'vehicule') renderFraisVehicule();
-  if (currentGsub === 'calcul') renderCalcul();
+  if (currentGsub === 'sms') renderSMS();
 }
 
 // ================= CLIENTS =================
@@ -534,27 +573,42 @@ function renderClients() {
   });
 }
 function editClient(existing, onSaved) {
-  const w = existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), nom: '', societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] };
+  const key = 'client:' + (existing ? existing.id : 'new');
+  const draft = DRAFTS.get(key);
+  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), nom: '', societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
   w.addr = toAddr(w.addr); w.societeAddr = toAddr(w.societeAddr);
   if (w.societe === undefined) w.societe = '';
   if (w.societeMemeAdresse === undefined) w.societeMemeAdresse = true;
+  const saveDraft = () => DRAFTS.set(key, w); // mémorise la saisie en cours
   openModal(`
     <div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} client</b><button class="x" id="mX">✕</button></div>
+    ${draft ? '<div class="draft-bar">✏️ Brouillon en cours restauré<button class="btn small" id="cDraftReset">Effacer le brouillon</button></div>' : ''}
     <label>Nom (nom &amp; prénom)<input type="text" id="cNom" value="${esc(w.nom)}" /></label>
     <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
     <h2 style="font-size:.9rem">Adresse du client</h2><div id="cAddr"></div>
-    <h2 style="font-size:.9rem">Informations légales</h2>
-    <label class="chk2"><input type="checkbox" id="cAssuj" ${w.assujettiTva ? 'checked' : ''}/> Assujetti à la TVA</label>
-    <div class="row"><label class="grow">N° de TVA<input type="text" id="cTvaNum" value="${esc(w.tvaNum)}" placeholder="BE0123.456.789" /></label><label class="grow">N° d'entreprise / SIRET<input type="text" id="cEntNum" value="${esc(w.entrepriseNum)}" /></label></div>
-    <label class="chk2"><input type="checkbox" id="cSocMeme" ${w.societeMemeAdresse !== false ? 'checked' : ''}/> Société à l'adresse du client</label>
-    <div id="cSocAddrWrap" ${w.societeMemeAdresse !== false ? 'style="display:none"' : ''}><h3 style="font-size:.82rem;color:var(--muted);margin:8px 0 4px">Adresse de la société</h3><div id="cSocAddr"></div></div>
+    <div id="cLegal">
+      <h2 style="font-size:.9rem">Informations légales</h2>
+      <p class="hint" id="cLegalHint">Renseignez d'abord la <b>Société</b> pour activer ces champs.</p>
+      <label class="chk2"><input type="checkbox" id="cAssuj" ${w.assujettiTva ? 'checked' : ''}/> Assujetti à la TVA</label>
+      <div class="row"><label class="grow">N° de TVA<input type="text" id="cTvaNum" value="${esc(w.tvaNum)}" placeholder="BE0123.456.789" /></label><label class="grow">N° d'entreprise / SIRET<input type="text" id="cEntNum" value="${esc(w.entrepriseNum)}" /></label></div>
+      <label class="chk2"><input type="checkbox" id="cSocMeme" ${w.societeMemeAdresse !== false ? 'checked' : ''}/> Société à l'adresse du client</label>
+      <div id="cSocAddrWrap" ${w.societeMemeAdresse !== false ? 'style="display:none"' : ''}><h3 style="font-size:.82rem;color:var(--muted);margin:8px 0 4px">Adresse de la société</h3><div id="cSocAddr"></div></div>
+    </div>
     <div class="card-head"><h2 style="font-size:.9rem">Chevaux</h2><button class="btn small" id="cAddCheval">+ Cheval</button></div>
     <div id="cChevaux"></div>
     ${existing ? '<button class="btn small danger" id="cDel">Supprimer ce client</button>' : ''}
     <div class="actions"><button class="btn primary block" id="cSave">Enregistrer</button></div>
     <p class="status err" id="cErr"></p>`);
-  mountAddress($('cAddr'), w.addr, (a) => { w.addr = a; });
-  mountAddress($('cSocAddr'), w.societeAddr, (a) => { w.societeAddr = a; });
+  mountAddress($('cAddr'), w.addr, (a) => { w.addr = a; saveDraft(); });
+  mountAddress($('cSocAddr'), w.societeAddr, (a) => { w.societeAddr = a; saveDraft(); });
+  // Section légale grisée/inactive tant que la société est vide.
+  const updateLegalState = () => {
+    const on = !!(w.societe && w.societe.trim());
+    const box = $('cLegal'); if (!box) return;
+    box.classList.toggle('section-off', !on);
+    box.querySelectorAll('input, select').forEach((el) => { el.disabled = !on; });
+    if ($('cLegalHint')) $('cLegalHint').style.display = on ? 'none' : '';
+  };
   const renderCh = () => {
     const box = $('cChevaux'); box.innerHTML = '';
     if (!w.chevaux.length) box.innerHTML = '<p class="empty">Aucun cheval.</p>';
@@ -569,28 +623,30 @@ function editClient(existing, onSaved) {
         </select></label>
         <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>`;
       row.querySelector('[data-src]').value = h.addrSource;
-      row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; });
-      row.querySelector('[data-del]').addEventListener('click', () => { w.chevaux.splice(i, 1); renderCh(); });
-      row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); });
-      if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; });
+      row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
+      row.querySelector('[data-del]').addEventListener('click', () => { w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
+      row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
+      if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; saveDraft(); });
       box.appendChild(row);
     });
   };
   renderCh();
+  updateLegalState();
   $('mX').addEventListener('click', closeModal);
-  $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; });
-  $('cSociete').addEventListener('input', (e) => { w.societe = e.target.value; });
-  $('cAssuj').addEventListener('change', (e) => { w.assujettiTva = e.target.checked; });
-  $('cTvaNum').addEventListener('input', (e) => { w.tvaNum = e.target.value; });
-  $('cEntNum').addEventListener('input', (e) => { w.entrepriseNum = e.target.value; });
-  $('cSocMeme').addEventListener('change', (e) => { w.societeMemeAdresse = e.target.checked; $('cSocAddrWrap').style.display = e.target.checked ? 'none' : ''; });
-  $('cAddCheval').addEventListener('click', () => { w.chevaux.push({ id: uid(), nom: '', addrSource: 'specifique', addr: emptyAddr() }); renderCh(); });
-  if (existing) $('cDel').addEventListener('click', () => { if (confirm('Supprimer ce client ?')) { clients = clients.filter((x) => x.id !== w.id); saveClients(); closeModal(); renderClients(); } });
+  if (draft && $('cDraftReset')) $('cDraftReset').addEventListener('click', () => { DRAFTS.clear(key); closeModal(); editClient(existing, onSaved); });
+  $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
+  $('cSociete').addEventListener('input', (e) => { w.societe = e.target.value; updateLegalState(); saveDraft(); });
+  $('cAssuj').addEventListener('change', (e) => { w.assujettiTva = e.target.checked; saveDraft(); });
+  $('cTvaNum').addEventListener('input', (e) => { w.tvaNum = e.target.value; saveDraft(); });
+  $('cEntNum').addEventListener('input', (e) => { w.entrepriseNum = e.target.value; saveDraft(); });
+  $('cSocMeme').addEventListener('change', (e) => { w.societeMemeAdresse = e.target.checked; $('cSocAddrWrap').style.display = e.target.checked ? 'none' : ''; saveDraft(); });
+  $('cAddCheval').addEventListener('click', () => { w.chevaux.push({ id: uid(), nom: '', addrSource: 'specifique', addr: emptyAddr() }); renderCh(); saveDraft(); });
+  if (existing) $('cDel').addEventListener('click', () => { if (confirm('Supprimer ce client ?')) { DRAFTS.clear(key); clients = clients.filter((x) => x.id !== w.id); saveClients(); closeModal(); renderClients(); } });
   $('cSave').addEventListener('click', () => {
     if (!w.nom.trim()) { $('cErr').textContent = 'Le nom est obligatoire.'; return; }
     if (!addrStr(w.addr).trim()) { $('cErr').textContent = 'L\'adresse du client est obligatoire.'; return; }
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
-    saveClients(); closeModal();
+    DRAFTS.clear(key); saveClients(); closeModal();
     if (onSaved) onSaved(w); else renderClients();
   });
 }
@@ -607,24 +663,29 @@ function renderAdresses() {
   });
 }
 function modalAdresse(existing, onSaved) {
-  const w = existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), nom: '', addr: emptyAddr() };
+  const key = 'adresse:' + (existing ? existing.id : 'new');
+  const draft = DRAFTS.get(key);
+  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), nom: '', addr: emptyAddr() });
   w.addr = toAddr(w.addr);
+  const saveDraft = () => DRAFTS.set(key, w);
   openModal(`<div class="modal-head"><b>${existing ? 'Éditer' : 'Nouvelle'} adresse de départ</b><button class="x" id="mX">✕</button></div>
+    ${draft ? '<div class="draft-bar">✏️ Brouillon en cours restauré<button class="btn small" id="adDraftReset">Effacer le brouillon</button></div>' : ''}
     <label>Nom de l'adresse<input type="text" id="adNom" value="${esc(w.nom)}" placeholder="Domicile, Écurie du Nord…" /></label>
     <h2 style="font-size:.9rem">Adresse</h2><div id="adAddr"></div>
     ${existing ? '<button class="btn small danger" id="adDel">Supprimer</button>' : ''}
     <div class="actions"><button class="btn primary block" id="adOk">Enregistrer</button></div>
     <p class="status err" id="adErr"></p>`);
-  mountAddress($('adAddr'), w.addr, (a) => { w.addr = a; });
+  mountAddress($('adAddr'), w.addr, (a) => { w.addr = a; saveDraft(); });
   $('mX').addEventListener('click', closeModal);
-  $('adNom').addEventListener('input', (e) => { w.nom = e.target.value; });
-  if (existing) $('adDel').addEventListener('click', () => { if (confirm('Supprimer cette adresse ?')) { S.adresses = S.adresses.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderAdresses(); } });
+  if (draft && $('adDraftReset')) $('adDraftReset').addEventListener('click', () => { DRAFTS.clear(key); closeModal(); modalAdresse(existing, onSaved); });
+  $('adNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
+  if (existing) $('adDel').addEventListener('click', () => { if (confirm('Supprimer cette adresse ?')) { DRAFTS.clear(key); S.adresses = S.adresses.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderAdresses(); } });
   $('adOk').addEventListener('click', async () => {
     if (!w.nom.trim()) { $('adErr').textContent = 'Le nom est obligatoire.'; return; }
     if (!addrStr(w.addr).trim()) { $('adErr').textContent = 'L\'adresse est obligatoire.'; return; }
     if (!w.addr.lat) { try { const g = await geocode(w.addr); w.addr.lat = g.lat; w.addr.lon = g.lon; } catch { /* localisation différée */ } }
     const i = S.adresses.findIndex((x) => x.id === w.id); if (i >= 0) S.adresses[i] = w; else S.adresses.push(w);
-    saveSettings(); closeModal();
+    DRAFTS.clear(key); saveSettings(); closeModal();
     if (onSaved) onSaved(w); else renderAdresses();
   });
 }
@@ -1543,23 +1604,92 @@ function modalTourArticle(existing) {
   });
 }
 
+// ================= SMS (modèle) =================
+const SMS_FIELDS = [
+  { k: '{client}', label: 'Client (nom prénom)' },
+  { k: '{societe}', label: 'Société' },
+  { k: '{cheval}', label: 'Cheval(aux)' },
+  { k: '{trajet}', label: 'Temps de trajet' },
+  { k: '{adresse}', label: 'Adresse' },
+];
+// Remplace {champ} par les valeurs fournies (laisse le jeton tel quel si absent).
+function fillSms(tpl, data) { return String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (data[k] != null && data[k] !== '' ? data[k] : m)); }
+function insertAtCursor(ta, text) {
+  const s = ta.selectionStart != null ? ta.selectionStart : ta.value.length, e = ta.selectionEnd != null ? ta.selectionEnd : ta.value.length;
+  ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+  ta.selectionStart = ta.selectionEnd = s + text.length; ta.focus();
+  S.smsTemplate = ta.value; saveSettings(); updateSmsPreview();
+}
+function updateSmsPreview() {
+  const p = $('smsPreview'); if (!p) return;
+  const sample = fillSms(S.smsTemplate, { client: 'Jean Dupont', societe: 'Écurie du Nord', cheval: 'Indianna', trajet: '15 min', adresse: 'Rue de l\'Exemple 1, 5000 Namur' });
+  p.innerHTML = '<b>Aperçu :</b> ' + esc(sample);
+}
+function renderSMS() {
+  const ta = $('smsTemplate'); if (!ta) return;
+  ta.value = S.smsTemplate || '';
+  ta.oninput = () => { S.smsTemplate = ta.value; saveSettings(); updateSmsPreview(); };
+  const box = $('smsFields'); if (box) { box.innerHTML = ''; SMS_FIELDS.forEach((f) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small'; b.textContent = '+ ' + f.label; b.addEventListener('click', () => insertAtCursor(ta, f.k)); box.appendChild(b); }); }
+  updateSmsPreview();
+}
+
 // ================= ACCUEIL =================
+// Temps de trajet cumulé (min, depuis le départ) jusqu'à chaque arrêt d'une tournée calculée.
+function legMinutesFor(t) {
+  const R = t.result; const out = [];
+  const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
+  let cum = 0;
+  (t.arrets || []).forEach((a, i) => { const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; cum += seg * mpk; out.push(R && R.rows ? cum : null); });
+  return out;
+}
+function renderHomeTrajet() {
+  const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
+  const todays = [...tournees].filter((t) => tourStatus(t.date) === 'active');
+  const rows = [];
+  todays.forEach((t) => { const mins = legMinutesFor(t); (t.arrets || []).forEach((a, i) => rows.push({ a, trajetMin: mins[i] })); });
+  $('homeTrajetEmpty').style.display = rows.length ? 'none' : 'block';
+  rows.forEach((r, idx) => {
+    const a = r.a;
+    const adresse = addrStr(a.addr);
+    const chNames = (a.clients || []).flatMap((cl) => (cl.chevaux || []).map((c) => c.nom)).filter(Boolean).join(', ');
+    const cl0 = (a.clients || [])[0] || {}; const c0 = clients.find((x) => x.id === cl0.clientId) || {};
+    const trajet = r.trajetMin != null ? Math.round(r.trajetMin) + ' min' : '—';
+    const el = document.createElement('div'); el.className = 'list-item';
+    el.innerHTML = `<div class="li-main"><b>${idx + 1}. 📍 ${esc(adresse) || '<i>adresse ?</i>'}</b><span class="li-sub">${esc(labelFor(a))}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajet}</span></div>
+      <div class="li-act"><button class="btn small" data-waze>Waze</button> <button class="btn small" data-sms>SMS</button></div>`;
+    el.querySelector('[data-waze]').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(adresse); } catch { /* ignore */ }
+      const url = (a.addr.lat && a.addr.lon) ? `https://waze.com/ul?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `https://waze.com/ul?q=${encodeURIComponent(adresse)}&navigate=yes`;
+      window.open(url, '_blank');
+    });
+    el.querySelector('[data-sms]').addEventListener('click', async () => {
+      const msg = fillSms(S.smsTemplate, { client: c0.nom || '', societe: c0.societe || '', cheval: chNames, trajet, adresse });
+      const btn = el.querySelector('[data-sms]');
+      try { await navigator.clipboard.writeText(msg); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); }
+      catch { alert(msg); }
+    });
+    box.appendChild(el);
+  });
+}
 function renderHome() {
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
   const today = [...tournees].filter((t) => tourStatus(t.date) === 'active').sort(byDate);
   const upcoming = [...tournees].filter((t) => tourStatus(t.date) === 'avenir').sort(byDate); // du plus proche au plus lointain
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((t) => box.appendChild(tourListItem(t, true))); };
+  renderHomeTrajet();
   fill('homeToday', 'homeTodayEmpty', today);
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
 }
 function modalVehicule() {
   openModal(`<div class="modal-head"><b>📋 Déclarer un événement</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Que voulez-vous faire ?</p>
+    <div class="actions"><button class="btn primary block" id="vClient">👤 Créer un client</button></div>
     <div class="actions"><button class="btn block" id="vPlein">⛽ Valider un plein (prix du carburant)</button></div>
     <div class="actions"><button class="btn block" id="vConso">🚗 Corriger la consommation</button></div>
     <div class="actions"><button class="btn block" id="vFrais">🧾 Frais véhicule (entretien, achat…)</button></div>
     <div class="actions"><button class="btn block" id="vMat">🧰 Frais de matériel</button></div>`);
   $('mX').addEventListener('click', closeModal);
+  $('vClient').addEventListener('click', () => { closeModal(); editClient(null); });
   $('vPlein').addEventListener('click', modalPlein);
   $('vConso').addEventListener('click', modalConso);
   $('vFrais').addEventListener('click', () => { closeModal(); showTab('gestion'); showGestion('vehicule'); });
@@ -1647,6 +1777,8 @@ function bindSettings() {
   if ($('setDureeMode')) $('setDureeMode').value = S.dureeAuto ? 'auto' : 'vitesse';
   toggleKeyRow(); refreshTarifTable();
   if ($('setAccent')) { $('setAccent').value = S.accentColor; $('setAccent').addEventListener('input', (e) => { S.accentColor = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
+  if ($('setTopbar')) { $('setTopbar').value = S.topbarColor || S.accentColor; $('setTopbar').addEventListener('input', (e) => { S.topbarColor = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
+  if ($('setNavbar')) { $('setNavbar').value = S.navBarColor || (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff'); $('setNavbar').addEventListener('input', (e) => { S.navBarColor = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
   if ($('setAppBg')) { $('setAppBg').value = S.appBg; $('setAppBg').addEventListener('input', (e) => { S.appBg = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
   if ($('setLogoBg')) { if (S.logoBg && S.logoBg !== 'transparent') $('setLogoBg').value = S.logoBg; $('setLogoBg').addEventListener('input', (e) => { S.logoBg = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
   refreshSwatches();
@@ -1756,11 +1888,12 @@ function updateReglagesUI() {
 function refreshEverywhere() {
   $('fuelChip').textContent = '⛽ ' + eur(S.prixPleinL) + '/L';
   $('consoChip').textContent = '🚗 ' + (S.consoL100 || 0) + ' L/100';
+  if ($('kmMonthChip')) $('kmMonthChip').textContent = '🗓 ' + km(kmStats().mois);
   refreshTarifTable(); updateReglagesUI();
   if ($('tab-accueil').classList.contains('active')) renderHome();
   // Note : vehicule / materiel / articles ne sont PAS re-rendus ici (édition inline = ne pas détruire les champs en cours de frappe).
   // Les champs calculés (TTC, tarifs) sont mis à jour par updateReglagesUI()/refreshTarifTable() ci-dessus.
-  if ($('tab-gestion').classList.contains('active') && currentGsub === 'calcul') renderCalcul();
+  if ($('tab-reglages').classList.contains('active') && currentRsub === 'calcul') renderCalcul();
   if ($('tab-stats') && $('tab-stats').classList.contains('active')) renderStats();
 }
 
@@ -1770,8 +1903,9 @@ window.addEventListener('DOMContentLoaded', () => {
   applyTheme(); // couleur du thème (bandeau & boutons)
   const av = $('appVersion'); if (av) av.textContent = 'v' + APP_VERSION;
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
-  document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => { showTab(b.dataset.goto); if (b.dataset.gsub) showGestion(b.dataset.gsub); }));
+  document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => { showTab(b.dataset.goto); if (b.dataset.gsub) showGestion(b.dataset.gsub); if (b.dataset.rsub) showReglages(b.dataset.rsub); }));
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
+  document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 
   bindSettings(); refreshEverywhere(); renderHome();
@@ -1785,6 +1919,20 @@ window.addEventListener('DOMContentLoaded', () => {
   $('btnNewTour').addEventListener('click', newTour);
   $('btnNewTour2').addEventListener('click', newTour);
   $('btnNewClient').addEventListener('click', () => editClient(null));
+  if ($('btnInstall')) $('btnInstall').addEventListener('click', async () => {
+    const h = $('installHint');
+    if (_deferredInstall) {
+      _deferredInstall.prompt();
+      try { const r = await _deferredInstall.userChoice; h.className = 'hint'; h.textContent = r.outcome === 'accepted' ? 'Installation lancée ✔ — l\'icône apparaît sur l\'écran d\'accueil.' : 'Installation annulée.'; } catch { /* ignore */ }
+      _deferredInstall = null;
+    } else {
+      const ua = navigator.userAgent || '';
+      if (/iPhone|iPad|iPod/i.test(ua)) h.innerHTML = 'Sur iPhone/iPad (Safari) : bouton <b>Partager</b> ⬆ → <b>« Sur l\'écran d\'accueil »</b>.';
+      else if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) h.textContent = 'App déjà installée ✔ (vous l\'utilisez en mode application).';
+      else h.innerHTML = 'Menu du navigateur (⋮) → <b>« Installer l\'application »</b> / <b>« Ajouter à l\'écran d\'accueil »</b>.';
+    }
+  });
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); _deferredInstall = e; });
   if ($('btnBackup')) $('btnBackup').addEventListener('click', modalBackup);
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);

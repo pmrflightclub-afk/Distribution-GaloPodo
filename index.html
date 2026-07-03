@@ -18,6 +18,7 @@
     <div class="chips">
       <div class="fuel-chip" id="fuelChip" title="Prix du dernier plein (TVAC)">⛽ —</div>
       <div class="fuel-chip" id="consoChip" title="Consommation moyenne">🚗 —</div>
+      <div class="fuel-chip" id="kmMonthChip" title="Parcours mensuel (km ce mois)">🗓 —</div>
     </div>
   </header>
 
@@ -33,7 +34,17 @@
 
   <!-- ============ ACCUEIL ============ -->
   <main id="tab-accueil" class="tab-panel active">
+    <div class="actions two">
+      <button class="btn" id="btnVehicule">📋 Déclarer un événement</button>
+      <button class="btn" data-goto="reglages" data-rsub="calcul">❓ Comment ça marche</button>
+    </div>
     <div class="actions"><button class="btn primary block big" id="btnNewTour">➕ Créer une tournée</button></div>
+    <section class="card">
+      <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
+      <p class="hint">Chaque arrêt de la tournée d'aujourd'hui, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
+      <div id="homeTrajet" class="list"></div>
+      <p class="empty" id="homeTrajetEmpty">Aucune tournée aujourd'hui.</p>
+    </section>
     <section class="card">
       <h2>Aujourd'hui</h2>
       <div id="homeToday" class="list"></div>
@@ -44,10 +55,6 @@
       <div id="homeUpcoming" class="list"></div>
       <p class="empty" id="homeUpcomingEmpty">Aucune tournée à venir.</p>
     </section>
-    <div class="actions two">
-      <button class="btn" id="btnVehicule">📋 Déclarer un événement</button>
-      <button class="btn" data-goto="gestion" data-gsub="calcul">❓ Comment ça marche</button>
-    </div>
   </main>
 
   <!-- ============ TOURNÉES ============ -->
@@ -121,7 +128,7 @@
       <button class="subtab" data-gsub="materiel">Frais matériel</button>
       <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
       <button class="subtab" data-gsub="adresses">Mes adresses</button>
-      <button class="subtab" data-gsub="calcul">Calcul</button>
+      <button class="subtab" data-gsub="sms">SMS</button>
     </nav>
 
     <div id="gsub-clients" class="subpanel active">
@@ -130,6 +137,13 @@
     </div>
 
     <div id="gsub-adresses" class="subpanel">
+      <section class="card">
+        <h2>Point de départ (domicile / base)</h2>
+        <p class="hint">Adresse de départ par défaut de toutes vos tournées (modifiable par tournée via « Changer le départ »).</p>
+        <div id="homeAddr"></div>
+        <button class="btn small" id="geocodeHome">Localiser cette adresse</button>
+        <p class="hint" id="homeGeoHint"></p>
+      </section>
       <div class="actions"><button class="btn primary block" id="btnAddAdresse">➕ Nouvelle adresse de départ</button></div>
       <section class="card">
         <p class="hint">Adresses de départ réutilisables (domicile, écurie, second point de départ…). Sélectionnez-en une dans une tournée via « Changer le départ ».</p>
@@ -226,7 +240,15 @@
       </section>
     </div>
 
-    <div id="gsub-calcul" class="subpanel"><div id="calculBody"></div></div>
+    <div id="gsub-sms" class="subpanel">
+      <section class="card">
+        <h2>Modèle de SMS</h2>
+        <p class="hint">Ce message est copié depuis « Trajet du jour » (bouton SMS par arrêt). Cliquez un champ pour l'insérer — il sera remplacé automatiquement par les infos de l'arrêt.</p>
+        <div class="sms-fields" id="smsFields"></div>
+        <textarea id="smsTemplate" class="bk-area" spellcheck="false" style="height:150px"></textarea>
+        <p class="hint" id="smsPreview"></p>
+      </section>
+    </div>
   </main>
 
   <!-- ============ STATS ============ -->
@@ -257,11 +279,47 @@
 
   <!-- ============ RÉGLAGES ============ -->
   <main id="tab-reglages" class="tab-panel">
+    <nav class="subtabs scroll" id="reglagesSub">
+      <button class="subtab active" data-rsub="config">Configuration</button>
+      <button class="subtab" data-rsub="service">Service</button>
+      <button class="subtab" data-rsub="calcul">Calcul</button>
+      <button class="subtab" data-rsub="theme">Thème</button>
+    </nav>
+
+    <div id="rsub-config" class="subpanel active">
     <section class="card">
-      <h2>Point de départ (domicile / base)</h2>
-      <div id="homeAddr"></div>
-      <button class="btn small" id="geocodeHome">Localiser cette adresse</button>
-      <p class="hint" id="homeGeoHint"></p>
+      <h2>Installer l'app</h2>
+      <p class="hint">Ajoutez GaloPodo à l'écran d'accueil de votre téléphone/tablette : une icône ouvrira l'app directement.</p>
+      <button class="btn primary block" id="btnInstall">📲 Installer / Ajouter à l'écran d'accueil</button>
+      <p class="hint" id="installHint"></p>
+    </section>
+    <section class="card">
+      <h2>Client proche &amp; répartition</h2>
+      <label>Répartition du kilométrage
+        <select id="setRepartition">
+          <option value="egal">Parts égales entre arrêts (équitable — défaut)</option>
+          <option value="prorata">Au prorata du segment</option>
+          <option value="parclient">Par client + seuil « client proche »</option>
+        </select>
+      </label>
+      <div class="row">
+        <label class="grow" id="lblSeuil">Seuil « client proche »<input type="number" id="setSeuil" step="1" min="0" /></label>
+        <label class="grow" id="lblForfait">Forfait client proche<input type="number" id="setForfait" step="0.01" min="0" /></label>
+        <label class="grow">Forfait<input id="setForfaitTTC" /></label>
+      </div>
+      <div class="row">
+        <label class="grow">Type de tarif déplacement<select id="setSeuilType"><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label>
+        <label class="grow">Tarif appliqué<input id="setSeuilTarif" /></label>
+      </div>
+      <div class="row">
+        <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepHT" /></label>
+        <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepTTC" /></label>
+      </div>
+      <p class="hint">Montant que l'app facturerait pour la distance du seuil <b>si aucun forfait</b> n'était fixé, selon le type de tarif choisi — pour vous aider à fixer votre forfait.</p>
+      <p class="hint" id="forfaitBreakdown"></p>
+      <p class="hint" id="seuilNote"></p>
+      <label>Rayon « même écurie »<input type="number" id="setRayon" step="0.1" min="0" /></label>
+      <p class="hint">Le rayon signale deux arrêts très proches (même écurie ?).</p>
     </section>
 
     <section class="card">
@@ -294,6 +352,24 @@
     </section>
 
     <section class="card">
+      <h2>Sauvegarde &amp; transfert</h2>
+      <p class="hint">Exportez vos réglages, articles, frais et données (sauvegarde, transfert d'appareil, ou pour définir les valeurs par défaut de l'app). Importez une sauvegarde pour tout restaurer.</p>
+      <button class="btn small" id="btnBackup">💾 Sauvegarde / restauration</button>
+    </section>
+    </div><!-- /rsub-config -->
+
+    <div id="rsub-service" class="subpanel">
+    <section class="card">
+      <h2>Service de cartographie</h2>
+      <label>Fournisseur
+        <select id="setProvider">
+          <option value="osm">OpenStreetMap public (sans clé, usage léger)</option>
+          <option value="geoapify">Geoapify (avec clé, suggestions + quota)</option>
+        </select>
+      </label>
+      <label id="keyRow">Clé API Geoapify<input type="text" id="setKey" placeholder="Collez votre clé Geoapify" /></label>
+    </section>
+    <section class="card">
       <h2>Estimation de la durée</h2>
       <div class="row">
         <label class="grow">Méthode<select id="setDureeMode">
@@ -306,62 +382,26 @@
       <button class="btn small" id="btnRefreshTours">↻ Actualiser les tournées (aujourd'hui + à venir)</button>
       <p class="hint" id="refreshToursHint">Recalcule les durées et montants des tournées <b>d'aujourd'hui et à venir</b>. Les clôturées et archivées ne sont pas modifiées.</p>
     </section>
+    </div><!-- /rsub-service -->
 
-    <section class="card">
-      <h2>Client proche &amp; répartition</h2>
-      <label>Répartition du kilométrage
-        <select id="setRepartition">
-          <option value="egal">Parts égales entre arrêts (équitable — défaut)</option>
-          <option value="prorata">Au prorata du segment</option>
-          <option value="parclient">Par client + seuil « client proche »</option>
-        </select>
-      </label>
-      <div class="row">
-        <label class="grow" id="lblSeuil">Seuil « client proche »<input type="number" id="setSeuil" step="1" min="0" /></label>
-        <label class="grow" id="lblForfait">Forfait client proche<input type="number" id="setForfait" step="0.01" min="0" /></label>
-        <label class="grow">Forfait<input id="setForfaitTTC" /></label>
-      </div>
-      <div class="row">
-        <label class="grow">Type de tarif déplacement<select id="setSeuilType"><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label>
-        <label class="grow">Tarif appliqué<input id="setSeuilTarif" /></label>
-      </div>
-      <div class="row">
-        <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepHT" /></label>
-        <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepTTC" /></label>
-      </div>
-      <p class="hint">Montant que l'app facturerait pour la distance du seuil <b>si aucun forfait</b> n'était fixé, selon le type de tarif choisi — pour vous aider à fixer votre forfait.</p>
-      <p class="hint" id="forfaitBreakdown"></p>
-      <p class="hint" id="seuilNote"></p>
-      <label>Rayon « même écurie »<input type="number" id="setRayon" step="0.1" min="0" /></label>
-      <p class="hint">Le rayon signale deux arrêts très proches (même écurie ?).</p>
-    </section>
+    <div id="rsub-calcul" class="subpanel"><div id="calculBody"></div></div>
 
-    <section class="card">
-      <h2>Service de cartographie</h2>
-      <label>Fournisseur
-        <select id="setProvider">
-          <option value="osm">OpenStreetMap public (sans clé, usage léger)</option>
-          <option value="geoapify">Geoapify (avec clé, suggestions + quota)</option>
-        </select>
-      </label>
-      <label id="keyRow">Clé API Geoapify<input type="text" id="setKey" placeholder="Collez votre clé Geoapify" /></label>
-    </section>
-
-    <section class="card">
-      <h2>Apparence</h2>
-      <label>Couleur des boutons<input type="color" id="setAccent" /></label>
-      <div class="swatches" id="swatches"></div>
-      <label style="margin-top:12px">Couleur du fond de l'app<input type="color" id="setAppBg" /></label>
-      <div class="swatches" id="bgSwatches"></div>
-      <label style="margin-top:12px">Fond du logo (couleur perso)<input type="color" id="setLogoBg" /></label>
-      <div class="swatches" id="logoBgSwatches"></div>
-    </section>
-    <section class="card">
-      <h2>Sauvegarde &amp; transfert</h2>
-      <p class="hint">Exportez vos réglages, articles, frais et données (sauvegarde, transfert d'appareil, ou pour définir les valeurs par défaut de l'app). Importez une sauvegarde pour tout restaurer.</p>
-      <button class="btn small" id="btnBackup">💾 Sauvegarde / restauration</button>
-    </section>
-    <p class="status ok">Réglages enregistrés automatiquement. · <span id="appVersion"></span></p>
+    <div id="rsub-theme" class="subpanel">
+      <section class="card">
+        <h2>Apparence</h2>
+        <label>Couleur des boutons<input type="color" id="setAccent" /></label>
+        <div class="swatches" id="swatches"></div>
+        <label style="margin-top:12px">Couleur du bandeau principal<input type="color" id="setTopbar" /></label>
+        <div class="swatches" id="topbarSwatches"></div>
+        <label style="margin-top:12px">Couleur de la barre d'onglets<input type="color" id="setNavbar" /></label>
+        <div class="swatches" id="navbarSwatches"></div>
+        <label style="margin-top:12px">Couleur du fond de l'app<input type="color" id="setAppBg" /></label>
+        <div class="swatches" id="bgSwatches"></div>
+        <label style="margin-top:12px">Fond du logo (couleur perso)<input type="color" id="setLogoBg" /></label>
+        <div class="swatches" id="logoBgSwatches"></div>
+      </section>
+      <p class="status ok">Réglages enregistrés automatiquement. · <span id="appVersion"></span></p>
+    </div><!-- /rsub-theme -->
   </main>
 
   <div id="modal" class="modal-overlay hidden"><div class="modal" id="modalBox"></div></div>
