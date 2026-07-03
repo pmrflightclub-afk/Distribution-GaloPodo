@@ -90,9 +90,12 @@
         <div class="tile"><span class="t-label">Total HT</span><span class="t-val" id="rHT">—</span></div>
         <div class="tile"><span class="t-label">TVA</span><span class="t-val" id="rTVA">—</span></div>
         <div class="tile strong"><span class="t-label">Total TTC</span><span class="t-val" id="rTTC">—</span></div>
-        <div class="tile"><span class="t-label">Provision charge (véhicule)</span><span class="t-val" id="rMarge">—</span></div>
-        <div class="tile"><span class="t-label">Marge réelle (temps/urgence)</span><span class="t-val" id="rMargeReelle">—</span></div>
       </div>
+    </section>
+    <section class="card">
+      <h2>Analytique (HT)</h2>
+      <div class="tiles tiles-3" id="analyticTiles"></div>
+      <p class="hint">Répartition HT de la tournée : Services + Matériel + Véhicule + Marge = Total HT. Glissez les cases pour les réordonner ; renommez-les dans Réglages → Analyse.</p>
     </section>
     <section class="card">
       <div class="card-head"><h2>Arrêts</h2><button class="btn small" id="edAddArret">+ Ajouter</button></div>
@@ -123,13 +126,16 @@
 
   <!-- ============ GESTION (hub) ============ -->
   <main id="tab-gestion" class="tab-panel">
-    <nav class="subtabs scroll" id="gestionSub">
-      <button class="subtab" data-gsub="adresses">Mes adresses</button>
-      <button class="subtab active" data-gsub="clients">Clients</button>
-      <button class="subtab" data-gsub="articles">Articles</button>
-      <button class="subtab" data-gsub="materiel">Frais matériel</button>
-      <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
-      <button class="subtab" data-gsub="sms">SMS</button>
+    <nav class="subtabs" id="gestionSub">
+      <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Clients</span><span class="nav-caret">▾</span></button>
+      <div class="subtabs-list">
+        <button class="subtab" data-gsub="adresses">Mes adresses</button>
+        <button class="subtab active" data-gsub="clients">Clients</button>
+        <button class="subtab" data-gsub="articles">Articles</button>
+        <button class="subtab" data-gsub="materiel">Frais matériel</button>
+        <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
+        <button class="subtab" data-gsub="sms">SMS</button>
+      </div>
     </nav>
 
     <div id="gsub-clients" class="subpanel active">
@@ -280,11 +286,15 @@
 
   <!-- ============ RÉGLAGES ============ -->
   <main id="tab-reglages" class="tab-panel">
-    <nav class="subtabs scroll" id="reglagesSub">
-      <button class="subtab active" data-rsub="config">Configuration</button>
-      <button class="subtab" data-rsub="service">Service</button>
-      <button class="subtab" data-rsub="calcul">Calcul</button>
-      <button class="subtab" data-rsub="theme">Thème</button>
+    <nav class="subtabs" id="reglagesSub">
+      <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Configuration</span><span class="nav-caret">▾</span></button>
+      <div class="subtabs-list">
+        <button class="subtab active" data-rsub="config">Configuration</button>
+        <button class="subtab" data-rsub="service">Service</button>
+        <button class="subtab" data-rsub="calcul">Calcul</button>
+        <button class="subtab" data-rsub="analyse">Analyse</button>
+        <button class="subtab" data-rsub="theme">Thème</button>
+      </div>
     </nav>
 
     <div id="rsub-config" class="subpanel active">
@@ -303,22 +313,24 @@
           <option value="parclient">Par client + seuil « client proche »</option>
         </select>
       </label>
-      <div class="row">
-        <label class="grow" id="lblSeuil">Seuil « client proche »<input type="number" id="setSeuil" step="1" min="0" /></label>
-        <label class="grow" id="lblForfait">Forfait client proche<input type="number" id="setForfait" step="0.01" min="0" /></label>
-        <label class="grow">Forfait<input id="setForfaitTTC" /></label>
+      <div id="seuilBlock">
+        <div class="row">
+          <label class="grow" id="lblSeuil">Seuil « client proche »<input type="number" id="setSeuil" step="1" min="0" /></label>
+          <label class="grow" id="lblForfait">Forfait client proche<input type="number" id="setForfait" step="0.01" min="0" /></label>
+          <label class="grow">Forfait<input id="setForfaitTTC" /></label>
+        </div>
+        <div class="row">
+          <label class="grow">Type de tarif déplacement<select id="setSeuilType"><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label>
+          <label class="grow">Tarif appliqué<input id="setSeuilTarif" /></label>
+        </div>
+        <div class="row">
+          <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepHT" /></label>
+          <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepTTC" /></label>
+        </div>
+        <p class="hint">Montant que l'app facturerait pour la distance du seuil <b>si aucun forfait</b> n'était fixé, selon le type de tarif choisi — pour vous aider à fixer votre forfait.</p>
+        <p class="hint" id="forfaitBreakdown"></p>
+        <p class="hint" id="seuilNote"></p>
       </div>
-      <div class="row">
-        <label class="grow">Type de tarif déplacement<select id="setSeuilType"><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label>
-        <label class="grow">Tarif appliqué<input id="setSeuilTarif" /></label>
-      </div>
-      <div class="row">
-        <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepHT" /></label>
-        <label class="grow">Déplacement au seuil (indicatif)<input id="setSeuilDepTTC" /></label>
-      </div>
-      <p class="hint">Montant que l'app facturerait pour la distance du seuil <b>si aucun forfait</b> n'était fixé, selon le type de tarif choisi — pour vous aider à fixer votre forfait.</p>
-      <p class="hint" id="forfaitBreakdown"></p>
-      <p class="hint" id="seuilNote"></p>
       <label>Rayon « même écurie »<input type="number" id="setRayon" step="0.1" min="0" /></label>
       <p class="hint">Le rayon signale deux arrêts très proches (même écurie ?).</p>
     </section>
@@ -386,6 +398,19 @@
     </div><!-- /rsub-service -->
 
     <div id="rsub-calcul" class="subpanel"><div id="calculBody"></div></div>
+
+    <div id="rsub-analyse" class="subpanel">
+      <section class="card">
+        <h2>Titres des cases — Analytique (tournée)</h2>
+        <p class="hint">Renommez les cases affichées dans la section <b>Analytique</b> d'une tournée (toutes en HT).</p>
+        <div id="analyseAnalytic"></div>
+      </section>
+      <section class="card">
+        <h2>Titres des cases — Statistiques</h2>
+        <p class="hint">Renommez les cases affichées sur la page <b>Stats</b> (utilisation du véhicule).</p>
+        <div id="analyseStats"></div>
+      </section>
+    </div>
 
     <div id="rsub-theme" class="subpanel">
       <section class="card">

@@ -11,7 +11,7 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.4';
+const APP_VERSION = '1.1.5';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 function isNewerVersion(a, b) {
   const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
@@ -83,6 +83,8 @@ const DEFAULTS = {
   seuilTarifType: 'tournee',                    // type de tarif pour le déplacement indicatif au seuil
   adresses: [],                                // carnet d'adresses de départ : {id, nom, addr}
   statOrder: [],                               // ordre personnalisé des tuiles de la page Stats
+  analyticOrder: [],                           // ordre personnalisé des cases Analytique (tournée)
+  tileLabels: {},                              // titres personnalisés des cases (stats + analytique)
 };
 const _hadSettings = localStorage.getItem('ftr.settings') != null; // 1er lancement ? (pour la config usine)
 let S = Object.assign({}, DEFAULTS, LS.get('ftr.settings', {}));
@@ -110,6 +112,8 @@ S.statOrder = Array.isArray(S.statOrder) ? S.statOrder : [];
 if (!['tournee', 'visite', 'urgence'].includes(S.seuilTarifType)) S.seuilTarifType = 'tournee';
 S.adresses = Array.isArray(S.adresses) ? S.adresses : [];
 S.adresses.forEach((a) => { a.addr = toAddr(a.addr); });
+S.analyticOrder = Array.isArray(S.analyticOrder) ? S.analyticOrder : [];
+S.tileLabels = (S.tileLabels && typeof S.tileLabels === 'object') ? S.tileLabels : {};
 
 // ── Configuration usine (réglages/articles/frais par défaut du pro) ──
 // Appliquée UNIQUEMENT au tout premier lancement (aucune donnée locale). Ne touche pas un utilisateur existant.
@@ -297,6 +301,9 @@ function saveTournees() { LS.set('ftr.tournees', tournees); }
   clients.forEach((c) => {
     if (c.adresse !== undefined) { c.addr = toAddr(c.adresse); delete c.adresse; }
     c.addr = toAddr(c.addr);
+    // Migration nom → prénom + nom : on NE TOUCHE PAS au nom existant (aucune perte), on ajoute juste un prénom vide.
+    if (c.prenom === undefined) c.prenom = '';
+    if (c.nom === undefined) c.nom = '';
     if (c.societe === undefined) c.societe = '';
     if (c.assujettiTva === undefined) c.assujettiTva = false;
     if (c.tvaNum === undefined) c.tvaNum = '';
@@ -387,7 +394,8 @@ const baseVehiculeHT = () => amortContribHT() + S.frais.reduce((s, f) => s + fra
 const tempsPerKm = () => (S.kmHeure > 0 ? (S.prixHeure || 0) / S.kmHeure : 0); // temps de déplacement €/km = prix/heure ÷ km/heure
 const tarifHT = (type) => baseVehiculeHT() + fuelPerKmHT() + (type !== 'tournee' ? tempsPerKm() : 0) + (type === 'urgence' ? S.urgenceSuppKm : 0);
 const ttc = (ht) => ht * (1 + rate());
-const clientName = (id) => { const c = clients.find((x) => x.id === id); return c ? c.nom : '?'; };
+const fullName = (c) => c ? [c.prenom, c.nom].filter((x) => x && String(x).trim()).join(' ').trim() : '';
+const clientName = (id) => { const c = clients.find((x) => x.id === id); return c ? (fullName(c) || '?') : '?'; };
 const arretNbClients = (a) => (a.clients || []).length;
 // Adresse de départ effective : celle de la tournée si définie, sinon le domicile des Réglages.
 const tourHome = () => (currentTour && currentTour.home && addrStr(currentTour.home).trim()) ? currentTour.home : S.home;
@@ -551,7 +559,11 @@ function showReglages(sub) {
   currentRsub = sub || 'config';
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.classList.toggle('active', b.dataset.rsub === currentRsub));
   document.querySelectorAll('#tab-reglages .subpanel').forEach((p) => p.classList.toggle('active', p.id === 'rsub-' + currentRsub));
+  const rb = document.querySelector('#reglagesSub .subtab[data-rsub="' + currentRsub + '"]'), rl = document.querySelector('#reglagesSub .subnav-label');
+  if (rb && rl) rl.textContent = rb.textContent;
+  if ($('reglagesSub')) $('reglagesSub').classList.remove('open');
   if (currentRsub === 'calcul') renderCalcul();
+  if (currentRsub === 'analyse') renderAnalyse();
   window.scrollTo(0, 0);
 }
 
@@ -561,6 +573,9 @@ function showGestion(sub) {
   currentGsub = sub || 'clients';
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.classList.toggle('active', b.dataset.gsub === currentGsub));
   document.querySelectorAll('#tab-gestion .subpanel').forEach((p) => p.classList.toggle('active', p.id === 'gsub-' + currentGsub));
+  const gb = document.querySelector('#gestionSub .subtab[data-gsub="' + currentGsub + '"]'), gl = document.querySelector('#gestionSub .subnav-label');
+  if (gb && gl) gl.textContent = gb.textContent;
+  if ($('gestionSub')) $('gestionSub').classList.remove('open');
   if (currentGsub === 'clients') renderClients();
   if (currentGsub === 'adresses') renderAdresses();
   if (currentGsub === 'articles') renderArticlesPage();
@@ -576,24 +591,25 @@ function renderClients() {
   clients.forEach((c) => {
     const nAdr = new Set((c.chevaux || []).map((h) => norm(addrStr(chevalAddr(c, h))))).size || 1;
     const soc = c.societe ? ' — ' + esc(c.societe) : '';
-    const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>${esc(c.nom)}${soc}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${(c.chevaux || []).length} cheval(aux)${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}</span></div><div class="li-act"><button class="btn small" data-edit>Éditer</button></div>`;
-    el.querySelector('[data-edit]').addEventListener('click', () => editClient(c));
+    const el = document.createElement('div'); el.className = 'list-item clickable';
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${(c.chevaux || []).length} cheval(aux)${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    el.addEventListener('click', () => editClient(c));
     list.appendChild(el);
   });
 }
 function editClient(existing, onSaved) {
   const key = 'client:' + (existing ? existing.id : 'new');
   const draft = DRAFTS.get(key);
-  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), nom: '', societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
+  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), prenom: '', nom: '', societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
   w.addr = toAddr(w.addr); w.societeAddr = toAddr(w.societeAddr);
+  if (w.prenom === undefined) w.prenom = '';
   if (w.societe === undefined) w.societe = '';
   if (w.societeMemeAdresse === undefined) w.societeMemeAdresse = true;
   const saveDraft = () => DRAFTS.set(key, w); // mémorise la saisie en cours
   openModal(`
     <div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} client</b><button class="x" id="mX">✕</button></div>
     ${draft ? '<div class="draft-bar">✏️ Brouillon en cours restauré<button class="btn small" id="cDraftReset">Effacer le brouillon</button></div>' : ''}
-    <label>Nom (nom &amp; prénom)<input type="text" id="cNom" value="${esc(w.nom)}" /></label>
+    <div class="row"><label class="grow">Prénom<input type="text" id="cPrenom" value="${esc(w.prenom || '')}" /></label><label class="grow">Nom<input type="text" id="cNom" value="${esc(w.nom)}" /></label></div>
     <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
     <h2 style="font-size:.9rem">Adresse du client</h2><div id="cAddr"></div>
     <div id="cLegal">
@@ -644,6 +660,7 @@ function editClient(existing, onSaved) {
   updateLegalState();
   $('mX').addEventListener('click', closeModal);
   if (draft && $('cDraftReset')) $('cDraftReset').addEventListener('click', () => { DRAFTS.clear(key); closeModal(); editClient(existing, onSaved); });
+  $('cPrenom').addEventListener('input', (e) => { w.prenom = e.target.value; saveDraft(); });
   $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
   $('cSociete').addEventListener('input', (e) => { w.societe = e.target.value; updateLegalState(); saveDraft(); });
   $('cAssuj').addEventListener('change', (e) => { w.assujettiTva = e.target.checked; saveDraft(); });
@@ -653,7 +670,7 @@ function editClient(existing, onSaved) {
   $('cAddCheval').addEventListener('click', () => { w.chevaux.push({ id: uid(), nom: '', addrSource: 'specifique', addr: emptyAddr() }); renderCh(); saveDraft(); });
   if (existing) $('cDel').addEventListener('click', () => { if (confirm('Supprimer ce client ?')) { DRAFTS.clear(key); clients = clients.filter((x) => x.id !== w.id); saveClients(); closeModal(); renderClients(); } });
   $('cSave').addEventListener('click', () => {
-    if (!w.nom.trim()) { $('cErr').textContent = 'Le nom est obligatoire.'; return; }
+    if (!(w.nom || '').trim() && !(w.prenom || '').trim()) { $('cErr').textContent = 'Le nom (ou le prénom) est obligatoire.'; return; }
     if (!addrStr(w.addr).trim()) { $('cErr').textContent = 'L\'adresse du client est obligatoire.'; return; }
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
     DRAFTS.clear(key); saveClients(); closeModal();
@@ -723,9 +740,9 @@ function modalTourHome() {
 // ================= TOURNÉES =================
 function tourListItem(t, showBadge) {
   const st = tourStatus(t.date);
-  const el = document.createElement('div'); el.className = 'list-item';
-  el.innerHTML = `<div class="li-main"><b>${esc(t.date)}${showBadge ? ' · ' + STATUS_LBL[st] : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span></div><div class="li-act"><button class="btn small" data-open>Ouvrir</button></div>`;
-  el.querySelector('[data-open]').addEventListener('click', () => openTour(t));
+  const el = document.createElement('div'); el.className = 'list-item clickable';
+  el.innerHTML = `<div class="li-main"><b>${esc(t.date)}${showBadge ? ' · ' + STATUS_LBL[st] : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+  el.addEventListener('click', () => openTour(t));
   return el;
 }
 function renderTours() {
@@ -803,19 +820,53 @@ function openEditor() {
 }
 
 // Libellé d'arrêt = nom du/des client(s) (+ société), SANS les chevaux.
-function clientLabel(id) { const c = clients.find((x) => x.id === id); return c ? (c.nom + (c.societe ? ' — ' + c.societe : '')) : '?'; }
+function clientLabel(id) { const c = clients.find((x) => x.id === id); return c ? (fullName(c) + (c.societe ? ' — ' + c.societe : '')) : '?'; }
 function labelFor(a) { return (a.clients || []).map((cl) => clientLabel(cl.clientId)).join(' + '); }
+
+// ----- Sélecteur de client cherchable (nom / prénom / société / cheval), trié par prénom nom -----
+function clientMatches(c, q) {
+  q = norm(q); if (!q) return true;
+  const hay = norm([c.prenom, c.nom, c.societe].concat((c.chevaux || []).map((h) => h.nom)).filter(Boolean).join(' '));
+  return q.split(/\s+/).filter(Boolean).every((tok) => hay.includes(tok));
+}
+function sortByName(list) {
+  return [...list].sort((a, b) => norm(a.prenom || '').localeCompare(norm(b.prenom || '')) || norm(a.nom || '').localeCompare(norm(b.nom || '')));
+}
+// container : élément hôte ; opts = { list, getSelected, onPick, highlightId }
+function mountClientPicker(container, opts) {
+  const list = opts.list || clients;
+  container.innerHTML = `<div class="cp"><input class="cp-search" type="search" placeholder="Rechercher : nom, prénom, société, cheval…" autocomplete="off"/><div class="cp-list"></div></div>`;
+  const search = container.querySelector('.cp-search'), listEl = container.querySelector('.cp-list');
+  const render = () => {
+    const sel = opts.getSelected ? opts.getSelected() : null;
+    let items = sortByName(list).filter((c) => clientMatches(c, search.value));
+    if (opts.highlightId) items.sort((a, b) => (a.id === opts.highlightId ? -1 : b.id === opts.highlightId ? 1 : 0));
+    listEl.innerHTML = '';
+    if (!items.length) { listEl.innerHTML = '<p class="empty">Aucun client trouvé.</p>'; return; }
+    items.forEach((c) => {
+      const b = document.createElement('button'); b.type = 'button';
+      b.className = 'cp-item' + (c.id === sel ? ' on' : '');
+      const soc = c.societe ? ' — ' + esc(c.societe) : '';
+      const chn = (c.chevaux || []).map((h) => h.nom).filter(Boolean).join(', ');
+      b.innerHTML = `<b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}</b><span class="li-sub">${esc(addrStr(c.addr))} · ${(c.chevaux || []).length} cheval(aux)${chn ? ' · 🐴 ' + esc(chn) : ''}${c.id === opts.highlightId ? ' · ✔ nouveau' : ''}</span>`;
+      b.addEventListener('click', () => opts.onPick(c));
+      listEl.appendChild(b);
+    });
+  };
+  search.addEventListener('input', render);
+  render();
+  return { render };
+}
 
 // ----- Ajout d'arrêt : client -> (choix chevaux si multi-adresses) -----
 function pickClientForArret(highlightId) {
   openModal(`<div class="modal-head"><b>Ajouter un arrêt</b><button class="x" id="mX">✕</button></div>
     <div class="actions"><button class="btn block" id="pNew">➕ Créer un nouveau client</button></div>
-    <p class="hint">${clients.length ? 'Ou choisissez un client existant :' : 'Aucun client encore — créez-en un ci-dessus.'}</p>
-    <div class="list" id="pickList"></div>`);
+    <p class="hint">${clients.length ? 'Choisissez un client existant :' : 'Aucun client encore — créez-en un ci-dessus.'}</p>
+    <div id="pickPicker"></div>`);
   $('mX').addEventListener('click', closeModal);
   $('pNew').addEventListener('click', () => editClient(null, (nc) => pickClientForArret(nc.id)));
-  const ordered = highlightId ? [...clients].sort((a, b) => (a.id === highlightId ? -1 : b.id === highlightId ? 1 : 0)) : clients;
-  ordered.forEach((c) => { const b = document.createElement('button'); b.className = 'btn block' + (c.id === highlightId ? ' primary' : ''); b.style.textAlign = 'left'; b.innerHTML = `<b>${esc(c.nom)}</b> <span class="li-sub">${esc(addrStr(c.addr))} · ${(c.chevaux || []).length} cheval(aux)${c.id === highlightId ? ' · ✔ nouveau' : ''}</span>`; b.addEventListener('click', () => chooseClientTargets(c)); $('pickList').appendChild(b); });
+  if (clients.length) mountClientPicker($('pickPicker'), { list: clients, highlightId, onPick: (c) => chooseClientTargets(c) });
 }
 const societeAddrOf = (c) => (c.societeMemeAdresse !== false || !addrStr(c.societeAddr)) ? c.addr : c.societeAddr;
 const chevalAddr = (c, h) => {
@@ -829,7 +880,7 @@ function chooseClientTargets(c) {
   const distinct = new Set(chs.map((h) => norm(addrStr(chevalAddr(c, h)))));
   if (!chs.length || distinct.size <= 1) { addClientToTour(c, chs); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); return; }
   const picked = new Set(chs.map((_, i) => i));
-  openModal(`<div class="modal-head"><b>Chevaux — ${esc(c.nom)}</b><button class="x" id="mX">✕</button></div>
+  openModal(`<div class="modal-head"><b>Chevaux — ${esc(fullName(c))}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Ce client a des chevaux à des adresses différentes. Cochez ceux à visiter (un arrêt par adresse).</p>
     <div id="chList"></div><div class="actions"><button class="btn primary block" id="addSel">Ajouter la sélection</button></div>`);
   $('mX').addEventListener('click', closeModal);
@@ -864,8 +915,8 @@ function renderEditorArrets(locked) {
         ${locked ? `<span class="a-num">${i + 1}</span>` : `<input class="a-num-in" data-order type="number" min="1" max="${N}" value="${i + 1}" title="N° d'ordre de passage (modifiable)"/>`}
         <div class="grow"><b>${esc(labelFor(a))}</b><div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
         ${locked ? '' : '<button class="a-del" data-del title="Retirer">✕</button>'}
-        ${(!locked && single) ? `<label class="a-reduc" title="Réduction articles">Réduc.<span class="fu"><input type="number" data-reduc-h min="0" max="100" step="1" value="${currentTour.reductions && currentTour.reductions[single.clientId] || ''}" placeholder="0"/><span class="fu-unit">%</span></span></label>` : ''}
       </div>
+      ${(!locked && single) ? `<label class="a-reduc-row"><span>Réduction articles</span><span class="fu"><input type="number" data-reduc-h min="0" max="100" step="1" value="${currentTour.reductions && currentTour.reductions[single.clientId] || ''}" placeholder="0"/><span class="fu-unit">%</span></span></label>` : ''}
       <div class="a-grid"><label class="grow">Tarif appliqué<select data-type ${locked ? 'disabled' : ''}><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label></div>`;
     el.querySelector('[data-type]').value = a.type || 'tournee';
     if (!locked) {
@@ -913,7 +964,8 @@ function renderEditorArrets(locked) {
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
           const cv = cl.chevaux[+inp.dataset.ci], key = inp.dataset.key;
           cv[key] = e.target.checked;
-          if (key === 'parage' && !e.target.checked) { cv.fourbure = false; cv.npas = false; renderEditorArrets(locked); } // décoche & désactive les pathologies
+          // Parage (dé)verrouille Fourbure/NPAS → il faut re-render pour mettre à jour l'état "disabled" des cases.
+          if (key === 'parage') { if (!e.target.checked) { cv.fourbure = false; cv.npas = false; } recomputeMoney(); renderEditorArrets(locked); return; }
           recomputeMoney();
         }));
         el.appendChild(wrap);
@@ -1045,12 +1097,15 @@ function computeResultMoney(rows, geom, articles, reducs) {
   }
   const parClient = Object.values(cmap).map((m) => {
     const rpct = reducs[m.clientId] || 0, rf = rpct / 100;
+    // Totaux « tarif plein » (avant toute remise) — capturés AVANT de réduire les lignes.
+    const htArtBrut = m.articles.reduce((s, a) => s + a.ht, 0), tvaArtBrut = m.articles.reduce((s, a) => s + a.tva, 0);
     // Remise appliquée LIGNE PAR LIGNE : le HT de chaque article est réduit, puis TVA et TTC recalculés sur le net.
     if (rpct) m.articles.forEach((a) => { a.remisePct = rpct; a.htBrut = a.ht; a.ht = a.ht * (1 - rf); a.tva = a.tva * (1 - rf); a.ttc = a.ttc * (1 - rf); });
     const htArt = m.articles.reduce((s, a) => s + a.ht, 0), tvaArt = m.articles.reduce((s, a) => s + a.tva, 0);
     const totalHT = m.htDep + m.htMat + htArt;
     const totalTVA = (m.htDep + m.htMat) * stdRate + tvaArt;
-    return Object.assign(m, { reducPct: rpct, htArt, tvaArt, totalHT, totalTVA, totalTTC: totalHT + totalTVA });
+    const pleinHT = m.htDep + m.htMat + htArtBrut, pleinTVA = (m.htDep + m.htMat) * stdRate + tvaArtBrut;
+    return Object.assign(m, { reducPct: rpct, htArt, tvaArt, totalHT, totalTVA, totalTTC: totalHT + totalTVA, pleinHT, pleinTVA, pleinTTC: pleinHT + pleinTVA });
   });
   const totalHT = parClient.reduce((s, m) => s + m.totalHT, 0);
   const totalTVA = parClient.reduce((s, m) => s + m.totalTVA, 0);
@@ -1060,9 +1115,11 @@ function computeResultMoney(rows, geom, articles, reducs) {
   // Le reste (base véhicule + carburant + forfaits) est une PROVISION destinée à couvrir les charges véhicule.
   const margeReelle = rows.reduce((s, r) => { if (r.proche) return s; const tps = (r.type !== 'tournee' ? tempsPerKm() : 0), urg = (r.type === 'urgence' ? S.urgenceSuppKm : 0); return s + (r.kmAttribue || 0) * (tps + urg); }, 0);
   const provisionVehiculeHT = htDeplacement - margeReelle;
+  const servicesHT = parClient.reduce((s, m) => s + m.htArt, 0);   // Analytique : Services (articles HT nets)
+  const materielHT = parClient.reduce((s, m) => s + m.htMat, 0);   // Analytique : Matériel (HT)
   const fuelReel = geom.totalKm * (S.consoL100 / 100) * S.prixPleinL;
   const fuelHT = fuelReel / (1 + stdRate);
-  return { rows, parClient, totalKm: geom.totalKm, totalMin: geom.totalMin, kmHomeFirst: geom.kmHomeFirst, kmLastHome: geom.kmLastHome, totalHT, totalTVA, totalTTC, htDeplacement, fuelReel, fuelHT, provisionVehiculeHT, margeReelle, tvaRate: S.tvaRate, repartition: S.repartition, computedAt: Date.now() };
+  return { rows, parClient, totalKm: geom.totalKm, totalMin: geom.totalMin, kmHomeFirst: geom.kmHomeFirst, kmLastHome: geom.kmLastHome, totalHT, totalTVA, totalTTC, htDeplacement, fuelReel, fuelHT, provisionVehiculeHT, margeReelle, servicesHT, materielHT, tvaRate: S.tvaRate, repartition: S.repartition, computedAt: Date.now() };
 }
 
 function rowFromArret(a, geo) {
@@ -1171,11 +1228,12 @@ async function calcTour(silent) {
 // Rendu unique : tuiles (haut) + facture (répartition par client > cheval + HT/TVA/TTC).
 function renderResultUI(R) {
   if (R) {
-    $('rKm').textContent = km(R.totalKm); $('rMin').textContent = Math.round(R.totalMin) + ' min';
-    $('rHT').textContent = eur(R.totalHT); $('rTVA').textContent = eur(R.totalTVA);
-    $('rTTC').textContent = eur(R.totalTTC); $('rMarge').textContent = eur(R.provisionVehiculeHT != null ? R.provisionVehiculeHT : (R.marge || 0));
-    if ($('rMargeReelle')) $('rMargeReelle').textContent = eur(R.margeReelle || 0);
-  } else { ['rKm', 'rMin', 'rHT', 'rTVA', 'rTTC', 'rMarge', 'rMargeReelle'].forEach((id) => { if ($(id)) $(id).textContent = '—'; }); }
+    $('rKm').textContent = km(R.totalKm);
+    $('rMin').textContent = Math.round(R.totalMin) + ' min · ' + hrs(R.totalMin);
+    $('rHT').textContent = eur(R.totalHT) + ' HT'; $('rTVA').textContent = eur(R.totalTVA);
+    $('rTTC').textContent = eur(R.totalTTC) + ' TTC';
+  } else { ['rKm', 'rMin', 'rHT', 'rTVA', 'rTTC'].forEach((id) => { if ($(id)) $(id).textContent = '—'; }); }
+  renderAnalytique(R);
   const box = $('edInvoice'); box.innerHTML = '';
   if (!R || !R.parClient || !R.parClient.length) { $('edInvoiceEmpty').style.display = 'block'; box.style.display = 'none'; return; }
   $('edInvoiceEmpty').style.display = 'none'; box.style.display = '';
@@ -1215,14 +1273,15 @@ function clientInvoiceHtml(m) {
   return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(m.totalTTC)} TTC</span></div>
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${row('Sous-total', '', m.totalHT, m.totalTVA, m.totalTTC, 'inv-total-row')}</tfoot></table></div>`;
+    <tfoot>${row('Sous-total', '', m.totalHT, m.totalTVA, m.totalTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}</tfoot></table></div>`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
-function recapText(R) {
+function recapText(R, tour) {
   if (!R) return '';
+  tour = tour || currentTour;
   const stdRate = rate(), htDep = R.htDeplacement || 0;
-  let s = `Frais de tournée — ${currentTour.date}\n`;
+  let s = `Frais de tournée — ${tour ? tour.date : ''}\n`;
   s += `Distance : ${km(R.totalKm)} · Durée : ${Math.round(R.totalMin)} min\n`;
   s += `Carburant : ${eur(S.prixPleinL)}/L (TVAC)\n`;
   s += `Frais de déplacement — HT ${eur(htDep)} · TVA ${eur(htDep * stdRate)} · TTC ${eur(htDep * (1 + stdRate))}\n\n`;
@@ -1231,6 +1290,27 @@ function recapText(R) {
   (R.rows || []).forEach((r) => { const kmc = (r.kmAttribue || 0) / Math.max(1, r.nbClients); r.clients.forEach((cl) => { kmByClient[cl.clientId] = (kmByClient[cl.clientId] || 0) + kmc; }); });
   (R.parClient || []).forEach((m, i) => { s += `• Client ${i + 1} : ${km(kmByClient[m.clientId] || 0)}\n`; });
   return s;
+}
+// Détail nominatif d'UN client (toutes ses lignes de facture) — pour le « Ticket ».
+function invoiceTextForClient(m) {
+  const stdRate = rate();
+  const L = [`Client : ${m.nom}`];
+  if (m.articles.length) {
+    L.push('— Articles —');
+    m.articles.forEach((a) => { const ch = a.chevaux.length ? ' (' + a.chevaux.join(', ') + ')' : ''; const rem = a.remisePct ? ` −${a.remisePct}%` : ''; L.push(`  ${a.libelle} ×${a.qte}${ch}${rem} : ${eur(a.ht)} HT · ${eur(a.tva)} TVA · ${eur(a.ttc)} TTC`); });
+  }
+  if (m.materiel.length) {
+    L.push('— Matériel —');
+    m.materiel.forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : ''].filter(Boolean).join(', '); L.push(`  ${x.nom}${tags ? ' (' + tags + ')' : ''} : ${eur(x.ht)} HT · ${eur(x.ht * stdRate)} TVA · ${eur(x.ttc)} TTC`); });
+  }
+  if (m.deplacement.length) {
+    L.push('— Déplacement —');
+    m.deplacement.forEach((l) => { const ch = l.chevaux.length ? ' (' + l.chevaux.join(', ') + ')' : ''; const u = l.proche ? 'forfait' : `${km(l.km)} × ${eurkm(l.tarifHT)}/km`; L.push(`  ${l.adresse} ${TYPES[l.type]}${ch} — ${u} : ${eur(l.partHT)} HT · ${eur(l.partHT * stdRate)} TVA · ${eur(l.partTTC)} TTC`); });
+  }
+  L.push(`Sous-total (à payer) : ${eur(m.totalHT)} HT · ${eur(m.totalTVA)} TVA · ${eur(m.totalTTC)} TTC`);
+  const pHT = m.pleinHT != null ? m.pleinHT : m.totalHT, pTVA = m.pleinTVA != null ? m.pleinTVA : m.totalTVA, pTTC = m.pleinTTC != null ? m.pleinTTC : m.totalTTC;
+  L.push(`Tarif plein : ${eur(pHT)} HT · ${eur(pTVA)} TVA · ${eur(pTTC)} TTC`);
+  return L.join('\n');
 }
 
 // ----- Facture détaillée : le calcul expliqué, étape par étape, avec les vraies valeurs -----
@@ -1325,16 +1405,40 @@ function kmStats() {
   return { mois, annee, odo: odometer(), parClient };
 }
 const hrs = (min) => (Math.round(min / 6) / 10).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' h';
-const STAT_TILES = ['kmMonth', 'kmYear', 'kmOdo', 'baseVeh', 'tCarb', 'tTournee'];
-// Applique l'ordre personnalisé des tuiles (S.statOrder) puis (ré)active le glisser-déposer.
+const STAT_TILE_DEFS = [
+  { key: 'kmMonth', label: 'Km ce mois' }, { key: 'kmYear', label: 'Km cette année' }, { key: 'kmOdo', label: 'Odomètre (total)' },
+  { key: 'baseVeh', label: 'Base véhicule /km' }, { key: 'tCarb', label: 'Carburant /km' }, { key: 'tTournee', label: 'Tarif tournée /km' },
+];
+const STAT_TILES = STAT_TILE_DEFS.map((d) => d.key);
+// Cases Analytique de la tournée (toutes en HT) — total = Total HT de la tournée.
+const ANALYTIC_DEFS = [
+  { key: 'anaServices', label: 'Services', get: (R) => R.servicesHT || 0 },
+  { key: 'anaMateriel', label: 'Matériel', get: (R) => R.materielHT || 0 },
+  { key: 'anaVehicule', label: 'Véhicule', get: (R) => R.provisionVehiculeHT || 0 },
+  { key: 'anaMarge', label: 'Marge réelle', get: (R) => R.margeReelle || 0 },
+];
+const tileLabel = (key, def) => (S.tileLabels && S.tileLabels[key]) || def;
+const orderedKeys = (saved, all) => { const s = (saved || []).filter((k) => all.includes(k)); return s.concat(all.filter((k) => !s.includes(k))); };
+// Applique l'ordre + les titres perso aux tuiles Stats, puis (ré)active le glisser-déposer.
 function applyStatOrder() {
   const box = $('statTiles'); if (!box) return;
-  const saved = (S.statOrder || []).filter((k) => STAT_TILES.includes(k));
-  const order = saved.concat(STAT_TILES.filter((k) => !saved.includes(k)));
-  order.forEach((k) => { const el = box.querySelector(`[data-key="${k}"]`); if (el) box.appendChild(el); });
-  if (!box._dragWired) { enableTileDrag(box); box._dragWired = true; }
+  orderedKeys(S.statOrder, STAT_TILES).forEach((k) => { const el = box.querySelector(`[data-key="${k}"]`); if (el) box.appendChild(el); });
+  STAT_TILE_DEFS.forEach((d) => { const el = box.querySelector(`[data-key="${d.key}"] .t-label`); if (el) el.textContent = tileLabel(d.key, d.label); });
+  if (!box._dragWired) { wireTileDrag(box, 'statOrder'); box._dragWired = true; }
 }
-function enableTileDrag(box) {
+// Cases Analytique (tournée) : construites dynamiquement, réordonnables, titres perso.
+function renderAnalytique(R) {
+  const box = $('analyticTiles'); if (!box) return;
+  box.innerHTML = '';
+  orderedKeys(S.analyticOrder, ANALYTIC_DEFS.map((d) => d.key)).forEach((key) => {
+    const d = ANALYTIC_DEFS.find((x) => x.key === key); if (!d) return;
+    const el = document.createElement('div'); el.className = 'tile draggable'; el.dataset.key = key;
+    el.innerHTML = `<span class="t-label">${esc(tileLabel(key, d.label))}</span><span class="t-val">${R ? eur(d.get(R)) + ' HT' : '—'}</span>`;
+    box.appendChild(el);
+  });
+  wireTileDrag(box, 'analyticOrder');
+}
+function wireTileDrag(box, orderKey) {
   box.querySelectorAll('.tile.draggable').forEach((tile) => {
     tile.addEventListener('pointerdown', (e) => {
       e.preventDefault(); tile.classList.add('dragging'); tile.setPointerCapture && tile.setPointerCapture(e.pointerId);
@@ -1347,11 +1451,26 @@ function enableTileDrag(box) {
       const up = () => {
         tile.classList.remove('dragging');
         document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
-        S.statOrder = [...box.querySelectorAll('.tile')].map((x) => x.dataset.key); saveSettings();
+        S[orderKey] = [...box.querySelectorAll('.tile')].map((x) => x.dataset.key); saveSettings();
       };
       document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
     });
   });
+}
+// Réglages → Analyse : renommer les titres des cases (Analytique + Stats).
+function renderAnalyse() {
+  const build = (containerId, defs) => {
+    const box = $(containerId); if (!box) return; box.innerHTML = '';
+    defs.forEach((d) => {
+      const lab = document.createElement('label'); lab.textContent = 'Défaut : ' + d.label;
+      const inp = document.createElement('input'); inp.type = 'text'; inp.placeholder = d.label;
+      inp.value = (S.tileLabels && S.tileLabels[d.key]) || '';
+      inp.addEventListener('input', (e) => { const v = e.target.value.trim(); if (v) S.tileLabels[d.key] = v; else delete S.tileLabels[d.key]; saveSettings(); });
+      lab.appendChild(inp); box.appendChild(lab);
+    });
+  };
+  build('analyseAnalytic', ANALYTIC_DEFS);
+  build('analyseStats', STAT_TILE_DEFS);
 }
 function renderStats() {
   applyStatOrder();
@@ -1578,37 +1697,39 @@ function modalTourArticle(existing) {
   const tourClients = [...new Set((currentTour.arrets || []).flatMap((a) => a.clients.map((c) => c.clientId)))];
   const pool = tourClients.length ? tourClients : clients.map((c) => c.id);
   if (!pool.length) { alert('Ajoutez d\'abord un arrêt (client) à la tournée.'); return; }
-  const clientOpts = pool.map((id) => `<option value="${id}">${esc(clientName(id))}</option>`).join('');
   const catOpts = ['<option value="">— depuis le catalogue —</option>'].concat(S.articlesCatalogue.map((a) => `<option value="${a.id}">${esc(a.libelle)} (${eur(a.prixHT)})</option>`)).join('');
   const tvaOpts = tvaRatesPays().map((r) => `<option value="${r}">${r}%</option>`).join('');
   const w = existing ? Object.assign({}, existing) : { id: uid(), clientId: pool[0], chevalNoms: [], libelle: '', prixHT: 0, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std };
   openModal(`<div class="modal-head"><b>${existing ? 'Éditer' : 'Nouvel'} article</b><button class="x" id="mX">✕</button></div>
     <label>Depuis le catalogue<select id="aCat">${catOpts}</select></label>
-    <label>Client<select id="aClient">${clientOpts}</select></label>
+    <label>Client (dans la tournée)</label><div id="aClientPicker"></div><p class="hint" id="aClientSel"></p>
     <label>Chevaux (quantité = nb cochés)</label><div id="aChevaux"></div>
     <label>Intitulé<input type="text" id="aLib" value="${esc(w.libelle)}" /></label>
     <div class="row"><label class="grow">TVA<select id="aTva">${tvaOpts}</select></label><label class="grow">Prix<input type="number" id="aPrix" step="0.01" min="0" value="${w.prixHT || ''}" /></label></div>
     <p class="hint" id="aBreak"></p>
     <label class="chk"><input type="checkbox" id="aSaveCat" checked/> Ajouter au catalogue réutilisable</label>
     <div class="actions"><button class="btn primary block" id="aOk">Enregistrer</button></div>`);
-  $('aClient').value = w.clientId; $('aTva').value = String(w.tvaPct); mUnit('aPrix', '€ HT', 2);
+  $('aTva').value = String(w.tvaPct); mUnit('aPrix', '€ HT', 2);
+  const poolClients = pool.map((id) => clients.find((c) => c.id === id)).filter(Boolean);
+  let selClient = (w.clientId && pool.includes(w.clientId)) ? w.clientId : pool[0];
+  const setSel = (id) => { selClient = id; const c = clients.find((x) => x.id === id); if ($('aClientSel')) $('aClientSel').innerHTML = c ? 'Client : <b>' + esc(fullName(c)) + (c.societe ? ' — ' + esc(c.societe) : '') + '</b>' : ''; };
   const idsFor = (cid) => tourClientChevaux(cid);
-  const picked = new Set(w.chevalIds || (w.chevalNoms || []).map((n) => { const c = idsFor(w.clientId).find((x) => x.nom === n); return c ? c.id : n; }));
+  const picked = new Set(w.chevalIds || (w.chevalNoms || []).map((n) => { const c = idsFor(selClient).find((x) => x.nom === n); return c ? c.id : n; }));
   const upd = () => { const qte = Math.max(1, picked.size || 1), p = parseNum($('aPrix').value), rr = (parseFloat($('aTva').value) || 0) / 100; $('aBreak').innerHTML = `Quantité ${qte} · HT ${eur(p * qte)} · TVA ${eur(p * qte * rr)} · <b>TTC ${eur(p * qte * (1 + rr))}</b>`; };
   const renderCh = () => {
-    const box = $('aChevaux'); box.innerHTML = ''; const chs = idsFor($('aClient').value);
+    const box = $('aChevaux'); box.innerHTML = ''; const chs = idsFor(selClient);
     if (!chs.length) { box.innerHTML = '<p class="hint" style="color:var(--danger)">Ce client n\'a pas de cheval dans la tournée — un article doit être lié à au moins un cheval.</p>'; return; }
     chs.forEach((c) => { const row = document.createElement('label'); row.className = 'chk'; row.innerHTML = `<input type="checkbox" ${picked.has(c.id) ? 'checked' : ''}/> 🐴 ${esc(c.nom)}`; row.querySelector('input').addEventListener('change', (e) => { e.target.checked ? picked.add(c.id) : picked.delete(c.id); upd(); }); box.appendChild(row); });
   };
-  renderCh(); upd();
-  $('aClient').addEventListener('change', () => { picked.clear(); renderCh(); upd(); });
+  const pk = mountClientPicker($('aClientPicker'), { list: poolClients, getSelected: () => selClient, onPick: (c) => { setSel(c.id); picked.clear(); renderCh(); upd(); pk.render(); } });
+  setSel(selClient); renderCh(); upd();
   $('aPrix').addEventListener('input', upd); $('aTva').addEventListener('change', upd);
   $('aCat').addEventListener('change', (e) => { const c = S.articlesCatalogue.find((x) => x.id === e.target.value); if (c) { $('aLib').value = c.libelle; $('aPrix').value = fmtNum(c.prixHT, 2); $('aTva').value = String(c.tvaPct); upd(); } });
   $('mX').addEventListener('click', closeModal);
   $('aOk').addEventListener('click', () => {
-    if (!$('aClient').value) { alert('Choisissez un client.'); return; }
+    if (!selClient) { alert('Choisissez un client.'); return; }
     if (!picked.size) { alert('Sélectionnez au moins un cheval pour cet article.'); return; }
-    const cid = $('aClient').value; const chs = idsFor(cid).filter((c) => picked.has(c.id));
+    const cid = selClient; const chs = idsFor(cid).filter((c) => picked.has(c.id));
     const art = { id: w.id || uid(), clientId: cid, chevalIds: chs.map((c) => c.id), chevalNoms: chs.map((c) => c.nom), libelle: $('aLib').value.trim() || 'Article', prixHT: parseNum($('aPrix').value), tvaPct: parseFloat($('aTva').value) || 0 };
     if (!currentTour.articles) currentTour.articles = [];
     const i = currentTour.articles.findIndex((x) => x.id === art.id); if (i >= 0) currentTour.articles[i] = art; else currentTour.articles.push(art);
@@ -1619,7 +1740,9 @@ function modalTourArticle(existing) {
 
 // ================= SMS (modèle) =================
 const SMS_FIELDS = [
-  { k: '{client}', label: 'Client (nom prénom)' },
+  { k: '{prenom}', label: 'Prénom' },
+  { k: '{nom}', label: 'Nom' },
+  { k: '{client}', label: 'Client (prénom nom)' },
   { k: '{societe}', label: 'Société' },
   { k: '{cheval}', label: 'Cheval(aux)' },
   { k: '{trajet}', label: 'Temps de trajet' },
@@ -1635,7 +1758,7 @@ function insertAtCursor(ta, text) {
 }
 function updateSmsPreview() {
   const p = $('smsPreview'); if (!p) return;
-  const sample = fillSms(S.smsTemplate, { client: 'Jean Dupont', societe: 'Écurie du Nord', cheval: 'Indianna', trajet: '15 min', adresse: 'Rue de l\'Exemple 1, 5000 Namur' });
+  const sample = fillSms(S.smsTemplate, { prenom: 'Jean', nom: 'Dupont', client: 'Jean Dupont', societe: 'Écurie du Nord', cheval: 'Indianna', trajet: '15 min', adresse: 'Rue de l\'Exemple 1, 5000 Namur' });
   p.innerHTML = '<b>Aperçu :</b> ' + esc(sample);
 }
 function renderSMS() {
@@ -1659,7 +1782,7 @@ function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
   const todays = [...tournees].filter((t) => tourStatus(t.date) === 'active');
   const rows = [];
-  todays.forEach((t) => { const mins = legMinutesFor(t); (t.arrets || []).forEach((a, i) => rows.push({ a, trajetMin: mins[i] })); });
+  todays.forEach((t) => { const mins = legMinutesFor(t); (t.arrets || []).forEach((a, i) => rows.push({ t, a, trajetMin: mins[i] })); });
   $('homeTrajetEmpty').style.display = rows.length ? 'none' : 'block';
   rows.forEach((r, idx) => {
     const a = r.a;
@@ -1669,17 +1792,26 @@ function renderHomeTrajet() {
     const trajet = r.trajetMin != null ? Math.round(r.trajetMin) + ' min' : '—';
     const el = document.createElement('div'); el.className = 'list-item';
     el.innerHTML = `<div class="li-main"><b>${idx + 1}. 📍 ${esc(adresse) || '<i>adresse ?</i>'}</b><span class="li-sub">${esc(labelFor(a))}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajet}</span></div>
-      <div class="li-act"><button class="btn small" data-waze>Waze</button> <button class="btn small" data-sms>SMS</button></div>`;
+      <div class="li-act"><button class="btn small" data-waze>Waze</button> <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
     el.querySelector('[data-waze]').addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(adresse); } catch { /* ignore */ }
       const url = (a.addr.lat && a.addr.lon) ? `https://waze.com/ul?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `https://waze.com/ul?q=${encodeURIComponent(adresse)}&navigate=yes`;
       window.open(url, '_blank');
     });
     el.querySelector('[data-sms]').addEventListener('click', async () => {
-      const msg = fillSms(S.smsTemplate, { client: c0.nom || '', societe: c0.societe || '', cheval: chNames, trajet, adresse });
+      const msg = fillSms(S.smsTemplate, { prenom: c0.prenom || '', nom: c0.nom || '', client: fullName(c0), societe: c0.societe || '', cheval: chNames, trajet, adresse });
       const btn = el.querySelector('[data-sms]');
       try { await navigator.clipboard.writeText(msg); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); }
       catch { alert(msg); }
+    });
+    // Ticket = récap de la tournée + détail complet de la facture de CE client (articles/matériel/déplacement + tarif plein).
+    el.querySelector('[data-ticket]').addEventListener('click', async () => {
+      const btn = el.querySelector('[data-ticket]');
+      const m = (r.t.result && r.t.result.parClient) ? r.t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
+      let txt = recapText(r.t.result, r.t);
+      txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
+      try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); }
+      catch { alert(txt); }
     });
     box.appendChild(el);
   });
@@ -1879,9 +2011,10 @@ function updateReglagesUI() {
   const r = rate(); const ht = S.prixPleinL / (1 + r), tva = S.prixPleinL - ht;
   updateReadouts();
   if ($('pleinBreakdown')) $('pleinBreakdown').innerHTML = `Prix au litre — HT : <b>${eur(ht)}</b> · TVA : <b>${eur(tva)}</b> (TVAC ${eur(S.prixPleinL)}).`;
+  // « Client proche » actif seulement en mode « par client » : tout le bloc seuil est grisé/inactif sinon (le Rayon reste actif, hors bloc).
   const seuilActive = S.repartition === 'parclient';
-  ['setSeuil', 'setForfait'].forEach((id) => { if ($(id)) $(id).disabled = !seuilActive; });
-  ['lblSeuil', 'lblForfait'].forEach((id) => { if ($(id)) $(id).style.opacity = seuilActive ? '1' : '.45'; });
+  const sb = $('seuilBlock');
+  if (sb) { sb.classList.toggle('section-off', !seuilActive); sb.querySelectorAll('input, select').forEach((el) => { el.disabled = !seuilActive; }); }
   const vitMode = !S.dureeAuto;
   if ($('lblVitesse')) $('lblVitesse').style.opacity = vitMode ? '1' : '.45';
   if ($('setVitesse')) $('setVitesse').disabled = !vitMode;
@@ -1920,7 +2053,11 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
   if ($('navToggle')) $('navToggle').addEventListener('click', (e) => { e.stopPropagation(); $('mainTabs').classList.toggle('open'); });
-  document.addEventListener('click', (e) => { const t = $('mainTabs'); if (t && t.classList.contains('open') && !t.contains(e.target)) t.classList.remove('open'); });
+  document.querySelectorAll('.subnav-current').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); const n = b.closest('.subtabs'); if (n) n.classList.toggle('open'); }));
+  document.addEventListener('click', (e) => {
+    const t = $('mainTabs'); if (t && t.classList.contains('open') && !t.contains(e.target)) t.classList.remove('open');
+    document.querySelectorAll('.subtabs.open').forEach((n) => { if (!n.contains(e.target)) n.classList.remove('open'); });
+  });
   window.addEventListener('resize', updateStickyOffsets);
   updateStickyOffsets(); setTimeout(updateStickyOffsets, 300);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });

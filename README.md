@@ -4,7 +4,7 @@ Application autonome (aucun serveur, données locales) pour préparer des **tour
 routiers**, **répartir équitablement les frais de déplacement**, et **facturer** (déplacement + matériel +
 articles) avec TVA. Installable sur téléphone / tablette / PC.
 
-**Version : 1.1.4**
+**Version : 1.1.5**
 
 ## Modèle de calcul
 
