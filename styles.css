@@ -24,8 +24,8 @@ body {
 .brand-logo-wrap { display: flex; flex-direction: column; align-items: center; gap: 1px; flex: none; }
 .brand-logo { height: 68px; width: auto; display: block; background: var(--logo-bg, transparent); border-radius: 10px; padding: 3px; }
 .brand .app-ver { font-size: .56rem; line-height: 1; opacity: .82; font-weight: 700; }
-.chips-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.chips-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.chips { display: flex; gap: 8px; flex-wrap: nowrap; justify-content: center; }
 .app-ver { font-size: .7rem; font-weight: 700; opacity: .78; letter-spacing: .02em; white-space: nowrap; }
 .fuel-chip { background: rgba(255,255,255,.20); padding: 8px 14px; border-radius: 999px; font-size: .95rem; font-weight: 700; white-space: nowrap; }
 @media (max-width: 480px) { .brand-name { display: none; } .fuel-chip { padding: 7px 11px; font-size: .88rem; } }

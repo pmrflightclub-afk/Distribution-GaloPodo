@@ -23,6 +23,8 @@
         <div class="fuel-chip" id="fuelChip" title="Prix du dernier plein (TVAC)">⛽ —</div>
         <div class="fuel-chip" id="consoChip" title="Consommation moyenne">🚗 —</div>
         <div class="fuel-chip" id="kmMonthChip" title="Parcours mensuel (km ce mois)">🗓 —</div>
+      </div>
+      <div class="chips">
         <div class="fuel-chip" id="clientsChip" title="Clients actifs">👤 —</div>
         <div class="fuel-chip" id="chevauxChip" title="Chevaux actifs">🐴 —</div>
         <div class="fuel-chip" id="toursMonthChip" title="Tournées ce mois">🗺 —</div>
@@ -146,6 +148,12 @@
     </div>
 
     <div id="asub-items" class="subpanel">
+      <section class="card">
+        <h2>Journées récupérées</h2>
+        <p class="hint">Événements <b>récupérés</b> regroupés par jour : créez la tournée d'un jour en un clic (clients pré-remplis), ou ouvrez-la si elle existe déjà.</p>
+        <div id="agendaDays"></div>
+        <p class="empty" id="agendaDaysEmpty">Aucune journée récupérée. Récupérez un événement ci-dessous.</p>
+      </section>
       <section class="card">
         <div class="card-head"><h2>Items du calendrier</h2><button class="btn small" id="agendaRefresh2">↻ Google</button></div>
         <p class="hint">Récupérez un événement (client connu ou nouveau), envoyez-le en agenda privé, ou passez-le inactif. La création de tournée se fait dans Réglages → Calendrier.</p>
@@ -534,9 +542,7 @@
     <div id="rsub-calendrier" class="subpanel">
       <section class="card">
         <div class="card-head"><h2>Calendrier (Google)</h2><button class="btn small" id="agendaRefresh">↻ Google</button></div>
-        <p class="hint">Événements <b>récupérés</b> (cochés dans l'onglet Agenda) regroupés par jour. Créez la tournée d'un jour en un clic, avec les clients pré-remplis.</p>
-        <div id="agendaDays"></div>
-        <p class="empty" id="agendaDaysEmpty">Aucun item récupéré. Allez dans l'onglet Agenda pour en cocher.</p>
+        <p class="hint">Chargez vos événements Google. Les <b>journées récupérées</b> (créer/ouvrir la tournée) s'affichent désormais en 1ʳᵉ position dans l'onglet <b>Agenda → Items</b>.</p>
         <p class="status" id="agendaStatus"></p>
       </section>
       <section class="card">

@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.21';
+const APP_VERSION = '1.1.22';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.22', date: '2026-07-05',
+    ajouts: [
+      'Compta : un arrêt dont le paiement n\'est pas renseigné n\'est plus compté comme « facture » — il apparaît dans une nouvelle section « À classer » (à renseigner via 💶 Paiement, ou le menu Mode). La facture n\'est comptée que si vous cochez « Facture nécessaire ».',
+      'Agenda → Items : les « Journées récupérées » (créer/ouvrir la tournée) s\'affichent maintenant en 1ʳᵉ position sur cette page (déplacées depuis Réglages → Calendrier).',
+      'Bandeau : widgets Clients / Chevaux / Tournées sur une 2ᵉ ligne, centrés (libellés raccourcis, « Chevaux » corrigé).',
+      'Un client créé lors de la récupération d\'un événement (sans cheval) récupère automatiquement ses chevaux dans la tournée dès que vous les ajoutez à sa fiche.',
+    ],
+  },
   {
     version: '1.1.21', date: '2026-07-05',
     ajouts: [
@@ -1013,7 +1022,7 @@ function showAgenda(sub) {
   if (ab && al) al.textContent = ab.textContent;
   if ($('agendaSub')) $('agendaSub').classList.remove('open');
   if (currentAsub === 'planning') renderPlanning();
-  if (currentAsub === 'items') renderAgendaItems();
+  if (currentAsub === 'items') { renderAgendaItems(); renderAgendaCalendrier(); }
 }
 
 // Sous-navigation Réglages : Configuration / Calcul / Thème
@@ -1431,7 +1440,12 @@ function reconcileTour(tour) {
     (a.clients || []).forEach((cl) => {
       const c = clients.find((x) => x.id === cl.clientId);
       if (!c) return; // client supprimé → retiré
-      if (!cl.chevaux.length || !(c.chevaux || []).length) { const arr = findOrCreate(c.addr, a.type); if (!arr.clients.some((x) => x.clientId === cl.clientId)) arr.clients.push({ clientId: cl.clientId, chevaux: [] }); return; } // déplacement seul (arrêt sans cheval ou client sans cheval au profil), à l'adresse ACTUELLE du client
+      const actifs = activeChevaux(c);
+      if (!actifs.length) { const arr = findOrCreate(c.addr, a.type); if (!arr.clients.some((x) => x.clientId === cl.clientId)) arr.clients.push({ clientId: cl.clientId, chevaux: [] }); return; } // client sans cheval actif → déplacement seul, à l'adresse ACTUELLE du client
+      if (!cl.chevaux.length) { // arrêt « déplacement seul » alors que le client a maintenant des chevaux actifs (ex. client créé à la récupération d'un item, chevaux ajoutés depuis) → on les rattache
+        actifs.forEach((h) => { const arr = findOrCreate(chevalAddr(c, h), a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [] }; arr.clients.push(ncl); } if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '' }); });
+        return;
+      }
       cl.chevaux.forEach((cv) => {
         const h = (c.chevaux || []).find((x) => (cv.id && x.id === cv.id) || norm(x.nom) === norm(cv.nom));
         if (!h) return; // cheval supprimé → retiré
@@ -2475,21 +2489,22 @@ function setComptaPayment(tourId, clientId, method) {
   const prev = t.payments[clientId] || {};
   if (method === 'liquide') t.payments[clientId] = { method: 'liquide', facture: false, rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null };
   else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null };
-  else t.payments[clientId] = { method: null, facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null }; // « facture »
+  else if (method === 'facture') t.payments[clientId] = { method: null, facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null }; // « facture nécessaire »
+  else t.payments[clientId] = { method: null, facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null }; // « à classer »
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
 }
 // Agrégats du mois : liquide (postes globalisés, sans nom) + virements + factures (par client).
 function comptaData(ym) {
   const r = rate();
-  const liquideClients = [], virementClients = [], factureClients = [];
+  const liquideClients = [], virementClients = [], factureClients = [], aclasserClients = [];
   const posts = {}; const addPost = (lib, ht, tva, ttc) => { const p = posts[lib] = posts[lib] || { libelle: lib, ht: 0, tva: 0, ttc: 0 }; p.ht += ht; p.tva += tva; p.ttc += ttc; };
   allTours().forEach((t) => {
     if (!(t.date || '').startsWith(ym) || !t.result || !t.result.parClient) return;
     t.result.parClient.forEach((m) => {
       const p = (t.payments || {})[m.clientId];
       const method = p ? p.method : null;
-      // Mode unique (mutuellement exclusif) : liquide | virement | facture (défaut = facture, à classer).
-      const mode = method === 'liquide' ? 'liquide' : (method === 'virement' ? 'virement' : 'facture');
+      // liquide | virement | facture (case « Facture nécessaire » cochée) | À CLASSER (rien de choisi → n'est PAS une facture).
+      const mode = method === 'liquide' ? 'liquide' : (method === 'virement' ? 'virement' : (p && p.facture) ? 'facture' : 'aclasser');
       const entry = { tourId: t.id, tourDate: t.date, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode, m, payment: p };
       if (mode === 'liquide') {
         const cash = payRecu(m, p); // caisse = liquide réellement reçu (rectifié − impayé)
@@ -2507,11 +2522,12 @@ function comptaData(ym) {
           const diff = payArrondi(m, p); if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); }
         }
       } else if (mode === 'virement') virementClients.push(entry);
-      else factureClients.push(entry);
+      else if (mode === 'facture') factureClients.push(entry);
+      else aclasserClients.push(entry);
     });
   });
   const sum = (arr) => arr.reduce((a, x) => ({ ht: a.ht + x.ht, tva: a.tva + x.tva, ttc: a.ttc + x.ttc }), { ht: 0, tva: 0, ttc: 0 });
-  return { liquideClients, virementClients, factureClients, liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients), factureTotal: sum(factureClients) };
+  return { liquideClients, virementClients, factureClients, aclasserClients, liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients), factureTotal: sum(factureClients), aclasserTotal: sum(aclasserClients) };
 }
 // Génère le PDF via l'impression du navigateur, dans le document courant (compatible PWA installée,
 // contrairement à window.open('_blank') qui est bloqué / ferme l'app sur mobile).
@@ -2571,7 +2587,8 @@ function comptaSectionsHtml(ym) {
   const recuKeyOf = (e) => e.recuKey || (e.tourId + ':' + e.clientId);
   const isRecu = (e) => !!(S.comptaRecu && S.comptaRecu[recuKeyOf(e)]);
   const isDem = (e) => !!(S.comptaDemarche && S.comptaDemarche[recuKeyOf(e)]);
-  const modeOpts = (m) => ['facture', 'virement', 'liquide'].map((v) => `<option value="${v}"${v === m ? ' selected' : ''}>${v === 'facture' ? 'Facture' : v === 'virement' ? 'Virement' : 'Liquide'}</option>`).join('');
+  const modeLbl = { aclasser: 'À classer', facture: 'Facture', virement: 'Virement', liquide: 'Liquide' };
+  const modeOpts = (m) => ['aclasser', 'facture', 'virement', 'liquide'].map((v) => `<option value="${v}"${v === m ? ' selected' : ''}>${modeLbl[v]}</option>`).join('');
   const clientTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th>${archived ? '<th>Démarche</th>' : ''}</tr></thead><tbody>${arr.map((e) => { const rk = recuKeyOf(e), dem = isDem(e); return `<tr${dem ? ' style="opacity:.45"' : ''}><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${(e.derived || dem) ? (e.derived ? 'Reste (virement)' : (e.mode === 'virement' ? 'Virement' : 'Facture')) : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center"><input type="checkbox" data-recu data-key="${rk}" ${isRecu(e) ? 'checked' : ''}${dem ? ' disabled' : ''}/></td>${archived ? `<td style="text-align:center"><input type="checkbox" data-dem data-key="${rk}" ${dem ? 'checked' : ''}/></td>` : ''}</tr>`; }).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const recuRow = (arr) => { if (!arr.length) return ''; const n = arr.filter(isRecu).length; const imp = arr.length - n; return `<p class="hint"${imp ? ' style="color:var(--warn);font-weight:700"' : ''}>Paiements reçus : ${n}/${arr.length}${imp ? ` · ⚠ ${imp} impayé(s)` : ' ✅'}</p>`; };
@@ -2579,7 +2596,8 @@ function comptaSectionsHtml(ym) {
   const liqDem = archived && statusOfKind('liquide') === 'encode';
   const liquideStatus = archived ? `<label>Démarche comptable (caisse du mois)<select data-status="liquide" data-ym="${ym}"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>` : '';
   const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><button class="btn small" data-print="liquide" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
-  return liquideSec + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients) + section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients), d.factureClients);
+  const aclasserSec = d.aclasserClients.length ? `<section class="card"><div class="card-head"><h3 style="margin:0;color:var(--warn)">🕓 À classer (paiement non renseigné)</h3></div><p class="hint">${tot(d.aclasserTotal)}</p><p class="hint">Ces clients n'ont pas de mode de paiement choisi — classez-les (💶 Paiement de l'arrêt, ou le menu « Mode » ci-dessous). Ils ne sont <b>pas</b> comptés comme factures.</p>${clientTbl(d.aclasserClients)}</section>` : '';
+  return liquideSec + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients) + section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients), d.factureClients) + aclasserSec;
 }
 function comptaWire(container, rerender) {
   container.querySelectorAll('[data-status]').forEach((el) => el.addEventListener('change', (e) => { const ym = el.dataset.ym; S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][el.dataset.status] = e.target.value; saveSettings(); rerender(); }));
@@ -3573,9 +3591,9 @@ function refreshEverywhere() {
   const actifs = clients.filter(isClientActif);
   const nCh = actifs.reduce((s, c) => s + activeChevaux(c).length, 0);
   const ym = todayStr().slice(0, 7); const nT = allTours().filter((t) => (t.date || '').startsWith(ym)).length;
-  if ($('clientsChip')) $('clientsChip').textContent = '👤 ' + actifs.length + ' client' + (actifs.length > 1 ? 's' : '');
-  if ($('chevauxChip')) $('chevauxChip').textContent = '🐴 ' + nCh + ' cheval' + (nCh > 1 ? 'aux' : '');
-  if ($('toursMonthChip')) $('toursMonthChip').textContent = '🗺 ' + nT + ' tournée' + (nT > 1 ? 's' : '') + '/mois';
+  if ($('clientsChip')) $('clientsChip').textContent = '👤 ' + actifs.length + ' Clients';
+  if ($('chevauxChip')) $('chevauxChip').textContent = '🐴 ' + nCh + ' Chevaux';
+  if ($('toursMonthChip')) $('toursMonthChip').textContent = '🗺 ' + nT + ' Tournées';
   refreshTarifTable(); updateReglagesUI();
   if ($('tab-accueil').classList.contains('active')) renderHome();
   // Note : vehicule / materiel / articles ne sont PAS re-rendus ici (édition inline = ne pas détruire les champs en cours de frappe).
