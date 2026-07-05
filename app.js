@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.11';
+const APP_VERSION = '1.1.12';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.12', date: '2026-07-05',
+    ajouts: [
+      'Paiement de l\'arrêt (liquide) clarifié en 3 champs : « Montant décimal rectifié » (le total arrondi à l\'euro que vous encaissez — plus de décimale ; la différence +/− passe en facture) ; « Montant impayé » (à l\'euro, quand paiement partiel est coché) ; « Montant réellement reçu » (calculé automatiquement = rectifié − impayé, non modifiable).',
+      'Chacun de ces montants est repris partout : facture, ticket, récap et stats (arrondi caisse, impayé/créance et montant réellement reçu).',
+    ],
+  },
   {
     version: '1.1.11', date: '2026-07-05',
     ajouts: [
@@ -1296,7 +1303,7 @@ function tourCloseBlock(t) {
     const p = (t.payments || {})[cl.clientId];
     const method = p ? p.method : null;
     if (method !== 'virement' && method !== 'liquide') out.push(clientName(cl.clientId) + ' : mode de paiement non choisi');
-    else if (method === 'liquide' && (!p || p.montantPaye == null)) out.push(clientName(cl.clientId) + ' : montant liquide non renseigné');
+    else if (method === 'liquide' && (!p || (p.rectifie == null && p.montantPaye == null))) out.push(clientName(cl.clientId) + ' : montant liquide non renseigné');
   }));
   return out;
 }
@@ -1819,19 +1826,35 @@ function renderResultUI(R) {
 
 // Un bloc facture pour un client : 3 sections (Articles · Matériel · Déplacement), par cheval.
 function clientInvoiceEl(m, payment) { const el = document.createElement('div'); el.className = 'inv-client'; el.innerHTML = clientInvoiceHtml(m, payment); return el; }
-// Arrondi caisse d'un client (paiement liquide arrondi) : { has, ht, tva, ttc } — différence à intégrer dans la facture.
+// ---------- Modèle de paiement liquide (arrondi « décimal rectifié » + impayé partiel) ----------
+// rectifie = total TTC ARRONDI à l'euro (choisi par le pro, sans décimale) → corrige la facture + ligne d'arrondi +/−.
+// impaye   = créance (paiement partiel), à l'euro. recu = rectifie − impaye = liquide réellement reçu en caisse.
+// Repli sur l'ancien champ montantPaye pour les tournées enregistrées avant la refonte.
+function payRectifie(m, p) {
+  if (!p || p.method !== 'liquide') return m ? m.totalTTC : 0;
+  if (p.rectifie != null) return p.rectifie;
+  if (p.montantPaye != null && !p.partiel) return p.montantPaye; // ancien modèle : montantPaye = total arrondi
+  return m ? m.totalTTC : 0;
+}
+function payImpaye(m, p) {
+  if (!p || p.method !== 'liquide' || !p.partiel) return 0;
+  if (p.impaye != null) return Math.max(0, p.impaye);
+  if (p.montantPaye != null) return Math.max(0, (m ? m.totalTTC : 0) - p.montantPaye); // ancien modèle : reste = total − encaissé
+  return 0;
+}
+function payRecu(m, p) { return payRectifie(m, p) - payImpaye(m, p); }  // liquide réellement reçu (rectifié − impayé)
+function payArrondi(m, p) { if (!p || p.method !== 'liquide') return 0; const d = payRectifie(m, p) - (m ? m.totalTTC : 0); return Math.abs(d) < 0.005 ? 0 : d; }
+// Arrondi caisse d'un client : { has, ht, tva, ttc } — différence (+/−) à intégrer dans la facture (s'applique aussi en partiel).
 function cashRounding(m, payment) {
-  if (!payment || payment.method !== 'liquide' || payment.montantPaye == null || payment.partiel) return { has: false, ht: 0, tva: 0, ttc: 0 }; // partiel = créance, pas une remise
-  const diffTTC = payment.montantPaye - m.totalTTC;
-  if (Math.abs(diffTTC) < 0.005) return { has: false, ht: 0, tva: 0, ttc: 0 };
+  const diffTTC = payArrondi(m, payment);
+  if (!diffTTC) return { has: false, ht: 0, tva: 0, ttc: 0 };
   const r = rate(); const ht = diffTTC / (1 + r); return { has: true, ht, tva: diffTTC - ht, ttc: diffTTC };
 }
-// Info paiement partiel (liquide) : payé + reste à percevoir. N'affecte PAS le total (le reste est une créance).
+// Info paiement partiel (liquide) : reçu + reste impayé (créance). Le total facturé reste le total rectifié.
 function partialPay(m, payment) {
-  if (!payment || payment.method !== 'liquide' || !payment.partiel || payment.montantPaye == null) return null;
-  const reste = Math.max(0, m.totalTTC - payment.montantPaye);
-  const r = rate(); const paidHT = payment.montantPaye / (1 + r), resteHT = reste / (1 + r);
-  return { paid: payment.montantPaye, paidHT, reste, resteHT, mode: payment.resteMode === 'virement' ? 'virement' : 'prochaine visite' };
+  if (!payment || payment.method !== 'liquide' || !payment.partiel) return null;
+  const reste = payImpaye(m, payment), recu = payRecu(m, payment), r = rate();
+  return { paid: recu, paidHT: recu / (1 + r), reste, resteHT: reste / (1 + r), mode: payment.resteMode === 'virement' ? 'virement' : 'prochaine visite' };
 }
 function clientInvoiceHtml(m, payment) {
   const stdRate = rate();
@@ -1861,11 +1884,11 @@ function clientInvoiceHtml(m, payment) {
   }
   const netHT = m.totalHT + arr.ht, netTVA = m.totalTVA + arr.tva, netTTC = m.totalTTC + arr.ttc; // total corrigé (arrondi inclus)
   const pp = partialPay(m, payment);
-  const ppRows = pp ? row('💵 Payé en liquide', '', pp.paidHT, pp.paid - pp.paidHT, pp.paid, 'inv-brut-row') + row('⏳ Reste à percevoir (' + pp.mode + ')', '', pp.resteHT, pp.reste - pp.resteHT, pp.reste, 'inv-reduc') : '';
+  const ppRows = pp ? row('💵 Montant réellement reçu (liquide)', '', pp.paidHT, pp.paid - pp.paidHT, pp.paid, 'inv-brut-row') + row('⏳ Montant impayé (' + pp.mode + ')', '', pp.resteHT, pp.reste - pp.resteHT, pp.reste, 'inv-reduc') : '';
   return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(netTTC)} TTC</span></div>
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${row(arr.has ? 'Sous-total (net encaissé)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}</tfoot></table></div>`;
+    <tfoot>${row(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}</tfoot></table></div>`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
@@ -1912,11 +1935,11 @@ function invoiceTextForClient(m, payment) {
     L.push('— Déplacement —');
     m.deplacement.forEach((l) => { const ch = l.chevaux.length ? ' (' + l.chevaux.join(', ') + ')' : ''; const u = l.proche ? `${km(l.km)} (forfait)` : `${km(l.km)} × ${eurkm(l.tarifHT)}/km`; L.push(`  ${l.adresse} ${TYPES[l.type]}${ch} — ${u} : ${eur(l.partHT)} HT · ${eur(l.partHT * stdRate)} TVA · ${eur(l.partTTC)} TTC`); });
   }
-  L.push(`Sous-total${arr.has ? ' (net encaissé)' : ' (à payer)'} : ${eur(m.totalHT + arr.ht)} HT · ${eur(m.totalTVA + arr.tva)} TVA · ${eur(m.totalTTC + arr.ttc)} TTC`);
+  L.push(`Sous-total${arr.has ? ' (rectifié)' : ' (à payer)'} : ${eur(m.totalHT + arr.ht)} HT · ${eur(m.totalTVA + arr.tva)} TVA · ${eur(m.totalTTC + arr.ttc)} TTC`);
   const pHT = m.pleinHT != null ? m.pleinHT : m.totalHT, pTVA = m.pleinTVA != null ? m.pleinTVA : m.totalTVA, pTTC = m.pleinTTC != null ? m.pleinTTC : m.totalTTC;
   L.push(`Tarif plein : ${eur(pHT)} HT · ${eur(pTVA)} TVA · ${eur(pTTC)} TTC`);
   const pp = partialPay(m, payment);
-  if (pp) { L.push(`Payé en liquide : ${eur(pp.paid)} TTC`); L.push(`Reste à percevoir (${pp.mode}) : ${eur(pp.reste)} TTC`); }
+  if (pp) { L.push(`Montant réellement reçu (liquide) : ${eur(pp.paid)} TTC`); L.push(`Montant impayé (${pp.mode}) : ${eur(pp.reste)} TTC`); }
   if (payment && payment.method) L.push(`Paiement : ${payment.method === 'liquide' ? 'liquide' : 'virement'}${payment.facture ? ' · facture demandée' : ''}`);
   return L.join('\n');
 }
@@ -2207,20 +2230,21 @@ function financeStats() {
   allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return;
     t.result.parClient.forEach((m) => {
-      const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, chevaux: {} };
+      const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, impaye: 0, chevaux: {} };
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
       const art = (m.articles || []).reduce((s, a) => s + a.ttc, 0); // remise déjà appliquée ligne par ligne
       c.dep += dep; c.mat += mat; c.art += art;
-      // Arrondi caisse (paiement liquide) : la différence est comptée à part → le total reflète le montant réellement encaissé.
+      // Arrondi caisse (liquide) : le total facturé = total rectifié. Impayé (partiel) suivi à part (créance, ne change pas le CA).
       const pay = (t.payments || {})[m.clientId];
-      if (pay && pay.method === 'liquide' && pay.montantPaye != null && !pay.partiel) c.arrondi += (pay.montantPaye - m.totalTTC); // partiel = créance (pas une remise) → CA inchangé
+      c.arrondi += payArrondi(m, pay);
+      c.impaye += payImpaye(m, pay);
       (m.materiel || []).forEach((x) => { const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0 }; ch.mat += x.ttc; });
       (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.dep += per; }); });
       (m.articles || []).forEach((a) => { const per = a.chevaux.length ? a.ttc / a.chevaux.length : 0; a.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.art += per; }); });
     });
   });
-  return Object.values(cmap).map((c) => ({ ...c, total: c.dep + c.mat + c.art + (c.arrondi || 0), chevaux: Object.values(c.chevaux) })).sort((a, b) => b.total - a.total);
+  return Object.values(cmap).map((c) => ({ ...c, total: c.dep + c.mat + c.art + (c.arrondi || 0), recu: c.dep + c.mat + c.art + (c.arrondi || 0) - (c.impaye || 0), chevaux: Object.values(c.chevaux) })).sort((a, b) => b.total - a.total);
 }
 function renderFinance() {
   const box = $('financeList'); if (!box) return; box.innerHTML = '';
@@ -2231,6 +2255,7 @@ function renderFinance() {
     let h = `<div class="inv-head"><span>${esc(c.nom)}</span><span class="inv-amt">${eur(c.total)} TTC</span></div>`;
     h += `<div class="inv-line"><span>Articles</span><span>${eur(c.art)}</span></div><div class="inv-line"><span>Matériel</span><span>${eur(c.mat)}</span></div><div class="inv-line"><span>Déplacement</span><span>${eur(c.dep)}</span></div>`;
     if (Math.abs(c.arrondi || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--warn)"><span>Arrondi caisse (liquide)</span><span>${eur(c.arrondi)}</span></div>`;
+    if ((c.impaye || 0) >= 0.005) { h += `<div class="inv-line" style="color:var(--warn)"><span>Montant impayé (créance)</span><span>−${eur(c.impaye)}</span></div>`; h += `<div class="inv-line"><span>Montant réellement reçu</span><span>${eur(c.recu)}</span></div>`; }
     c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)} · A ${eur(cv.art)} M ${eur(cv.mat)} D ${eur(cv.dep)}</span><span>${eur(cv.art + cv.mat + cv.dep)}</span></div>`; });
     el.innerHTML = h; box.appendChild(el);
   });
@@ -2250,10 +2275,9 @@ function setComptaPayment(tourId, clientId, method) {
   const t = tourById(tourId); if (!t) return;
   if (!t.payments) t.payments = {};
   const prev = t.payments[clientId] || {};
-  const mp = prev.montantPaye != null ? prev.montantPaye : null;
-  if (method === 'liquide') t.payments[clientId] = { method: 'liquide', facture: false, montantPaye: mp };
-  else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, montantPaye: null };
-  else t.payments[clientId] = { method: null, facture: true, montantPaye: null }; // « facture »
+  if (method === 'liquide') t.payments[clientId] = { method: 'liquide', facture: false, rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null };
+  else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null };
+  else t.payments[clientId] = { method: null, facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null }; // « facture »
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
 }
 // Agrégats du mois : liquide (postes globalisés, sans nom) + virements + factures (par client).
@@ -2270,19 +2294,19 @@ function comptaData(ym) {
       const mode = method === 'liquide' ? 'liquide' : (method === 'virement' ? 'virement' : 'facture');
       const entry = { tourId: t.id, tourDate: t.date, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode, m, payment: p };
       if (mode === 'liquide') {
-        const cash = (p && p.montantPaye != null) ? p.montantPaye : m.totalTTC; // caisse = cash réellement reçu
+        const cash = payRecu(m, p); // caisse = liquide réellement reçu (rectifié − impayé)
         const cHT = cash / (1 + r); liquideClients.push({ nom: m.nom, ht: cHT, tva: cash - cHT, ttc: cash });
         if (p && p.partiel) {
           // Paiement partiel : la caisse reçoit un acompte ; le reste virement est suivi en Virements (ci-dessous).
           addPost('Acompte liquide (partiel)', cHT, cash - cHT, cash);
-          const reste = Math.max(0, m.totalTTC - cash);
+          const reste = payImpaye(m, p);
           if (reste > 0.005 && p.resteMode === 'virement') virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: reste / (1 + r), tva: reste - reste / (1 + r), ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' });
         } else {
           // Globalisation par poste (sans nom de client) : articles par libellé + Matériel + Déplacement + Arrondi.
           (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
           if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
           const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
-          if (p && p.montantPaye != null) { const diff = p.montantPaye - m.totalTTC; if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); } }
+          const diff = payArrondi(m, p); if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); }
         }
       } else if (mode === 'virement') virementClients.push(entry);
       else factureClients.push(entry);
@@ -2810,10 +2834,11 @@ function modalPayment(t, arret, after) {
   if (!t.payments) t.payments = {};
   const invTTC = (cid) => { const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; return m ? m.totalTTC : 0; };
   const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); return; } const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); return; } tournees.push(t); saveTournees(); };
-  let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div><p class="hint">Choisissez le mode de paiement (obligatoire pour clôturer). En <b>liquide</b>, saisissez le montant réellement encaissé (la différence + ou − est reprise en facture).</p>';
+  let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div><p class="hint">Choisissez le mode de paiement (obligatoire pour clôturer). En <b>liquide</b>, saisissez le <b>montant décimal rectifié</b> : le total arrondi à l\'euro que vous encaissez (la différence + ou − passe en facture).</p>';
   clientsAt.forEach((cid) => {
-    const p = t.payments[cid] || { method: null, facture: false, montantPaye: null }; // par défaut : aucun mode choisi (neutre)
+    const p = t.payments[cid] || { method: null, facture: false, rectifie: null, partiel: false, impaye: null }; // par défaut : aucun mode choisi (neutre)
     const ttc = invTTC(cid);
+    const rectVal = p.rectifie != null ? p.rectifie : (p.montantPaye != null && !p.partiel ? p.montantPaye : '');
     html += `<div class="pay-block" data-cid="${cid}">
       <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture ${eur(ttc)} TTC</span></h3>
       <div class="seg pay-method">
@@ -2822,12 +2847,14 @@ function modalPayment(t, arret, after) {
       </div>
       <label class="chk2"><input type="checkbox" data-fac ${p.facture ? 'checked' : ''}/> Facture nécessaire</label>
       <div class="pay-cash" style="${p.method === 'liquide' ? '' : 'display:none'}">
-        <label>Montant réellement encaissé (TTC)<input type="number" data-paye step="0.01" min="0" value="${p.montantPaye != null ? p.montantPaye : ''}" placeholder="${ttc ? fmtNum(ttc, 2) : ''}"/></label>
-        <label class="chk2"><input type="checkbox" data-partiel ${p.partiel ? 'checked' : ''}/> Paiement partiel (reste à percevoir)</label>
-        <div class="pay-reste" style="${p.partiel ? '' : 'display:none'}">
-          <label>Reste à percevoir par<select data-restemode><option value="report"${p.resteMode !== 'virement' ? ' selected' : ''}>Prochaine visite (liquide)</option><option value="virement"${p.resteMode === 'virement' ? ' selected' : ''}>Virement</option></select></label>
-        </div>
+        <label>Montant décimal rectifié (TTC, arrondi à l'euro)<input type="number" data-rectifie step="1" min="0" inputmode="numeric" value="${rectVal}" placeholder="${ttc ? Math.round(ttc) : ''}"/></label>
         <p class="hint" data-diff></p>
+        <label class="chk2"><input type="checkbox" data-partiel ${p.partiel ? 'checked' : ''}/> Paiement partiel (reste impayé)</label>
+        <div class="pay-reste" style="${p.partiel ? '' : 'display:none'}">
+          <label>Montant impayé (TTC, à l'euro)<input type="number" data-impaye step="1" min="0" inputmode="numeric" value="${p.impaye != null ? p.impaye : ''}" placeholder="0"/></label>
+          <label>Reste à percevoir par<select data-restemode><option value="report"${p.resteMode !== 'virement' ? ' selected' : ''}>Prochaine visite (liquide)</option><option value="virement"${p.resteMode === 'virement' ? ' selected' : ''}>Virement</option></select></label>
+          <p class="hint" data-recu></p>
+        </div>
       </div>
     </div>`;
   });
@@ -2837,18 +2864,23 @@ function modalPayment(t, arret, after) {
   document.querySelectorAll('.pay-block').forEach((block) => {
     const cid = block.dataset.cid; const ttc = invTTC(cid);
     const cash = block.querySelector('.pay-cash');
-    const updDiff = () => {
-      const v = parseNum(block.querySelector('[data-paye]').value);
-      const partiel = block.querySelector('[data-partiel]').checked;
-      const el = block.querySelector('[data-diff]'); if (!el) return;
-      if (!v) { el.innerHTML = ''; return; }
-      if (partiel) { const reste = Math.max(0, ttc - v); el.innerHTML = `Encaissé <b>${eur(v)}</b> · Reste à percevoir <b>${eur(reste)}</b> TTC`; }
-      else { const d = v - ttc; el.innerHTML = `Différence (arrondi) : <b>${eur(d)}</b> TTC ${d < -0.004 ? '(remise)' : d > 0.004 ? '(supplément)' : ''}`; }
+    const rectInt = () => { const v = block.querySelector('[data-rectifie]').value; return v === '' ? null : Math.max(0, Math.round(parseNum(v))); };
+    const impInt = () => { const v = block.querySelector('[data-impaye]').value; return v === '' ? 0 : Math.max(0, Math.round(parseNum(v))); };
+    const upd = () => {
+      const rect = rectInt();
+      const diffEl = block.querySelector('[data-diff]');
+      if (diffEl) {
+        if (rect == null) diffEl.innerHTML = `Facture <b>${eur(ttc)}</b> TTC — arrondissez à l'euro (vers le haut ou le bas).`;
+        else { const d = rect - ttc; diffEl.innerHTML = `Différence (arrondi) : <b>${eur(d)}</b> TTC ${d < -0.004 ? '(remise)' : d > 0.004 ? '(supplément)' : ''}`; }
+      }
+      const recuEl = block.querySelector('[data-recu]');
+      if (recuEl) { const base = rect != null ? rect : ttc; const imp = impInt(); recuEl.innerHTML = `Montant réellement reçu : <b>${eur(base - imp)}</b> TTC <span class="li-sub">(rectifié ${eur(base)} − impayé ${eur(imp)})</span>`; }
     };
-    block.querySelectorAll('.pay-method .seg-btn').forEach((b) => b.addEventListener('click', () => { block.querySelectorAll('.pay-method .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); cash.style.display = b.dataset.m === 'liquide' ? '' : 'none'; updDiff(); }));
-    const pt = block.querySelector('[data-partiel]'); if (pt) pt.addEventListener('change', () => { const pr = block.querySelector('.pay-reste'); if (pr) pr.style.display = pt.checked ? '' : 'none'; updDiff(); });
-    const pi = block.querySelector('[data-paye]'); if (pi) pi.addEventListener('input', updDiff);
-    updDiff();
+    block.querySelectorAll('.pay-method .seg-btn').forEach((b) => b.addEventListener('click', () => { block.querySelectorAll('.pay-method .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); cash.style.display = b.dataset.m === 'liquide' ? '' : 'none'; upd(); }));
+    const pt = block.querySelector('[data-partiel]'); if (pt) pt.addEventListener('change', () => { const pr = block.querySelector('.pay-reste'); if (pr) pr.style.display = pt.checked ? '' : 'none'; upd(); });
+    // Champs à l'euro : recalcul en direct + normalisation (aucune décimale) à la sortie du champ.
+    ['[data-rectifie]', '[data-impaye]'].forEach((sel) => { const i = block.querySelector(sel); if (i) { i.addEventListener('input', upd); i.addEventListener('blur', () => { if (i.value !== '') i.value = String(Math.max(0, Math.round(parseNum(i.value)))); }); } });
+    upd();
   });
   $('payOk').addEventListener('click', () => {
     document.querySelectorAll('.pay-block').forEach((block) => {
@@ -2856,16 +2888,16 @@ function modalPayment(t, arret, after) {
       const on = block.querySelector('.pay-method .seg-btn.on');
       const method = on ? on.dataset.m : null; // aucun choix → neutre (bloque la clôture)
       const facture = block.querySelector('[data-fac]').checked;
-      let montantPaye = null, partiel = false, resteMode = null;
+      let rectifie = null, partiel = false, impaye = null, resteMode = null;
       if (method === 'liquide') {
-        const v = parseNum(block.querySelector('[data-paye]').value); montantPaye = v > 0 ? v : null;
+        const rv = block.querySelector('[data-rectifie]').value; rectifie = rv !== '' ? Math.max(0, Math.round(parseNum(rv))) : null;
         partiel = block.querySelector('[data-partiel]').checked;
-        if (partiel) resteMode = block.querySelector('[data-restemode]').value;
+        if (partiel) { const iv = block.querySelector('[data-impaye]').value; impaye = iv !== '' ? Math.max(0, Math.round(parseNum(iv))) : 0; resteMode = block.querySelector('[data-restemode]').value; }
       }
-      t.payments[cid] = { method, facture, montantPaye, partiel, resteMode };
-      // Reste « reporté » (liquide, prochaine visite) rattaché au client ; le reste « virement » est dérivé en Compta (pas d'impayé client).
-      const reste = (partiel && montantPaye != null) ? Math.max(0, invTTC(cid) - montantPaye) : 0;
-      setClientImpaye(t, cid, resteMode === 'report' ? reste : 0);
+      t.payments[cid] = { method, facture, rectifie, partiel, impaye, resteMode };
+      // Impayé « reporté » (prochaine visite) rattaché au client ; « virement » dérivé en Compta (pas d'impayé client).
+      const imp = (partiel && impaye != null) ? impaye : 0;
+      setClientImpaye(t, cid, resteMode === 'report' ? imp : 0);
     });
     persist(); saveClients(); closeModal(); if (after) after();
   });
