@@ -106,6 +106,20 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .heure-in { width: 92px; padding: 4px 6px; }
 .rdv-chevaux { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .rdv-chevaux .chk { white-space: nowrap; }
+/* Planning (agenda mensuel) */
+.planning-ctrl { align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.planning-title { flex: 1 1 auto; text-align: center; min-width: 120px; }
+.planning-ctrl input[type=month] { width: auto; }
+.planning-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.planning-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; min-width: 0; }
+.pl-head { text-align: center; font-size: .7rem; color: var(--muted); padding: 2px 0; font-weight: 700; }
+.pl-cell { min-height: 60px; border: 1px solid var(--line); border-radius: 6px; padding: 2px; background: var(--card); overflow: hidden; }
+.pl-empty { border: 0; background: transparent; }
+.pl-today { outline: 2px solid var(--accent, #e8722a); outline-offset: -2px; }
+.pl-num { font-weight: 700; font-size: .72rem; line-height: 1; margin-bottom: 2px; }
+.pl-ev { font-size: .6rem; line-height: 1.25; border-radius: 4px; padding: 1px 3px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-tour { background: rgba(232, 114, 42, .20); }
+.pl-prive { background: rgba(120, 120, 120, .24); }
 .badge { font-size: .7rem; padding: 2px 7px; border-radius: 999px; background: #fde68a55; color: var(--warn); font-weight: 700; }
 
 /* Résultat */

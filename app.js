@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.16';
+const APP_VERSION = '1.1.17';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.17', date: '2026-07-05',
+    ajouts: [
+      'Agenda → nouveau sous-onglet « Planning » (en 1ʳᵉ position) : agenda mensuel complet, 7 colonnes (jours de la semaine) × semaines, affichant par heure les rendez-vous privés et les RDV chevaux/clients des tournées. Navigation mois précédent / suivant / choix du mois (mois en cours par défaut).',
+      'Listes de tournées (Accueil + page Tournées) : les noms de clients de chaque arrêt s\'affichent en plus de la date, du nombre d\'arrêts, des km et du montant TTC.',
+    ],
+  },
   {
     version: '1.1.16', date: '2026-07-05',
     ajouts: [
@@ -958,11 +965,24 @@ function showTab(name) {
   if ($('mainTabs')) $('mainTabs').classList.remove('open'); // referme le menu déroulant (mobile)
   if (name === 'accueil') renderHome();
   if (name === 'tournees') renderTours();
-  if (name === 'agenda') { renderAgendaItems(); agendaAutoSync(); } // affiche le cache puis rafraîchit silencieusement
+  if (name === 'agenda') { showAgenda(currentAsub); agendaAutoSync(); } // affiche le cache puis rafraîchit silencieusement
   if (name === 'compta') showCompta(currentCsub);
   if (name === 'gestion') showGestion(currentGsub);
   if (name === 'stats') renderStats();
   if (name === 'reglages') showReglages(currentRsub);
+}
+
+// Sous-navigation Agenda : Planning / Items
+let currentAsub = 'planning';
+function showAgenda(sub) {
+  currentAsub = sub || 'planning';
+  document.querySelectorAll('#agendaSub .subtab').forEach((b) => b.classList.toggle('active', b.dataset.asub === currentAsub));
+  document.querySelectorAll('#tab-agenda .subpanel').forEach((p) => p.classList.toggle('active', p.id === 'asub-' + currentAsub));
+  const ab = document.querySelector('#agendaSub .subtab[data-asub="' + currentAsub + '"]'), al = document.querySelector('#agendaSub .subnav-label');
+  if (ab && al) al.textContent = ab.textContent;
+  if ($('agendaSub')) $('agendaSub').classList.remove('open');
+  if (currentAsub === 'planning') renderPlanning();
+  if (currentAsub === 'items') renderAgendaItems();
 }
 
 // Sous-navigation Réglages : Configuration / Calcul / Thème
@@ -1004,6 +1024,49 @@ function eventHeure(ev) { const s = (ev && ev.start) || ''; return s.length > 10
 // Événements de l'agenda privé pour un jour donné (triés par heure).
 function privateEventsForDay(day) {
   return Object.keys(S.agendaPrive || {}).map((id) => Object.assign({ id }, S.agendaPrive[id])).filter((x) => x.day === day).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+}
+// Tous les rendez-vous d'un jour (agenda privé + chevaux/clients des tournées), triés par heure (sans heure en dernier).
+function dayAgendaEntries(day) {
+  const out = [];
+  privateEventsForDay(day).forEach((p) => out.push({ heure: eventHeure(p), type: 'prive', label: p.title || '(privé)' }));
+  allTours().forEach((t) => { if (t.date !== day) return; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => out.push({ heure: cv.heure || '', type: 'tour', label: clientLabel(cl.clientId) + ' · ' + cv.nom })))); });
+  return out.sort((x, y) => (x.heure || '~').localeCompare(y.heure || '~'));
+}
+// Décale un mois 'YYYY-MM' de delta mois.
+function shiftMonth(ym, delta) { let [y, m] = ym.split('-').map(Number); m += delta; while (m < 1) { m += 12; y--; } while (m > 12) { m -= 12; y++; } return y + '-' + String(m).padStart(2, '0'); }
+// ================= PLANNING (agenda mensuel : 7 colonnes × semaines) =================
+let planningYm = null; // 'YYYY-MM' affiché
+function renderPlanning() {
+  const host = $('planningBody'); if (!host) return;
+  if (!planningYm) planningYm = todayStr().slice(0, 7);
+  const [y, m] = planningYm.split('-').map(Number);
+  host.innerHTML = '';
+  const ctrl = document.createElement('div'); ctrl.className = 'row planning-ctrl';
+  ctrl.innerHTML = `<button class="btn small" id="plPrev">◀</button><b class="planning-title">${monthLabel(planningYm)}</b><button class="btn small" id="plNext">▶</button><input type="month" id="plMonth" value="${planningYm}"/><button class="btn small" id="plToday">Ce mois</button>`;
+  host.appendChild(ctrl);
+  const scroll = document.createElement('div'); scroll.className = 'planning-scroll';
+  const grid = document.createElement('div'); grid.className = 'planning-grid';
+  ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].forEach((d) => { const h = document.createElement('div'); h.className = 'pl-head'; h.textContent = d; grid.appendChild(h); });
+  const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7; // blancs avant le 1er (lundi = 0)
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const total = Math.ceil((lead + daysInMonth) / 7) * 7;
+  const todayS = todayStr();
+  for (let i = 0; i < total; i++) {
+    const dayNum = i - lead + 1;
+    const cell = document.createElement('div'); cell.className = 'pl-cell';
+    if (dayNum < 1 || dayNum > daysInMonth) { cell.classList.add('pl-empty'); grid.appendChild(cell); continue; }
+    const ds = y + '-' + String(m).padStart(2, '0') + '-' + String(dayNum).padStart(2, '0');
+    if (ds === todayS) cell.classList.add('pl-today');
+    let hh = `<div class="pl-num">${dayNum}</div>`;
+    dayAgendaEntries(ds).forEach((e) => { hh += `<div class="pl-ev pl-${e.type}" title="${esc((e.heure ? e.heure + ' ' : '') + e.label)}">${e.heure ? '<b>' + e.heure + '</b> ' : ''}${esc(e.label)}</div>`; });
+    cell.innerHTML = hh;
+    grid.appendChild(cell);
+  }
+  scroll.appendChild(grid); host.appendChild(scroll);
+  $('plPrev').addEventListener('click', () => { planningYm = shiftMonth(planningYm, -1); renderPlanning(); });
+  $('plNext').addEventListener('click', () => { planningYm = shiftMonth(planningYm, 1); renderPlanning(); });
+  $('plToday').addEventListener('click', () => { planningYm = todayStr().slice(0, 7); renderPlanning(); });
+  $('plMonth').addEventListener('change', (e) => { if (e.target.value) { planningYm = e.target.value; renderPlanning(); } });
 }
 // Crée un client si besoin, crée la tournée du jour si aucune n'existe (en cours / à venir), sinon ajoute le client
 // à la tournée déjà prévue à cette date ; puis l'item quitte la liste. (Jamais les tournées clôturées.)
@@ -1266,7 +1329,8 @@ function tourListItem(t, showBadge) {
   const st = statusOf(t);
   const el = document.createElement('div'); el.className = 'list-item clickable';
   const titre = fmtDateFr(t.date) + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : '');
-  el.innerHTML = `<div class="li-main"><b>${titre}${showBadge ? ' · ' + STATUS_LBL[st] : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+  const clientsLine = (t.arrets || []).map((a) => labelFor(a)).filter(Boolean).join(' · '); // noms de clients par arrêt
+  el.innerHTML = `<div class="li-main"><b>${titre}${showBadge ? ' · ' + STATUS_LBL[st] : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
@@ -3397,6 +3461,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
   document.querySelectorAll('#comptaSub .subtab').forEach((b) => b.addEventListener('click', () => showCompta(b.dataset.csub)));
+  document.querySelectorAll('#agendaSub .subtab').forEach((b) => b.addEventListener('click', () => showAgenda(b.dataset.asub)));
   const agendaRefresh = async (statusEl) => { try { if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Chargement du calendrier…'; } _agendaEvents = await fetchCalendarEvents(true); renderAgendaItems(); renderAgendaCalendrier(); if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = _agendaEvents.length + ' événement(s) chargé(s).'; } } catch (e) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Erreur : ' + e.message; } else alert('Erreur : ' + e.message); } };
   if ($('agendaRefresh')) $('agendaRefresh').addEventListener('click', () => agendaRefresh($('agendaStatus')));
   if ($('agendaRefresh2')) $('agendaRefresh2').addEventListener('click', () => agendaRefresh(null));

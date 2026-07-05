@@ -126,15 +126,33 @@
 
   <!-- ============ AGENDA (Google) — Items ============ -->
   <main id="tab-agenda" class="tab-panel">
-    <section class="card">
-      <div class="card-head"><h2>Items du calendrier</h2><button class="btn small" id="agendaRefresh2">↻ Google</button></div>
-      <p class="hint">Cochez les événements à récupérer. Chaque item est lié à un client connu ; s'il est inconnu, la création du client s'ouvre. Décochez « Actif » pour retirer un événement de la liste (il passe en « Inactifs » plus bas). La création de tournée se fait dans Réglages → Calendrier.</p>
-      <div id="agendaItems" class="list"></div>
-      <p class="empty" id="agendaItemsEmpty">Cliquez « ↻ Google » pour charger vos événements (nécessite l'ID client Google — Réglages → Synchro).</p>
-      <h3 class="rsub">Inactifs</h3>
-      <div id="agendaInactifs" class="list"></div>
-      <p class="empty" id="agendaInactifsEmpty">Aucun item inactif.</p>
-    </section>
+    <nav class="subtabs" id="agendaSub">
+      <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Planning</span><span class="nav-caret">▾</span></button>
+      <div class="subtabs-list">
+        <button class="subtab active" data-asub="planning">Planning</button>
+        <button class="subtab" data-asub="items">Items</button>
+      </div>
+    </nav>
+
+    <div id="asub-planning" class="subpanel active">
+      <section class="card">
+        <div class="card-head"><h2>Planning</h2></div>
+        <p class="hint">Agenda mensuel : rendez-vous <b>privés</b> et RDV <b>chevaux/clients</b> des tournées, affichés par heure. 7 colonnes (jours de la semaine), un mois par écran.</p>
+        <div id="planningBody"></div>
+      </section>
+    </div>
+
+    <div id="asub-items" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Items du calendrier</h2><button class="btn small" id="agendaRefresh2">↻ Google</button></div>
+        <p class="hint">Récupérez un événement (client connu ou nouveau), envoyez-le en agenda privé, ou passez-le inactif. La création de tournée se fait dans Réglages → Calendrier.</p>
+        <div id="agendaItems" class="list"></div>
+        <p class="empty" id="agendaItemsEmpty">Cliquez « ↻ Google » pour charger vos événements (nécessite l'ID client Google — Réglages → Synchro).</p>
+        <h3 class="rsub">Inactifs</h3>
+        <div id="agendaInactifs" class="list"></div>
+        <p class="empty" id="agendaInactifsEmpty">Aucun item inactif.</p>
+      </section>
+    </div>
   </main>
 
   <!-- ============ COMPTA ============ -->
