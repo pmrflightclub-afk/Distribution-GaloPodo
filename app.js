@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.19';
+const APP_VERSION = '1.1.20';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.20', date: '2026-07-05',
+    ajouts: [
+      'Fiche cheval : nouveau champ « Date de prise en charge » (par cheval).',
+      'Stats → Analyse financière par cheval : affiche la durée de suivi depuis la prise en charge (« N mois », et au-delà d\'un an « 1 an et N mois »).',
+    ],
+  },
   {
     version: '1.1.19', date: '2026-07-05',
     ajouts: [
@@ -1250,6 +1257,7 @@ function editClient(existing, onSaved, prefillNom) {
       h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = 'specifique';
       const row = document.createElement('div'); row.className = 'cheval';
       row.innerHTML = `<div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><label class="chk2"><input type="checkbox" data-actif ${h.actif !== false ? 'checked' : ''}/> Actif</label><button class="a-del" data-del>✕</button></div>
+        <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
         <label>Adresse du cheval<select data-src>
           <option value="client">Même adresse que le client</option>
           <option value="societe">Adresse de la société</option>
@@ -1259,6 +1267,7 @@ function editClient(existing, onSaved, prefillNom) {
       row.querySelector('[data-src]').value = h.addrSource;
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
       row.querySelector('[data-actif]').addEventListener('change', (e) => { h.actif = e.target.checked; saveDraft(); });
+      row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
       if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; saveDraft(); });
@@ -2603,7 +2612,7 @@ function renderComptaDecl() {
 // Analyse financière PAR CHEVAL avec le DÉTAIL par date (chaque ligne facturée) pour Articles / Matériel / Déplacement.
 function chevalFinanceDetail() {
   const map = {}; // clé = clientId|chevalNom
-  const get = (cid, nom, cnom) => { const k = cid + '|' + nom; return map[k] || (map[k] = { nom, client: cnom, art: [], mat: [], dep: [], total: 0 }); };
+  const get = (cid, nom, cnom) => { const k = cid + '|' + nom; return map[k] || (map[k] = { clientId: cid, nom, client: cnom, art: [], mat: [], dep: [], total: 0 }); };
   allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return; const date = t.date;
     t.result.parClient.forEach((m) => {
@@ -2614,6 +2623,21 @@ function chevalFinanceDetail() {
   });
   return Object.values(map).sort((a, b) => b.total - a.total);
 }
+// Nombre de mois entre deux dates 'YYYY-MM-DD' (arrondi au mois entamé complet).
+function monthsBetween(fromYmd, toYmd) {
+  if (!fromYmd) return null;
+  const [y1, m1, d1] = fromYmd.split('-').map(Number); const [y2, m2, d2] = (toYmd || todayStr()).split('-').map(Number);
+  let months = (y2 - y1) * 12 + (m2 - m1); if (d2 < d1) months -= 1; return Math.max(0, months);
+}
+// Libellé de durée : « N mois » ; au-delà d'un an « 1 an et N mois ».
+function durMonthsLabel(months) {
+  if (months == null) return '';
+  const y = Math.floor(months / 12), mo = months % 12;
+  if (y >= 1) return y + ' an' + (y > 1 ? 's' : '') + (mo ? ' et ' + mo + ' mois' : '');
+  return mo + ' mois';
+}
+// Retrouve l'objet cheval (profil) d'un client par nom, pour lire sa date de prise en charge.
+function findChevalObj(clientId, nom) { const c = clients.find((x) => x.id === clientId); return c ? (c.chevaux || []).find((h) => norm(h.nom) === norm(nom)) : null; }
 function renderFinanceCheval() {
   const box = $('financeChevalList'); if (!box) return; box.innerHTML = '';
   const fs = chevalFinanceDetail();
@@ -2621,7 +2645,9 @@ function renderFinanceCheval() {
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
   fs.forEach((cv) => {
     const el = document.createElement('div'); el.className = 'inv-client';
-    let h = `<div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.total)} TTC</span></div>`;
+    const hObj = findChevalObj(cv.clientId, cv.nom); const pec = hObj && hObj.datePriseEnCharge;
+    const suivi = pec ? ` · 🗓 suivi depuis le ${fmtDateFr(pec)} (${durMonthsLabel(monthsBetween(pec))})` : '';
+    let h = `<div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}${suivi}</span></span><span class="inv-amt">${eur(cv.total)} TTC</span></div>`;
     [['Articles', cv.art], ['Matériel', cv.mat], ['Déplacement', cv.dep]].forEach(([titre, lignes]) => {
       const sum = lignes.reduce((s, l) => s + l.ttc, 0);
       h += `<div class="inv-line"><span><b>${titre}</b></span><span><b>${eur(sum)}</b></span></div>`;
