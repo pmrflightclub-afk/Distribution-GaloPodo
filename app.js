@@ -49,6 +49,7 @@ const CHANGELOG = [
       'Suppression : confirmation systématique avant de supprimer un client, un cheval, un arrêt, un article, un frais ou du matériel.',
       'Éditeur de tournée : la carte du trajet est placée juste au-dessus des arrêts.',
       'Compta : bouton PDF corrigé (impression via le navigateur, ne ferme plus l\'app). Compta et Agenda déplacés en onglets principaux.',
+      'Paiement partiel liquide : option « reste à percevoir » (montant encaissé + reste). Le reste n\'est PAS une remise (créance). Reporté → ligne « Impayé du … » ajoutée automatiquement à la prochaine tournée du client ; ou demandé en virement (suivi en Compta). Repris dans facture, ticket, récap et stats.',
       'Clôture sécurisée : impossible de clôturer une tournée tant qu\'un client n\'a pas de mode de paiement (virement/liquide, aucun présélectionné par défaut) — en liquide, le montant encaissé est obligatoire. Message de blocage dans l\'éditeur.',
       'Compta : statut « paiement reçu » par client (facture & virement, suivi payé/impayé) et statut « démarche comptable » par section (en attente / effectuée), indépendants, disponibles pour tous les mois.',
       'Facture : l\'arrondi caisse (liquide) apparaît en dernière ligne d\'article et corrige le total (facture, ticket, stats). Parage & Équilibrage en 1ʳᵉ position des articles.',
@@ -533,6 +534,7 @@ function importSyncFile(file, statusEl) {
     if (c.tvaNum === undefined) c.tvaNum = '';
     if (c.entrepriseNum === undefined) c.entrepriseNum = '';
     if (c.societeMemeAdresse === undefined) c.societeMemeAdresse = true;
+    if (!Array.isArray(c.impayes)) c.impayes = []; // restes reportés (paiement partiel liquide)
     c.societeAddr = toAddr(c.societeAddr);
     (c.chevaux || []).forEach((h) => { if (!h.id) h.id = uid(); if (h.adresse !== undefined) { h.addr = toAddr(h.adresse); delete h.adresse; } h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = (h.memeAdresse === false) ? 'specifique' : 'client'; });
   });
@@ -1123,6 +1125,7 @@ function reconcileTour(tour) {
   if (tour.arrets.length !== n0) changed = true;
   // Articles : resync par id (renommage / suppression de cheval)
   (tour.articles || []).forEach((art) => {
+    if (art.impaye) return; // impayé : rattaché au client, sans cheval → on n'y touche pas
     const c = clients.find((x) => x.id === art.clientId); if (!c) return;
     if (!art.chevalIds) art.chevalIds = (art.chevalNoms || []).map((n) => { const h = (c.chevaux || []).find((x) => norm(x.nom) === norm(n)); return h ? h.id : null; }).filter(Boolean);
     const kept = (art.chevalIds || []).filter((id) => (c.chevaux || []).some((h) => h.id === id));
@@ -1131,7 +1134,7 @@ function reconcileTour(tour) {
     art.chevalNoms = kept.map((id) => { const h = c.chevaux.find((x) => x.id === id); return h ? h.nom : ''; }).filter(Boolean);
   });
   const na = (tour.articles || []).length;
-  tour.articles = (tour.articles || []).filter((art) => (art.chevalIds || art.chevalNoms || []).length);
+  tour.articles = (tour.articles || []).filter((art) => art.impaye || (art.chevalIds || art.chevalNoms || []).length);
   if ((tour.articles || []).length !== na) changed = true;
   if (changed) saveTournees();
   return changed;
@@ -1262,6 +1265,16 @@ function addClientToTour(c, chevaux) {
     if (ex) { let cl = ex.clients.find((x) => x.clientId === c.id); if (!cl) { cl = { clientId: c.id, chevaux: [] }; ex.clients.push(cl); } g.chevaux.forEach((n) => cl.chevaux.push(n)); }
     else currentTour.arrets.push({ addr: JSON.parse(JSON.stringify(g.addr)), type: 'tournee', clients: [{ clientId: c.id, chevaux: g.chevaux.slice() }] });
   });
+  // Impayés reportés du client → ligne d'article « Impayé du … » mise en place directement dans cette tournée.
+  if (!currentTour.articles) currentTour.articles = [];
+  let addedImpaye = false;
+  (c.impayes || []).filter((im) => !im.collected).forEach((im) => { // reste « reporté » (liquide) réintégré automatiquement à la tournée du client
+    if (currentTour.articles.some((a) => a.impayeId === im.id)) return;
+    const r = rate(); const ht = im.ttc / (1 + r);
+    currentTour.articles.push({ id: uid(), clientId: c.id, chevalNoms: [], chevalIds: [], libelle: 'Impayé du ' + fmtDateFr(im.date), prixHT: ht, tvaPct: S.tvaRate, impaye: true, impayeId: im.id });
+    im.collected = true; im.collectedTourId = currentTour.id; addedImpaye = true;
+  });
+  if (addedImpaye) saveClients();
 }
 
 function renderEditorArrets(locked) {
@@ -1361,7 +1374,7 @@ function renderEditorArrets(locked) {
       row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${eur(ttcv)} TTC</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>'}`;
       if (!locked) {
         row.querySelector('[data-e]').addEventListener('click', () => modalTourArticle(art, { arret: a }));
-        row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
+        row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; if (art.impaye && art.impayeId) uncollectImpaye(art.impayeId); currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
       }
       alist.appendChild(row);
     });
@@ -1475,10 +1488,12 @@ function computeResultMoney(rows, geom, articles, reducs) {
   });
   // Articles (lignes manuelles) — TVA par ligne
   (articles || []).forEach((a) => {
-    const noms = a.chevalNoms || []; if (!noms.length) return; const qte = noms.length; // article obligatoirement lié à ≥1 cheval
+    const noms = a.chevalNoms || [];
+    if (!a.impaye && !noms.length) return; // article normal : lié à ≥1 cheval ; impayé : sans cheval, quantité 1
+    const qte = a.impaye ? 1 : noms.length;
     const lineHT = (a.prixHT || 0) * qte, rr = (a.tvaPct || 0) / 100;
     const m = getC(a.clientId, clientName(a.clientId));
-    m.articles.push({ libelle: a.libelle, chevaux: noms, qte, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr) });
+    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye });
     m.htArt += lineHT; m.tvaArt += lineHT * rr;
   });
   // Parage & équilibrage auto (cheval coché) → ligne d'article
@@ -1658,10 +1673,17 @@ function renderResultUI(R) {
 function clientInvoiceEl(m, payment) { const el = document.createElement('div'); el.className = 'inv-client'; el.innerHTML = clientInvoiceHtml(m, payment); return el; }
 // Arrondi caisse d'un client (paiement liquide arrondi) : { has, ht, tva, ttc } — différence à intégrer dans la facture.
 function cashRounding(m, payment) {
-  if (!payment || payment.method !== 'liquide' || payment.montantPaye == null) return { has: false, ht: 0, tva: 0, ttc: 0 };
+  if (!payment || payment.method !== 'liquide' || payment.montantPaye == null || payment.partiel) return { has: false, ht: 0, tva: 0, ttc: 0 }; // partiel = créance, pas une remise
   const diffTTC = payment.montantPaye - m.totalTTC;
   if (Math.abs(diffTTC) < 0.005) return { has: false, ht: 0, tva: 0, ttc: 0 };
   const r = rate(); const ht = diffTTC / (1 + r); return { has: true, ht, tva: diffTTC - ht, ttc: diffTTC };
+}
+// Info paiement partiel (liquide) : payé + reste à percevoir. N'affecte PAS le total (le reste est une créance).
+function partialPay(m, payment) {
+  if (!payment || payment.method !== 'liquide' || !payment.partiel || payment.montantPaye == null) return null;
+  const reste = Math.max(0, m.totalTTC - payment.montantPaye);
+  const r = rate(); const paidHT = payment.montantPaye / (1 + r), resteHT = reste / (1 + r);
+  return { paid: payment.montantPaye, paidHT, reste, resteHT, mode: payment.resteMode === 'virement' ? 'virement' : 'prochaine visite' };
 }
 function clientInvoiceHtml(m, payment) {
   const stdRate = rate();
@@ -1690,10 +1712,12 @@ function clientInvoiceHtml(m, payment) {
     });
   }
   const netHT = m.totalHT + arr.ht, netTVA = m.totalTVA + arr.tva, netTTC = m.totalTTC + arr.ttc; // total corrigé (arrondi inclus)
+  const pp = partialPay(m, payment);
+  const ppRows = pp ? row('💵 Payé en liquide', '', pp.paidHT, pp.paid - pp.paidHT, pp.paid, 'inv-brut-row') + row('⏳ Reste à percevoir (' + pp.mode + ')', '', pp.resteHT, pp.reste - pp.resteHT, pp.reste, 'inv-reduc') : '';
   return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(netTTC)} TTC</span></div>
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${row(arr.has ? 'Sous-total (net encaissé)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}</tfoot></table></div>`;
+    <tfoot>${row(arr.has ? 'Sous-total (net encaissé)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}</tfoot></table></div>`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
@@ -1716,6 +1740,10 @@ function recapText(R, tour) {
   const kmByClient = {};
   (R.rows || []).forEach((r) => { const kmc = (r.kmAttribue || 0) / Math.max(1, r.nbClients); r.clients.forEach((cl) => { kmByClient[cl.clientId] = (kmByClient[cl.clientId] || 0) + kmc; }); });
   (R.parClient || []).forEach((m, i) => { s += `• Client ${i + 1} : ${km(kmByClient[m.clientId] || 0)}\n`; });
+  // Restes à percevoir (paiements partiels liquide) — anonymisé.
+  let resteTot = 0;
+  (R.parClient || []).forEach((m) => { const pp = partialPay(m, ((tour && tour.payments) || {})[m.clientId]); if (pp) resteTot += pp.reste; });
+  if (resteTot > 0.005) s += `\nReste à percevoir (impayés) : ${eur(resteTot)} TTC\n`;
   return s;
 }
 // Détail nominatif d'UN client (toutes ses lignes de facture) — pour le « Ticket ».
@@ -1739,6 +1767,8 @@ function invoiceTextForClient(m, payment) {
   L.push(`Sous-total${arr.has ? ' (net encaissé)' : ' (à payer)'} : ${eur(m.totalHT + arr.ht)} HT · ${eur(m.totalTVA + arr.tva)} TVA · ${eur(m.totalTTC + arr.ttc)} TTC`);
   const pHT = m.pleinHT != null ? m.pleinHT : m.totalHT, pTVA = m.pleinTVA != null ? m.pleinTVA : m.totalTVA, pTTC = m.pleinTTC != null ? m.pleinTTC : m.totalTTC;
   L.push(`Tarif plein : ${eur(pHT)} HT · ${eur(pTVA)} TVA · ${eur(pTTC)} TTC`);
+  const pp = partialPay(m, payment);
+  if (pp) { L.push(`Payé en liquide : ${eur(pp.paid)} TTC`); L.push(`Reste à percevoir (${pp.mode}) : ${eur(pp.reste)} TTC`); }
   if (payment && payment.method) L.push(`Paiement : ${payment.method === 'liquide' ? 'liquide' : 'virement'}${payment.facture ? ' · facture demandée' : ''}`);
   return L.join('\n');
 }
@@ -2036,7 +2066,7 @@ function financeStats() {
       c.dep += dep; c.mat += mat; c.art += art;
       // Arrondi caisse (paiement liquide) : la différence est comptée à part → le total reflète le montant réellement encaissé.
       const pay = (t.payments || {})[m.clientId];
-      if (pay && pay.method === 'liquide' && pay.montantPaye != null) c.arrondi += (pay.montantPaye - m.totalTTC);
+      if (pay && pay.method === 'liquide' && pay.montantPaye != null && !pay.partiel) c.arrondi += (pay.montantPaye - m.totalTTC); // partiel = créance (pas une remise) → CA inchangé
       (m.materiel || []).forEach((x) => { const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0 }; ch.mat += x.ttc; });
       (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.dep += per; }); });
       (m.articles || []).forEach((a) => { const per = a.chevaux.length ? a.ttc / a.chevaux.length : 0; a.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.art += per; }); });
@@ -2092,13 +2122,20 @@ function comptaData(ym) {
       const mode = method === 'liquide' ? 'liquide' : (method === 'virement' ? 'virement' : 'facture');
       const entry = { tourId: t.id, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode };
       if (mode === 'liquide') {
-        const ttc = (p && p.montantPaye != null) ? p.montantPaye : m.totalTTC;
-        const ht = ttc / (1 + r); liquideClients.push({ nom: m.nom, ht, tva: ttc - ht, ttc });
-        // Globalisation par poste (sans nom de client) : articles par libellé + Matériel + Déplacement + Arrondi.
-        (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
-        if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
-        const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
-        if (p && p.montantPaye != null) { const diff = p.montantPaye - m.totalTTC; if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); } }
+        const cash = (p && p.montantPaye != null) ? p.montantPaye : m.totalTTC; // caisse = cash réellement reçu
+        const cHT = cash / (1 + r); liquideClients.push({ nom: m.nom, ht: cHT, tva: cash - cHT, ttc: cash });
+        if (p && p.partiel) {
+          // Paiement partiel : la caisse reçoit un acompte ; le reste virement est suivi en Virements (ci-dessous).
+          addPost('Acompte liquide (partiel)', cHT, cash - cHT, cash);
+          const reste = Math.max(0, m.totalTTC - cash);
+          if (reste > 0.005 && p.resteMode === 'virement') virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: reste / (1 + r), tva: reste - reste / (1 + r), ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' });
+        } else {
+          // Globalisation par poste (sans nom de client) : articles par libellé + Matériel + Déplacement + Arrondi.
+          (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
+          if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
+          const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
+          if (p && p.montantPaye != null) { const diff = p.montantPaye - m.totalTTC; if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); } }
+        }
       } else if (mode === 'virement') virementClients.push(entry);
       else factureClients.push(entry);
     });
@@ -2130,10 +2167,11 @@ function renderCompta() {
   const body = $('comptaBody'); if (!body) return;
   const tot = (tt) => `HT ${eur(tt.ht)} · TVA ${eur(tt.tva)} · <b>TTC ${eur(tt.ttc)}</b>`;
   const statusOfKind = (k) => (S.comptaStatus[ym] && S.comptaStatus[ym][k]) || 'attente';
-  const isRecu = (e) => !!(S.comptaRecu && S.comptaRecu[e.tourId + ':' + e.clientId]);
+  const recuKeyOf = (e) => e.recuKey || (e.tourId + ':' + e.clientId);
+  const isRecu = (e) => !!(S.comptaRecu && S.comptaRecu[recuKeyOf(e)]);
   const modeOpts = (cur) => ['facture', 'virement', 'liquide'].map((v) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v === 'facture' ? 'Facture' : v === 'virement' ? 'Virement' : 'Liquide'}</option>`).join('');
-  // Table par client (virement/facture) : Mode (classe le paiement) + Reçu (paiement encaissé). Texte figé à l'impression.
-  const clientTbl = (arr, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th></tr></thead><tbody>${arr.map((e) => `<tr><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${forPrint ? (e.mode === 'virement' ? 'Virement' : 'Facture') : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center">${forPrint ? (isRecu(e) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu data-tour="${e.tourId}" data-cid="${e.clientId}" ${isRecu(e) ? 'checked' : ''}/>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
+  // Table par client (virement/facture) : Mode (classe le paiement) + Reçu (paiement encaissé). Les restes dérivés (paiement partiel) ne sont pas reclassables.
+  const clientTbl = (arr, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th></tr></thead><tbody>${arr.map((e) => `<tr><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${(forPrint || e.derived) ? (e.derived ? 'Reste (virement)' : (e.mode === 'virement' ? 'Virement' : 'Facture')) : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center">${forPrint ? (isRecu(e) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu data-key="${recuKeyOf(e)}" ${isRecu(e) ? 'checked' : ''}/>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   // Statut de DÉMARCHE comptable (indépendant du paiement) — par section, disponible pour tous les mois.
   const statusRow = (k) => `${isCur ? '<p class="hint">Mois en cours (se clôture automatiquement le mois prochain).</p>' : ''}<label>Démarche comptable<select data-status="${k}"><option value="attente"${statusOfKind(k) === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind(k) === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>`;
@@ -2146,7 +2184,7 @@ function renderCompta() {
     section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients, false), d.factureClients);
   body.querySelectorAll('[data-status]').forEach((selEl) => selEl.addEventListener('change', (e) => { S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][selEl.dataset.status] = e.target.value; saveSettings(); }));
   body.querySelectorAll('[data-mode]').forEach((selEl) => selEl.addEventListener('change', () => { setComptaPayment(selEl.dataset.tour, selEl.dataset.cid, selEl.value); renderCompta(); }));
-  body.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const key = cb.dataset.tour + ':' + cb.dataset.cid; if (e.target.checked) S.comptaRecu[key] = true; else delete S.comptaRecu[key]; saveSettings(); renderCompta(); }));
+  body.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const key = cb.dataset.key; if (e.target.checked) S.comptaRecu[key] = true; else delete S.comptaRecu[key]; saveSettings(); renderCompta(); }));
   body.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => {
     const k = btn.dataset.print, ml = monthLabel(ym);
     const foot = (tt, extra) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td>${extra || ''}</tr></tfoot>`;
@@ -2341,6 +2379,7 @@ function articlesForArret(arret) {
   return (currentTour.articles || []).filter((art) => {
     const cl = (arret.clients || []).find((x) => x.clientId === art.clientId);
     if (!cl) return false;
+    if (art.impaye) { const first = (currentTour.arrets || []).find((a2) => (a2.clients || []).some((x) => x.clientId === art.clientId)); return first === arret; } // impayé : sous le 1ᵉʳ arrêt du client
     const ids = new Set((cl.chevaux || []).map((c) => c.id || c.nom));
     const noms = new Set((cl.chevaux || []).map((c) => norm(c.nom)));
     return (art.chevalIds || []).some((id) => ids.has(id)) || (art.chevalNoms || []).some((n) => noms.has(norm(n)));
@@ -2584,6 +2623,10 @@ function modalPayment(t, arret, after) {
       <label class="chk2"><input type="checkbox" data-fac ${p.facture ? 'checked' : ''}/> Facture nécessaire</label>
       <div class="pay-cash" style="${p.method === 'liquide' ? '' : 'display:none'}">
         <label>Montant réellement encaissé (TTC)<input type="number" data-paye step="0.01" min="0" value="${p.montantPaye != null ? p.montantPaye : ''}" placeholder="${ttc ? fmtNum(ttc, 2) : ''}"/></label>
+        <label class="chk2"><input type="checkbox" data-partiel ${p.partiel ? 'checked' : ''}/> Paiement partiel (reste à percevoir)</label>
+        <div class="pay-reste" style="${p.partiel ? '' : 'display:none'}">
+          <label>Reste à percevoir par<select data-restemode><option value="report"${p.resteMode !== 'virement' ? ' selected' : ''}>Prochaine visite (liquide)</option><option value="virement"${p.resteMode === 'virement' ? ' selected' : ''}>Virement</option></select></label>
+        </div>
         <p class="hint" data-diff></p>
       </div>
     </div>`;
@@ -2594,8 +2637,16 @@ function modalPayment(t, arret, after) {
   document.querySelectorAll('.pay-block').forEach((block) => {
     const cid = block.dataset.cid; const ttc = invTTC(cid);
     const cash = block.querySelector('.pay-cash');
-    const updDiff = () => { const v = parseNum(block.querySelector('[data-paye]').value); const d = v - ttc; const el = block.querySelector('[data-diff]'); if (el) el.innerHTML = v ? `Différence : <b>${eur(d)}</b> TTC ${d < -0.004 ? '(remise caisse)' : d > 0.004 ? '(supplément)' : ''}` : ''; };
+    const updDiff = () => {
+      const v = parseNum(block.querySelector('[data-paye]').value);
+      const partiel = block.querySelector('[data-partiel]').checked;
+      const el = block.querySelector('[data-diff]'); if (!el) return;
+      if (!v) { el.innerHTML = ''; return; }
+      if (partiel) { const reste = Math.max(0, ttc - v); el.innerHTML = `Encaissé <b>${eur(v)}</b> · Reste à percevoir <b>${eur(reste)}</b> TTC`; }
+      else { const d = v - ttc; el.innerHTML = `Différence (arrondi) : <b>${eur(d)}</b> TTC ${d < -0.004 ? '(remise)' : d > 0.004 ? '(supplément)' : ''}`; }
+    };
     block.querySelectorAll('.pay-method .seg-btn').forEach((b) => b.addEventListener('click', () => { block.querySelectorAll('.pay-method .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); cash.style.display = b.dataset.m === 'liquide' ? '' : 'none'; updDiff(); }));
+    const pt = block.querySelector('[data-partiel]'); if (pt) pt.addEventListener('change', () => { const pr = block.querySelector('.pay-reste'); if (pr) pr.style.display = pt.checked ? '' : 'none'; updDiff(); });
     const pi = block.querySelector('[data-paye]'); if (pi) pi.addEventListener('input', updDiff);
     updDiff();
   });
@@ -2605,12 +2656,31 @@ function modalPayment(t, arret, after) {
       const on = block.querySelector('.pay-method .seg-btn.on');
       const method = on ? on.dataset.m : null; // aucun choix → neutre (bloque la clôture)
       const facture = block.querySelector('[data-fac]').checked;
-      let montantPaye = null;
-      if (method === 'liquide') { const v = parseNum(block.querySelector('[data-paye]').value); montantPaye = v > 0 ? v : null; }
-      t.payments[cid] = { method, facture, montantPaye };
+      let montantPaye = null, partiel = false, resteMode = null;
+      if (method === 'liquide') {
+        const v = parseNum(block.querySelector('[data-paye]').value); montantPaye = v > 0 ? v : null;
+        partiel = block.querySelector('[data-partiel]').checked;
+        if (partiel) resteMode = block.querySelector('[data-restemode]').value;
+      }
+      t.payments[cid] = { method, facture, montantPaye, partiel, resteMode };
+      // Reste « reporté » (liquide, prochaine visite) rattaché au client ; le reste « virement » est dérivé en Compta (pas d'impayé client).
+      const reste = (partiel && montantPaye != null) ? Math.max(0, invTTC(cid) - montantPaye) : 0;
+      setClientImpaye(t, cid, resteMode === 'report' ? reste : 0);
     });
-    persist(); closeModal(); if (after) after();
+    persist(); saveClients(); closeModal(); if (after) after();
   });
+}
+// Reste « reporté » (liquide, à percevoir à la prochaine visite) rattaché au client.
+function setClientImpaye(t, cid, resteTTC) {
+  const c = clients.find((x) => x.id === cid); if (!c) return;
+  if (!Array.isArray(c.impayes)) c.impayes = [];
+  c.impayes = c.impayes.filter((im) => !(im.sourceTourId === t.id && !im.collected)); // recrée l'impayé non perçu de cette tournée
+  if (resteTTC > 0.005) c.impayes.push({ id: uid(), sourceTourId: t.id, date: t.date, ttc: resteTTC, collected: false, collectedTourId: null });
+}
+// Remet un impayé « à percevoir » (ex. si on retire sa ligne d'article d'une tournée).
+function uncollectImpaye(impayeId) {
+  clients.forEach((c) => (c.impayes || []).forEach((im) => { if (im.id === impayeId) { im.collected = false; im.collectedTourId = null; } }));
+  saveClients();
 }
 function renderHome() {
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
