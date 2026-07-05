@@ -44,6 +44,10 @@ const CHANGELOG = [
       'Stats « Km & heures » : temps RÉEL par cheval quand la tournée a été suivie (Démarrer→Clôturer), sinon estimé ; toutes les tournées (clôturées, du jour, à venir, archivées).',
       'Réglages : sous-onglets réordonnés (Configuration · Synchro · GPS · Service · Calcul · Analyse · Thème · Changelog · Sauvegarde).',
       'Bandeau : numéro de version déplacé sous le logo (à gauche), en petit, sans réduire le logo.',
+      'Compta : virement/facture se gèrent dans la Compta (menu « Mode » par client, écrit dans la tournée) — utile car ces paiements arrivent après la clôture ; statut « reçu » par paiement (impayés signalés).',
+      'Stats : nouvelle section « Analyse financière par cheval » (avec le nom du client).',
+      'Suppression : confirmation systématique avant de supprimer un client, un cheval, un arrêt, un article, un frais ou du matériel.',
+      'Éditeur de tournée : la carte du trajet est placée juste au-dessus des arrêts. Sous-onglets Réglages : Synchro juste avant Sauvegarde.',
       'Trajet du jour : nom du client d\'abord, adresse en dessous ; la tournée du jour apparaît en 1ʳᵉ ligne.',
       'Tournée clôturée réellement figée (changer départ, articles, suppression bloqués).',
       'Palette de couleurs : contours de pastilles visibles, couleur personnalisée indiquée comme sélectionnée.',
@@ -951,7 +955,7 @@ function editClient(existing, onSaved) {
         <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>`;
       row.querySelector('[data-src]').value = h.addrSource;
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
-      row.querySelector('[data-del]').addEventListener('click', () => { w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
+      row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
       if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; saveDraft(); });
       box.appendChild(row);
@@ -1272,7 +1276,7 @@ function renderEditorArrets(locked) {
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
-      el.querySelector('[data-del]').addEventListener('click', () => { currentTour.arrets.splice(i, 1); renderEditorArrets(locked); scheduleGeoRecalc(); });
+      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; currentTour.arrets.splice(i, 1); renderEditorArrets(locked); scheduleGeoRecalc(); });
       // N° d'ordre saisi : déplace l'arrêt à la position demandée ; les autres se renumérotent tout seuls.
       const ord = el.querySelector('[data-order]');
       if (ord) ord.addEventListener('change', (e) => {
@@ -1335,7 +1339,7 @@ function renderEditorArrets(locked) {
       row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${eur(ttcv)} TTC</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>'}`;
       if (!locked) {
         row.querySelector('[data-e]').addEventListener('click', () => modalTourArticle(art, { arret: a }));
-        row.querySelector('[data-d]').addEventListener('click', () => { currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
+        row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
       }
       alist.appendChild(row);
     });
@@ -1908,6 +1912,7 @@ function renderStats() {
   renderTrajetTemps();
   renderTravail();
   renderFinance();
+  renderFinanceCheval();
 }
 // Stats : temps de trajet estimé (tournée) vs réel encodé (par arrêt), avec arrêts manquants signalés.
 function renderTrajetTemps() {
@@ -2032,11 +2037,24 @@ function renderFinance() {
 }
 // ================= GESTION → COMPTA (mensuelle) =================
 const monthLabel = (ym) => { const d = new Date(ym + '-01T00:00:00'); return isNaN(d.getTime()) ? ym : d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }); };
-// Mois ayant au moins un paiement encodé.
+// Mois ayant au moins une tournée calculée (facturée).
 function comptaMonths() {
   const set = new Set();
-  allTours().forEach((t) => { if ((t.date || '') && t.result && Object.keys(t.payments || {}).length) set.add(t.date.slice(0, 7)); });
+  allTours().forEach((t) => { if ((t.date || '') && t.result && t.result.parClient && t.result.parClient.length) set.add(t.date.slice(0, 7)); });
   return [...set].sort().reverse();
+}
+// Retrouve une tournée (active ou archivée) par id.
+function tourById(id) { return tournees.find((t) => t.id === id) || archive.find((t) => t.id === id) || null; }
+// Classe le paiement d'un client d'une tournée depuis la Compta (virement/facture arrivent après la clôture).
+function setComptaPayment(tourId, clientId, method) {
+  const t = tourById(tourId); if (!t) return;
+  if (!t.payments) t.payments = {};
+  const prev = t.payments[clientId] || {};
+  const mp = prev.montantPaye != null ? prev.montantPaye : null;
+  if (method === 'liquide') t.payments[clientId] = { method: 'liquide', facture: false, montantPaye: mp };
+  else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, montantPaye: null };
+  else t.payments[clientId] = { method: null, facture: true, montantPaye: null }; // « facture »
+  const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
 }
 // Agrégats du mois : liquide (postes globalisés, sans nom) + virements + factures (par client).
 function comptaData(ym) {
@@ -2047,19 +2065,20 @@ function comptaData(ym) {
     if (!(t.date || '').startsWith(ym) || !t.result || !t.result.parClient) return;
     t.result.parClient.forEach((m) => {
       const p = (t.payments || {})[m.clientId];
-      const entry = { clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC };
       const method = p ? p.method : null;
-      const facture = p ? p.facture : true; // paiement non renseigné → une facture est due par défaut
-      if (method === 'liquide') {
-        const ttc = (p.montantPaye != null) ? p.montantPaye : m.totalTTC;
+      // Mode unique (mutuellement exclusif) : liquide | virement | facture (défaut = facture, à classer).
+      const mode = method === 'liquide' ? 'liquide' : (method === 'virement' ? 'virement' : 'facture');
+      const entry = { tourId: t.id, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode };
+      if (mode === 'liquide') {
+        const ttc = (p && p.montantPaye != null) ? p.montantPaye : m.totalTTC;
         const ht = ttc / (1 + r); liquideClients.push({ nom: m.nom, ht, tva: ttc - ht, ttc });
         // Globalisation par poste (sans nom de client) : articles par libellé + Matériel + Déplacement + Arrondi.
         (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
         if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
         const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
-        if (p.montantPaye != null) { const diff = p.montantPaye - m.totalTTC; if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); } }
-      } else if (method === 'virement') virementClients.push(entry);
-      if (facture || !method) factureClients.push(entry); // non classé → apparaît en « Factures » (à classer)
+        if (p && p.montantPaye != null) { const diff = p.montantPaye - m.totalTTC; if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); } }
+      } else if (mode === 'virement') virementClients.push(entry);
+      else factureClients.push(entry);
     });
   });
   const sum = (arr) => arr.reduce((a, x) => ({ ht: a.ht + x.ht, tva: a.tva + x.tva, ttc: a.ttc + x.ttc }), { ht: 0, tva: 0, ttc: 0 });
@@ -2083,27 +2102,46 @@ function renderCompta() {
   const body = $('comptaBody'); if (!body) return;
   const tot = (tt) => `HT ${eur(tt.ht)} · TVA ${eur(tt.tva)} · <b>TTC ${eur(tt.ttc)}</b>`;
   const statusOfKind = (k) => (S.comptaStatus[ym] && S.comptaStatus[ym][k]) || 'attente';
-  const isRecu = (k, cid) => !!(S.comptaRecu && S.comptaRecu[ym + ':' + k + ':' + cid]);
-  // Table par client avec colonne « Reçu » (paiement encaissé) : cases à cocher à l'écran, texte à l'impression.
-  const clientTbl = (arr, k, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Reçu</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.nom)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td><td style="text-align:center">${forPrint ? (isRecu(k, x.clientId) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu="${k}" data-cid="${x.clientId}" ${isRecu(k, x.clientId) ? 'checked' : ''}/>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
+  const isRecu = (e) => !!(S.comptaRecu && S.comptaRecu[e.tourId + ':' + e.clientId]);
+  const modeOpts = (cur) => ['facture', 'virement', 'liquide'].map((v) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v === 'facture' ? 'Facture' : v === 'virement' ? 'Virement' : 'Liquide'}</option>`).join('');
+  // Table par client (virement/facture) : Mode (classe le paiement) + Reçu (paiement encaissé). Texte figé à l'impression.
+  const clientTbl = (arr, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th></tr></thead><tbody>${arr.map((e) => `<tr><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${forPrint ? (e.mode === 'virement' ? 'Virement' : 'Facture') : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center">${forPrint ? (isRecu(e) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu data-tour="${e.tourId}" data-cid="${e.clientId}" ${isRecu(e) ? 'checked' : ''}/>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const statusRow = (k) => isCur ? '<p class="hint">Mois en cours (se clôture automatiquement le mois prochain).</p>' : `<label>Statut comptable<select data-status="${k}"><option value="attente"${statusOfKind(k) === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind(k) === 'encode' ? ' selected' : ''}>Comptabilité encodée</option></select></label>`;
   // Ligne « suivi des paiements reçus » (virement/facture) : combien encaissés, impayés signalés.
-  const recuRow = (k, arr) => { if (!arr.length) return ''; const n = arr.filter((x) => isRecu(k, x.clientId)).length; const imp = arr.length - n; return `<p class="hint"${imp ? ' style="color:var(--warn);font-weight:700"' : ''}>Paiements reçus : ${n}/${arr.length}${imp ? ` · ⚠ ${imp} impayé(s)` : ' ✅'}</p>`; };
-  const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(k, arr) : ''}${detail}${statusRow(k)}</section>`;
+  const recuRow = (arr) => { if (!arr.length) return ''; const n = arr.filter(isRecu).length; const imp = arr.length - n; return `<p class="hint"${imp ? ' style="color:var(--warn);font-weight:700"' : ''}>Paiements reçus : ${n}/${arr.length}${imp ? ` · ⚠ ${imp} impayé(s)` : ' ✅'}</p>`; };
+  const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(arr) : ''}${detail}${statusRow(k)}</section>`;
   body.innerHTML =
     section('💶 Liquide (globalisé)', 'liquide', d.liquideTotal, postTbl(d.liquidePosts)) +
-    section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients, 'virement', false), d.virementClients) +
-    section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients, 'facture', false), d.factureClients);
+    section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients, false), d.virementClients) +
+    section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients, false), d.factureClients);
   body.querySelectorAll('[data-status]').forEach((selEl) => selEl.addEventListener('change', (e) => { S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][selEl.dataset.status] = e.target.value; saveSettings(); }));
-  body.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const key = ym + ':' + cb.dataset.recu + ':' + cb.dataset.cid; if (e.target.checked) S.comptaRecu[key] = true; else delete S.comptaRecu[key]; saveSettings(); renderCompta(); }));
+  body.querySelectorAll('[data-mode]').forEach((selEl) => selEl.addEventListener('change', () => { setComptaPayment(selEl.dataset.tour, selEl.dataset.cid, selEl.value); renderCompta(); }));
+  body.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const key = cb.dataset.tour + ':' + cb.dataset.cid; if (e.target.checked) S.comptaRecu[key] = true; else delete S.comptaRecu[key]; saveSettings(); renderCompta(); }));
   body.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => {
     const k = btn.dataset.print, ml = monthLabel(ym);
     const foot = (tt, extra) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td>${extra || ''}</tr></tfoot>`;
     if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>${postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal, ''))}`);
-    else if (k === 'virement') printHtml('Virements — ' + ml, `<h1>Virements bancaires</h1><h2>${ml} — par client</h2>${clientTbl(d.virementClients, 'virement', true).replace('</tbody>', '</tbody>' + foot(d.virementTotal, '<td></td>'))}`);
-    else printHtml('Factures — ' + ml, `<h1>Factures pro</h1><h2>${ml} — par client</h2>${clientTbl(d.factureClients, 'facture', true).replace('</tbody>', '</tbody>' + foot(d.factureTotal, '<td></td>'))}`);
+    else if (k === 'virement') printHtml('Virements — ' + ml, `<h1>Virements bancaires</h1><h2>${ml} — par client</h2>${clientTbl(d.virementClients, true).replace('</tbody>', '</tbody>' + foot(d.virementTotal, '<td></td><td></td>'))}`);
+    else printHtml('Factures — ' + ml, `<h1>Factures pro</h1><h2>${ml} — par client</h2>${clientTbl(d.factureClients, true).replace('</tbody>', '</tbody>' + foot(d.factureTotal, '<td></td><td></td>'))}`);
   }));
+}
+// Analyse financière PAR CHEVAL (avec le nom du client), tous cumuls TTC.
+function chevalFinanceStats() {
+  const out = [];
+  financeStats().forEach((c) => (c.chevaux || []).forEach((cv) => out.push({ nom: cv.nom, client: c.nom, art: cv.art, mat: cv.mat, dep: cv.dep, total: cv.art + cv.mat + cv.dep })));
+  return out.sort((a, b) => b.total - a.total);
+}
+function renderFinanceCheval() {
+  const box = $('financeChevalList'); if (!box) return; box.innerHTML = '';
+  const fs = chevalFinanceStats();
+  if ($('financeChevalEmpty')) $('financeChevalEmpty').style.display = fs.length ? 'none' : 'block';
+  fs.forEach((cv) => {
+    const el = document.createElement('div'); el.className = 'inv-client';
+    el.innerHTML = `<div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.total)} TTC</span></div>
+      <div class="inv-line"><span>Articles</span><span>${eur(cv.art)}</span></div><div class="inv-line"><span>Matériel</span><span>${eur(cv.mat)}</span></div><div class="inv-line"><span>Déplacement</span><span>${eur(cv.dep)}</span></div>`;
+    box.appendChild(el);
+  });
 }
 function renderFraisVehicule() {
   const odo = odometer();
@@ -2137,7 +2175,7 @@ function renderFraisVehicule() {
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
     el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; if (f.nature === 'exceptionnel' && !f.kmDebut) f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); });
-    el.querySelector('[data-del]').addEventListener('click', () => { S.frais = S.frais.filter((x) => x.id !== f.id); saveSettings(); renderFraisVehicule(); });
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== f.id); saveSettings(); renderFraisVehicule(); });
     box.appendChild(el);
   });
   enableRowDrag(box, S.frais, () => saveSettings());
@@ -2164,7 +2202,7 @@ function modalFrais(existing) {
   const upd = () => { const m = parseFloat($('fMontant').value) || 0, k = parseFloat($('fKm').value) || 0; $('fBreak').innerHTML = k > 0 ? `Contribution = ${eur(m)} ÷ ${km(k)} = <b>${eurkm(m / k)}/km</b>` : ''; };
   upd(); $('fMontant').addEventListener('input', upd); $('fKm').addEventListener('input', upd);
   $('mX').addEventListener('click', closeModal);
-  if (existing) $('fDel').addEventListener('click', () => { S.frais = S.frais.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderFraisVehicule(); });
+  if (existing) $('fDel').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderFraisVehicule(); });
   $('fOk').addEventListener('click', () => {
     w.poste = $('fPoste').value.trim() || 'Frais'; w.nature = $('fNature').value;
     w.montantHT = parseFloat($('fMontant').value) || 0; w.kmPrevus = parseFloat($('fKm').value) || 0;
@@ -2197,7 +2235,7 @@ function renderMateriel() {
     wireNum(nbEl, { get: () => m.nbChevaux, dec: 0, set: (v) => { m.nbChevaux = Math.max(1, v); paintRo(); }, after: () => saveSettings() });
     paintRo();
     el.querySelector('[data-k="libelle"]').addEventListener('input', (e) => { m.libelle = e.target.value; saveSettings(); });
-    el.querySelector('[data-del]').addEventListener('click', () => { S.materiel = S.materiel.filter((x) => x.id !== m.id); saveSettings(); renderMateriel(); });
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce matériel ?')) return; S.materiel = S.materiel.filter((x) => x.id !== m.id); saveSettings(); renderMateriel(); });
     box.appendChild(el);
   });
   enableRowDrag(box, S.materiel, () => saveSettings());
@@ -2213,7 +2251,7 @@ function modalMateriel(existing) {
   const upd = () => { const p = parseFloat($('mMont').value) || 0, n = Math.max(1, parseFloat($('mNb').value) || 1); $('mHint').innerHTML = `Prix unitaire = ${eur(p)} ÷ ${n} = <b>${eur(p / n)}/cheval</b>`; };
   upd(); $('mMont').addEventListener('input', upd); $('mNb').addEventListener('input', upd);
   $('mX').addEventListener('click', closeModal);
-  if (existing) $('mDel').addEventListener('click', () => { S.materiel = S.materiel.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderMateriel(); });
+  if (existing) $('mDel').addEventListener('click', () => { if (!confirm('Supprimer ce matériel ?')) return; S.materiel = S.materiel.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderMateriel(); });
   $('mOk').addEventListener('click', () => { w.libelle = $('mLib').value.trim() || 'Matériel'; w.montantHT = parseFloat($('mMont').value) || 0; w.nbChevaux = Math.max(1, parseFloat($('mNb').value) || 1); const i = S.materiel.findIndex((x) => x.id === w.id); if (i >= 0) S.materiel[i] = w; else S.materiel.push(w); saveSettings(); closeModal(); renderMateriel(); });
 }
 
@@ -2240,7 +2278,7 @@ function renderArticlesCat() {
     paintRo();
     el.querySelector('[data-k="libelle"]').addEventListener('input', (e) => { a.libelle = e.target.value; saveSettings(); });
     el.querySelector('[data-k="tvaPct"]').addEventListener('change', (e) => { a.tvaPct = parseFloat(e.target.value) || 0; paintRo(); saveSettings(); });
-    el.querySelector('[data-del]').addEventListener('click', () => { S.articlesCatalogue = S.articlesCatalogue.filter((x) => x.id !== a.id); saveSettings(); renderArticlesCat(); });
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer cet article du catalogue ?')) return; S.articlesCatalogue = S.articlesCatalogue.filter((x) => x.id !== a.id); saveSettings(); renderArticlesCat(); });
     box.appendChild(el);
   });
   enableRowDrag(box, S.articlesCatalogue, () => saveSettings());
@@ -2254,7 +2292,7 @@ function modalArticleCat(existing) {
     ${existing ? '<button class="btn small danger" id="aDel">Supprimer</button>' : ''}
     <div class="actions"><button class="btn primary block" id="aOk">Enregistrer</button></div>`);
   $('aTva').value = String(w.tvaPct); $('mX').addEventListener('click', closeModal); mUnit('aPrix', '€ HT', 2);
-  if (existing) $('aDel').addEventListener('click', () => { S.articlesCatalogue = S.articlesCatalogue.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderArticlesCat(); });
+  if (existing) $('aDel').addEventListener('click', () => { if (!confirm('Supprimer cet article du catalogue ?')) return; S.articlesCatalogue = S.articlesCatalogue.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderArticlesCat(); });
   $('aOk').addEventListener('click', () => { w.libelle = $('aLib').value.trim() || 'Article'; w.prixHT = parseNum($('aPrix').value); w.tvaPct = parseFloat($('aTva').value) || 0; const i = S.articlesCatalogue.findIndex((x) => x.id === w.id); if (i >= 0) S.articlesCatalogue[i] = w; else S.articlesCatalogue.push(w); saveSettings(); closeModal(); renderArticlesCat(); });
 }
 

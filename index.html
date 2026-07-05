@@ -84,12 +84,6 @@
     </section>
 
     <section class="card">
-      <div class="card-head"><h2>Carte du trajet</h2><span><button class="btn small" id="edReloc">↻ Re-localiser</button> <button class="btn small" id="edMapBtn">Afficher la carte</button></span></div>
-      <div id="edMap" class="map"></div>
-      <p class="hint" id="edMapHint">Départ/retour 🏠 (adresse de départ de la tournée) + arrêts numérotés dans l'ordre + tracé.</p>
-    </section>
-
-    <section class="card">
       <div class="tiles tiles-3">
         <div class="tile"><span class="t-label">Boucle (total tournée)</span><span class="t-val" id="rKm">—</span></div>
         <div class="tile"><span class="t-label">Durée estimée</span><span class="t-val" id="rMin">—</span></div>
@@ -102,6 +96,11 @@
       <div class="card-head"><h2>Analytique (HT)</h2><button class="btn small" id="analyticDragBtn">⇅ Réordonner</button></div>
       <div class="tiles tiles-3" id="analyticTiles"></div>
       <p class="hint">Répartition HT de la tournée : Services + Matériel + Véhicule + Marge = Total HT. Glissez les cases pour les réordonner ; renommez-les dans Réglages → Analyse.</p>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Carte du trajet</h2><span><button class="btn small" id="edReloc">↻ Re-localiser</button> <button class="btn small" id="edMapBtn">Afficher la carte</button></span></div>
+      <div id="edMap" class="map"></div>
+      <p class="hint" id="edMapHint">Départ/retour 🏠 (adresse de départ de la tournée) + arrêts numérotés dans l'ordre + tracé.</p>
     </section>
     <section class="card">
       <div class="card-head"><h2>Arrêts</h2><button class="btn small" id="edAddArret">+ Ajouter</button></div>
@@ -339,6 +338,13 @@
       <div id="financeList" class="list"></div>
       <p class="empty" id="financeEmpty">Aucune tournée calculée.</p>
     </section>
+
+    <section class="card">
+      <h2>Analyse financière par cheval</h2>
+      <p class="hint">Totaux TTC cumulés <b>par cheval</b> (avec le nom du client), sur toutes les tournées : Articles · Matériel · Déplacement.</p>
+      <div id="financeChevalList" class="list"></div>
+      <p class="empty" id="financeChevalEmpty">Aucune tournée calculée.</p>
+    </section>
   </main>
 
   <!-- ============ RÉGLAGES ============ -->
@@ -347,13 +353,13 @@
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Configuration</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
         <button class="subtab active" data-rsub="config">Configuration</button>
-        <button class="subtab" data-rsub="synchro">Synchro</button>
         <button class="subtab" data-rsub="gps">GPS</button>
         <button class="subtab" data-rsub="service">Service</button>
         <button class="subtab" data-rsub="calcul">Calcul</button>
         <button class="subtab" data-rsub="analyse">Analyse</button>
         <button class="subtab" data-rsub="theme">Thème</button>
         <button class="subtab" data-rsub="changelog">Changelog</button>
+        <button class="subtab" data-rsub="synchro">Synchro</button>
         <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
       </div>
     </nav>
