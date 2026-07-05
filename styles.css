@@ -120,6 +120,10 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .pl-ev { font-size: .6rem; line-height: 1.25; border-radius: 4px; padding: 1px 3px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-tour { background: rgba(232, 114, 42, .20); }
 .pl-prive { background: rgba(120, 120, 120, .24); }
+.pl-more { font-size: .58rem; color: var(--muted); margin-top: 1px; font-weight: 700; }
+.pl-has { cursor: pointer; }
+.item-off { opacity: .55; }
+.fin-detail { display: flex; justify-content: space-between; gap: 8px; font-size: .72rem; color: var(--muted); padding: 1px 0 1px 10px; }
 .badge { font-size: .7rem; padding: 2px 7px; border-radius: 999px; background: #fde68a55; color: var(--warn); font-weight: 700; }
 
 /* Résultat */

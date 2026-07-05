@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.17';
+const APP_VERSION = '1.1.18';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.18', date: '2026-07-05',
+    ajouts: [
+      'Statut actif / inactif pour les clients ET les chevaux (case à cocher dans la fiche client). Les inactifs passent en fin de liste (grisés) et ne sont plus ajoutés automatiquement aux nouvelles tournées.',
+      'Bandeau : nouveaux widgets nombre de clients actifs, chevaux actifs, et tournées du mois (sous ⛽/🚗/🗓).',
+      'Analyse financière par cheval : détail par date pour chaque section (Articles, Matériel, Déplacement) — chaque ligne facturée est listée avec sa date.',
+      'Planning : chaque case n\'affiche que les 3 premiers rendez-vous (+N autres) ; cliquez un jour pour voir le détail complet dans une fenêtre, avec navigation jour précédent/suivant et sélecteur de date.',
+    ],
+  },
   {
     version: '1.1.17', date: '2026-07-05',
     ajouts: [
@@ -1034,6 +1043,19 @@ function dayAgendaEntries(day) {
 }
 // Décale un mois 'YYYY-MM' de delta mois.
 function shiftMonth(ym, delta) { let [y, m] = ym.split('-').map(Number); m += delta; while (m < 1) { m += 12; y--; } while (m > 12) { m -= 12; y++; } return y + '-' + String(m).padStart(2, '0'); }
+// Détail complet d'un jour (modale) : liste tous les RDV, avec filtre de date (mini-agenda natif) + jour précédent/suivant.
+function modalDay(ds) {
+  const entries = dayAgendaEntries(ds);
+  let h = `<div class="modal-head"><b>📅 ${esc(fmtDateFr(ds))}</b><button class="x" id="mX">✕</button></div>
+    <div class="row planning-ctrl"><button class="btn small" id="dPrev">◀ Jour</button><input type="date" id="dDate" value="${ds}"/><button class="btn small" id="dNext">Jour ▶</button></div>`;
+  if (!entries.length) h += '<p class="hint">Aucun rendez-vous ce jour.</p>';
+  else h += '<div class="list">' + entries.map((e) => `<div class="list-item"><div class="li-main"><b>${e.heure ? '🕘 ' + esc(e.heure) + ' · ' : ''}${esc(e.label)}</b><span class="li-sub">${e.type === 'prive' ? '📅 Agenda privé' : '🗺 Tournée'}</span></div></div>`).join('') + '</div>';
+  openModal(h);
+  $('mX').addEventListener('click', closeModal);
+  $('dPrev').addEventListener('click', () => modalDay(addDaysStr(ds, -1)));
+  $('dNext').addEventListener('click', () => modalDay(addDaysStr(ds, 1)));
+  $('dDate').addEventListener('change', (e) => { if (e.target.value) modalDay(e.target.value); });
+}
 // ================= PLANNING (agenda mensuel : 7 colonnes × semaines) =================
 let planningYm = null; // 'YYYY-MM' affiché
 function renderPlanning() {
@@ -1057,9 +1079,13 @@ function renderPlanning() {
     if (dayNum < 1 || dayNum > daysInMonth) { cell.classList.add('pl-empty'); grid.appendChild(cell); continue; }
     const ds = y + '-' + String(m).padStart(2, '0') + '-' + String(dayNum).padStart(2, '0');
     if (ds === todayS) cell.classList.add('pl-today');
+    const entries = dayAgendaEntries(ds);
     let hh = `<div class="pl-num">${dayNum}</div>`;
-    dayAgendaEntries(ds).forEach((e) => { hh += `<div class="pl-ev pl-${e.type}" title="${esc((e.heure ? e.heure + ' ' : '') + e.label)}">${e.heure ? '<b>' + e.heure + '</b> ' : ''}${esc(e.label)}</div>`; });
+    entries.slice(0, 3).forEach((e) => { hh += `<div class="pl-ev pl-${e.type}" title="${esc((e.heure ? e.heure + ' ' : '') + e.label)}">${e.heure ? '<b>' + e.heure + '</b> ' : ''}${esc(e.label)}</div>`; });
+    if (entries.length > 3) hh += `<div class="pl-more">+${entries.length - 3} autre(s)</div>`;
     cell.innerHTML = hh;
+    if (entries.length) cell.classList.add('pl-has');
+    cell.addEventListener('click', () => modalDay(ds)); // détail complet du jour
     grid.appendChild(cell);
   }
   scroll.appendChild(grid); host.appendChild(scroll);
@@ -1075,9 +1101,9 @@ function attachEventToTour(ev, client) {
   let created = false;
   if (!t) { t = { id: uid(), date: ev.day, nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, payments: {}, result: null, createdAt: Date.now() }; tournees.push(t); created = true; }
   const prev = currentTour; currentTour = t; // addClientToTour opère sur currentTour → on bascule le temps de l'ajout
-  addClientToTour(client, client.chevaux || []);
+  addClientToTour(client, activeChevaux(client));
   currentTour = prev;
-  const heure = eventHeure(ev); if (heure) setChevalHeure(t, client.id, client.chevaux || [], heure); // reprend l'horaire de l'événement agenda sur les chevaux
+  const heure = eventHeure(ev); if (heure) setChevalHeure(t, client.id, activeChevaux(client), heure); // reprend l'horaire de l'événement agenda sur les chevaux
   t.result = null; // arrêts modifiés → recalcul géométrie/km à la prochaine ouverture de la tournée
   saveTournees();
   S.agendaImported[ev.id] = { clientId: client.id, tourId: t.id, title: ev.title, start: ev.start, day: ev.day, location: ev.location };
@@ -1147,19 +1173,24 @@ function createTourFromDay(day, items) {
   if (existing) { openTour(existing); return; } // pas de doublon
   currentTour = { id: uid(), date: day, nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, payments: {}, result: null, createdAt: Date.now() };
   const seen = {};
-  items.forEach((x) => { const c = clients.find((cc) => cc.id === x.clientId); if (c && !seen[c.id]) { seen[c.id] = 1; addClientToTour(c, c.chevaux || []); } });
+  items.forEach((x) => { const c = clients.find((cc) => cc.id === x.clientId); if (c && !seen[c.id]) { seen[c.id] = 1; addClientToTour(c, activeChevaux(c)); } });
   openEditor(); scheduleGeoRecalc();
 }
 
 // ================= CLIENTS =================
+const isClientActif = (c) => !!c && c.actif !== false;                     // défaut = actif
+const activeChevaux = (c) => ((c && c.chevaux) || []).filter((h) => h.actif !== false);
 function renderClients() {
   const list = $('clientsList'); list.innerHTML = '';
   $('clientsEmpty').style.display = clients.length ? 'none' : 'block';
-  clients.forEach((c) => {
+  // Actifs d'abord, inactifs en fin de liste (grisés).
+  [...clients].sort((a, b) => (isClientActif(a) === isClientActif(b) ? 0 : (isClientActif(a) ? -1 : 1))).forEach((c) => {
     const nAdr = new Set((c.chevaux || []).map((h) => norm(addrStr(chevalAddr(c, h))))).size || 1;
     const soc = c.societe ? ' — ' + esc(c.societe) : '';
-    const el = document.createElement('div'); el.className = 'list-item clickable';
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${(c.chevaux || []).length} cheval(aux)${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    const inactif = !isClientActif(c);
+    const nChev = (c.chevaux || []).length, nChevInact = (c.chevaux || []).filter((h) => h.actif === false).length;
+    const el = document.createElement('div'); el.className = 'list-item clickable' + (inactif ? ' item-off' : '');
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${inactif ? ' <span class="badge">inactif</span>' : ''}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => editClient(c));
     list.appendChild(el);
   });
@@ -1178,6 +1209,7 @@ function editClient(existing, onSaved, prefillNom) {
     ${draft ? '<div class="draft-bar">✏️ Brouillon en cours restauré<button class="btn small" id="cDraftReset">Effacer le brouillon</button></div>' : ''}
     <div class="row"><label class="grow">Prénom<input type="text" id="cPrenom" value="${esc(w.prenom || '')}" /></label><label class="grow">Nom<input type="text" id="cNom" value="${esc(w.nom)}" /></label></div>
     <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
+    <label class="chk2"><input type="checkbox" id="cActif" ${w.actif !== false ? 'checked' : ''}/> Client actif</label>
     <h2 style="font-size:.9rem">Adresse du client</h2><div id="cAddr"></div>
     <div id="cLegal">
       <h2 style="font-size:.9rem">Informations légales</h2>
@@ -1208,7 +1240,7 @@ function editClient(existing, onSaved, prefillNom) {
     w.chevaux.forEach((h, i) => {
       h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = 'specifique';
       const row = document.createElement('div'); row.className = 'cheval';
-      row.innerHTML = `<div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><button class="a-del" data-del>✕</button></div>
+      row.innerHTML = `<div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><label class="chk2"><input type="checkbox" data-actif ${h.actif !== false ? 'checked' : ''}/> Actif</label><button class="a-del" data-del>✕</button></div>
         <label>Adresse du cheval<select data-src>
           <option value="client">Même adresse que le client</option>
           <option value="societe">Adresse de la société</option>
@@ -1217,6 +1249,7 @@ function editClient(existing, onSaved, prefillNom) {
         <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>`;
       row.querySelector('[data-src]').value = h.addrSource;
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
+      row.querySelector('[data-actif]').addEventListener('change', (e) => { h.actif = e.target.checked; saveDraft(); });
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
       if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; saveDraft(); });
@@ -1230,6 +1263,7 @@ function editClient(existing, onSaved, prefillNom) {
   $('cPrenom').addEventListener('input', (e) => { w.prenom = e.target.value; saveDraft(); });
   $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
   $('cSociete').addEventListener('input', (e) => { w.societe = e.target.value; updateLegalState(); saveDraft(); });
+  if ($('cActif')) $('cActif').addEventListener('change', (e) => { w.actif = e.target.checked; saveDraft(); });
   $('cAssuj').addEventListener('change', (e) => { w.assujettiTva = e.target.checked; saveDraft(); });
   $('cTvaNum').addEventListener('input', (e) => { w.tvaNum = e.target.value; saveDraft(); });
   $('cEntNum').addEventListener('input', (e) => { w.entrepriseNum = e.target.value; saveDraft(); });
@@ -2553,21 +2587,34 @@ function renderComptaDecl() {
     + months.sort().reverse().map((m) => `<h2 class="rsub" style="margin-top:16px">${monthLabel(m)}${m < todayStr().slice(0, 7) ? '' : ' (en cours — pas de démarche)'}</h2>` + comptaSectionsHtml(m)).join('');
   comptaWire(box, renderComptaDecl);
 }
-// Analyse financière PAR CHEVAL (avec le nom du client), tous cumuls TTC.
-function chevalFinanceStats() {
-  const out = [];
-  financeStats().forEach((c) => (c.chevaux || []).forEach((cv) => out.push({ nom: cv.nom, client: c.nom, art: cv.art, mat: cv.mat, dep: cv.dep, total: cv.art + cv.mat + cv.dep })));
-  return out.sort((a, b) => b.total - a.total);
+// Analyse financière PAR CHEVAL avec le DÉTAIL par date (chaque ligne facturée) pour Articles / Matériel / Déplacement.
+function chevalFinanceDetail() {
+  const map = {}; // clé = clientId|chevalNom
+  const get = (cid, nom, cnom) => { const k = cid + '|' + nom; return map[k] || (map[k] = { nom, client: cnom, art: [], mat: [], dep: [], total: 0 }); };
+  allTours().forEach((t) => {
+    if (!t.result || !t.result.parClient) return; const date = t.date;
+    t.result.parClient.forEach((m) => {
+      (m.articles || []).forEach((a) => { const per = (a.chevaux && a.chevaux.length) ? a.ttc / a.chevaux.length : 0; (a.chevaux || []).forEach((n) => { const g = get(m.clientId, n, m.nom); g.art.push({ date, libelle: a.libelle + (a.remisePct ? ' (−' + a.remisePct + '%)' : ''), ttc: per }); g.total += per; }); });
+      (m.materiel || []).forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : '', x.infection ? 'Infection' : ''].filter(Boolean).join('+'); const g = get(m.clientId, x.nom, m.nom); g.mat.push({ date, libelle: 'Matériel' + (tags ? ' (' + tags + ')' : ''), ttc: x.ttc }); g.total += x.ttc; });
+      (m.deplacement || []).forEach((l) => { const per = (l.chevaux && l.chevaux.length) ? l.partTTC / l.chevaux.length : 0; (l.chevaux || []).forEach((n) => { const g = get(m.clientId, n, m.nom); g.dep.push({ date, libelle: (l.adresse || 'Déplacement') + ' ' + (TYPES[l.type] || ''), ttc: per }); g.total += per; }); });
+    });
+  });
+  return Object.values(map).sort((a, b) => b.total - a.total);
 }
 function renderFinanceCheval() {
   const box = $('financeChevalList'); if (!box) return; box.innerHTML = '';
-  const fs = chevalFinanceStats();
+  const fs = chevalFinanceDetail();
   if ($('financeChevalEmpty')) $('financeChevalEmpty').style.display = fs.length ? 'none' : 'block';
+  const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
   fs.forEach((cv) => {
     const el = document.createElement('div'); el.className = 'inv-client';
-    el.innerHTML = `<div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.total)} TTC</span></div>
-      <div class="inv-line"><span>Articles</span><span>${eur(cv.art)}</span></div><div class="inv-line"><span>Matériel</span><span>${eur(cv.mat)}</span></div><div class="inv-line"><span>Déplacement</span><span>${eur(cv.dep)}</span></div>`;
-    box.appendChild(el);
+    let h = `<div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.total)} TTC</span></div>`;
+    [['Articles', cv.art], ['Matériel', cv.mat], ['Déplacement', cv.dep]].forEach(([titre, lignes]) => {
+      const sum = lignes.reduce((s, l) => s + l.ttc, 0);
+      h += `<div class="inv-line"><span><b>${titre}</b></span><span><b>${eur(sum)}</b></span></div>`;
+      lignes.slice().sort(byDate).forEach((l) => { h += `<div class="fin-detail"><span>${esc(fmtDateFr(l.date))} · ${esc(l.libelle)}</span><span>${eur(l.ttc)}</span></div>`; });
+    });
+    el.innerHTML = h; box.appendChild(el);
   });
 }
 function renderFraisVehicule() {
@@ -3117,8 +3164,8 @@ function modalRDV(t, arret, cid, onDone) {
   if (!client) { if (onDone) onDone(); return; }
   const arrCl = (arret.clients || []).find((x) => x.clientId === cid);
   const poolIds = ((arrCl && arrCl.chevaux) || []).map((c) => c.id).filter(Boolean);
-  const chevalPool = (client.chevaux || []).filter((h) => !poolIds.length || poolIds.includes(h.id));
-  const pool = chevalPool.length ? chevalPool : (client.chevaux || []);
+  const chevalPool = activeChevaux(client).filter((h) => !poolIds.length || poolIds.includes(h.id));
+  const pool = chevalPool.length ? chevalPool : activeChevaux(client);
   const proposed = proposedRdvDate(t.date || todayStr());
   const blocks = [{ date: proposed, ids: new Set(pool.map((h) => h.id)) }];
   const render = () => {
@@ -3442,6 +3489,12 @@ function refreshEverywhere() {
   $('fuelChip').textContent = '⛽ ' + eur(S.prixPleinL) + '/L';
   $('consoChip').textContent = '🚗 ' + (S.consoL100 || 0) + ' L/100';
   if ($('kmMonthChip')) $('kmMonthChip').textContent = '🗓 ' + km(kmStats().mois);
+  const actifs = clients.filter(isClientActif);
+  const nCh = actifs.reduce((s, c) => s + activeChevaux(c).length, 0);
+  const ym = todayStr().slice(0, 7); const nT = allTours().filter((t) => (t.date || '').startsWith(ym)).length;
+  if ($('clientsChip')) $('clientsChip').textContent = '👤 ' + actifs.length + ' client' + (actifs.length > 1 ? 's' : '');
+  if ($('chevauxChip')) $('chevauxChip').textContent = '🐴 ' + nCh + ' cheval' + (nCh > 1 ? 'aux' : '');
+  if ($('toursMonthChip')) $('toursMonthChip').textContent = '🗺 ' + nT + ' tournée' + (nT > 1 ? 's' : '') + '/mois';
   refreshTarifTable(); updateReglagesUI();
   if ($('tab-accueil').classList.contains('active')) renderHome();
   // Note : vehicule / materiel / articles ne sont PAS re-rendus ici (édition inline = ne pas détruire les champs en cours de frappe).
