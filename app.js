@@ -47,7 +47,8 @@ const CHANGELOG = [
       'Compta : virement/facture se gèrent dans la Compta (menu « Mode » par client, écrit dans la tournée) — utile car ces paiements arrivent après la clôture ; statut « reçu » par paiement (impayés signalés).',
       'Stats : nouvelle section « Analyse financière par cheval » (avec le nom du client).',
       'Suppression : confirmation systématique avant de supprimer un client, un cheval, un arrêt, un article, un frais ou du matériel.',
-      'Éditeur de tournée : la carte du trajet est placée juste au-dessus des arrêts. Sous-onglets Réglages : Synchro juste avant Sauvegarde.',
+      'Éditeur de tournée : la carte du trajet est placée juste au-dessus des arrêts.',
+      'Correctifs téléphone : logo et n° de version réaffichés (masqués par erreur sur petit écran) ; couleur du bandeau/thème bien appliquée sur iOS (le sélecteur natif émettant « change ») ; le mode sombre du système ne teinte plus l\'app (color-scheme). Sous-onglets Réglages : Synchro · Sauvegarde · Changelog (en dernier).',
       'Trajet du jour : nom du client d\'abord, adresse en dessous ; la tournée du jour apparaît en 1ʳᵉ ligne.',
       'Tournée clôturée réellement figée (changer départ, articles, suppression bloqués).',
       'Palette de couleurs : contours de pastilles visibles, couleur personnalisée indiquée comme sélectionnée.',
@@ -2725,11 +2726,13 @@ function bindSettings() {
   set('setRepartition', S.repartition); set('setProvider', S.provider); set('setKey', S.geoapifyKey); set('setPays', S.pays);
   if ($('setDureeMode')) $('setDureeMode').value = S.dureeAuto ? 'auto' : 'vitesse';
   toggleKeyRow(); refreshTarifTable();
-  if ($('setAccent')) { $('setAccent').value = S.accentColor; $('setAccent').addEventListener('input', (e) => { S.accentColor = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
-  if ($('setTopbar')) { $('setTopbar').value = S.topbarColor || S.accentColor; $('setTopbar').addEventListener('input', (e) => { S.topbarColor = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
-  if ($('setNavbar')) { $('setNavbar').value = S.navBarColor || (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff'); $('setNavbar').addEventListener('input', (e) => { S.navBarColor = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
-  if ($('setAppBg')) { $('setAppBg').value = S.appBg; $('setAppBg').addEventListener('input', (e) => { S.appBg = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
-  if ($('setLogoBg')) { if (S.logoBg && S.logoBg !== 'transparent') $('setLogoBg').value = S.logoBg; $('setLogoBg').addEventListener('input', (e) => { S.logoBg = e.target.value; saveSettings(); applyTheme(); refreshSwatches(); }); }
+  // iOS : le sélecteur natif de couleur émet « change » (à la fermeture) et pas toujours « input » → on écoute les deux.
+  const bindColor = (id, set) => { const el = $(id); if (!el) return; const h = (e) => { set(e.target.value); saveSettings(); applyTheme(); refreshSwatches(); }; el.addEventListener('input', h); el.addEventListener('change', h); };
+  if ($('setAccent')) { $('setAccent').value = S.accentColor; bindColor('setAccent', (v) => { S.accentColor = v; }); }
+  if ($('setTopbar')) { $('setTopbar').value = S.topbarColor || S.accentColor; bindColor('setTopbar', (v) => { S.topbarColor = v; }); }
+  if ($('setNavbar')) { $('setNavbar').value = S.navBarColor || (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff'); bindColor('setNavbar', (v) => { S.navBarColor = v; }); }
+  if ($('setAppBg')) { $('setAppBg').value = S.appBg; bindColor('setAppBg', (v) => { S.appBg = v; }); }
+  if ($('setLogoBg')) { if (S.logoBg && S.logoBg !== 'transparent') $('setLogoBg').value = S.logoBg; bindColor('setLogoBg', (v) => { S.logoBg = v; }); }
   refreshSwatches();
   // Champs numériques : séparateur de milliers + unité DANS le champ, mise à jour en direct.
   const paints = {};

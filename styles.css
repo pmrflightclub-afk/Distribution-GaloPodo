@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light; /* l'app gère sa propre palette : on empêche le mode sombre du système de teinter les éléments natifs / le bandeau */
   --bg: #f6f4f1; --card: #ffffff; --ink: #241f1a; --muted: #7a6f64; --line: #e6dfd7;
   --accent: #e8722a; --accent-ink: #ffffff; --strong: #6b3410; --warn: #b45309; --danger: #dc2626;
   --ro-bg: #e7e3dc;
@@ -27,7 +28,7 @@ body {
 .chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .app-ver { font-size: .7rem; font-weight: 700; opacity: .78; letter-spacing: .02em; white-space: nowrap; }
 .fuel-chip { background: rgba(255,255,255,.20); padding: 8px 14px; border-radius: 999px; font-size: .95rem; font-weight: 700; white-space: nowrap; }
-@media (max-width: 480px) { .brand span { display: none; } .fuel-chip { padding: 7px 11px; font-size: .88rem; } }
+@media (max-width: 480px) { .brand-name { display: none; } .fuel-chip { padding: 7px 11px; font-size: .88rem; } }
 .tabs { background: var(--navbar, var(--card)); border-bottom: 1px solid var(--line); position: sticky; top: var(--topbar-h, 88px); z-index: 20; padding: 7px 10px; }
 .tabs-inner { display: flex; gap: 6px; max-width: 680px; margin: 0 auto; justify-content: center; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .tab { flex: 0 0 auto; white-space: nowrap; padding: 16px 20px; border: 0; background: transparent; color: var(--navbar-ink, var(--muted)); opacity: .62; font-weight: 700; border-radius: 12px; font-size: 1.05rem; }
