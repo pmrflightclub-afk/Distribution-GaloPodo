@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.9';
+const APP_VERSION = '1.1.10';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.10', date: '2026-07-05',
+    ajouts: [
+      'Synchro cohérente des items d\'agenda : les items « Récupéré » et « Inactif » cochés sur un appareil sont désormais conservés sur l\'autre après synchro (fusion par union — un item fait quelque part reste fait partout ; ils ne repassent plus par défaut).',
+      'Réglages → Synchro : deux modes exclusifs avec case « Mode actif ». Activer l\'un désactive l\'autre (par défaut : « Synchronisation multi-appareils » par fichier). Quand « Synchro Drive » est active, la section fichier est grisée ; en mode fichier, la synchro Drive automatique est en veille (l\'Agenda reste utilisable).',
+      'Bouton « 🔄 Synchroniser (Google Drive) » ajouté en dernière position dans « Déclarer un événement » (Accueil) : synchro manuelle immédiate quand l\'app est déjà ouverte (mode Drive).',
+    ],
+  },
   {
     version: '1.1.9', date: '2026-07-05',
     ajouts: [
@@ -157,6 +165,7 @@ const DEFAULTS = {
   analyticOrder: [],                           // ordre personnalisé des cases Analytique (tournée)
   tileLabels: {},                              // titres personnalisés des cases (stats + analytique)
   changelogRead: [],                           // versions dont le message de nouveautés a été « marqué comme lu »
+  syncMode: 'file',                            // mode de synchro ACTIF (exclusif) : 'file' (multi-appareils par fichier, défaut) | 'drive' (Google Drive)
 };
 const _hadSettings = localStorage.getItem('ftr.settings') != null; // 1er lancement ? (pour la config usine)
 let S = Object.assign({}, DEFAULTS, LS.get('ftr.settings', {}));
@@ -178,6 +187,7 @@ if (!S.pays) S.pays = 'be';
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (typeof S.googleClientId !== 'string') S.googleClientId = '';
 if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
+if (S.syncMode !== 'drive') S.syncMode = 'file'; // défaut = mode fichier (section 1)
 if (!S.agendaImported || typeof S.agendaImported !== 'object') S.agendaImported = {}; // { eventId: {clientId, title, start, location} }
 if (!S.agendaInactive || typeof S.agendaInactive !== 'object') S.agendaInactive = {}; // { eventId: true } — items masqués (section Inactifs)
 if (!S.accentColor) S.accentColor = '#e8722a';
@@ -413,11 +423,15 @@ function mergeCollection(localArr, remoteArr, tomb) {
   return Object.values(byId).filter((rec) => ((tomb && tomb[rec.id]) || 0) <= (rec.updatedAt || 0));
 }
 function mergeTomb(a, b) { const t = Object.assign({}, a || {}); Object.keys(b || {}).forEach((id) => { t[id] = Math.max(t[id] || 0, b[id]); }); return t; }
-// Réglages : l'objet le plus récent gagne (entier), mais changelogRead est unifié (union).
+// Réglages : l'objet le plus récent gagne (entier), MAIS les états accumulatifs sont unifiés (union) pour
+// ne jamais écraser ce qui a été fait sur l'autre appareil : changelog lu, items d'agenda inactivés/récupérés.
 function mergeSettings(localS, remoteS) {
   const base = ((remoteS && remoteS.updatedAt) || 0) > ((localS && localS.updatedAt) || 0) ? remoteS : localS;
   const merged = Object.assign({}, base || {});
   merged.changelogRead = Array.from(new Set([].concat((localS && localS.changelogRead) || [], (remoteS && remoteS.changelogRead) || [])));
+  // Items d'agenda : « fait sur un appareil = fait partout » → union des clés (eventId), jamais l'un n'efface l'autre.
+  merged.agendaImported = Object.assign({}, (localS && localS.agendaImported) || {}, (remoteS && remoteS.agendaImported) || {});
+  merged.agendaInactive = Object.assign({}, (localS && localS.agendaInactive) || {}, (remoteS && remoteS.agendaInactive) || {});
   return merged;
 }
 // Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
@@ -546,18 +560,35 @@ async function googleSync(interactive, statusEl, reload) {
     if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); await driveUpload(token, f.id, exportSnapshot()); }
     else { await driveUpload(token, null, exportSnapshot()); }
     if (reload) { setS('ok', 'Synchronisé ✔ Rechargement…'); setTimeout(() => location.reload(), 800); }
-    else { setS('ok', 'Synchronisé ✔'); refreshEverywhere(); if ($('tab-accueil').classList.contains('active')) renderHome(); }
+    else { setS('ok', 'Synchronisé ✔'); refreshEverywhere(); if ($('tab-accueil').classList.contains('active')) renderHome(); if ($('tab-agenda') && $('tab-agenda').classList.contains('active')) renderAgendaItems(); }
   } catch (e) { setS('err', 'Erreur : ' + e.message); }
+}
+// Modes de synchro EXCLUSIFS : 'file' (multi-appareils par fichier) OU 'drive' (Google Drive). Activer l'un désactive l'autre.
+// La section fichier est grisée+inerte quand Drive est actif ; la synchro Drive est en veille quand le mode fichier est actif
+// (l'Agenda et l'ID client restent disponibles dans les deux cas).
+function applySyncMode(mode) {
+  mode = (mode === 'drive') ? 'drive' : 'file';
+  S.syncMode = mode;
+  const fileOn = mode === 'file';
+  if ($('syncSecFile')) $('syncSecFile').checked = fileOn;
+  if ($('syncSecDrive')) $('syncSecDrive').checked = !fileOn;
+  if ($('syncCardFile')) $('syncCardFile').classList.toggle('sync-off', !fileOn); // section fichier désactivée si Drive actif
+  if ($('setGoogleAuto')) $('setGoogleAuto').disabled = fileOn;                    // contrôles de synchro Drive inactifs en mode fichier
+  if ($('googleConnect')) $('googleConnect').disabled = fileOn;
+  if ($('googleSyncBtn')) $('googleSyncBtn').disabled = fileOn;
+  if ($('syncDriveDim')) $('syncDriveDim').style.display = fileOn ? '' : 'none';
 }
 // Envoi automatique vers Drive à CHAQUE modification utilisateur (débattu ~4 s pour regrouper les rafales de saisie).
 // Toujours une fusion (télécharge → fusionne → renvoie) : ne perd pas les modifs faites sur l'autre appareil. Silencieux.
 let _drivePushTimer = null;
 function scheduleDrivePush() {
+  if (S.syncMode !== 'drive') return;                  // mode fichier actif → pas d'envoi Drive automatique
   if (!(S.googleAutoSync && S.googleClientId)) return; // synchro auto désactivée ou non configurée
   if (_drivePushTimer) clearTimeout(_drivePushTimer);
   _drivePushTimer = setTimeout(() => { _drivePushTimer = null; drivePushNow(); }, 4000);
 }
 async function drivePushNow() {
+  if (S.syncMode !== 'drive') return;
   if (!(S.googleAutoSync && S.googleClientId)) return;
   if (!gTokenValid(GSCOPE_DRIVE)) return; // pas de jeton en cache → on n'ouvre JAMAIS d'écran d'auth ici (évite le renvoi vers Google en pleine navigation) ; la synchro au boot rattrapera
   try {
@@ -2892,13 +2923,17 @@ function modalVehicule() {
     <div class="actions"><button class="btn block" id="vPlein">⛽ Valider un plein (prix du carburant)</button></div>
     <div class="actions"><button class="btn block" id="vConso">🚗 Corriger la consommation</button></div>
     <div class="actions"><button class="btn block" id="vFrais">🧾 Frais véhicule (entretien, achat…)</button></div>
-    <div class="actions"><button class="btn block" id="vMat">🧰 Frais de matériel</button></div>`);
+    <div class="actions"><button class="btn block" id="vMat">🧰 Frais de matériel</button></div>
+    <div class="actions"><button class="btn block" id="vSync">🔄 Synchroniser (Google Drive)</button></div>
+    <p class="status" id="vSyncStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
   $('vClient').addEventListener('click', () => { closeModal(); editClient(null); });
   $('vPlein').addEventListener('click', modalPlein);
   $('vConso').addEventListener('click', modalConso);
   $('vFrais').addEventListener('click', () => { closeModal(); showTab('gestion'); showGestion('vehicule'); });
   $('vMat').addEventListener('click', () => { closeModal(); showTab('gestion'); showGestion('materiel'); });
+  // Synchro manuelle immédiate (interactive : peut demander la connexion Google si besoin), puis recharge l'app à jour.
+  $('vSync').addEventListener('click', () => { const s = $('vSyncStatus'); if (S.syncMode !== 'drive') { s.className = 'status err'; s.textContent = 'Activez « Synchro Drive » dans Réglages → Synchro (le mode fichier est actif).'; return; } if (!S.googleClientId) { s.className = 'status err'; s.textContent = 'Renseignez d\'abord votre ID client Google dans Réglages → Synchro.'; return; } googleSync(true, s, true); });
 }
 function modalPlein() {
   openModal(`<div class="modal-head"><b>⛽ Valider un plein</b><button class="x" id="mX">✕</button></div>
@@ -3009,6 +3044,9 @@ function bindSettings() {
   if ($('setNavApp')) { $('setNavApp').value = S.navApp; $('setNavApp').addEventListener('change', (e) => { S.navApp = e.target.value === 'gmaps' ? 'gmaps' : 'waze'; saveSettings(); if ($('tab-accueil').classList.contains('active')) renderHome(); }); }
   if ($('setGoogleClientId')) { $('setGoogleClientId').value = S.googleClientId || ''; $('setGoogleClientId').addEventListener('input', (e) => { S.googleClientId = e.target.value.trim(); saveSettings(); }); }
   if ($('setGoogleAuto')) { $('setGoogleAuto').checked = !!S.googleAutoSync; $('setGoogleAuto').addEventListener('change', (e) => { S.googleAutoSync = e.target.checked; saveSettings(); }); }
+  if ($('syncSecFile')) $('syncSecFile').addEventListener('change', () => { applySyncMode('file'); saveSettings(); });
+  if ($('syncSecDrive')) $('syncSecDrive').addEventListener('change', () => { applySyncMode('drive'); saveSettings(); });
+  applySyncMode(S.syncMode);
   if ($('setPays')) $('setPays').addEventListener('change', (e) => { S.pays = e.target.value; S.tvaRate = (PAYS_TVA[S.pays] || PAYS_TVA.be).std; if (paints.setTva) paints.setTva(); saveSettings(); });
   if ($('setDureeMode')) $('setDureeMode').addEventListener('change', (e) => { S.dureeAuto = e.target.value === 'auto'; saveSettings(); updateReglagesUI(); });
   $('setRepartition').addEventListener('change', (e) => { S.repartition = e.target.value; saveSettings(); });
@@ -3183,8 +3221,8 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('syncFile')) $('syncFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importSyncFile(f, $('syncStatus')); e.target.value = ''; });
   if ($('googleConnect')) $('googleConnect').addEventListener('click', async () => { const h = $('googleStatus'); try { h.className = 'status'; h.textContent = 'Connexion…'; await googleToken(true); h.className = 'status ok'; h.textContent = 'Connecté ✔ — cliquez « Synchroniser ».'; } catch (e) { h.className = 'status err'; h.textContent = 'Erreur : ' + e.message; } });
   if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
-  // Synchro Drive automatique à l'ouverture (silencieuse, sans rechargement) si configurée.
-  if (S.googleAutoSync && S.googleClientId) { try { googleSync(false, $('googleStatus'), false); } catch { /* ignore */ } }
+  // Synchro Drive automatique à l'ouverture (silencieuse, sans rechargement) si le mode Drive est actif et configuré.
+  if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { try { googleSync(false, $('googleStatus'), false); } catch { /* ignore */ } }
   // Agenda Google : rafraîchissement à l'ouverture (peut acquérir le jeton une fois, silencieux si déjà consenti).
   if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } }
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));

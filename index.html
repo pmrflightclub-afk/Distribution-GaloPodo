@@ -499,8 +499,8 @@
     </div>
 
     <div id="rsub-synchro" class="subpanel">
-    <section class="card">
-      <h2>Synchronisation (multi-appareils)</h2>
+    <section class="card" id="syncCardFile">
+      <h2>Synchronisation (multi-appareils) <label class="chk2 sync-toggle"><input type="checkbox" id="syncSecFile"/> Mode actif</label></h2>
       <p class="hint">Transférez et <b>fusionnez</b> vos données entre téléphone et PC. La fusion ne remplace rien : le plus récent gagne, les suppressions sont respectées, aucun doublon.</p>
       <h3 class="rsub">Mode fichier (sans compte)</h3>
       <div class="actions two">
@@ -510,9 +510,10 @@
       <p class="hint">Sur l'appareil A : « Exporter » (enregistre un fichier). Transférez-le (mail, cloud, USB…) sur l'appareil B, puis « Importer &amp; fusionner ». À refaire dans les deux sens pour un état identique.</p>
       <p class="status" id="syncStatus"></p>
     </section>
-    <section class="card">
-      <h2>Google — Drive (synchro) &amp; Agenda</h2>
-      <p class="hint">Un <b>seul ID client Google</b> (le vôtre) active <b>Drive</b> (synchro auto téléphone↔PC) <b>et</b> l'<b>Agenda</b>. Vous choisissez : l'un, l'autre, ou les deux. La connexion se fait avec <b>votre compte Google</b> (votre e-mail), 1 fois puis silencieuse. Rien n'est partagé avec l'auteur de l'app.</p>
+    <section class="card" id="syncCardDrive">
+      <h2>Google — Drive (synchro) &amp; Agenda <label class="chk2 sync-toggle"><input type="checkbox" id="syncSecDrive"/> Synchro Drive active</label></h2>
+      <p class="hint">Un <b>seul ID client Google</b> (le vôtre) active <b>Drive</b> (synchro auto téléphone↔PC) <b>et</b> l'<b>Agenda</b>. La connexion se fait avec <b>votre compte Google</b> (votre e-mail), 1 fois puis silencieuse. Rien n'est partagé avec l'auteur de l'app.</p>
+      <p class="hint" id="syncDriveDim" style="display:none">ℹ️ La <b>synchro Drive</b> est en veille (mode fichier actif ci-dessus). L'<b>Agenda</b> reste utilisable ; l'ID client ci-dessous sert aussi à l'Agenda.</p>
       <label>ID client Google (Drive + Agenda)<input type="text" id="setGoogleClientId" placeholder="…apps.googleusercontent.com" autocomplete="off" /></label>
       <label class="chk2"><input type="checkbox" id="setGoogleAuto"/> Synchroniser Drive automatiquement à l'ouverture</label>
       <div class="actions two"><button class="btn" id="googleConnect">🔗 Connecter Drive</button><button class="btn primary" id="googleSyncBtn">🔄 Synchroniser</button></div>
