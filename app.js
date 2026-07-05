@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.20';
+const APP_VERSION = '1.1.21';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.21', date: '2026-07-05',
+    ajouts: [
+      'Compta → nouveau sous-onglet « Impayés » : section « En attente de paiement » (tous les restes reportés) + section « Régularisation » (impayés repris et encaissés lors d\'une visite suivante → statut « paiement reçu »). Le passage de l\'un à l\'autre est automatique quand une facture reprend l\'impayé.',
+    ],
+  },
   {
     version: '1.1.20', date: '2026-07-05',
     ajouts: [
@@ -2529,8 +2535,32 @@ function showCompta(sub) {
   const cb = document.querySelector('#comptaSub .subtab[data-csub="' + currentCsub + '"]'), cl = document.querySelector('#comptaSub .subnav-label');
   if (cb && cl) cl.textContent = cb.textContent;
   if ($('comptaSub')) $('comptaSub').classList.remove('open');
-  if (currentCsub === 'decl') renderComptaDecl(); else renderComptaMois();
+  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else renderComptaMois();
   window.scrollTo(0, 0);
+}
+// Sous-onglet Compta « Impayés » : tous les impayés clients, séparés « en attente » / « régularisés » (paiement reçu).
+function renderComptaImpayes() {
+  const attente = $('impayesAttente'), regul = $('impayesRegul'); if (!attente || !regul) return;
+  attente.innerHTML = ''; regul.innerHTML = '';
+  const all = [];
+  clients.forEach((c) => (c.impayes || []).forEach((im) => all.push({ c, im })));
+  const enAttente = all.filter((x) => !x.im.collected).sort((a, b) => (a.im.date || '').localeCompare(b.im.date || ''));
+  const regularises = all.filter((x) => x.im.collected).sort((a, b) => (b.im.date || '').localeCompare(a.im.date || ''));
+  const totA = enAttente.reduce((s, x) => s + (x.im.ttc || 0), 0);
+  if ($('impayesAttenteEmpty')) $('impayesAttenteEmpty').style.display = enAttente.length ? 'none' : 'block';
+  if ($('impayesRegulEmpty')) $('impayesRegulEmpty').style.display = regularises.length ? 'none' : 'block';
+  if ($('impayesAttenteTot')) $('impayesAttenteTot').textContent = totA > 0.005 ? 'Total en attente : ' + eur(totA) + ' TTC' : '';
+  enAttente.forEach(({ c, im }) => {
+    const el = document.createElement('div'); el.className = 'list-item';
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">en attente</span></span></div><div class="li-act"><b>${eur(im.ttc)}</b></div>`;
+    attente.appendChild(el);
+  });
+  regularises.forEach(({ c, im }) => {
+    const rt = im.collectedTourId ? tourById(im.collectedTourId) : null;
+    const el = document.createElement('div'); el.className = 'list-item';
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">paiement reçu</span>${rt ? ' · régularisé le ' + esc(fmtDateFr(rt.date)) : ''}</span></div><div class="li-act"><b>${eur(im.ttc)}</b></div>`;
+    regul.appendChild(el);
+  });
 }
 // HTML des 3 sections d'UN mois. archived (ym < mois courant) = démarches disponibles.
 function comptaSectionsHtml(ym) {

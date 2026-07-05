@@ -165,6 +165,7 @@
       <div class="subtabs-list">
         <button class="subtab active" data-csub="mois">Mois en cours</button>
         <button class="subtab" data-csub="decl">Déclaration compta</button>
+        <button class="subtab" data-csub="impayes">Impayés</button>
       </div>
     </nav>
 
@@ -186,6 +187,22 @@
         <p class="hint">Plage pour votre comptable. Les mois <b>terminés</b> reçoivent la validation des <b>démarches</b> (liquide : 1 pour le mois ; virements/factures : 1 par client). Un mois en cours n'a pas de démarche. 🖨 = fiche PDF par section et par mois.</p>
         <div id="comptaDeclBody"></div>
         <p class="empty" id="comptaDeclEmpty">Aucune donnée sur cette plage.</p>
+      </section>
+    </div>
+
+    <div id="csub-impayes" class="subpanel">
+      <section class="card">
+        <h2>Impayés — en attente de paiement</h2>
+        <p class="hint">Restes reportés (paiement partiel liquide « prochaine visite »). Dès qu'une facture reprend l'impayé (à la visite suivante), il passe en <b>paiement reçu</b> et descend dans « Régularisation ».</p>
+        <p class="hint" id="impayesAttenteTot"></p>
+        <div id="impayesAttente" class="list"></div>
+        <p class="empty" id="impayesAttenteEmpty">Aucun impayé en attente.</p>
+      </section>
+      <section class="card">
+        <h2>Régularisation (paiement reçu)</h2>
+        <p class="hint">Impayés repris et encaissés lors d'une visite ultérieure.</p>
+        <div id="impayesRegul" class="list"></div>
+        <p class="empty" id="impayesRegulEmpty">Aucun impayé régularisé.</p>
       </section>
     </div>
   </main>
