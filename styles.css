@@ -102,6 +102,7 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .chk { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--muted); margin-top: 8px; margin-bottom: 0; }
 .chk input, .chk2 input { width: auto; margin: 0; }
 .chk2 { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--muted); align-self: center; white-space: nowrap; }
+.art-remise { font-size: .72rem; margin-right: 4px; }
 .badge { font-size: .7rem; padding: 2px 7px; border-radius: 999px; background: #fde68a55; color: var(--warn); font-weight: 700; }
 
 /* Résultat */

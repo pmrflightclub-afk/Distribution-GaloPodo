@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.13';
+const APP_VERSION = '1.1.14';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.14', date: '2026-07-05',
+    ajouts: [
+      'Réduction articles par ligne : chaque article (et la ligne « Parage et équilibrage ») a maintenant une case « Remise » dans l\'éditeur. Cochée = la réduction du client s\'applique à cette ligne ; décochée = ligne au prix plein. Cochée par défaut (le parage est remisé quand il est actif). La réduction reste une seule réduction par client (pas de cumul par article).',
+      'La ligne Parage apparaît désormais dans la liste des articles de l\'arrêt (auto, non supprimable — elle suit les cases Parage des chevaux), avec sa propre case Remise.',
+      'Les impayés (créances reportées) ne sont jamais remisés.',
+    ],
+  },
   {
     version: '1.1.13', date: '2026-07-05',
     ajouts: [
@@ -1535,18 +1543,36 @@ function renderEditorArrets(locked) {
     const arts = articlesForArret(a);
     artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<button class="btn small" data-add-art>+ Article</button>'}</div>`;
     const alist = document.createElement('div'); alist.className = 'list';
-    if (!arts.length) alist.innerHTML = '<p class="hint">Aucun article pour cet arrêt.</p>';
+    // Case « Remise » (à cocher) = la réduction client s'applique à cette ligne. Cochée par défaut.
+    const remiseChkHtml = (off) => locked ? '' : `<label class="chk2 art-remise" title="La réduction client s'applique à cette ligne"><input type="checkbox" data-remise ${off ? '' : 'checked'}/> Remise</label>`;
+    // Ligne(s) Parage & équilibrage (auto, par cheval coché) : affichée avec sa case Remise (remisée par défaut).
+    if (S.parage && S.parage.prixHT > 0) {
+      if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {};
+      a.clients.forEach((cl) => {
+        const pc = (cl.chevaux || []).filter((c) => c.parage); if (!pc.length) return;
+        const qte = pc.length, ttcv = S.parage.prixHT * qte * (1 + (S.parage.tvaPct || 0) / 100);
+        const off = !!currentTour.parageRemiseOff[cl.clientId];
+        const row = document.createElement('div'); row.className = 'list-item';
+        row.innerHTML = `<div class="li-main"><b>Parage et équilibrage</b><span class="li-sub">${esc(clientName(cl.clientId))} · ×${qte} · 🐴 ${esc(pc.map((c) => c.nom).join(', '))} · ${eur(ttcv)} TTC · <i>auto</i></span></div><div class="li-act">${remiseChkHtml(off)}</div>`;
+        const rc = row.querySelector('[data-remise]');
+        if (rc) rc.addEventListener('change', (e) => { if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {}; if (e.target.checked) delete currentTour.parageRemiseOff[cl.clientId]; else currentTour.parageRemiseOff[cl.clientId] = true; saveTournees(); recomputeMoney(); });
+        alist.appendChild(row);
+      });
+    }
     arts.forEach((art) => {
       const rr = (art.tvaPct || 0) / 100, qte = Math.max(1, (art.chevalNoms || []).length || 1), ttcv = (art.prixHT || 0) * qte * (1 + rr);
       const row = document.createElement('div'); row.className = 'list-item';
       const chn = (art.chevalNoms || []).join(', ');
-      row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${eur(ttcv)} TTC</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>'}`;
+      const remiseChk = art.impaye ? '' : remiseChkHtml(!!art.remiseOff); // l'impayé (créance) n'est jamais remisé
+      row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${eur(ttcv)} TTC</span></div>${locked ? '' : `<div class="li-act">${remiseChk}<button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>`}`;
       if (!locked) {
+        const rc = row.querySelector('[data-remise]'); if (rc) rc.addEventListener('change', (e) => { art.remiseOff = !e.target.checked; saveTournees(); recomputeMoney(); });
         row.querySelector('[data-e]').addEventListener('click', () => modalTourArticle(art, { arret: a }));
         row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; if (art.impaye && art.impayeId) uncollectImpaye(art.impayeId); currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
       }
       alist.appendChild(row);
     });
+    if (!alist.children.length) alist.innerHTML = '<p class="hint">Aucun article pour cet arrêt.</p>';
     artWrap.appendChild(alist);
     if (!locked) { const ab = artWrap.querySelector('[data-add-art]'); if (ab) ab.addEventListener('click', () => modalTourArticle(null, { arret: a, clientId: a.clients.length === 1 ? a.clients[0].clientId : undefined })); }
     el.appendChild(artWrap);
@@ -1615,9 +1641,10 @@ function enableRowDrag(listEl, arr, save) {
 }
 
 // ----- Calcul : ARGENT (pur, instantané, sans API) à partir de la géométrie -----
-function computeResultMoney(rows, geom, articles, reducs) {
+function computeResultMoney(rows, geom, articles, reducs, parageNoRemise) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
+  parageNoRemise = parageNoRemise || (currentTour && currentTour.parageRemiseOff) || {}; // { clientId: true } → parage EXCLU de la remise client
   const useSeuil = S.repartition === 'parclient'; // seuil/forfait « client proche » actifs seulement dans ce mode
   rows.forEach((r) => (r.proche = useSeuil && r.directKm < S.seuilKm));
   const loin = rows.filter((r) => !r.proche);
@@ -1662,7 +1689,7 @@ function computeResultMoney(rows, geom, articles, reducs) {
     const qte = a.impaye ? 1 : noms.length;
     const lineHT = (a.prixHT || 0) * qte, rr = (a.tvaPct || 0) / 100;
     const m = getC(a.clientId, clientName(a.clientId));
-    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye });
+    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, remiseOff: !!(a.remiseOff || a.impaye) }); // impayé (créance) jamais remisé
     m.htArt += lineHT; m.tvaArt += lineHT * rr;
   });
   // Parage & équilibrage auto (cheval coché) → ligne d'article
@@ -1672,7 +1699,7 @@ function computeResultMoney(rows, geom, articles, reducs) {
     Object.keys(pa).forEach((cid) => {
       const noms = pa[cid], qte = noms.length, rr = (S.parage.tvaPct || 0) / 100, lineHT = S.parage.prixHT * qte;
       const m = getC(cid, clientName(cid));
-      m.articles.unshift({ libelle: 'Parage et équilibrage', chevaux: noms, qte, prixHT: S.parage.prixHT, tvaPct: S.parage.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr) }); // Parage en 1ʳᵉ position dans la facture
+      m.articles.unshift({ libelle: 'Parage et équilibrage', chevaux: noms, qte, prixHT: S.parage.prixHT, tvaPct: S.parage.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), parage: true, remiseOff: !!parageNoRemise[cid] }); // Parage en 1ʳᵉ position ; remisé par défaut (sauf si exclu)
       m.htArt += lineHT; m.tvaArt += lineHT * rr;
     });
   }
@@ -1681,7 +1708,7 @@ function computeResultMoney(rows, geom, articles, reducs) {
     // Totaux « tarif plein » (avant toute remise) — capturés AVANT de réduire les lignes.
     const htArtBrut = m.articles.reduce((s, a) => s + a.ht, 0), tvaArtBrut = m.articles.reduce((s, a) => s + a.tva, 0);
     // Remise appliquée LIGNE PAR LIGNE : le HT de chaque article est réduit, puis TVA et TTC recalculés sur le net.
-    if (rpct) m.articles.forEach((a) => { a.remisePct = rpct; a.htBrut = a.ht; a.ht = a.ht * (1 - rf); a.tva = a.tva * (1 - rf); a.ttc = a.ttc * (1 - rf); });
+    if (rpct) m.articles.forEach((a) => { if (a.remiseOff) return; a.remisePct = rpct; a.htBrut = a.ht; a.ht = a.ht * (1 - rf); a.tva = a.tva * (1 - rf); a.ttc = a.ttc * (1 - rf); }); // remise SEULEMENT sur les lignes activées
     const htArt = m.articles.reduce((s, a) => s + a.ht, 0), tvaArt = m.articles.reduce((s, a) => s + a.tva, 0);
     const totalHT = m.htDep + m.htMat + htArt;
     const totalTVA = (m.htDep + m.htMat) * stdRate + tvaArt;
@@ -1741,7 +1768,7 @@ function recomputeTourLocal(t) {
   const prov = (R.providerMin != null ? R.providerMin : R.totalMin);
   const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 50));
   const geom = { totalKm: R.totalKm, totalMin, kmHomeFirst: R.kmHomeFirst, kmLastHome: R.kmLastHome };
-  const res = computeResultMoney(rows, geom, t.articles, t.reductions);
+  const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff);
   res.providerMin = prov; res.routeGeo = R.routeGeo || [];
   t.result = res;
   return true;
@@ -2019,7 +2046,7 @@ function exampleResult() {
   const kmLastHome = 28;
   const totalKm = rows.reduce((s, r) => s + r.segKm, 0) + kmLastHome;
   const articles = [{ clientId: 'm', chevalNoms: ['Rex'], libelle: 'Plaque orthopédique (ex.)', prixHT: 40, tvaPct: 21 }];
-  return computeResultMoney(rows, { totalKm, kmHomeFirst: rows[0].segKm, kmLastHome, totalMin: Math.round(totalKm * 60 / (S.vitesseKmh || 50)) }, articles, { m: 10 });
+  return computeResultMoney(rows, { totalKm, kmHomeFirst: rows[0].segKm, kmLastHome, totalMin: Math.round(totalKm * 60 / (S.vitesseKmh || 50)) }, articles, { m: 10 }, {});
 }
 function openFactureDetail() {
   openModal(factureDetailHtml(exampleResult()));
