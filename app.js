@@ -49,6 +49,8 @@ const CHANGELOG = [
       'Suppression : confirmation systématique avant de supprimer un client, un cheval, un arrêt, un article, un frais ou du matériel.',
       'Éditeur de tournée : la carte du trajet est placée juste au-dessus des arrêts.',
       'Compta : bouton PDF corrigé (impression via le navigateur, ne ferme plus l\'app). Compta et Agenda déplacés en onglets principaux.',
+      'Clôture sécurisée : impossible de clôturer une tournée tant qu\'un client n\'a pas de mode de paiement (virement/liquide, aucun présélectionné par défaut) — en liquide, le montant encaissé est obligatoire. Message de blocage dans l\'éditeur.',
+      'Compta : statut « paiement reçu » par client (facture & virement, suivi payé/impayé) et statut « démarche comptable » par section (en attente / effectuée), indépendants, disponibles pour tous les mois.',
       'Facture : l\'arrondi caisse (liquide) apparaît en dernière ligne d\'article et corrige le total (facture, ticket, stats). Parage & Équilibrage en 1ʳᵉ position des articles.',
       'Client proche : la ligne « forfait » affiche le km du seuil (ex. 15 km) et ce km est compté dans les stats par client/cheval.',
       'Tournée clôturée : boutons Waze / Route / Paiement masqués dans les arrêts (le paiement se classe dans la Compta).',
@@ -1135,6 +1137,18 @@ function reconcileTour(tour) {
   return changed;
 }
 
+// Sécurité de clôture : chaque client doit avoir un mode de paiement (virement/liquide) ; en liquide, le montant encaissé est requis.
+function tourCloseBlock(t) {
+  const out = []; const seen = new Set();
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => {
+    if (seen.has(cl.clientId)) return; seen.add(cl.clientId);
+    const p = (t.payments || {})[cl.clientId];
+    const method = p ? p.method : null;
+    if (method !== 'virement' && method !== 'liquide') out.push(clientName(cl.clientId) + ' : mode de paiement non choisi');
+    else if (method === 'liquide' && (!p || p.montantPaye == null)) out.push(clientName(cl.clientId) + ' : montant liquide non renseigné');
+  }));
+  return out;
+}
 function openEditor() {
   const st = statusOf(currentTour); const locked = st === 'cloturee';
   reconcileTour(currentTour); // resync chevaux/clients (non clôturée)
@@ -1153,6 +1167,7 @@ function openEditor() {
   if ($('edChangeHome')) $('edChangeHome').style.display = locked ? 'none' : '';
   if ($('edChangeArrivee')) $('edChangeArrivee').style.display = locked ? 'none' : '';
   if ($('edCloseWrap')) $('edCloseWrap').style.display = locked ? 'none' : '';
+  if ($('edCloseWarn')) { const blk = locked ? [] : tourCloseBlock(currentTour); $('edCloseWarn').innerHTML = blk.length ? '🔒 Clôture bloquée — paiement à renseigner :<br>• ' + blk.map(esc).join('<br>• ') + '<br>Ouvrez l\'arrêt concerné → <b>💶 Paiement</b>.' : ''; $('edCloseWarn').classList.toggle('hidden', !blk.length); }
   $('edLockBanner').classList.toggle('hidden', !locked);
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
@@ -2120,7 +2135,8 @@ function renderCompta() {
   // Table par client (virement/facture) : Mode (classe le paiement) + Reçu (paiement encaissé). Texte figé à l'impression.
   const clientTbl = (arr, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th></tr></thead><tbody>${arr.map((e) => `<tr><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${forPrint ? (e.mode === 'virement' ? 'Virement' : 'Facture') : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center">${forPrint ? (isRecu(e) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu data-tour="${e.tourId}" data-cid="${e.clientId}" ${isRecu(e) ? 'checked' : ''}/>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
-  const statusRow = (k) => isCur ? '<p class="hint">Mois en cours (se clôture automatiquement le mois prochain).</p>' : `<label>Statut comptable<select data-status="${k}"><option value="attente"${statusOfKind(k) === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind(k) === 'encode' ? ' selected' : ''}>Comptabilité encodée</option></select></label>`;
+  // Statut de DÉMARCHE comptable (indépendant du paiement) — par section, disponible pour tous les mois.
+  const statusRow = (k) => `${isCur ? '<p class="hint">Mois en cours (se clôture automatiquement le mois prochain).</p>' : ''}<label>Démarche comptable<select data-status="${k}"><option value="attente"${statusOfKind(k) === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind(k) === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>`;
   // Ligne « suivi des paiements reçus » (virement/facture) : combien encaissés, impayés signalés.
   const recuRow = (arr) => { if (!arr.length) return ''; const n = arr.filter(isRecu).length; const imp = arr.length - n; return `<p class="hint"${imp ? ' style="color:var(--warn);font-weight:700"' : ''}>Paiements reçus : ${n}/${arr.length}${imp ? ` · ⚠ ${imp} impayé(s)` : ' ✅'}</p>`; };
   const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(arr) : ''}${detail}${statusRow(k)}</section>`;
@@ -2506,7 +2522,7 @@ function renderHomeTrajet() {
         <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button>${t.endedAt ? '' : ' <button class="btn small primary" data-close>Clôturer</button>'}</div>`;
       rr.querySelector('[data-waze]').addEventListener('click', () => openNav(retAddr));
       rr.querySelector('[data-route]').addEventListener('click', () => modalReturnTime(t, estRet, renderHomeTrajet));
-      const cb = rr.querySelector('[data-close]'); if (cb) cb.addEventListener('click', () => { if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); renderHome(); });
+      const cb = rr.querySelector('[data-close]'); if (cb) cb.addEventListener('click', () => { const blk = tourCloseBlock(t); if (blk.length) { alert('🔒 Clôture bloquée — paiement à renseigner :\n\n• ' + blk.join('\n• ') + '\n\nOuvrez la tournée, puis 💶 Paiement sur l\'arrêt concerné.'); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); renderHome(); });
       box.appendChild(rr);
     }
   });
@@ -2555,19 +2571,19 @@ function modalPayment(t, arret, after) {
   if (!t.payments) t.payments = {};
   const invTTC = (cid) => { const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; return m ? m.totalTTC : 0; };
   const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); return; } const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); return; } tournees.push(t); saveTournees(); };
-  let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div>';
+  let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div><p class="hint">Choisissez le mode de paiement (obligatoire pour clôturer). En <b>liquide</b>, saisissez le montant réellement encaissé (la différence + ou − est reprise en facture).</p>';
   clientsAt.forEach((cid) => {
-    const p = t.payments[cid] || { method: 'virement', facture: false, montantPaye: null };
+    const p = t.payments[cid] || { method: null, facture: false, montantPaye: null }; // par défaut : aucun mode choisi (neutre)
     const ttc = invTTC(cid);
     html += `<div class="pay-block" data-cid="${cid}">
       <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture ${eur(ttc)} TTC</span></h3>
       <div class="seg pay-method">
-        <button type="button" class="seg-btn${p.method !== 'liquide' ? ' on' : ''}" data-m="virement">Virement</button>
+        <button type="button" class="seg-btn${p.method === 'virement' ? ' on' : ''}" data-m="virement">Virement</button>
         <button type="button" class="seg-btn${p.method === 'liquide' ? ' on' : ''}" data-m="liquide">Liquide</button>
       </div>
       <label class="chk2"><input type="checkbox" data-fac ${p.facture ? 'checked' : ''}/> Facture nécessaire</label>
       <div class="pay-cash" style="${p.method === 'liquide' ? '' : 'display:none'}">
-        <label>Montant réellement payé (TTC)<input type="number" data-paye step="0.01" min="0" value="${p.montantPaye != null ? p.montantPaye : (ttc ? Math.round(ttc * 100) / 100 : '')}"/></label>
+        <label>Montant réellement encaissé (TTC)<input type="number" data-paye step="0.01" min="0" value="${p.montantPaye != null ? p.montantPaye : ''}" placeholder="${ttc ? fmtNum(ttc, 2) : ''}"/></label>
         <p class="hint" data-diff></p>
       </div>
     </div>`;
@@ -2587,7 +2603,7 @@ function modalPayment(t, arret, after) {
     document.querySelectorAll('.pay-block').forEach((block) => {
       const cid = block.dataset.cid;
       const on = block.querySelector('.pay-method .seg-btn.on');
-      const method = on ? on.dataset.m : 'virement';
+      const method = on ? on.dataset.m : null; // aucun choix → neutre (bloque la clôture)
       const facture = block.querySelector('[data-fac]').checked;
       let montantPaye = null;
       if (method === 'liquide') { const v = parseNum(block.querySelector('[data-paye]').value); montantPaye = v > 0 ? v : null; }
@@ -2948,6 +2964,8 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('edNom')) $('edNom').addEventListener('input', (e) => { if (currentTour) { currentTour.nom = e.target.value; saveTournees(); } });
   if ($('edClose')) $('edClose').addEventListener('click', () => {
     if (!currentTour || currentTour.closed) return;
+    const blk = tourCloseBlock(currentTour);
+    if (blk.length) { alert('🔒 Clôture bloquée — paiement à renseigner :\n\n• ' + blk.join('\n• ') + '\n\nOuvrez l\'arrêt concerné (bouton 💶 Paiement), choisissez virement/liquide (+ montant si liquide).'); return; }
     if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
     currentTour.closed = true;
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
