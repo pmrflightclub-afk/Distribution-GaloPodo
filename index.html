@@ -301,6 +301,7 @@
         <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
         <button class="subtab" data-rsub="service">Service</button>
         <button class="subtab" data-rsub="gps">GPS</button>
+        <button class="subtab" data-rsub="synchro">Synchro</button>
         <button class="subtab" data-rsub="calcul">Calcul</button>
         <button class="subtab" data-rsub="analyse">Analyse</button>
         <button class="subtab" data-rsub="theme">Thème</button>
@@ -423,6 +424,25 @@
       </label>
     </section>
     </div><!-- /rsub-gps -->
+
+    <div id="rsub-synchro" class="subpanel">
+    <section class="card">
+      <h2>Synchronisation (multi-appareils)</h2>
+      <p class="hint">Transférez et <b>fusionnez</b> vos données entre téléphone et PC. La fusion ne remplace rien : le plus récent gagne, les suppressions sont respectées, aucun doublon.</p>
+      <h3 class="rsub">Mode fichier (sans compte)</h3>
+      <div class="actions two">
+        <button class="btn" id="syncExport">⬇ Exporter un fichier</button>
+        <label class="btn" id="syncImportLbl" style="text-align:center;cursor:pointer;display:block">🔀 Importer &amp; fusionner<input type="file" id="syncFile" accept="application/json,.json" hidden/></label>
+      </div>
+      <p class="hint">Sur l'appareil A : « Exporter » (enregistre un fichier). Transférez-le (mail, cloud, USB…) sur l'appareil B, puis « Importer &amp; fusionner ». À refaire dans les deux sens pour un état identique.</p>
+      <p class="status" id="syncStatus"></p>
+    </section>
+    <section class="card">
+      <h2>Google Drive (synchro automatique) — à configurer</h2>
+      <p class="hint">Synchro automatique téléphone↔PC via votre compte Google (connexion unique, puis silencieuse). Nécessite un identifiant Google (OAuth) à mettre en place. <b>Indisponible tant qu'il n'est pas configuré.</b></p>
+      <button class="btn" disabled>Se connecter à Google Drive (bientôt)</button>
+    </section>
+    </div><!-- /rsub-synchro -->
 
     <div id="rsub-calcul" class="subpanel"><div id="calculBody"></div></div>
 

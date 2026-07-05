@@ -29,7 +29,7 @@ const CHANGELOG = [
       'Navigation GPS : le bouton ouvre l\'app installée (Waze par défaut, repli Google Maps si Waze absent) ; choix Waze/Google Maps dans Réglages → GPS.',
       'Bouton « Route » (Trajet du jour ET éditeur) : encoder le temps de trajet RÉEL ; repris automatiquement dans le SMS, le récap, le ticket et les stats (l\'estimé reste conservé). Boutons Waze + Route par arrêt dans l\'éditeur.',
       'Stats : nouvelle carte « Temps de trajet — estimé vs réel » (arrêts sans temps réel signalés).',
-      'Sauvegarde / transfert : import par FUSION (le plus récent gagne, suppressions respectées, sans écraser) — base de la synchro multi-appareils.',
+      'Synchro multi-appareils (Réglages → Synchro, mode Fichier) : exporter/importer un fichier avec FUSION (le plus récent gagne, suppressions respectées, sans écraser, sans compte). Drive automatique à venir.',
       'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
     corrections: [
@@ -398,6 +398,30 @@ function applyMerged(merged) {
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
 }
 function importSnapshotMerge(remote) { applyMerged(mergeSnapshots(exportSnapshot(), remote)); }
+// D3 (mode fichier) : télécharge l'instantané dans un fichier .json.
+function downloadSnapshot() {
+  const data = JSON.stringify(exportSnapshot(), null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `galopodo-sync-${todayStr()}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// D3 (mode fichier) : lit un fichier de synchro et le FUSIONNE (sans écraser).
+function importSyncFile(file, statusEl) {
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const o = JSON.parse(r.result);
+      if (!o.tours && Array.isArray(o.tournees)) o.tours = o.tournees; // compat ancienne sauvegarde
+      if (!o.settings || !Array.isArray(o.clients) || !Array.isArray(o.tours)) throw new Error('format non reconnu');
+      importSnapshotMerge(o);
+      if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = 'Fusionné ✔ Rechargement…'; }
+      setTimeout(() => location.reload(), 700);
+    } catch (err) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Fichier invalide : ' + err.message; } }
+  };
+  r.readAsText(file);
+}
 
 (function migrate() {
   clients.forEach((c) => {
@@ -2435,6 +2459,8 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); _deferredInstall = e; });
   if ($('btnBackup')) $('btnBackup').addEventListener('click', modalBackup);
+  if ($('syncExport')) $('syncExport').addEventListener('click', downloadSnapshot);
+  if ($('syncFile')) $('syncFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importSyncFile(f, $('syncStatus')); e.target.value = ''; });
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
