@@ -5,10 +5,8 @@
   --topbar-h: 88px; --tabs-h: 64px; /* hauteurs des barres collantes (recalculées en JS) */
   --radius: 14px; --shadow: 0 1px 3px rgba(0,0,0,.08), 0 6px 18px rgba(0,0,0,.04);
 }
-@media (prefers-color-scheme: dark) {
-  :root { --bg:#15120f; --card:#211d19; --ink:#efe7de; --muted:#a89a8c; --line:#332d27;
-    --accent:#f0863a; --accent-ink:#241205; --strong:#f0b78a; --ro-bg:#3a352f; }
-}
+/* Le thème est entièrement géré par applyTheme() (variables CSS en ligne). Pas de surcharge OS
+   (prefers-color-scheme) : sinon le mode sombre du téléphone imposait une palette différente du PC. */
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
@@ -58,7 +56,7 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .hint, small.hint { display: block; font-size: .76rem; color: var(--muted); font-weight: 400; margin-top: 6px; }
 .empty { color: var(--muted); font-size: .85rem; text-align: center; padding: 8px; }
 
-.btn { border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 11px 14px; border-radius: 10px; font-weight: 600; font-size: .92rem; cursor: pointer; }
+.btn { -webkit-appearance: none; appearance: none; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 11px 14px; border-radius: 10px; font-weight: 600; font-size: .92rem; cursor: pointer; }
 .btn.small { padding: 7px 11px; font-size: .82rem; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.danger { color: var(--danger); border-color: var(--danger); background: transparent; }
@@ -184,8 +182,9 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
   .subtabs-list .subtab { width: 100%; text-align: left; }
 }
 .swatches { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
-/* Anneau neutre double (clair + sombre) → la pastille reste visible sur fond clair comme sombre. */
-.swatch { width: 30px; height: 30px; border-radius: 50%; border: 0; cursor: pointer; padding: 0; box-shadow: 0 0 0 1px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.4); }
+/* appearance:none = INDISPENSABLE sur iOS (sinon la pastille prend le style bouton système gris et ignore la couleur).
+   Anneau gris neutre visible sur fond clair comme sombre, sans teinter la couleur. */
+.swatch { -webkit-appearance: none; appearance: none; width: 32px; height: 32px; border-radius: 50%; border: 0; cursor: pointer; padding: 0; box-shadow: 0 0 0 1px rgba(128,128,128,.6); }
 .swatch.on { outline: 3px solid var(--accent); outline-offset: 3px; }
 .swatch.sw-custom { position: relative; }
 .swatch.sw-custom::after { content: '✎'; position: absolute; inset: 0; display: grid; place-items: center; font-size: .7rem; color: #fff; text-shadow: 0 0 2px rgba(0,0,0,.8); }

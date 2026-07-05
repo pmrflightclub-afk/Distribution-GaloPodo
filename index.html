@@ -485,14 +485,16 @@
       <p class="status" id="syncStatus"></p>
     </section>
     <section class="card">
-      <h2>Google Drive (synchro automatique)</h2>
-      <p class="hint">Synchro automatique téléphone↔PC via <b>votre</b> compte Google (chacun le sien). Collez votre <b>ID client OAuth</b> — 1 connexion, puis silencieuse. Rien n'est partagé avec l'auteur de l'app.</p>
-      <label>ID client Google OAuth<input type="text" id="setGoogleClientId" placeholder="…apps.googleusercontent.com" autocomplete="off" /></label>
-      <label class="chk2"><input type="checkbox" id="setGoogleAuto"/> Synchroniser automatiquement à l'ouverture</label>
+      <h2>Google — Drive (synchro) &amp; Agenda</h2>
+      <p class="hint">Un <b>seul ID client Google</b> (le vôtre) active <b>Drive</b> (synchro auto téléphone↔PC) <b>et</b> l'<b>Agenda</b>. Vous choisissez : l'un, l'autre, ou les deux. La connexion se fait avec <b>votre compte Google</b> (votre e-mail), 1 fois puis silencieuse. Rien n'est partagé avec l'auteur de l'app.</p>
+      <label>ID client Google (Drive + Agenda)<input type="text" id="setGoogleClientId" placeholder="…apps.googleusercontent.com" autocomplete="off" /></label>
+      <label class="chk2"><input type="checkbox" id="setGoogleAuto"/> Synchroniser Drive automatiquement à l'ouverture</label>
       <div class="actions two"><button class="btn" id="googleConnect">🔗 Connecter Drive</button><button class="btn primary" id="googleSyncBtn">🔄 Synchroniser</button></div>
       <p class="status" id="googleStatus"></p>
-      <details class="assistant"><summary>Comment obtenir mon ID client (une fois)</summary>
-        <p class="hint">1. console.cloud.google.com → nouveau projet. 2. Activer <b>Google Drive API</b>. 3. Écran de consentement OAuth (externe) + votre e-mail en test. 4. Identifiants → <b>ID client OAuth</b> → « Application Web ». 5. Origines JavaScript autorisées = l'adresse de l'app. 6. Collez l'ID ci-dessus.</p>
+      <details class="assistant"><summary>❓ C'est quoi « Google Cloud Console » et comment obtenir mon ID ?</summary>
+        <p class="hint"><b>Google Cloud Console</b> = l'espace développeur <b>gratuit</b> de Google. On y crée un « identifiant » qui autorise <b>cette</b> app à accéder à <b>votre</b> Drive et Agenda (personne d'autre). Ouvrez <a href="https://console.cloud.google.com/" target="_blank" rel="noopener"><b>console.cloud.google.com</b></a> et connectez-vous avec votre compte Google.</p>
+        <p class="hint">1. Créez un <b>projet</b>. 2. « APIs &amp; Services » → <b>activez</b> « Google Drive API » <b>et</b> « Google Calendar API » (le même ID sert aux deux). 3. « Écran de consentement OAuth » → <b>Externe</b> + ajoutez votre e-mail en « utilisateur test ». 4. « Identifiants » → <b>Créer des identifiants</b> → <b>ID client OAuth</b> → type <b>Application Web</b>. 5. « Origines JavaScript autorisées » : collez l'adresse de l'app (ex. <span style="word-break:break-all">https://pmrflightclub-afk.github.io</span>). 6. Copiez l'<b>ID client</b> (finit par <i>.apps.googleusercontent.com</i>) et collez-le ci-dessus.</p>
+        <p class="hint">Ensuite : « <b>Connecter Drive</b> » ici pour la synchro, et/ou « <b>↻ Google</b> » dans l'onglet <b>Agenda</b> pour le calendrier. Les deux sont indépendants.</p>
       </details>
     </section>
     </div><!-- /rsub-synchro -->

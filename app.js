@@ -37,6 +37,9 @@ const CHANGELOG = [
       'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
     corrections: [
+      'Durées unifiées partout : moins d\'1h → minutes, à partir d\'1h → « 1h30 » (trajets, temps de travail, stats, SMS, saisie Route avec aperçu en direct).',
+      'Thème : couleurs enfin fidèles sur téléphone/iOS (les pastilles et boutons ne prennent plus le style système gris) ; l\'app impose ses couleurs quel que soit le mode sombre du téléphone.',
+      'Google : aide « Cloud Console » clarifiée (avec lien direct) ; un seul ID client active Drive ET Agenda, au choix (indépendants).',
       'Trajet du jour : nom du client d\'abord, adresse en dessous ; la tournée du jour apparaît en 1ʳᵉ ligne.',
       'Tournée clôturée réellement figée (changer départ, articles, suppression bloqués).',
       'Palette de couleurs : contours de pastilles visibles, couleur personnalisée indiquée comme sélectionnée.',
@@ -1257,7 +1260,7 @@ function renderEditorArrets(locked) {
     const nav = document.createElement('div'); nav.className = 'a-nav';
     const estMin = legMins[i] != null ? Math.round(legMins[i]) : null;
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? estMin + ' min est.' : '—'}${realMin != null ? ' · <b>' + realMin + ' min réel</b>' : ''}</span><span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button>${locked ? '' : ' <button class="btn small" data-route>Route</button>'}</span>`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span><span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button>${locked ? '' : ' <button class="btn small" data-route>Route</button>'}</span>`;
     nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
     if (!locked) { const rb = nav.querySelector('[data-route]'); if (rb) rb.addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets())); }
     el.appendChild(nav);
@@ -1601,7 +1604,7 @@ async function calcTour(silent) {
 function renderResultUI(R) {
   if (R) {
     $('rKm').textContent = km(R.totalKm);
-    $('rMin').textContent = Math.round(R.totalMin) + ' min · ' + hrs(R.totalMin);
+    $('rMin').textContent = durMin(R.totalMin);
     $('rHT').textContent = eur(R.totalHT) + ' HT'; $('rTVA').textContent = eur(R.totalTVA);
     $('rTTC').textContent = eur(R.totalTTC) + ' TTC';
   } else { ['rKm', 'rMin', 'rHT', 'rTVA', 'rTTC'].forEach((id) => { if ($(id)) $(id).textContent = '—'; }); }
@@ -1664,7 +1667,7 @@ function recapText(R, tour) {
   tour = tour || currentTour;
   const stdRate = rate(), htDep = R.htDeplacement || 0;
   let s = `Frais de tournée — ${tour ? tour.date : ''}\n`;
-  s += `Distance : ${km(R.totalKm)} · Durée estimée : ${Math.round(R.totalMin)} min\n`;
+  s += `Distance : ${km(R.totalKm)} · Durée estimée : ${durMin(R.totalMin)}\n`;
   // Temps de trajet RÉEL (encodé via le bouton Route) : total renseigné + arrêts sans temps réel.
   if (tour && Array.isArray(tour.arrets) && tour.arrets.length) {
     const withReal = tour.arrets.filter((a) => typeof a.realMin === 'number');
@@ -1890,8 +1893,8 @@ function renderStats() {
     box.innerHTML = ''; $('kmParClientEmpty').style.display = st.parClient.length ? 'none' : 'block';
     st.parClient.forEach((c) => {
       const el = document.createElement('div'); el.className = 'inv-client';
-      let h = `<div class="inv-head"><span>${esc(c.nom)}</span><span>${km(c.km)} · ${hrs(c.min)}</span></div>`;
-      c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)}</span><span>${km(cv.km)} · ${hrs(cv.min)}</span></div>`; });
+      let h = `<div class="inv-head"><span>${esc(c.nom)}</span><span>${km(c.km)} · ${durMin(c.min)}</span></div>`;
+      c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)}</span><span>${km(cv.km)} · ${durMin(cv.min)}</span></div>`; });
       el.innerHTML = h; box.appendChild(el);
     });
   }
@@ -1912,10 +1915,10 @@ function renderTrajetTemps() {
     const estTot = t.result ? Math.round(t.result.totalMin) : null;
     const el = document.createElement('div'); el.className = 'inv-client';
     let h = `<div class="inv-head"><span>${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}</span><span>${withReal.length}/${na} réel</span></div>`;
-    h += `<div class="inv-line"><span>Durée estimée (tournée)</span><span>${estTot != null ? estTot + ' min' : '—'}</span></div>`;
-    h += `<div class="inv-line"><span>Temps réel renseigné (somme)</span><span>${withReal.length ? realTot + ' min' : '—'}</span></div>`;
+    h += `<div class="inv-line"><span>Durée estimée (tournée)</span><span>${estTot != null ? durMin(estTot) : '—'}</span></div>`;
+    h += `<div class="inv-line"><span>Temps réel renseigné (somme)</span><span>${withReal.length ? durMin(realTot) : '—'}</span></div>`;
     if (missing) h += `<div class="inv-line" style="color:var(--warn)"><span>Arrêts sans temps réel</span><span>${missing}</span></div>`;
-    (t.arrets || []).forEach((a, i) => { const r = (typeof a.realMin === 'number') ? a.realMin + ' min' : '<i>non renseigné</i>'; h += `<div class="fin-cheval"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}</span><span>réel : ${r}</span></div>`; });
+    (t.arrets || []).forEach((a, i) => { const r = (typeof a.realMin === 'number') ? durMin(a.realMin) : '<i>non renseigné</i>'; h += `<div class="fin-cheval"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}</span><span>réel : ${r}</span></div>`; });
     el.innerHTML = h; box.appendChild(el);
   });
 }
@@ -2377,7 +2380,9 @@ function legMinutesFor(t) {
 }
 // Heure locale HH:MM et durée « X h Y min » (temps de travail).
 const hm = (ts) => ts ? new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—';
-function durHm(ms) { if (ms == null || ms < 0) return '—'; const m = Math.round(ms / 60000); const h = Math.floor(m / 60), mm = m % 60; return h ? `${h} h ${mm} min` : `${mm} min`; }
+// Durée à partir de MINUTES : < 1h → « 45 min » ; ≥ 1h → « 1h30 » / « 2h ». Format unique partout.
+function durMin(min) { if (min == null || isNaN(min) || min < 0) return '—'; min = Math.round(min); const h = Math.floor(min / 60), m = min % 60; if (!h) return m + ' min'; return m ? `${h}h${m < 10 ? '0' + m : m}` : `${h}h`; }
+function durHm(ms) { return (ms == null || ms < 0) ? '—' : durMin(ms / 60000); }
 function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
   const todays = [...tournees].filter((t) => statusOf(t) === 'active').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -2400,8 +2405,8 @@ function renderHomeTrajet() {
       const cl0 = (a.clients || [])[0] || {}; const c0 = clients.find((x) => x.id === cl0.clientId) || {};
       const est = mins[i] != null ? Math.round(mins[i]) : null;                       // temps estimé (précalculé)
       const real = (typeof a.realMin === 'number') ? a.realMin : null;                 // temps réel encodé (bouton Route)
-      const trajet = real != null ? real + ' min' : (est != null ? est + ' min' : '—'); // SMS : réel si encodé, sinon estimé
-      const trajetLbl = (est != null ? est + ' min est.' : '—') + (real != null ? ' · <b>' + real + ' min réel</b>' : '');
+      const trajet = real != null ? durMin(real) : (est != null ? durMin(est) : '—'); // SMS : réel si encodé, sinon estimé
+      const trajetLbl = (est != null ? durMin(est) + ' est.' : '—') + (real != null ? ' · <b>' + durMin(real) + ' réel</b>' : '');
       const el = document.createElement('div'); el.className = 'list-item';
       // Nom du client d'abord, adresse en dessous.
       // Bouton « Valider » (marque la fin de visite / départ) — visible seulement après « Démarrer ».
@@ -2422,7 +2427,7 @@ function renderHomeTrajet() {
       el.querySelector('[data-ticket]').addEventListener('click', async () => {
         const btn = el.querySelector('[data-ticket]');
         const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
-        let txt = `Trajet vers ${adresse}\n  Estimé : ${est != null ? est + ' min' : '—'} · Réel : ${real != null ? real + ' min' : 'non renseigné'}\n\n`;
+        let txt = `Trajet vers ${adresse}\n  Estimé : ${est != null ? durMin(est) : '—'} · Réel : ${real != null ? durMin(real) : 'non renseigné'}\n\n`;
         txt += recapText(t.result, t);
         txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m, (t.payments || {})[cl0.clientId]) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
         try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); }
@@ -2436,7 +2441,7 @@ function renderHomeTrajet() {
       const R = t.result; const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
       const estRet = (R && R.kmLastHome != null) ? Math.round(R.kmLastHome * mpk) : null;
       const realRet = (typeof t.returnRealMin === 'number') ? t.returnRealMin : null;
-      const retLbl = (estRet != null ? estRet + ' min est.' : '—') + (realRet != null ? ' · <b>' + realRet + ' min réel</b>' : '') + (t.endedAt ? ' · ✅ ' + hm(t.endedAt) : '');
+      const retLbl = (estRet != null ? durMin(estRet) + ' est.' : '—') + (realRet != null ? ' · <b>' + durMin(realRet) + ' réel</b>' : '') + (t.endedAt ? ' · ✅ ' + hm(t.endedAt) : '');
       const rr = document.createElement('div'); rr.className = 'list-item';
       rr.innerHTML = `<div class="li-main"><b>🏁 Retour</b><span class="li-sub">📍 ${esc(addrStr(retAddr)) || 'domicile'} · 🕒 ${retLbl}</span></div>
         <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button>${t.endedAt ? '' : ' <button class="btn small primary" data-close>Clôturer</button>'}</div>`;
@@ -2453,10 +2458,13 @@ function modalRouteTime(tour, arret, estMin, after) {
   const cur = (typeof arret.realMin === 'number') ? arret.realMin : '';
   const persist = () => { const i = tournees.findIndex((t) => t.id === tour.id); if (i >= 0) tournees[i] = tour; else tournees.push(tour); saveTournees(); };
   openModal(`<div class="modal-head"><b>⏱ Temps de trajet réel</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Estimé (précalculé) : <b>${estMin != null ? estMin + ' min' : '—'}</b>. Encodez le temps réel relevé sur Waze pour <b>${esc(labelFor(arret))}</b> — il sera repris automatiquement dans le SMS, le récap, le ticket et les stats (l'estimé reste conservé).</p>
-    <label>Temps réel (minutes)<input type="number" id="rtMin" step="1" min="0" inputmode="numeric" value="${cur}" /></label>
+    <p class="hint">Estimé (précalculé) : <b>${estMin != null ? durMin(estMin) : '—'}</b>. Encodez le temps réel relevé sur Waze pour <b>${esc(labelFor(arret))}</b> — il sera repris automatiquement dans le SMS, le récap, le ticket et les stats (l'estimé reste conservé).</p>
+    <label>Temps réel (en minutes)<input type="number" id="rtMin" step="1" min="0" inputmode="numeric" value="${cur}" /></label>
+    <p class="hint" id="rtConv"></p>
     <div class="actions two"><button class="btn" id="rtClear">Effacer</button><button class="btn primary" id="rtOk">Enregistrer</button></div>`);
   $('mX').addEventListener('click', closeModal);
+  const rtConv = () => { const v = parseInt($('rtMin').value, 10); $('rtConv').innerHTML = (!isNaN(v) && v >= 0) ? '= <b>' + durMin(v) + '</b>' : ''; };
+  $('rtMin').addEventListener('input', rtConv); rtConv();
   $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete arret.realMin; else arret.realMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
   $('rtClear').addEventListener('click', () => { delete arret.realMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
 }
@@ -2471,10 +2479,13 @@ function modalReturnTime(t, estMin, after) {
   const cur = (typeof t.returnRealMin === 'number') ? t.returnRealMin : '';
   const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; saveTournees(); };
   openModal(`<div class="modal-head"><b>⏱ Temps de trajet retour</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Estimé : <b>${estMin != null ? estMin + ' min' : '—'}</b>. Encodez le temps réel du retour vers <b>${esc(addrStr(returnAddrOf(t))) || 'le domicile'}</b> (relevé sur Waze). Repris dans le temps de travail.</p>
-    <label>Temps réel du retour (minutes)<input type="number" id="rtMin" step="1" min="0" inputmode="numeric" value="${cur}" /></label>
+    <p class="hint">Estimé : <b>${estMin != null ? durMin(estMin) : '—'}</b>. Encodez le temps réel du retour vers <b>${esc(addrStr(returnAddrOf(t))) || 'le domicile'}</b> (relevé sur Waze). Repris dans le temps de travail.</p>
+    <label>Temps réel du retour (en minutes)<input type="number" id="rtMin" step="1" min="0" inputmode="numeric" value="${cur}" /></label>
+    <p class="hint" id="rtConv"></p>
     <div class="actions two"><button class="btn" id="rtClear">Effacer</button><button class="btn primary" id="rtOk">Enregistrer</button></div>`);
   $('mX').addEventListener('click', closeModal);
+  const rtConv = () => { const v = parseInt($('rtMin').value, 10); $('rtConv').innerHTML = (!isNaN(v) && v >= 0) ? '= <b>' + durMin(v) + '</b>' : ''; };
+  $('rtMin').addEventListener('input', rtConv); rtConv();
   $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete t.returnRealMin; else t.returnRealMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
   $('rtClear').addEventListener('click', () => { delete t.returnRealMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
 }
