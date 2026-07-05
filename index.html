@@ -454,9 +454,15 @@
       <p class="status" id="syncStatus"></p>
     </section>
     <section class="card">
-      <h2>Google Drive (synchro automatique) — à configurer</h2>
-      <p class="hint">Synchro automatique téléphone↔PC via votre compte Google (connexion unique, puis silencieuse). Nécessite un identifiant Google (OAuth) à mettre en place. <b>Indisponible tant qu'il n'est pas configuré.</b></p>
-      <button class="btn" disabled>Se connecter à Google Drive (bientôt)</button>
+      <h2>Google Drive (synchro automatique)</h2>
+      <p class="hint">Synchro automatique téléphone↔PC via <b>votre</b> compte Google (chacun le sien). Collez votre <b>ID client OAuth</b> — 1 connexion, puis silencieuse. Rien n'est partagé avec l'auteur de l'app.</p>
+      <label>ID client Google OAuth<input type="text" id="setGoogleClientId" placeholder="…apps.googleusercontent.com" autocomplete="off" /></label>
+      <label class="chk2"><input type="checkbox" id="setGoogleAuto"/> Synchroniser automatiquement à l'ouverture</label>
+      <div class="actions two"><button class="btn" id="googleConnect">🔗 Connecter Drive</button><button class="btn primary" id="googleSyncBtn">🔄 Synchroniser</button></div>
+      <p class="status" id="googleStatus"></p>
+      <details class="assistant"><summary>Comment obtenir mon ID client (une fois)</summary>
+        <p class="hint">1. console.cloud.google.com → nouveau projet. 2. Activer <b>Google Drive API</b>. 3. Écran de consentement OAuth (externe) + votre e-mail en test. 4. Identifiants → <b>ID client OAuth</b> → « Application Web ». 5. Origines JavaScript autorisées = l'adresse de l'app. 6. Collez l'ID ci-dessus.</p>
+      </details>
     </section>
     </div><!-- /rsub-synchro -->
 

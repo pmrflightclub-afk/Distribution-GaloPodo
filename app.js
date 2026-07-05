@@ -32,7 +32,7 @@ const CHANGELOG = [
       'Suivi du temps de travail : « Démarrer la tournée » + « Valider l\'arrêt » + étape « Retour » (Waze + Route + Clôturer) → Stats « Temps de travail » (route + visite mesurée + retour réparti en parts égales) par client et par cheval.',
       'Paiement par arrêt (à la validation) : liquide / virement + « facture nécessaire » ; si liquide, saisie du montant réellement payé → ligne « Arrondi caisse » (facture, récap, ticket) et montant réel repris dans les stats.',
       'Gestion → Compta (mensuelle) : 3 sections Liquide (postes globalisés, sans nom) · Virements · Factures pro, avec totaux HT/TVA/TTC, sélecteur de mois, statut « en attente / comptabilité encodée » par mois archivé, et fiche PDF imprimable par section.',
-      'Synchro multi-appareils (Réglages → Synchro, mode Fichier) : exporter/importer un fichier avec FUSION (le plus récent gagne, suppressions respectées, sans écraser, sans compte). Drive automatique à venir.',
+      'Synchro multi-appareils (Réglages → Synchro) : mode Fichier (export/import avec FUSION, sans compte) ET Google Drive automatique — chacun renseigne SON propre ID client Google (rien de partagé), connexion unique puis silencieuse.',
       'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
     corrections: [
@@ -107,6 +107,8 @@ const DEFAULTS = {
   parage: { prixHT: 0, tvaPct: 21 },            // article « Parage et équilibrage » (coché par cheval)
   articlesCatalogue: [],                        // catalogue réutilisable : {id, libelle, prixHT, tvaPct}
   navApp: 'waze',                               // application GPS : 'waze' (défaut) | 'gmaps'
+  googleClientId: '',                           // ID client OAuth Google PROPRE à chaque utilisateur (aucune clé codée en dur)
+  googleAutoSync: false,                        // synchro Drive automatique à l'ouverture
   pays: 'be',                                   // pays (TVA) : 'be' | 'fr'
   seuilKm: 20, forfait: 15,
   repartition: 'egal', rayonMemeEcurieKm: 1, roadFactor: 1.30, vitesseKmh: 90,
@@ -134,6 +136,8 @@ if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; 
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
+if (typeof S.googleClientId !== 'string') S.googleClientId = '';
+if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 if (!S.accentColor) S.accentColor = '#e8722a';
 if (typeof S.topbarColor !== 'string') S.topbarColor = '';
 if (typeof S.navBarColor !== 'string') S.navBarColor = '';
@@ -410,6 +414,57 @@ function downloadSnapshot() {
   const a = document.createElement('a'); a.href = url; a.download = `galopodo-sync-${todayStr()}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// ---------- Synchro D3 (Google Drive) : OAuth par-utilisateur (aucune clé codée en dur) ----------
+let _gToken = null, _gTokenExp = 0, _gTokenClient = null;
+const GDRIVE_FILE = 'galopodo-sync.json';
+function loadGis() {
+  return new Promise((res, rej) => {
+    if (window.google && google.accounts && google.accounts.oauth2) return res();
+    const s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true;
+    s.onload = () => res(); s.onerror = () => rej(new Error('Chargement de Google impossible (hors-ligne ?)'));
+    document.head.appendChild(s);
+  });
+}
+// Jeton d'accès Drive : silencieux si déjà consenti, sinon écran de connexion (interactive).
+async function googleToken(interactive) {
+  if (_gToken && Date.now() < _gTokenExp - 60000) return _gToken;
+  if (!S.googleClientId) throw new Error('Renseignez d\'abord votre ID client Google.');
+  await loadGis();
+  return new Promise((resolve, reject) => {
+    _gTokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: S.googleClientId,
+      scope: 'https://www.googleapis.com/auth/drive.appdata',
+      callback: (resp) => { if (resp && resp.error) return reject(new Error(resp.error)); _gToken = resp.access_token; _gTokenExp = Date.now() + ((resp.expires_in || 3600) * 1000); resolve(_gToken); },
+      error_callback: (err) => reject(new Error((err && err.type) || 'connexion refusée')),
+    });
+    _gTokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+  });
+}
+async function driveFindFile(token) {
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent("name='" + GDRIVE_FILE + "'")}&fields=files(id,name)`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw new Error('Drive HTTP ' + r.status); const j = await r.json(); return (j.files && j.files[0]) || null;
+}
+async function driveDownload(token, id) { const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } }); if (!r.ok) throw new Error('Drive téléchargement ' + r.status); return r.json(); }
+async function driveUpload(token, id, data) {
+  const meta = { name: GDRIVE_FILE }; if (!id) meta.parents = ['appDataFolder'];
+  const boundary = 'gp' + Math.floor(Math.random() * 1e9).toString(36);
+  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}\r\n--${boundary}--`;
+  const url = id ? `https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=multipart` : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+  const r = await fetch(url, { method: id ? 'PATCH' : 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'multipart/related; boundary=' + boundary }, body });
+  if (!r.ok) throw new Error('Drive envoi ' + r.status); return r.json();
+}
+// Synchro Drive : télécharge le distant, FUSIONNE, renvoie le tout (le coffre porte l'état fusionné). interactive = autorise l'écran de connexion.
+async function googleSync(interactive, statusEl, reload) {
+  const setS = (cls, txt) => { if (statusEl) { statusEl.className = 'status ' + cls; statusEl.textContent = txt; } };
+  try {
+    setS('', 'Connexion à Google…'); const token = await googleToken(interactive);
+    setS('', 'Synchronisation Drive…'); const f = await driveFindFile(token);
+    if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); await driveUpload(token, f.id, exportSnapshot()); }
+    else { await driveUpload(token, null, exportSnapshot()); }
+    if (reload) { setS('ok', 'Synchronisé ✔ Rechargement…'); setTimeout(() => location.reload(), 800); }
+    else { setS('ok', 'Synchronisé ✔'); refreshEverywhere(); if ($('tab-accueil').classList.contains('active')) renderHome(); }
+  } catch (e) { setS('err', 'Erreur : ' + e.message); }
 }
 // D3 (mode fichier) : lit un fichier de synchro et le FUSIONNE (sans écraser).
 function importSyncFile(file, statusEl) {
@@ -2554,6 +2609,8 @@ function bindSettings() {
   if ($('setSeuilType')) { $('setSeuilType').value = S.seuilTarifType; $('setSeuilType').addEventListener('change', (e) => { S.seuilTarifType = e.target.value; saveSettings(); }); }
   updateReadouts();
   if ($('setNavApp')) { $('setNavApp').value = S.navApp; $('setNavApp').addEventListener('change', (e) => { S.navApp = e.target.value === 'gmaps' ? 'gmaps' : 'waze'; saveSettings(); if ($('tab-accueil').classList.contains('active')) renderHome(); }); }
+  if ($('setGoogleClientId')) { $('setGoogleClientId').value = S.googleClientId || ''; $('setGoogleClientId').addEventListener('input', (e) => { S.googleClientId = e.target.value.trim(); saveSettings(); }); }
+  if ($('setGoogleAuto')) { $('setGoogleAuto').checked = !!S.googleAutoSync; $('setGoogleAuto').addEventListener('change', (e) => { S.googleAutoSync = e.target.checked; saveSettings(); }); }
   if ($('setPays')) $('setPays').addEventListener('change', (e) => { S.pays = e.target.value; S.tvaRate = (PAYS_TVA[S.pays] || PAYS_TVA.be).std; if (paints.setTva) paints.setTva(); saveSettings(); });
   if ($('setDureeMode')) $('setDureeMode').addEventListener('change', (e) => { S.dureeAuto = e.target.value === 'auto'; saveSettings(); updateReglagesUI(); });
   $('setRepartition').addEventListener('change', (e) => { S.repartition = e.target.value; saveSettings(); });
@@ -2722,6 +2779,10 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('btnBackup')) $('btnBackup').addEventListener('click', modalBackup);
   if ($('syncExport')) $('syncExport').addEventListener('click', downloadSnapshot);
   if ($('syncFile')) $('syncFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importSyncFile(f, $('syncStatus')); e.target.value = ''; });
+  if ($('googleConnect')) $('googleConnect').addEventListener('click', async () => { const h = $('googleStatus'); try { h.className = 'status'; h.textContent = 'Connexion…'; await googleToken(true); h.className = 'status ok'; h.textContent = 'Connecté ✔ — cliquez « Synchroniser ».'; } catch (e) { h.className = 'status err'; h.textContent = 'Erreur : ' + e.message; } });
+  if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
+  // Synchro Drive automatique à l'ouverture (silencieuse, sans rechargement) si configurée.
+  if (S.googleAutoSync && S.googleClientId) { try { googleSync(false, $('googleStatus'), false); } catch { /* ignore */ } }
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
