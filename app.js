@@ -29,6 +29,8 @@ const CHANGELOG = [
       'Navigation GPS : le bouton ouvre l\'app installée (Waze par défaut, repli Google Maps si Waze absent) ; choix Waze/Google Maps dans Réglages → GPS.',
       'Bouton « Route » (Trajet du jour ET éditeur) : encoder le temps de trajet RÉEL ; repris automatiquement dans le SMS, le récap, le ticket et les stats (l\'estimé reste conservé). Boutons Waze + Route par arrêt dans l\'éditeur.',
       'Stats : nouvelle carte « Temps de trajet — estimé vs réel » (arrêts sans temps réel signalés).',
+      'Sauvegarde / transfert : import par FUSION (le plus récent gagne, suppressions respectées, sans écraser) — base de la synchro multi-appareils.',
+      'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
     corrections: [
       'Trajet du jour : nom du client d\'abord, adresse en dessous ; la tournée du jour apparaît en 1ʳᵉ ligne.',
@@ -275,7 +277,7 @@ if (!S.pincesAdded) {
 const PAYS_TVA = { be: { nom: 'Belgique', std: 21, rates: [21, 6, 0] }, fr: { nom: 'France', std: 20, rates: [20, 10, 5.5, 0] } };
 const tvaRatesPays = () => (PAYS_TVA[S.pays] || PAYS_TVA.be).rates;
 const baseMateriel = () => S.materiel.reduce((s, m) => s + ((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1)), 0);
-function saveSettings() { LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); }
+function saveSettings() { S.updatedAt = Date.now(); LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); }
 
 // ---------- Thème (couleur bandeau & boutons) ----------
 const THEME_PRESETS = ['#e8722a', '#1f6f54', '#2563eb', '#dc2626', '#7c3aed', '#0891b2'];
@@ -328,8 +330,74 @@ function refreshSwatches() {
 
 let clients = LS.get('ftr.clients', []);
 let tournees = LS.get('ftr.tournees', []);
-function saveClients() { LS.set('ftr.clients', clients); }
-function saveTournees() { LS.set('ftr.tournees', tournees); }
+let archive = LS.get('ftr.archive', []);            // tournées clôturées > 4 semaines (D2 — allègement)
+const allTours = () => tournees.concat(archive);    // union pour stats/finances/odomètre/fusion
+
+// ---------- Synchro D1 : horodatage (updatedAt) + tombstones (suppressions) ----------
+// Signature de contenu d'un enregistrement, hors updatedAt (pour détecter un vrai changement).
+function hashRec(rec) { const c = {}; for (const k in rec) if (k !== 'updatedAt') c[k] = rec[k]; return JSON.stringify(c); }
+function syncMeta() { const m = LS.get('ftr.syncmeta', {}); m.hash = m.hash || {}; m.tomb = m.tomb || {}; return m; }
+// Pose updatedAt sur les enregistrements modifiés et enregistre les suppressions en tombstones (par « kind »).
+function syncStamp(kind, arr) {
+  const m = syncMeta(); m.hash[kind] = m.hash[kind] || {}; m.tomb[kind] = m.tomb[kind] || {};
+  const now = Date.now(); const seen = {};
+  arr.forEach((rec) => {
+    if (!rec.id) rec.id = uid(); seen[rec.id] = true;
+    const h = hashRec(rec);
+    if (m.hash[kind][rec.id] !== h) { rec.updatedAt = now; m.hash[kind][rec.id] = h; } else if (!rec.updatedAt) rec.updatedAt = now;
+    if (m.tomb[kind][rec.id] && m.tomb[kind][rec.id] <= (rec.updatedAt || 0)) delete m.tomb[kind][rec.id]; // réapparu → tombstone périmé
+  });
+  Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = now; delete m.hash[kind][id]; } }); // disparu → tombstone
+  LS.set('ftr.syncmeta', m);
+}
+function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); }
+function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); }
+function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); }
+
+// ---------- Synchro D1 : fusion idempotente (moteur pur — utilisé par l'import fichier et, plus tard, Drive) ----------
+// Union de deux collections par id : garde le updatedAt le plus élevé ; un tombstone plus récent supprime l'enregistrement.
+function mergeCollection(localArr, remoteArr, tomb) {
+  const byId = {};
+  const put = (rec) => { if (!rec || !rec.id) return; const cur = byId[rec.id]; if (!cur || (rec.updatedAt || 0) > (cur.updatedAt || 0)) byId[rec.id] = rec; };
+  (localArr || []).forEach(put); (remoteArr || []).forEach(put);
+  return Object.values(byId).filter((rec) => ((tomb && tomb[rec.id]) || 0) <= (rec.updatedAt || 0));
+}
+function mergeTomb(a, b) { const t = Object.assign({}, a || {}); Object.keys(b || {}).forEach((id) => { t[id] = Math.max(t[id] || 0, b[id]); }); return t; }
+// Réglages : l'objet le plus récent gagne (entier), mais changelogRead est unifié (union).
+function mergeSettings(localS, remoteS) {
+  const base = ((remoteS && remoteS.updatedAt) || 0) > ((localS && localS.updatedAt) || 0) ? remoteS : localS;
+  const merged = Object.assign({}, base || {});
+  merged.changelogRead = Array.from(new Set([].concat((localS && localS.changelogRead) || [], (remoteS && remoteS.changelogRead) || [])));
+  return merged;
+}
+// Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
+function mergeSnapshots(local, remote) {
+  const tombC = mergeTomb(local.tomb && local.tomb.clients, remote.tomb && remote.tomb.clients);
+  const tombT = mergeTomb(local.tomb && local.tomb.tournees, remote.tomb && remote.tomb.tournees);
+  return {
+    settings: mergeSettings(local.settings, remote.settings),
+    clients: mergeCollection(local.clients, remote.clients, tombC),
+    tours: mergeCollection(local.tours, remote.tours, tombT),
+    tomb: { clients: tombC, tournees: tombT },
+  };
+}
+// Instantané local complet (pour export / fusion).
+function exportSnapshot() {
+  const m = syncMeta();
+  return { app: 'GaloPodo', version: APP_VERSION, at: Date.now(), settings: S, clients, tours: allTours(), tomb: { clients: (m.tomb && m.tomb.clients) || {}, tournees: (m.tomb && m.tomb.tournees) || {} } };
+}
+// Applique le résultat de fusion : réécrit les stores + re-partitionne les tournées (actives / archive > 4 semaines).
+function applyMerged(merged) {
+  S = Object.assign(S, merged.settings);
+  clients = merged.clients;
+  const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
+  const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
+  tournees = merged.tours.filter((t) => !isArch(t));
+  archive = merged.tours.filter((t) => isArch(t));
+  const m = syncMeta(); m.tomb.clients = merged.tomb.clients; m.tomb.tournees = merged.tomb.tournees; LS.set('ftr.syncmeta', m);
+  LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
+}
+function importSnapshotMerge(remote) { applyMerged(mergeSnapshots(exportSnapshot(), remote)); }
 
 (function migrate() {
   clients.forEach((c) => {
@@ -427,7 +495,7 @@ function haversineKm(a, b) {
 const rate = () => (S.tvaRate || 0) / 100;
 const fuelPerKmHT = () => (S.consoL100 / 100) * S.prixPleinL / (1 + rate());
 // Odomètre = somme des km de toutes les tournées calculées (chaque tournée compte une fois).
-const odometer = () => tournees.reduce((s, t) => s + (t.result ? t.result.totalKm : 0), 0);
+const odometer = () => allTours().reduce((s, t) => s + (t.result ? t.result.totalKm : 0), 0);
 const fraisActif = (f) => f.nature === 'recurrent' ? true : (odometer() - (f.kmDebut || 0)) < (f.kmPrevus || 0);
 const fraisContribHT = (f) => (f.kmPrevus > 0 && fraisActif(f)) ? (f.montantHT || 0) / f.kmPrevus : 0;
 const amortContribHT = () => (S.amortissement.achatHT > 0 && S.amortissement.dureeVieKm > 0) ? S.amortissement.achatHT / S.amortissement.dureeVieKm : 0;
@@ -832,15 +900,25 @@ function tourListItem(t, showBadge) {
 function renderTours() {
   const d = new Date(); d.setDate(d.getDate() - 28); const fourWeeksAgo = d.toISOString().slice(0, 10);
   const asc = (a, b) => (a.date || '').localeCompare(b.date || ''), desc = (a, b) => (b.date || '').localeCompare(a.date || '');
-  const t = [...tournees];
-  const closed = t.filter((x) => statusOf(x) === 'cloturee');
+  const closed = allTours().filter((x) => statusOf(x) === 'cloturee'); // inclut les archivées (store séparé)
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((x) => box.appendChild(tourListItem(x, true))); };
   // « À venir » regroupe désormais aujourd'hui (non clôturée) + les tournées futures.
-  fill('trUpcoming', 'trUpcomingEmpty', t.filter((x) => { const s = statusOf(x); return s === 'active' || s === 'avenir'; }).sort(asc));
+  fill('trUpcoming', 'trUpcomingEmpty', tournees.filter((x) => { const s = statusOf(x); return s === 'active' || s === 'avenir'; }).sort(asc));
   fill('trClosed', 'trClosedEmpty', closed.filter((x) => (x.date || '') >= fourWeeksAgo).sort(desc));
   fill('trArchive', 'trArchiveEmpty', closed.filter((x) => (x.date || '') < fourWeeksAgo).sort(desc));
 }
 function newTour() { currentTour = { id: uid(), date: todayStr(), nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, result: null, createdAt: Date.now() }; openEditor(); }
+// D2 — archivage : déplace les tournées clôturées > 4 semaines de `tournees` vers `archive` (simple déplacement, union inchangée).
+function archiveOldTours() {
+  const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
+  const move = tournees.filter((t) => statusOf(t) === 'cloturee' && (t.date || '') < cutoff);
+  if (!move.length) return 0;
+  const ids = new Set(move.map((t) => t.id));
+  tournees = tournees.filter((t) => !ids.has(t.id));
+  move.forEach((t) => { if (!archive.some((a) => a.id === t.id)) archive.push(t); });
+  LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive); // pas de tombstone : déplacement, pas suppression
+  return move.length;
+}
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
 
 // Synchronise une tournée non clôturée avec les données client actuelles (chevaux ajoutés/supprimés/renommés).
@@ -1518,7 +1596,7 @@ function kmStats() {
   const now = new Date();
   const ym = now.toISOString().slice(0, 7), y = now.toISOString().slice(0, 4);
   let mois = 0, annee = 0; const cmap = {};
-  tournees.forEach((t) => {
+  allTours().forEach((t) => {
     if (!t.result) return;
     if ((t.date || '').startsWith(ym)) mois += t.result.totalKm;
     if ((t.date || '').startsWith(y)) annee += t.result.totalKm;
@@ -1637,7 +1715,7 @@ function renderStats() {
 // Stats : temps de trajet estimé (tournée) vs réel encodé (par arrêt), avec arrêts manquants signalés.
 function renderTrajetTemps() {
   const box = $('trajetTempsList'); if (!box) return; box.innerHTML = '';
-  const list = [...tournees].filter((t) => (t.arrets || []).length).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const list = allTours().filter((t) => (t.arrets || []).length).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   if ($('trajetTempsEmpty')) $('trajetTempsEmpty').style.display = list.length ? 'none' : 'block';
   list.forEach((t) => {
     const na = (t.arrets || []).length;
@@ -1656,7 +1734,7 @@ function renderTrajetTemps() {
 }
 function financeStats() {
   const cmap = {};
-  tournees.forEach((t) => {
+  allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return;
     t.result.parClient.forEach((m) => {
       const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, chevaux: {} };
@@ -2195,21 +2273,40 @@ function bindSettings() {
 function toggleKeyRow() { $('keyRow').style.display = S.provider === 'geoapify' ? 'block' : 'none'; }
 // Sauvegarde / restauration : exporte réglages + articles + frais + données, ou importe une sauvegarde.
 function modalBackup() {
-  const dump = JSON.stringify({ app: 'GaloPodo', version: APP_VERSION, settings: S, clients, tournees }, null, 2);
-  openModal(`<div class="modal-head"><b>💾 Sauvegarde / restauration</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Copiez ce texte pour sauvegarder. Pour restaurer/transférer : collez une sauvegarde puis « Importer ».</p>
+  const dump = JSON.stringify(exportSnapshot(), null, 2);
+  openModal(`<div class="modal-head"><b>💾 Sauvegarde / transfert</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Copiez ce texte pour sauvegarder. Pour transférer sur un autre appareil : collez la sauvegarde de l'autre appareil, puis <b>« Importer (fusion) »</b> — les données sont <b>fusionnées</b> (le plus récent gagne, les suppressions sont respectées), <b>sans écraser</b>.</p>
     <textarea id="bkText" class="bk-area" spellcheck="false">${esc(dump)}</textarea>
-    <div class="actions two"><button class="btn" id="bkCopy">📋 Copier</button><button class="btn primary" id="bkImport">⬇ Importer (remplace tout)</button></div>
+    <div class="actions two"><button class="btn" id="bkCopy">📋 Copier</button><button class="btn primary" id="bkMerge">🔀 Importer (fusion)</button></div>
+    <div class="actions"><button class="btn danger block" id="bkImport">⚠ Importer (remplace tout)</button></div>
+    <p class="hint">« Fusion » = recommandé pour synchroniser deux appareils. « Remplace tout » = restauration complète (écrase les données locales).</p>
     <p class="status" id="bkStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
   $('bkCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('bkText').value); $('bkStatus').className = 'status ok'; $('bkStatus').textContent = 'Copié dans le presse-papier.'; } catch { $('bkText').select(); document.execCommand && document.execCommand('copy'); $('bkStatus').textContent = 'Sélectionné — Ctrl+C pour copier.'; } });
+  $('bkMerge').addEventListener('click', () => {
+    try {
+      const o = JSON.parse($('bkText').value);
+      // Compat : ancienne sauvegarde {tournees} → convertie en {tours}.
+      if (!o.tours && Array.isArray(o.tournees)) o.tours = o.tournees;
+      if (!o.settings || !Array.isArray(o.clients) || !Array.isArray(o.tours)) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'Format non reconnu (settings/clients/tours attendus).'; return; }
+      importSnapshotMerge(o);
+      $('bkStatus').className = 'status ok'; $('bkStatus').textContent = 'Fusionné ✔ Rechargement…';
+      setTimeout(() => location.reload(), 700);
+    } catch (e) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'JSON invalide : ' + e.message; }
+  });
   $('bkImport').addEventListener('click', () => {
-    if (!confirm('Remplacer TOUS vos réglages et données par cette sauvegarde ?')) return;
+    if (!confirm('Remplacer TOUS vos réglages et données par cette sauvegarde ? (écrase l\'existant)')) return;
     try {
       const o = JSON.parse($('bkText').value);
       if (o.settings && typeof o.settings === 'object') LS.set('ftr.settings', o.settings);
       if (Array.isArray(o.clients)) LS.set('ftr.clients', o.clients);
-      if (Array.isArray(o.tournees)) LS.set('ftr.tournees', o.tournees);
+      const tours = Array.isArray(o.tours) ? o.tours : (Array.isArray(o.tournees) ? o.tournees : null);
+      if (tours) {
+        const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
+        const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
+        LS.set('ftr.tournees', tours.filter((t) => !isArch(t)));
+        LS.set('ftr.archive', tours.filter(isArch));
+      }
       $('bkStatus').className = 'status ok'; $('bkStatus').textContent = 'Importé ✔ Rechargement…';
       setTimeout(() => location.reload(), 700);
     } catch (e) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'JSON invalide : ' + e.message; }
@@ -2304,6 +2401,7 @@ window.addEventListener('DOMContentLoaded', () => {
   updateStickyOffsets(); setTimeout(updateStickyOffsets, 300);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 
+  archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   bindSettings(); refreshEverywhere(); renderHome();
 
   if ($('btnRefreshTours')) $('btnRefreshTours').addEventListener('click', refreshActiveTours);
