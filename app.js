@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.7';
+const APP_VERSION = '1.1.8';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.8', date: '2026-07-05',
+    ajouts: [
+      'Changement d\'adresse (client ou cheval) dans Gestion : les tournées EN COURS et À VENIR se réactualisent automatiquement (l\'arrêt suit la nouvelle adresse) ; les tournées clôturées restent figées.',
+      'Agenda Google : rafraîchissement automatique et silencieux à l\'ouverture de l\'app et à chaque passage sur l\'onglet Agenda (plus besoin de « Rafraîchir » à la main).',
+      'Google Drive : envoi automatique de vos modifications vers le coffre après chaque changement (fusion sûre — ne perd pas les modifs de l\'autre appareil), en plus de la synchro à l\'ouverture.',
+    ],
+  },
   {
     version: '1.1.7', date: '2026-07-05',
     ajouts: [
@@ -311,7 +319,7 @@ if (!S.pincesAdded) {
 const PAYS_TVA = { be: { nom: 'Belgique', std: 21, rates: [21, 6, 0] }, fr: { nom: 'France', std: 20, rates: [20, 10, 5.5, 0] } };
 const tvaRatesPays = () => (PAYS_TVA[S.pays] || PAYS_TVA.be).rates;
 const baseMateriel = () => S.materiel.reduce((s, m) => s + ((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1)), 0);
-function saveSettings() { S.updatedAt = Date.now(); LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); }
+function saveSettings() { S.updatedAt = Date.now(); LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); scheduleDrivePush(); }
 
 // ---------- Thème (couleur bandeau & boutons) ----------
 const THEME_PRESETS = ['#e8722a', '#1f6f54', '#2563eb', '#dc2626', '#7c3aed', '#0891b2'];
@@ -384,9 +392,9 @@ function syncStamp(kind, arr) {
   Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = now; delete m.hash[kind][id]; } }); // disparu → tombstone
   LS.set('ftr.syncmeta', m);
 }
-function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); }
-function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); }
-function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); }
+function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); scheduleDrivePush(); }
+function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); scheduleDrivePush(); }
+function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); scheduleDrivePush(); }
 
 // ---------- Synchro D1 : fusion idempotente (moteur pur — utilisé par l'import fichier et, plus tard, Drive) ----------
 // Union de deux collections par id : garde le updatedAt le plus élevé ; un tombstone plus récent supprime l'enregistrement.
@@ -442,6 +450,16 @@ async function fetchCalendarEvents(interactive) {
   if (!r.ok) throw new Error('Calendar HTTP ' + r.status);
   const j = await r.json();
   return (j.items || []).map((ev) => ({ id: ev.id, title: ev.summary || '(sans titre)', start: (ev.start && (ev.start.dateTime || ev.start.date)) || '', day: ((ev.start && (ev.start.dateTime || ev.start.date)) || '').slice(0, 10), location: ev.location || '', desc: ev.description || '' }));
+}
+// Rafraîchissement SILENCIEUX de l'agenda (jeton déjà consenti) — appelé à l'ouverture de l'app et à la navigation vers Agenda.
+// Non interactif : n'affiche jamais d'écran de connexion. Si le jeton n'est pas encore consenti, l'utilisateur clique « Rafraîchir » une fois.
+async function agendaAutoSync() {
+  if (!S.googleClientId) return;
+  try {
+    _agendaEvents = await fetchCalendarEvents(false);
+    if ($('tab-agenda') && $('tab-agenda').classList.contains('active')) renderAgendaItems();
+    if (typeof renderAgendaCalendrier === 'function') renderAgendaCalendrier();
+  } catch { /* jeton non consenti / hors-ligne : rafraîchissement manuel disponible */ }
 }
 // Cherche un client connu correspondant au titre de l'événement (nom/prénom/société).
 function matchClientForEvent(title) {
@@ -509,6 +527,23 @@ async function googleSync(interactive, statusEl, reload) {
     if (reload) { setS('ok', 'Synchronisé ✔ Rechargement…'); setTimeout(() => location.reload(), 800); }
     else { setS('ok', 'Synchronisé ✔'); refreshEverywhere(); if ($('tab-accueil').classList.contains('active')) renderHome(); }
   } catch (e) { setS('err', 'Erreur : ' + e.message); }
+}
+// Envoi automatique vers Drive à CHAQUE modification utilisateur (débattu ~4 s pour regrouper les rafales de saisie).
+// Toujours une fusion (télécharge → fusionne → renvoie) : ne perd pas les modifs faites sur l'autre appareil. Silencieux.
+let _drivePushTimer = null;
+function scheduleDrivePush() {
+  if (!(S.googleAutoSync && S.googleClientId)) return; // synchro auto désactivée ou non configurée
+  if (_drivePushTimer) clearTimeout(_drivePushTimer);
+  _drivePushTimer = setTimeout(() => { _drivePushTimer = null; drivePushNow(); }, 4000);
+}
+async function drivePushNow() {
+  if (!(S.googleAutoSync && S.googleClientId)) return;
+  try {
+    const token = await googleToken(false); // silencieux : jeton déjà consenti (sinon la prochaine synchro manuelle/au boot rattrapera)
+    const f = await driveFindFile(token);
+    if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); await driveUpload(token, f.id, exportSnapshot()); }
+    else { await driveUpload(token, null, exportSnapshot()); }
+  } catch { /* hors-ligne ou jeton non consenti : la synchro au prochain boot rattrapera */ }
 }
 // D3 (mode fichier) : lit un fichier de synchro et le FUSIONNE (sans écraser).
 function importSyncFile(file, statusEl) {
@@ -807,7 +842,7 @@ function showTab(name) {
   if ($('mainTabs')) $('mainTabs').classList.remove('open'); // referme le menu déroulant (mobile)
   if (name === 'accueil') renderHome();
   if (name === 'tournees') renderTours();
-  if (name === 'agenda') renderAgendaItems();
+  if (name === 'agenda') { renderAgendaItems(); agendaAutoSync(); } // affiche le cache puis rafraîchit silencieusement
   if (name === 'compta') showCompta(currentCsub);
   if (name === 'gestion') showGestion(currentGsub);
   if (name === 'stats') renderStats();
@@ -993,7 +1028,7 @@ function editClient(existing, onSaved) {
     if (!(w.nom || '').trim() && !(w.prenom || '').trim()) { $('cErr').textContent = 'Le nom (ou le prénom) est obligatoire.'; return; }
     if (!addrStr(w.addr).trim()) { $('cErr').textContent = 'L\'adresse du client est obligatoire.'; return; }
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
-    DRAFTS.clear(key); saveClients(); closeModal();
+    DRAFTS.clear(key); saveClients(); reconcileActiveTours(); closeModal();
     if (onSaved) onSaved(w); else renderClients();
   });
 }
@@ -1110,25 +1145,35 @@ function archiveOldTours() {
 }
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
 
-// Synchronise une tournée non clôturée avec les données client actuelles (chevaux ajoutés/supprimés/renommés).
+// Synchronise une tournée non clôturée avec les données client actuelles (chevaux ajoutés/supprimés/renommés
+// ET changements d'adresse client/cheval → l'arrêt suit la nouvelle adresse). Les clôturées restent figées.
 function reconcileTour(tour) {
   if (statusOf(tour) === 'cloturee') return false;
   let changed = false;
-  (tour.arrets || []).forEach((a) => {
-    const before = JSON.stringify(a.clients);
-    a.clients = (a.clients || []).map((cl) => {
+  const beforeArrets = JSON.stringify(tour.arrets || []);
+  const addrSig = (arrets) => (arrets || []).map((a) => norm(addrStr(a.addr))).sort().join('|');
+  const beforeAddr = addrSig(tour.arrets);
+  const oldArrets = tour.arrets || [];
+  const newArrets = [];
+  const findOrCreate = (addr, type) => { let a = newArrets.find((x) => norm(addrStr(x.addr)) === norm(addrStr(addr))); if (!a) { a = { addr: toAddr(JSON.parse(JSON.stringify(addr))), type: type || 'tournee', clients: [] }; newArrets.push(a); } return a; };
+  oldArrets.forEach((a) => {
+    (a.clients || []).forEach((cl) => {
       const c = clients.find((x) => x.id === cl.clientId);
-      if (!c) return null;                                   // client supprimé → retirer
-      if (!(c.chevaux || []).length) return { clientId: cl.clientId, chevaux: [] }; // client sans cheval : déplacement seul
-      const atAddr = c.chevaux.filter((h) => norm(addrStr(chevalAddr(c, h))) === norm(addrStr(a.addr)));
-      const chevaux = atAddr.map((h) => { const old = (cl.chevaux || []).find((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom)); return { id: h.id, nom: h.nom, fourbure: !!(old && old.fourbure), npas: !!(old && old.npas), infection: !!(old && old.infection), parage: !!(old && old.parage) }; });
-      return chevaux.length ? { clientId: cl.clientId, chevaux } : null; // plus aucun cheval de ce client ici → retirer
-    }).filter(Boolean);
-    if (JSON.stringify(a.clients) !== before) changed = true;
+      if (!c) return; // client supprimé → retiré
+      if (!cl.chevaux.length || !(c.chevaux || []).length) { const arr = findOrCreate(c.addr, a.type); if (!arr.clients.some((x) => x.clientId === cl.clientId)) arr.clients.push({ clientId: cl.clientId, chevaux: [] }); return; } // déplacement seul (arrêt sans cheval ou client sans cheval au profil), à l'adresse ACTUELLE du client
+      cl.chevaux.forEach((cv) => {
+        const h = (c.chevaux || []).find((x) => (cv.id && x.id === cv.id) || norm(x.nom) === norm(cv.nom));
+        if (!h) return; // cheval supprimé → retiré
+        const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
+        let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [] }; arr.clients.push(ncl); }
+        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage });
+      });
+    });
   });
-  const n0 = tour.arrets.length;
-  tour.arrets = (tour.arrets || []).filter((a) => (a.clients || []).length);
-  if (tour.arrets.length !== n0) changed = true;
+  newArrets.forEach((na) => { const old = oldArrets.find((o) => norm(addrStr(o.addr)) === norm(addrStr(na.addr))); if (old) { if (typeof old.realMin === 'number') na.realMin = old.realMin; if (typeof old.validatedAt === 'number') na.validatedAt = old.validatedAt; } });
+  tour.arrets = newArrets.filter((a) => a.clients.length);
+  if (JSON.stringify(tour.arrets) !== beforeArrets) changed = true;
+  if (beforeAddr !== addrSig(tour.arrets)) tour.result = null; // adresses modifiées → recalcul géométrie au prochain ouvrir
   // Articles : resync par id (renommage / suppression de cheval)
   (tour.articles || []).forEach((art) => {
     if (art.impaye) return; // impayé : rattaché au client, sans cheval → on n'y touche pas
@@ -1144,6 +1189,13 @@ function reconcileTour(tour) {
   if ((tour.articles || []).length !== na) changed = true;
   if (changed) saveTournees();
   return changed;
+}
+
+// Répercute les changements client/cheval (dont adresse) sur toutes les tournées en cours/à venir (jamais les clôturées).
+function reconcileActiveTours() {
+  let any = false;
+  (tournees || []).forEach((t) => { if (statusOf(t) !== 'cloturee') { if (reconcileTour(t)) any = true; } });
+  return any;
 }
 
 // Sécurité de clôture : chaque client doit avoir un mode de paiement (virement/liquide) ; en liquide, le montant encaissé est requis.
@@ -3086,6 +3138,8 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
   // Synchro Drive automatique à l'ouverture (silencieuse, sans rechargement) si configurée.
   if (S.googleAutoSync && S.googleClientId) { try { googleSync(false, $('googleStatus'), false); } catch { /* ignore */ } }
+  // Agenda Google : rafraîchissement silencieux à l'ouverture (jeton déjà consenti).
+  if (S.googleClientId) { try { agendaAutoSync(); } catch { /* ignore */ } }
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
