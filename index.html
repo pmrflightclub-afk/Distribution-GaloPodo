@@ -496,6 +496,18 @@
         <p class="empty" id="agendaDaysEmpty">Aucun item récupéré. Allez dans l'onglet Agenda pour en cocher.</p>
         <p class="status" id="agendaStatus"></p>
       </section>
+      <section class="card">
+        <h2>Programmation des RDV (option)</h2>
+        <p class="hint">Date proposée par défaut pour le bouton « RDV » (programmer le suivi depuis le paiement). Par défaut : <b>même jour de la semaine, 5 semaines plus tard</b>.</p>
+        <div class="row">
+          <label class="grow">Délai (semaines)<input type="number" id="setRdvDelai" min="1" max="52" step="1" /></label>
+          <label class="grow">Jour de la semaine<select id="setRdvJour">
+            <option value="">Même jour</option>
+            <option value="1">Lundi</option><option value="2">Mardi</option><option value="3">Mercredi</option>
+            <option value="4">Jeudi</option><option value="5">Vendredi</option><option value="6">Samedi</option><option value="0">Dimanche</option>
+          </select></label>
+        </div>
+      </section>
     </div>
 
     <div id="rsub-synchro" class="subpanel">

@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.15';
+const APP_VERSION = '1.1.16';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.16', date: '2026-07-05',
+    ajouts: [
+      'RDV : la date proposée par défaut est maintenant le MÊME JOUR de la semaine, 5 semaines plus tard.',
+      'Réglages → Calendrier : nouvelle section « Programmation des RDV » pour régler le délai (semaines) et, en option, imposer un jour de la semaine pour la date proposée.',
+    ],
+  },
   {
     version: '1.1.15', date: '2026-07-05',
     ajouts: [
@@ -204,6 +211,8 @@ const DEFAULTS = {
   tileLabels: {},                              // titres personnalisés des cases (stats + analytique)
   changelogRead: [],                           // versions dont le message de nouveautés a été « marqué comme lu »
   syncMode: 'file',                            // mode de synchro ACTIF (exclusif) : 'file' (multi-appareils par fichier, défaut) | 'drive' (Google Drive)
+  rdvDelaiSemaines: 5,                          // proposition RDV : délai par défaut (semaines) — même jour de la semaine
+  rdvJourSemaine: '',                          // proposition RDV : jour de la semaine imposé ('' = même jour ; 0=dim..6=sam, JS getDay)
 };
 const _hadSettings = localStorage.getItem('ftr.settings') != null; // 1er lancement ? (pour la config usine)
 let S = Object.assign({}, DEFAULTS, LS.get('ftr.settings', {}));
@@ -226,6 +235,8 @@ if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (typeof S.googleClientId !== 'string') S.googleClientId = '';
 if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 if (S.syncMode !== 'drive') S.syncMode = 'file'; // défaut = mode fichier (section 1)
+if (typeof S.rdvDelaiSemaines !== 'number' || S.rdvDelaiSemaines < 1) S.rdvDelaiSemaines = 5;
+if (typeof S.rdvJourSemaine !== 'string') S.rdvJourSemaine = (S.rdvJourSemaine == null ? '' : String(S.rdvJourSemaine));
 if (!S.agendaImported || typeof S.agendaImported !== 'object') S.agendaImported = {}; // { eventId: {clientId, title, start, location} }
 if (!S.agendaInactive || typeof S.agendaInactive !== 'object') S.agendaInactive = {}; // { eventId: true } — items masqués (section Inactifs)
 if (!S.agendaPrive || typeof S.agendaPrive !== 'object') S.agendaPrive = {}; // { eventId: {title, day, start, location} } — agenda privé (perso, non facturé)
@@ -2995,8 +3006,24 @@ function uncollectImpaye(impayeId) {
   saveClients();
 }
 // ---------- Programmation de suivi (RDV) ----------
-function addDaysStr(ymd, days) { const d = new Date((ymd || todayStr()) + 'T00:00:00'); d.setDate(d.getDate() + (days || 0)); return d.toISOString().slice(0, 10); }
-const RDV_INTERVAL_DAYS = 42; // proposition de prochaine visite par défaut = 6 semaines
+// Ajout de jours en UTC (cohérent avec todayStr = UTC) → pas de décalage de date selon le fuseau.
+function addDaysStr(ymd, days) {
+  const [y, m, d] = (ymd || todayStr()).split('-').map(Number);
+  const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1)); dt.setUTCDate(dt.getUTCDate() + (days || 0));
+  return dt.toISOString().slice(0, 10);
+}
+// Date de prochaine visite proposée : baseDate + délai (semaines, réglable) → même jour de la semaine ;
+// si un jour de la semaine est imposé dans les Réglages, on avance jusqu'à ce jour.
+function proposedRdvDate(baseDate) {
+  const weeks = (typeof S.rdvDelaiSemaines === 'number' && S.rdvDelaiSemaines >= 1) ? S.rdvDelaiSemaines : 5;
+  let ymd = addDaysStr(baseDate || todayStr(), weeks * 7); // multiple de 7 → même jour de la semaine
+  const jour = S.rdvJourSemaine;
+  if (jour !== '' && jour != null) {
+    const target = parseInt(jour, 10);
+    if (!isNaN(target)) { const [y, m, d] = ymd.split('-').map(Number); const dt = new Date(Date.UTC(y, m - 1, d)); dt.setUTCDate(dt.getUTCDate() + ((target - dt.getUTCDay() + 7) % 7)); ymd = dt.toISOString().slice(0, 10); }
+  }
+  return ymd;
+}
 // Applique une heure de RDV aux chevaux (par id) d'un client dans une tournée.
 function setChevalHeure(t, clientId, chevalObjs, heure) {
   const ids = new Set((chevalObjs || []).map((h) => h.id));
@@ -3028,7 +3055,7 @@ function modalRDV(t, arret, cid, onDone) {
   const poolIds = ((arrCl && arrCl.chevaux) || []).map((c) => c.id).filter(Boolean);
   const chevalPool = (client.chevaux || []).filter((h) => !poolIds.length || poolIds.includes(h.id));
   const pool = chevalPool.length ? chevalPool : (client.chevaux || []);
-  const proposed = addDaysStr(t.date || todayStr(), RDV_INTERVAL_DAYS);
+  const proposed = proposedRdvDate(t.date || todayStr());
   const blocks = [{ date: proposed, ids: new Set(pool.map((h) => h.id)) }];
   const render = () => {
     openModal(`<div class="modal-head"><b>📅 Programmer le suivi (RDV)</b><button class="x" id="mX">✕</button></div>
@@ -3236,6 +3263,8 @@ function bindSettings() {
   if ($('setNavApp')) { $('setNavApp').value = S.navApp; $('setNavApp').addEventListener('change', (e) => { S.navApp = e.target.value === 'gmaps' ? 'gmaps' : 'waze'; saveSettings(); if ($('tab-accueil').classList.contains('active')) renderHome(); }); }
   if ($('setGoogleClientId')) { $('setGoogleClientId').value = S.googleClientId || ''; $('setGoogleClientId').addEventListener('input', (e) => { S.googleClientId = e.target.value.trim(); saveSettings(); }); }
   if ($('setGoogleAuto')) { $('setGoogleAuto').checked = !!S.googleAutoSync; $('setGoogleAuto').addEventListener('change', (e) => { S.googleAutoSync = e.target.checked; saveSettings(); }); }
+  if ($('setRdvDelai')) { $('setRdvDelai').value = S.rdvDelaiSemaines || 5; $('setRdvDelai').addEventListener('input', (e) => { const v = parseInt(e.target.value, 10); S.rdvDelaiSemaines = (!isNaN(v) && v >= 1) ? v : 5; saveSettings(); }); }
+  if ($('setRdvJour')) { $('setRdvJour').value = S.rdvJourSemaine || ''; $('setRdvJour').addEventListener('change', (e) => { S.rdvJourSemaine = e.target.value; saveSettings(); }); }
   if ($('syncSecFile')) $('syncSecFile').addEventListener('change', () => { applySyncMode('file'); saveSettings(); });
   if ($('syncSecDrive')) $('syncSecDrive').addEventListener('change', () => { applySyncMode('drive'); saveSettings(); });
   applySyncMode(S.syncMode);
