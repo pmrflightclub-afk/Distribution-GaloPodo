@@ -29,7 +29,8 @@ const CHANGELOG = [
       'Navigation GPS : le bouton ouvre l\'app installée (Waze par défaut, repli Google Maps si Waze absent) ; choix Waze/Google Maps dans Réglages → GPS.',
       'Bouton « Route » (Trajet du jour ET éditeur) : encoder le temps de trajet RÉEL ; repris automatiquement dans le SMS, le récap, le ticket et les stats (l\'estimé reste conservé). Boutons Waze + Route par arrêt dans l\'éditeur.',
       'Stats : nouvelle carte « Temps de trajet — estimé vs réel » (arrêts sans temps réel signalés).',
-      'Suivi du temps de travail : « Démarrer la tournée » + « Valider l\'arrêt » (Trajet du jour) → Stats « Temps de travail » (route + visite mesurée + retour réparti en parts égales) par client et par cheval.',
+      'Suivi du temps de travail : « Démarrer la tournée » + « Valider l\'arrêt » + étape « Retour » (Waze + Route + Clôturer) → Stats « Temps de travail » (route + visite mesurée + retour réparti en parts égales) par client et par cheval.',
+      'Paiement par arrêt (à la validation) : liquide / virement + « facture nécessaire » ; si liquide, saisie du montant réellement payé → ligne « Arrondi caisse » (facture, récap, ticket) et montant réel repris dans les stats.',
       'Synchro multi-appareils (Réglages → Synchro, mode Fichier) : exporter/importer un fichier avec FUSION (le plus récent gagne, suppressions respectées, sans écraser, sans compte). Drive automatique à venir.',
       'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
@@ -445,6 +446,7 @@ function importSyncFile(file, statusEl) {
     if (t.nom === undefined) t.nom = '';           // nom / identification de la tournée
     if (t.closed === undefined) t.closed = false;  // clôture manuelle (fige la tournée)
     if (t.arrivee === undefined) t.arrivee = null; // adresse d'arrivée distincte (null = retour au départ)
+    if (!t.payments || typeof t.payments !== 'object') t.payments = {}; // paiement par client : {method, facture, montantPaye}
     (t.arrets || []).forEach((a) => {
       if (!a.addr) { a.addr = toAddr(a.adresse); a.addr.lat = a.lat || null; a.addr.lon = a.lon || null; }
       if (!a.clients) a.clients = (a.clientIds || []).map((id, i) => ({ clientId: id, chevalNoms: i === 0 ? (a.chevalNoms || []) : [] }));
@@ -1471,7 +1473,8 @@ function renderResultUI(R) {
   const box = $('edInvoice'); box.innerHTML = '';
   if (!R || !R.parClient || !R.parClient.length) { $('edInvoiceEmpty').style.display = 'block'; box.style.display = 'none'; return; }
   $('edInvoiceEmpty').style.display = 'none'; box.style.display = '';
-  R.parClient.forEach((m) => { box.appendChild(clientInvoiceEl(m)); });
+  const pays = (currentTour && currentTour.payments) || {};
+  R.parClient.forEach((m) => { box.appendChild(clientInvoiceEl(m, pays[m.clientId])); });
   const f = document.createElement('div'); f.className = 'inv-footer';
   f.innerHTML = `<div class="inv-line"><span>Total HT</span><span>${eur(R.totalHT)}</span></div>
     <div class="inv-line"><span>TVA</span><span>${eur(R.totalTVA)}</span></div>
@@ -1480,8 +1483,17 @@ function renderResultUI(R) {
 }
 
 // Un bloc facture pour un client : 3 sections (Articles · Matériel · Déplacement), par cheval.
-function clientInvoiceEl(m) { const el = document.createElement('div'); el.className = 'inv-client'; el.innerHTML = clientInvoiceHtml(m); return el; }
-function clientInvoiceHtml(m) {
+function clientInvoiceEl(m, payment) { const el = document.createElement('div'); el.className = 'inv-client'; el.innerHTML = clientInvoiceHtml(m, payment); return el; }
+// Ligne d'arrondi caisse (paiement liquide arrondi) : différence TTC (+ HT/TVA au taux standard) et net encaissé.
+function cashRoundingRows(m, payment, rowFn) {
+  if (!payment || payment.method !== 'liquide' || payment.montantPaye == null) return '';
+  const diffTTC = payment.montantPaye - m.totalTTC;
+  if (Math.abs(diffTTC) < 0.005) return '';
+  const r = rate(); const dHT = diffTTC / (1 + r), dTVA = diffTTC - dHT;
+  const nHT = payment.montantPaye / (1 + r), nTVA = payment.montantPaye - nHT;
+  return rowFn('💶 Arrondi caisse', '', dHT, dTVA, diffTTC, 'inv-reduc') + rowFn('Net encaissé (liquide)', '', nHT, nTVA, payment.montantPaye, 'inv-total-row');
+}
+function clientInvoiceHtml(m, payment) {
   const stdRate = rate();
   // Colonnes : Poste | Prix unitaire | Base HT (×quantité, remise incluse) | TVA | TTC.
   const row = (label, unitStr, baseHT, tva, ttc, cls) => `<tr${cls ? ' class="' + cls + '"' : ''}><td>${label}</td><td>${unitStr}</td><td>${eur(baseHT)}</td><td>${eur(tva)}</td><td>${eur(ttc)}</td></tr>`;
@@ -1507,7 +1519,7 @@ function clientInvoiceHtml(m) {
   return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(m.totalTTC)} TTC</span></div>
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${row('Sous-total', '', m.totalHT, m.totalTVA, m.totalTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}</tfoot></table></div>`;
+    <tfoot>${row('Sous-total', '', m.totalHT, m.totalTVA, m.totalTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${cashRoundingRows(m, payment, row)}</tfoot></table></div>`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
@@ -1533,7 +1545,7 @@ function recapText(R, tour) {
   return s;
 }
 // Détail nominatif d'UN client (toutes ses lignes de facture) — pour le « Ticket ».
-function invoiceTextForClient(m) {
+function invoiceTextForClient(m, payment) {
   const stdRate = rate();
   const L = [`Client : ${m.nom}`];
   if (m.articles.length) {
@@ -1551,6 +1563,13 @@ function invoiceTextForClient(m) {
   L.push(`Sous-total (à payer) : ${eur(m.totalHT)} HT · ${eur(m.totalTVA)} TVA · ${eur(m.totalTTC)} TTC`);
   const pHT = m.pleinHT != null ? m.pleinHT : m.totalHT, pTVA = m.pleinTVA != null ? m.pleinTVA : m.totalTVA, pTTC = m.pleinTTC != null ? m.pleinTTC : m.totalTTC;
   L.push(`Tarif plein : ${eur(pHT)} HT · ${eur(pTVA)} TVA · ${eur(pTTC)} TTC`);
+  if (payment && payment.method === 'liquide' && payment.montantPaye != null) {
+    const diffTTC = payment.montantPaye - m.totalTTC;
+    if (Math.abs(diffTTC) >= 0.005) { const r = rate(); const dHT = diffTTC / (1 + r); L.push(`Arrondi caisse : ${eur(dHT)} HT · ${eur(diffTTC - dHT)} TVA · ${eur(diffTTC)} TTC`); }
+    L.push(`Net encaissé (liquide) : ${eur(payment.montantPaye)} TTC`);
+  } else if (payment && payment.method) {
+    L.push(`Paiement : ${payment.method === 'liquide' ? 'liquide' : 'virement'}${payment.facture ? ' · facture demandée' : ''}`);
+  }
   return L.join('\n');
 }
 
@@ -1782,7 +1801,8 @@ function travailForTour(t) {
     per.push({ travelMs, visitMs, arrival, dep });
   });
   const lastDep = per.length ? per[per.length - 1].dep : null;
-  const returnMs = (t.endedAt && lastDep) ? Math.max(0, t.endedAt - lastDep) : returnMinEst * 60000;
+  // Retour : réel encodé (Route) en priorité, sinon mesuré (Clôturer), sinon estimé.
+  const returnMs = (typeof t.returnRealMin === 'number') ? t.returnRealMin * 60000 : ((t.endedAt && lastDep) ? Math.max(0, t.endedAt - lastDep) : returnMinEst * 60000);
   const endTs = t.endedAt || (lastDep != null ? lastDep + returnMs : null);
   return { per, returnMs, complete, totalMs: endTs != null ? (endTs - t.startedAt) : null, endTs };
 }
@@ -1836,17 +1856,20 @@ function financeStats() {
   allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return;
     t.result.parClient.forEach((m) => {
-      const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, chevaux: {} };
+      const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, chevaux: {} };
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
       const art = (m.articles || []).reduce((s, a) => s + a.ttc, 0); // remise déjà appliquée ligne par ligne
       c.dep += dep; c.mat += mat; c.art += art;
+      // Arrondi caisse (paiement liquide) : la différence est comptée à part → le total reflète le montant réellement encaissé.
+      const pay = (t.payments || {})[m.clientId];
+      if (pay && pay.method === 'liquide' && pay.montantPaye != null) c.arrondi += (pay.montantPaye - m.totalTTC);
       (m.materiel || []).forEach((x) => { const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0 }; ch.mat += x.ttc; });
       (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.dep += per; }); });
       (m.articles || []).forEach((a) => { const per = a.chevaux.length ? a.ttc / a.chevaux.length : 0; a.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.art += per; }); });
     });
   });
-  return Object.values(cmap).map((c) => ({ ...c, total: c.dep + c.mat + c.art, chevaux: Object.values(c.chevaux) })).sort((a, b) => b.total - a.total);
+  return Object.values(cmap).map((c) => ({ ...c, total: c.dep + c.mat + c.art + (c.arrondi || 0), chevaux: Object.values(c.chevaux) })).sort((a, b) => b.total - a.total);
 }
 function renderFinance() {
   const box = $('financeList'); if (!box) return; box.innerHTML = '';
@@ -1856,6 +1879,7 @@ function renderFinance() {
     const el = document.createElement('div'); el.className = 'inv-client';
     let h = `<div class="inv-head"><span>${esc(c.nom)}</span><span class="inv-amt">${eur(c.total)} TTC</span></div>`;
     h += `<div class="inv-line"><span>Articles</span><span>${eur(c.art)}</span></div><div class="inv-line"><span>Matériel</span><span>${eur(c.mat)}</span></div><div class="inv-line"><span>Déplacement</span><span>${eur(c.dep)}</span></div>`;
+    if (Math.abs(c.arrondi || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--warn)"><span>Arrondi caisse (liquide)</span><span>${eur(c.arrondi)}</span></div>`;
     c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)} · A ${eur(cv.art)} M ${eur(cv.mat)} D ${eur(cv.dep)}</span><span>${eur(cv.art + cv.mat + cv.dep)}</span></div>`; });
     el.innerHTML = h; box.appendChild(el);
   });
@@ -2155,11 +2179,10 @@ function renderHomeTrajet() {
     // Barre de suivi du temps de travail : Démarrer → (valider chaque arrêt) → Terminer.
     const ctrl = document.createElement('div'); ctrl.className = 'tour-timer';
     if (!t.startedAt) ctrl.innerHTML = '<button class="btn small primary" data-start>▶ Démarrer la tournée</button>';
-    else if (!t.endedAt) ctrl.innerHTML = `<span class="tt-info">⏱ Démarrée à ${hm(t.startedAt)}</span><button class="btn small" data-end>⏹ Terminer (domicile)</button>`;
+    else if (!t.endedAt) ctrl.innerHTML = `<span class="tt-info">⏱ Démarrée à ${hm(t.startedAt)}</span><span class="li-sub">Validez chaque arrêt, puis « Clôturer » au retour.</span>`;
     else ctrl.innerHTML = `<span class="tt-info">✅ ${hm(t.startedAt)} → ${hm(t.endedAt)} · ${durHm(t.endedAt - t.startedAt)}</span>`;
     box.appendChild(ctrl);
     const sb = ctrl.querySelector('[data-start]'); if (sb) sb.addEventListener('click', () => { t.startedAt = Date.now(); persistTour(); renderHomeTrajet(); });
-    const eb = ctrl.querySelector('[data-end]'); if (eb) eb.addEventListener('click', () => { t.endedAt = Date.now(); persistTour(); renderHomeTrajet(); });
     const mins = legMinutesFor(t);
     (t.arrets || []).forEach((a, i) => {
       const adresse = addrStr(a.addr);
@@ -2178,7 +2201,7 @@ function renderHomeTrajet() {
         <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button>${validBtn} <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
       el.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       el.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(t, a, est));
-      const vb = el.querySelector('[data-valid]'); if (vb) vb.addEventListener('click', () => { a.validatedAt = Date.now(); persistTour(); renderHomeTrajet(); });
+      const vb = el.querySelector('[data-valid]'); if (vb) vb.addEventListener('click', () => { a.validatedAt = Date.now(); persistTour(); renderHomeTrajet(); modalPayment(t, a, renderHomeTrajet); });
       el.querySelector('[data-sms]').addEventListener('click', async () => {
         const msg = fillSms(S.smsTemplate, { prenom: c0.prenom || '', nom: c0.nom || '', client: fullName(c0), societe: c0.societe || '', cheval: chNames, trajet, adresse });
         const btn = el.querySelector('[data-sms]');
@@ -2191,12 +2214,27 @@ function renderHomeTrajet() {
         const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
         let txt = `Trajet vers ${adresse}\n  Estimé : ${est != null ? est + ' min' : '—'} · Réel : ${real != null ? real + ' min' : 'non renseigné'}\n\n`;
         txt += recapText(t.result, t);
-        txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
+        txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m, (t.payments || {})[cl0.clientId]) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
         try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); }
         catch { alert(txt); }
       });
       box.appendChild(el);
     });
+    // ----- Retour → domicile/arrivée : Waze + Route (temps réel) + Clôturer (après « Démarrer ») -----
+    if (t.startedAt) {
+      const retAddr = returnAddrOf(t);
+      const R = t.result; const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
+      const estRet = (R && R.kmLastHome != null) ? Math.round(R.kmLastHome * mpk) : null;
+      const realRet = (typeof t.returnRealMin === 'number') ? t.returnRealMin : null;
+      const retLbl = (estRet != null ? estRet + ' min est.' : '—') + (realRet != null ? ' · <b>' + realRet + ' min réel</b>' : '') + (t.endedAt ? ' · ✅ ' + hm(t.endedAt) : '');
+      const rr = document.createElement('div'); rr.className = 'list-item';
+      rr.innerHTML = `<div class="li-main"><b>🏁 Retour</b><span class="li-sub">📍 ${esc(addrStr(retAddr)) || 'domicile'} · 🕒 ${retLbl}</span></div>
+        <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button>${t.endedAt ? '' : ' <button class="btn small primary" data-close>Clôturer</button>'}</div>`;
+      rr.querySelector('[data-waze]').addEventListener('click', () => openNav(retAddr));
+      rr.querySelector('[data-route]').addEventListener('click', () => modalReturnTime(t, estRet, renderHomeTrajet));
+      const cb = rr.querySelector('[data-close]'); if (cb) cb.addEventListener('click', () => { if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); renderHome(); });
+      box.appendChild(rr);
+    }
   });
 }
 // Encodage du temps de trajet RÉEL d'un arrêt (relevé sur Waze) — repris dans SMS / récap / ticket / stats.
@@ -2211,6 +2249,72 @@ function modalRouteTime(tour, arret, estMin, after) {
   $('mX').addEventListener('click', closeModal);
   $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete arret.realMin; else arret.realMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
   $('rtClear').addEventListener('click', () => { delete arret.realMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
+}
+// Adresse de retour d'une tournée : arrivée propre si définie, sinon départ propre, sinon domicile.
+function returnAddrOf(t) {
+  if (t.arrivee && addrStr(t.arrivee).trim()) return toAddr(t.arrivee);
+  if (t.home && addrStr(t.home).trim()) return toAddr(t.home);
+  return S.home;
+}
+// Encodage du temps de trajet RÉEL du retour (dernier arrêt → domicile/arrivée).
+function modalReturnTime(t, estMin, after) {
+  const cur = (typeof t.returnRealMin === 'number') ? t.returnRealMin : '';
+  const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; saveTournees(); };
+  openModal(`<div class="modal-head"><b>⏱ Temps de trajet retour</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Estimé : <b>${estMin != null ? estMin + ' min' : '—'}</b>. Encodez le temps réel du retour vers <b>${esc(addrStr(returnAddrOf(t))) || 'le domicile'}</b> (relevé sur Waze). Repris dans le temps de travail.</p>
+    <label>Temps réel du retour (minutes)<input type="number" id="rtMin" step="1" min="0" inputmode="numeric" value="${cur}" /></label>
+    <div class="actions two"><button class="btn" id="rtClear">Effacer</button><button class="btn primary" id="rtOk">Enregistrer</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete t.returnRealMin; else t.returnRealMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
+  $('rtClear').addEventListener('click', () => { delete t.returnRealMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
+}
+// Paiement d'un arrêt (par client) : liquide / virement + facture ? + (si liquide) montant réel payé (arrondi caisse).
+function modalPayment(t, arret, after) {
+  const clientsAt = (arret.clients || []).map((cl) => cl.clientId);
+  if (!clientsAt.length) { if (after) after(); return; }
+  if (!t.payments) t.payments = {};
+  const invTTC = (cid) => { const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; return m ? m.totalTTC : 0; };
+  const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; saveTournees(); };
+  let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div>';
+  clientsAt.forEach((cid) => {
+    const p = t.payments[cid] || { method: 'virement', facture: false, montantPaye: null };
+    const ttc = invTTC(cid);
+    html += `<div class="pay-block" data-cid="${cid}">
+      <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture ${eur(ttc)} TTC</span></h3>
+      <div class="seg pay-method">
+        <button type="button" class="seg-btn${p.method !== 'liquide' ? ' on' : ''}" data-m="virement">Virement</button>
+        <button type="button" class="seg-btn${p.method === 'liquide' ? ' on' : ''}" data-m="liquide">Liquide</button>
+      </div>
+      <label class="chk2"><input type="checkbox" data-fac ${p.facture ? 'checked' : ''}/> Facture nécessaire</label>
+      <div class="pay-cash" style="${p.method === 'liquide' ? '' : 'display:none'}">
+        <label>Montant réellement payé (TTC)<input type="number" data-paye step="0.01" min="0" value="${p.montantPaye != null ? p.montantPaye : (ttc ? Math.round(ttc * 100) / 100 : '')}"/></label>
+        <p class="hint" data-diff></p>
+      </div>
+    </div>`;
+  });
+  html += '<div class="actions"><button class="btn primary block" id="payOk">Enregistrer</button></div>';
+  openModal(html);
+  $('mX').addEventListener('click', () => { closeModal(); if (after) after(); });
+  document.querySelectorAll('.pay-block').forEach((block) => {
+    const cid = block.dataset.cid; const ttc = invTTC(cid);
+    const cash = block.querySelector('.pay-cash');
+    const updDiff = () => { const v = parseNum(block.querySelector('[data-paye]').value); const d = v - ttc; const el = block.querySelector('[data-diff]'); if (el) el.innerHTML = v ? `Différence : <b>${eur(d)}</b> TTC ${d < -0.004 ? '(remise caisse)' : d > 0.004 ? '(supplément)' : ''}` : ''; };
+    block.querySelectorAll('.pay-method .seg-btn').forEach((b) => b.addEventListener('click', () => { block.querySelectorAll('.pay-method .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); cash.style.display = b.dataset.m === 'liquide' ? '' : 'none'; updDiff(); }));
+    const pi = block.querySelector('[data-paye]'); if (pi) pi.addEventListener('input', updDiff);
+    updDiff();
+  });
+  $('payOk').addEventListener('click', () => {
+    document.querySelectorAll('.pay-block').forEach((block) => {
+      const cid = block.dataset.cid;
+      const on = block.querySelector('.pay-method .seg-btn.on');
+      const method = on ? on.dataset.m : 'virement';
+      const facture = block.querySelector('[data-fac]').checked;
+      let montantPaye = null;
+      if (method === 'liquide') { const v = parseNum(block.querySelector('[data-paye]').value); montantPaye = v > 0 ? v : null; }
+      t.payments[cid] = { method, facture, montantPaye };
+    });
+    persist(); closeModal(); if (after) after();
+  });
 }
 function renderHome() {
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');

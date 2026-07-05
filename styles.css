@@ -281,6 +281,10 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .seg-btn + .seg-btn { border-left: 1px solid var(--line); }
 .seg-btn.on { background: var(--accent); color: var(--accent-ink); }
 
+/* Bloc paiement (par client, à la validation d'un arrêt) */
+.pay-block { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; background: var(--bg); }
+.pay-block h3 { color: var(--strong); }
+
 /* Barre de suivi du temps de travail (Trajet du jour) */
 .tour-timer { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin: 2px 0 4px; padding: 8px 10px; border: 1px dashed var(--accent); border-radius: 10px; background: var(--bg); }
 .tt-info { font-size: .82rem; color: var(--strong); font-weight: 700; }
