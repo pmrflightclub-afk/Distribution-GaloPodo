@@ -11,12 +11,12 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.6';
+const APP_VERSION = '1.1.7';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
   {
-    version: '1.1.6', date: '2026-07-05',
+    version: '1.1.7', date: '2026-07-05',
     ajouts: [
       'Sous-onglets « Sauvegarde » et « Changelog » dans Réglages.',
       'Bouton « Clôturer la tournée » (fige la tournée), en plus de la clôture auto par date.',
