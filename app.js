@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.10';
+const APP_VERSION = '1.1.11';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.11', date: '2026-07-05',
+    ajouts: [
+      'Connexion Google conservée entre les redémarrages : le jeton est mémorisé (il dure ~1 h). Tant qu\'il est valide, rouvrir l\'app resynchronise Drive et Agenda en silence, sans redemander la connexion. (Après une longue fermeture, une reconnexion reste demandée — limite Google côté navigateur.)',
+      'Une seule connexion pour tout : le même clic « Connecter » couvre désormais Drive ET Agenda (plus deux autorisations séparées).',
+    ],
+  },
   {
     version: '1.1.10', date: '2026-07-05',
     ajouts: [
@@ -509,10 +516,15 @@ function downloadSnapshot() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 // ---------- Synchro D3 (Google Drive) : OAuth par-utilisateur (aucune clé codée en dur) ----------
-let _gTokens = {}; // scope → { token, exp }
+// Jetons persistés (localStorage) pour SURVIVRE au redémarrage de l'app : un jeton Google dure ~1 h ;
+// tant qu'il est valide, rouvrir l'app resynchronise en silence SANS redemander la connexion.
+let _gTokens = LS.get('ftr.gtokens', {}) || {}; // scope → { token, exp }
+function persistGTokens() { try { LS.set('ftr.gtokens', _gTokens); } catch { /* quota — sans gravité */ } }
 const GDRIVE_FILE = 'galopodo-sync.json';
-const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata';
-const GSCOPE_CAL = 'https://www.googleapis.com/auth/calendar.readonly';
+// UN SEUL jeton combiné (Drive appData + Calendar lecture) → une seule connexion couvre Drive ET Agenda,
+// persistée une fois. Les deux constantes sont volontairement identiques : même clé de cache, même jeton partagé.
+const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.readonly';
+const GSCOPE_CAL = GSCOPE_DRIVE;
 // Vrai si un jeton VALIDE est déjà en cache pour ce scope → autorise une opération silencieuse SANS jamais afficher d'écran d'auth.
 function gTokenValid(scope) { const c = _gTokens[scope || GSCOPE_DRIVE]; return !!(c && Date.now() < c.exp - 60000); }
 function loadGis() {
@@ -532,7 +544,7 @@ async function googleToken(interactive, scope) {
   return new Promise((resolve, reject) => {
     const tc = google.accounts.oauth2.initTokenClient({
       client_id: S.googleClientId, scope,
-      callback: (resp) => { if (resp && resp.error) return reject(new Error(resp.error)); _gTokens[scope] = { token: resp.access_token, exp: Date.now() + ((resp.expires_in || 3600) * 1000) }; resolve(resp.access_token); },
+      callback: (resp) => { if (resp && resp.error) return reject(new Error(resp.error)); _gTokens[scope] = { token: resp.access_token, exp: Date.now() + ((resp.expires_in || 3600) * 1000) }; persistGTokens(); resolve(resp.access_token); },
       error_callback: (err) => reject(new Error((err && err.type) || 'connexion refusée')),
     });
     tc.requestAccessToken({ prompt: interactive ? 'consent' : '' });
