@@ -29,6 +29,7 @@ const CHANGELOG = [
       'Navigation GPS : le bouton ouvre l\'app installée (Waze par défaut, repli Google Maps si Waze absent) ; choix Waze/Google Maps dans Réglages → GPS.',
       'Bouton « Route » (Trajet du jour ET éditeur) : encoder le temps de trajet RÉEL ; repris automatiquement dans le SMS, le récap, le ticket et les stats (l\'estimé reste conservé). Boutons Waze + Route par arrêt dans l\'éditeur.',
       'Stats : nouvelle carte « Temps de trajet — estimé vs réel » (arrêts sans temps réel signalés).',
+      'Suivi du temps de travail : « Démarrer la tournée » + « Valider l\'arrêt » (Trajet du jour) → Stats « Temps de travail » (route + visite mesurée + retour réparti en parts égales) par client et par cheval.',
       'Synchro multi-appareils (Réglages → Synchro, mode Fichier) : exporter/importer un fichier avec FUSION (le plus récent gagne, suppressions respectées, sans écraser, sans compte). Drive automatique à venir.',
       'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
@@ -1740,6 +1741,7 @@ function renderStats() {
     });
   }
   renderTrajetTemps();
+  renderTravail();
   renderFinance();
 }
 // Stats : temps de trajet estimé (tournée) vs réel encodé (par arrêt), avec arrêts manquants signalés.
@@ -1759,6 +1761,73 @@ function renderTrajetTemps() {
     h += `<div class="inv-line"><span>Temps réel renseigné (somme)</span><span>${withReal.length ? realTot + ' min' : '—'}</span></div>`;
     if (missing) h += `<div class="inv-line" style="color:var(--warn)"><span>Arrêts sans temps réel</span><span>${missing}</span></div>`;
     (t.arrets || []).forEach((a, i) => { const r = (typeof a.realMin === 'number') ? a.realMin + ' min' : '<i>non renseigné</i>'; h += `<div class="fin-cheval"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}</span><span>réel : ${r}</span></div>`; });
+    el.innerHTML = h; box.appendChild(el);
+  });
+}
+// ---------- Temps de travail (suivi réel : « Démarrer » + « Valider l'arrêt ») ----------
+// Trajet = réel (Route) sinon estimé ; visite = mesurée entre l'arrivée (calculée) et la validation ; retour = mesuré (Terminer) sinon estimé.
+function travailForTour(t) {
+  if (!t.startedAt || !(t.arrets || []).length) return null;
+  const R = t.result;
+  const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
+  const travelMin = (i) => { const a = t.arrets[i]; if (typeof a.realMin === 'number') return a.realMin; const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; return seg * mpk; };
+  const returnMinEst = (R && R.kmLastHome != null) ? R.kmLastHome * mpk : 0;
+  const per = []; let prevDepart = t.startedAt; let complete = true;
+  t.arrets.forEach((a, i) => {
+    const travelMs = travelMin(i) * 60000;
+    const arrival = prevDepart + travelMs;
+    const dep = (typeof a.validatedAt === 'number') ? a.validatedAt : null;
+    let visitMs = null;
+    if (dep != null) { visitMs = Math.max(0, dep - arrival); prevDepart = dep; } else complete = false;
+    per.push({ travelMs, visitMs, arrival, dep });
+  });
+  const lastDep = per.length ? per[per.length - 1].dep : null;
+  const returnMs = (t.endedAt && lastDep) ? Math.max(0, t.endedAt - lastDep) : returnMinEst * 60000;
+  const endTs = t.endedAt || (lastDep != null ? lastDep + returnMs : null);
+  return { per, returnMs, complete, totalMs: endTs != null ? (endTs - t.startedAt) : null, endTs };
+}
+function travailStats() {
+  const out = [];
+  allTours().forEach((t) => {
+    const w = travailForTour(t); if (!w) return;
+    const clientIds = new Set(); t.arrets.forEach((a) => (a.clients || []).forEach((cl) => clientIds.add(cl.clientId)));
+    const returnPer = w.returnMs / (clientIds.size || 1); // retour : parts égales par client
+    const cmap = {};
+    t.arrets.forEach((a, i) => {
+      const nc = (a.clients || []).length || 1;
+      const travelPer = w.per[i].travelMs / nc;
+      const visitPer = (w.per[i].visitMs != null ? w.per[i].visitMs : 0) / nc;
+      (a.clients || []).forEach((cl) => {
+        const c = cmap[cl.clientId] = cmap[cl.clientId] || { clientId: cl.clientId, nom: clientName(cl.clientId), travelMs: 0, visitMs: 0, chevaux: {} };
+        c.travelMs += travelPer; c.visitMs += visitPer;
+        const chn = (cl.chevaux || []).length || 1;
+        (cl.chevaux || []).forEach((cv) => { const ch = c.chevaux[cv.nom] = c.chevaux[cv.nom] || { nom: cv.nom, ms: 0 }; ch.ms += (travelPer + visitPer) / chn; });
+      });
+    });
+    const clientsArr = Object.values(cmap).map((c) => {
+      const chList = Object.values(c.chevaux); const rpc = chList.length ? returnPer / chList.length : 0;
+      chList.forEach((cv) => { cv.ms += rpc; });
+      return Object.assign({}, c, { returnMs: returnPer, totalMs: c.travelMs + c.visitMs + returnPer, chevaux: chList });
+    });
+    out.push({ tour: t, clients: clientsArr, totalMs: w.totalMs, complete: w.complete, startedAt: t.startedAt, endTs: w.endTs });
+  });
+  out.sort((a, b) => (b.tour.date || '').localeCompare(a.tour.date || ''));
+  return out;
+}
+function renderTravail() {
+  const box = $('travailList'); if (!box) return; box.innerHTML = '';
+  const st = travailStats();
+  if ($('travailEmpty')) $('travailEmpty').style.display = st.length ? 'none' : 'block';
+  st.forEach((w) => {
+    const t = w.tour;
+    const el = document.createElement('div'); el.className = 'inv-client';
+    let h = `<div class="inv-head"><span>${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}</span><span>${durHm(w.totalMs)}${w.complete ? '' : ' ⚠'}</span></div>`;
+    h += `<div class="inv-line"><span>Départ → fin</span><span>${hm(w.startedAt)} → ${hm(w.endTs)}</span></div>`;
+    if (!w.complete) h += '<div class="inv-line" style="color:var(--warn)"><span>Suivi incomplet</span><span>arrêts non validés</span></div>';
+    w.clients.forEach((c) => {
+      h += `<div class="inv-line"><span><b>${esc(c.nom)}</b> — route ${durHm(c.travelMs)} · visite ${durHm(c.visitMs)} · retour ${durHm(c.returnMs)}</span><span><b>${durHm(c.totalMs)}</b></span></div>`;
+      c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)}</span><span>${durHm(cv.ms)}</span></div>`; });
+    });
     el.innerHTML = h; box.appendChild(el);
   });
 }
@@ -2072,6 +2141,9 @@ function legMinutesFor(t) {
   (t.arrets || []).forEach((a, i) => { const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; cum += seg * mpk; out.push(R && R.rows ? cum : null); });
   return out;
 }
+// Heure locale HH:MM et durée « X h Y min » (temps de travail).
+const hm = (ts) => ts ? new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—';
+function durHm(ms) { if (ms == null || ms < 0) return '—'; const m = Math.round(ms / 60000); const h = Math.floor(m / 60), mm = m % 60; return h ? `${h} h ${mm} min` : `${mm} min`; }
 function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
   const todays = [...tournees].filter((t) => statusOf(t) === 'active').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -2079,6 +2151,15 @@ function renderHomeTrajet() {
   todays.forEach((t) => {
     // 1ʳᵉ ligne : la tournée du jour elle-même (cliquable → ouvre l'éditeur).
     box.appendChild(tourListItem(t, false));
+    const persistTour = () => { const idx = tournees.findIndex((x) => x.id === t.id); if (idx >= 0) tournees[idx] = t; saveTournees(); };
+    // Barre de suivi du temps de travail : Démarrer → (valider chaque arrêt) → Terminer.
+    const ctrl = document.createElement('div'); ctrl.className = 'tour-timer';
+    if (!t.startedAt) ctrl.innerHTML = '<button class="btn small primary" data-start>▶ Démarrer la tournée</button>';
+    else if (!t.endedAt) ctrl.innerHTML = `<span class="tt-info">⏱ Démarrée à ${hm(t.startedAt)}</span><button class="btn small" data-end>⏹ Terminer (domicile)</button>`;
+    else ctrl.innerHTML = `<span class="tt-info">✅ ${hm(t.startedAt)} → ${hm(t.endedAt)} · ${durHm(t.endedAt - t.startedAt)}</span>`;
+    box.appendChild(ctrl);
+    const sb = ctrl.querySelector('[data-start]'); if (sb) sb.addEventListener('click', () => { t.startedAt = Date.now(); persistTour(); renderHomeTrajet(); });
+    const eb = ctrl.querySelector('[data-end]'); if (eb) eb.addEventListener('click', () => { t.endedAt = Date.now(); persistTour(); renderHomeTrajet(); });
     const mins = legMinutesFor(t);
     (t.arrets || []).forEach((a, i) => {
       const adresse = addrStr(a.addr);
@@ -2090,10 +2171,14 @@ function renderHomeTrajet() {
       const trajetLbl = (est != null ? est + ' min est.' : '—') + (real != null ? ' · <b>' + real + ' min réel</b>' : '');
       const el = document.createElement('div'); el.className = 'list-item';
       // Nom du client d'abord, adresse en dessous.
-      el.innerHTML = `<div class="li-main"><b>${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}</span></div>
-        <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button> <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
+      // Bouton « Valider » (marque la fin de visite / départ) — visible seulement après « Démarrer ».
+      const validBtn = t.startedAt ? (typeof a.validatedAt === 'number' ? ` <button class="btn small" data-valid title="Re-valider">✓ ${hm(a.validatedAt)}</button>` : ' <button class="btn small primary" data-valid>Valider</button>') : '';
+      const validLbl = (typeof a.validatedAt === 'number') ? ' · ✅ ' + hm(a.validatedAt) : '';
+      el.innerHTML = `<div class="li-main"><b>${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
+        <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button>${validBtn} <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
       el.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       el.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(t, a, est));
+      const vb = el.querySelector('[data-valid]'); if (vb) vb.addEventListener('click', () => { a.validatedAt = Date.now(); persistTour(); renderHomeTrajet(); });
       el.querySelector('[data-sms]').addEventListener('click', async () => {
         const msg = fillSms(S.smsTemplate, { prenom: c0.prenom || '', nom: c0.nom || '', client: fullName(c0), societe: c0.societe || '', cheval: chNames, trajet, adresse });
         const btn = el.querySelector('[data-sms]');
