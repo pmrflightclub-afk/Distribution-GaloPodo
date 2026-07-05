@@ -31,6 +31,7 @@ const CHANGELOG = [
       'Stats : nouvelle carte « Temps de trajet — estimé vs réel » (arrêts sans temps réel signalés).',
       'Suivi du temps de travail : « Démarrer la tournée » + « Valider l\'arrêt » + étape « Retour » (Waze + Route + Clôturer) → Stats « Temps de travail » (route + visite mesurée + retour réparti en parts égales) par client et par cheval.',
       'Paiement par arrêt (à la validation) : liquide / virement + « facture nécessaire » ; si liquide, saisie du montant réellement payé → ligne « Arrondi caisse » (facture, récap, ticket) et montant réel repris dans les stats.',
+      'Gestion → Compta (mensuelle) : 3 sections Liquide (postes globalisés, sans nom) · Virements · Factures pro, avec totaux HT/TVA/TTC, sélecteur de mois, statut « en attente / comptabilité encodée » par mois archivé, et fiche PDF imprimable par section.',
       'Synchro multi-appareils (Réglages → Synchro, mode Fichier) : exporter/importer un fichier avec FUSION (le plus récent gagne, suppressions respectées, sans écraser, sans compte). Drive automatique à venir.',
       'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
@@ -129,6 +130,7 @@ if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
 if (typeof S.npasHT !== 'number') S.npasHT = 0;
 if (typeof S.infectionHT !== 'number') S.infectionHT = 0;
 S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
+if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; // { 'YYYY-MM': { liquide, virement, facture } }
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
@@ -739,6 +741,7 @@ function showGestion(sub) {
   if (currentGsub === 'articles') renderArticlesPage();
   if (currentGsub === 'materiel') renderMateriel();
   if (currentGsub === 'vehicule') renderFraisVehicule();
+  if (currentGsub === 'compta') renderCompta();
   if (currentGsub === 'sms') renderSMS();
 }
 
@@ -1883,6 +1886,75 @@ function renderFinance() {
     c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)} · A ${eur(cv.art)} M ${eur(cv.mat)} D ${eur(cv.dep)}</span><span>${eur(cv.art + cv.mat + cv.dep)}</span></div>`; });
     el.innerHTML = h; box.appendChild(el);
   });
+}
+// ================= GESTION → COMPTA (mensuelle) =================
+const monthLabel = (ym) => { const d = new Date(ym + '-01T00:00:00'); return isNaN(d.getTime()) ? ym : d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }); };
+// Mois ayant au moins un paiement encodé.
+function comptaMonths() {
+  const set = new Set();
+  allTours().forEach((t) => { if ((t.date || '') && t.result && Object.keys(t.payments || {}).length) set.add(t.date.slice(0, 7)); });
+  return [...set].sort().reverse();
+}
+// Agrégats du mois : liquide (postes globalisés, sans nom) + virements + factures (par client).
+function comptaData(ym) {
+  const r = rate();
+  const liquideClients = [], virementClients = [], factureClients = [];
+  const posts = {}; const addPost = (lib, ht, tva, ttc) => { const p = posts[lib] = posts[lib] || { libelle: lib, ht: 0, tva: 0, ttc: 0 }; p.ht += ht; p.tva += tva; p.ttc += ttc; };
+  allTours().forEach((t) => {
+    if (!(t.date || '').startsWith(ym) || !t.result || !t.result.parClient) return;
+    t.result.parClient.forEach((m) => {
+      const p = (t.payments || {})[m.clientId]; if (!p) return;
+      const entry = { nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC };
+      if (p.method === 'liquide') {
+        const ttc = (p.montantPaye != null) ? p.montantPaye : m.totalTTC;
+        const ht = ttc / (1 + r); liquideClients.push({ nom: m.nom, ht, tva: ttc - ht, ttc });
+        // Globalisation par poste (sans nom de client) : articles par libellé + Matériel + Déplacement + Arrondi.
+        (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
+        if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
+        const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
+        if (p.montantPaye != null) { const diff = p.montantPaye - m.totalTTC; if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); } }
+      }
+      if (p.method === 'virement') virementClients.push(entry);
+      if (p.facture) factureClients.push(entry);
+    });
+  });
+  const sum = (arr) => arr.reduce((a, x) => ({ ht: a.ht + x.ht, tva: a.tva + x.tva, ttc: a.ttc + x.ttc }), { ht: 0, tva: 0, ttc: 0 });
+  return { liquideClients, virementClients, factureClients, liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients), factureTotal: sum(factureClients) };
+}
+// Ouvre une fenêtre imprimable (→ PDF via le navigateur).
+function printHtml(title, bodyHtml) {
+  const w = window.open('', '_blank');
+  if (!w) { alert('Autorisez les fenêtres pop-up pour générer le PDF.'); return; }
+  w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:22px;color:#111}h1{font-size:19px;margin:0 0 4px}h2{font-size:14px;color:#555;margin:0 0 16px;font-weight:600}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:right}th:first-child,td:first-child{text-align:left}tfoot td{font-weight:700}</style></head><body>${bodyHtml}<script>window.onload=function(){setTimeout(function(){window.print()},150)}<\/script></body></html>`);
+  w.document.close();
+}
+let currentComptaMonth = null;
+function renderCompta() {
+  const cur = todayStr().slice(0, 7);
+  const months = comptaMonths(); if (!months.includes(cur)) months.unshift(cur);
+  if (!currentComptaMonth || !months.includes(currentComptaMonth)) currentComptaMonth = cur;
+  const sel = $('comptaMonth');
+  if (sel) { sel.innerHTML = months.map((m) => `<option value="${m}"${m === currentComptaMonth ? ' selected' : ''}>${monthLabel(m)}${m === cur ? ' (en cours)' : ''}</option>`).join(''); sel.onchange = () => { currentComptaMonth = sel.value; renderCompta(); }; }
+  const ym = currentComptaMonth, isCur = ym === cur, d = comptaData(ym);
+  const body = $('comptaBody'); if (!body) return;
+  const tot = (tt) => `HT ${eur(tt.ht)} · TVA ${eur(tt.tva)} · <b>TTC ${eur(tt.ttc)}</b>`;
+  const statusOfKind = (k) => (S.comptaStatus[ym] && S.comptaStatus[ym][k]) || 'attente';
+  const clientTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.nom)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
+  const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
+  const statusRow = (k) => isCur ? '<p class="hint">Mois en cours (se clôture automatiquement le mois prochain).</p>' : `<label>Statut comptable<select data-status="${k}"><option value="attente"${statusOfKind(k) === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind(k) === 'encode' ? ' selected' : ''}>Comptabilité encodée</option></select></label>`;
+  const section = (title, k, total, detail) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${detail}${statusRow(k)}</section>`;
+  body.innerHTML =
+    section('💶 Liquide (globalisé)', 'liquide', d.liquideTotal, postTbl(d.liquidePosts)) +
+    section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients)) +
+    section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients));
+  body.querySelectorAll('[data-status]').forEach((selEl) => selEl.addEventListener('change', (e) => { S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][selEl.dataset.status] = e.target.value; saveSettings(); }));
+  body.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => {
+    const k = btn.dataset.print, ml = monthLabel(ym);
+    const foot = (tt) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td></tr></tfoot>`;
+    if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>${postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal))}`);
+    else if (k === 'virement') printHtml('Virements — ' + ml, `<h1>Virements bancaires</h1><h2>${ml} — par client</h2>${clientTbl(d.virementClients).replace('</tbody>', '</tbody>' + foot(d.virementTotal))}`);
+    else printHtml('Factures — ' + ml, `<h1>Factures pro</h1><h2>${ml} — par client</h2>${clientTbl(d.factureClients).replace('</tbody>', '</tbody>' + foot(d.factureTotal))}`);
+  }));
 }
 function renderFraisVehicule() {
   const odo = odometer();

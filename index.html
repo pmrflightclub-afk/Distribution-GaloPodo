@@ -131,6 +131,7 @@
         <button class="subtab" data-gsub="articles">Articles</button>
         <button class="subtab" data-gsub="materiel">Frais matériel</button>
         <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
+        <button class="subtab" data-gsub="compta">Compta</button>
         <button class="subtab" data-gsub="sms">SMS</button>
       </div>
     </nav>
@@ -245,6 +246,14 @@
         <p class="hint">Amortissement + chaque poste ci-dessous forment la base véhicule au km. Modifiez les champs directement dans la ligne.</p>
         <div id="fraisList" class="edit-list"></div>
         <p class="empty" id="fraisEmpty">Aucun frais. Ajoutez entretien, assurance, réparations…</p>
+      </section>
+    </div>
+
+    <div id="gsub-compta" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Compta mensuelle</h2><select id="comptaMonth" style="width:auto;margin:0"></select></div>
+        <p class="hint">Pour votre comptable : <b>liquide</b> (postes globalisés, sans nom de client), <b>virements</b> et <b>factures pro</b> (par client). Remise à zéro chaque mois ; les mois passés sont archivés avec un statut. Bouton 🖨 = fiche PDF par section (via l'impression du navigateur).</p>
+        <div id="comptaBody"></div>
       </section>
     </div>
 
