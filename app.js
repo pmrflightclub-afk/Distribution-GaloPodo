@@ -979,8 +979,9 @@ function openEditor() {
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
   $('edDelete').style.display = '';
   renderEditorArrets(locked);
-  if (currentTour.result && currentTour.result.rows && currentTour.result.rows.length === currentTour.arrets.length) recomputeMoney();
-  else { renderResultUI(null); if (!locked && currentTour.arrets.length) scheduleGeoRecalc(); }
+  if (locked) renderResultUI(currentTour.result || null); // tournée figée : on affiche le résultat stocké, sans recalcul ni ré-enregistrement
+  else if (currentTour.result && currentTour.result.rows && currentTour.result.rows.length === currentTour.arrets.length) recomputeMoney();
+  else { renderResultUI(null); if (currentTour.arrets.length) scheduleGeoRecalc(); }
   $('edStatus').textContent = '';
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
   $('tab-editeur').classList.add('active'); window.scrollTo(0, 0);
@@ -1328,6 +1329,13 @@ function rowFromArret(a, geo) {
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
+// Enregistre currentTour dans le bon store (actif ou archive) sans jamais créer de doublon.
+function persistCurrentTour() {
+  const ai = archive.findIndex((t) => t.id === currentTour.id);
+  if (ai >= 0) { archive[ai] = currentTour; saveArchive(); return; }
+  const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
+  saveTournees();
+}
 // Recalcul ARGENT uniquement (types/tarifs/TVA/seuil/répartition) — instantané, réutilise la géométrie.
 function recomputeMoney() {
   const R = currentTour && currentTour.result;
@@ -1340,8 +1348,7 @@ function recomputeMoney() {
   currentTour.result = computeResultMoney(rows, geom);
   currentTour.result.providerMin = prov;
   currentTour.result.routeGeo = geo || [];
-  const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
-  saveTournees();
+  persistCurrentTour();
   renderResultUI(currentTour.result);
 }
 
@@ -1420,8 +1427,7 @@ async function calcTour(silent) {
     currentTour.result = computeResultMoney(rows, geom);
     currentTour.result.providerMin = rt.totalMin || totalMin; // durée brute du service de carte (conservée)
     currentTour.result.routeGeo = rt.geo || [];
-    const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
-    saveTournees();
+    persistCurrentTour();
     renderResultUI(currentTour.result);
     renderMap(rows.map((r) => ({ lat: r.lat, lon: r.lon, label: r.label })), home, currentTour.result.routeGeo, arrXY);
     st.className = 'status ok'; st.textContent = silent ? 'À jour ✔' : 'Frais calculés et enregistrés.';
@@ -2447,7 +2453,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('edDate').addEventListener('change', (e) => { currentTour.date = e.target.value; });
   $('edDate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } });
   $('edCalc').addEventListener('click', calcTour);
-  $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ?')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; tournees = tournees.filter((t) => t.id !== id); saveTournees(); showTab('tournees'); } });
+  $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ?')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(recapText(currentTour.result)); $('edStatus').className = 'status ok'; $('edStatus').textContent = 'Récap copié.'; } catch { $('edStatus').textContent = 'Copie impossible.'; } });
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
