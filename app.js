@@ -51,6 +51,7 @@ const CHANGELOG = [
       'Compta : bouton PDF corrigé (impression via le navigateur, ne ferme plus l\'app). Compta et Agenda déplacés en onglets principaux.',
       'Paiement partiel liquide : option « reste à percevoir » (montant encaissé + reste). Le reste n\'est PAS une remise (créance). Reporté → ligne « Impayé du … » ajoutée automatiquement à la prochaine tournée du client ; ou demandé en virement (suivi en Compta). Repris dans facture, ticket, récap et stats.',
       'Clôture sécurisée : impossible de clôturer une tournée tant qu\'un client n\'a pas de mode de paiement (virement/liquide, aucun présélectionné par défaut) — en liquide, le montant encaissé est obligatoire. Message de blocage dans l\'éditeur.',
+      'Compta : mois en cours (paiements reçus gérables, sans démarche) vs mois archivé (validation des démarches — liquide 1 pour le mois, virement/facture 1 par client — qui grise et verrouille l\'élément traité). PDF corrigé (plus de page vide) : liquide = postes globalisés ; virements & factures = détail par client ET par cheval.',
       'Compta : statut « paiement reçu » par client (facture & virement, suivi payé/impayé) et statut « démarche comptable » par section (en attente / effectuée), indépendants, disponibles pour tous les mois.',
       'Facture : l\'arrondi caisse (liquide) apparaît en dernière ligne d\'article et corrige le total (facture, ticket, stats). Parage & Équilibrage en 1ʳᵉ position des articles.',
       'Client proche : la ligne « forfait » affiche le km du seuil (ex. 15 km) et ce km est compté dans les stats par client/cheval.',
@@ -153,7 +154,8 @@ if (typeof S.npasHT !== 'number') S.npasHT = 0;
 if (typeof S.infectionHT !== 'number') S.infectionHT = 0;
 S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
 if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; // { 'YYYY-MM': { liquide, virement, facture } }
-if (!S.comptaRecu || typeof S.comptaRecu !== 'object') S.comptaRecu = {};       // { 'YYYY-MM:kind:clientId': true } — paiement reçu (virement/facture)
+if (!S.comptaRecu || typeof S.comptaRecu !== 'object') S.comptaRecu = {};       // { 'tourId:clientId': true } — paiement reçu (virement/facture)
+if (!S.comptaDemarche || typeof S.comptaDemarche !== 'object') S.comptaDemarche = {}; // { 'tourId:clientId': true } — démarche comptable effectuée (mois archivé)
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
@@ -2123,7 +2125,7 @@ function comptaData(ym) {
       const method = p ? p.method : null;
       // Mode unique (mutuellement exclusif) : liquide | virement | facture (défaut = facture, à classer).
       const mode = method === 'liquide' ? 'liquide' : (method === 'virement' ? 'virement' : 'facture');
-      const entry = { tourId: t.id, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode };
+      const entry = { tourId: t.id, tourDate: t.date, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode, m, payment: p };
       if (mode === 'liquide') {
         const cash = (p && p.montantPaye != null) ? p.montantPaye : m.totalTTC; // caisse = cash réellement reçu
         const cHT = cash / (1 + r); liquideClients.push({ nom: m.nom, ht: cHT, tva: cash - cHT, ttc: cash });
@@ -2174,26 +2176,37 @@ function renderCompta() {
   const isRecu = (e) => !!(S.comptaRecu && S.comptaRecu[recuKeyOf(e)]);
   const modeOpts = (cur) => ['facture', 'virement', 'liquide'].map((v) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v === 'facture' ? 'Facture' : v === 'virement' ? 'Virement' : 'Liquide'}</option>`).join('');
   // Table par client (virement/facture) : Mode (classe le paiement) + Reçu (paiement encaissé). Les restes dérivés (paiement partiel) ne sont pas reclassables.
-  const clientTbl = (arr, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th></tr></thead><tbody>${arr.map((e) => `<tr><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${(forPrint || e.derived) ? (e.derived ? 'Reste (virement)' : (e.mode === 'virement' ? 'Virement' : 'Facture')) : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center">${forPrint ? (isRecu(e) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu data-key="${recuKeyOf(e)}" ${isRecu(e) ? 'checked' : ''}/>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
+  const isDem = (e) => !!(S.comptaDemarche && S.comptaDemarche[recuKeyOf(e)]);
+  // Table par client. Colonne « Démarche » seulement pour un mois archivé ; ligne grisée/verrouillée si démarche effectuée.
+  const clientTbl = (arr, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th>${(!isCur && !forPrint) ? '<th>Démarche</th>' : ''}</tr></thead><tbody>${arr.map((e) => { const rk = recuKeyOf(e), dem = isDem(e); return `<tr${dem ? ' style="opacity:.45"' : ''}><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${(forPrint || e.derived || dem) ? (e.derived ? 'Reste (virement)' : (e.mode === 'virement' ? 'Virement' : 'Facture')) : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center">${forPrint ? (isRecu(e) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu data-key="${rk}" ${isRecu(e) ? 'checked' : ''}${dem ? ' disabled' : ''}/>`}</td>${(!isCur && !forPrint) ? `<td style="text-align:center"><input type="checkbox" data-dem data-key="${rk}" ${dem ? 'checked' : ''}/></td>` : ''}</tr>`; }).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
-  // Statut de DÉMARCHE comptable (indépendant du paiement) — par section, disponible pour tous les mois.
-  const statusRow = (k) => `${isCur ? '<p class="hint">Mois en cours (se clôture automatiquement le mois prochain).</p>' : ''}<label>Démarche comptable<select data-status="${k}"><option value="attente"${statusOfKind(k) === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind(k) === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>`;
   // Ligne « suivi des paiements reçus » (virement/facture) : combien encaissés, impayés signalés.
   const recuRow = (arr) => { if (!arr.length) return ''; const n = arr.filter(isRecu).length; const imp = arr.length - n; return `<p class="hint"${imp ? ' style="color:var(--warn);font-weight:700"' : ''}>Paiements reçus : ${n}/${arr.length}${imp ? ` · ⚠ ${imp} impayé(s)` : ' ✅'}</p>`; };
-  const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(arr) : ''}${detail}${statusRow(k)}</section>`;
+  const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(arr) : ''}${detail}</section>`;
+  // Démarche comptable : ABSENTE le mois en cours ; disponible seulement une fois le mois archivé.
+  // Liquide = 1 démarche pour le mois (grise toute la caisse) ; virement/facture = 1 par client (colonne Démarche du tableau).
+  const liqDem = !isCur && statusOfKind('liquide') === 'encode';
+  const liquideStatus = isCur ? '' : `<label>Démarche comptable (caisse du mois)<select data-status="liquide"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>`;
+  const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><button class="btn small" data-print="liquide">🖨 PDF</button></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
   body.innerHTML =
-    section('💶 Liquide (globalisé)', 'liquide', d.liquideTotal, postTbl(d.liquidePosts)) +
+    `<p class="hint">${isCur ? '📅 <b>Mois en cours</b> (1ᵉʳ → dernier jour). Gérez les paiements reçus ; la validation des <b>démarches</b> comptables se fera une fois le mois archivé (mois suivant).' : '🗄 <b>Mois archivé</b> — validez les <b>démarches</b> comptables (l\'élément traité est grisé et verrouillé).'}</p>` +
+    liquideSec +
     section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients, false), d.virementClients) +
     section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients, false), d.factureClients);
-  body.querySelectorAll('[data-status]').forEach((selEl) => selEl.addEventListener('change', (e) => { S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][selEl.dataset.status] = e.target.value; saveSettings(); }));
+  body.querySelectorAll('[data-status]').forEach((selEl) => selEl.addEventListener('change', (e) => { S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][selEl.dataset.status] = e.target.value; saveSettings(); renderCompta(); }));
+  body.querySelectorAll('[data-dem]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaDemarche = S.comptaDemarche || {}; const key = cb.dataset.key; if (e.target.checked) S.comptaDemarche[key] = true; else delete S.comptaDemarche[key]; saveSettings(); renderCompta(); }));
   body.querySelectorAll('[data-mode]').forEach((selEl) => selEl.addEventListener('change', () => { setComptaPayment(selEl.dataset.tour, selEl.dataset.cid, selEl.value); renderCompta(); }));
   body.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const key = cb.dataset.key; if (e.target.checked) S.comptaRecu[key] = true; else delete S.comptaRecu[key]; saveSettings(); renderCompta(); }));
+  // Détail par client ET par cheval (réutilise la facture détaillée) — pour virements & factures.
+  const detailPdf = (entries, total, titre, sousTitre, vide) => entries.length
+    ? `<h1>${titre}</h1><h2>${sousTitre}</h2>` + entries.map((e) => `<h3>${esc(e.nom)}${e.tourDate ? ' · ' + esc(fmtDateFr(e.tourDate)) : ''}</h3>${e.m ? clientInvoiceHtml(e.m, e.payment) : '<p>Reste impayé (paiement partiel liquide) : ' + eur(e.ttc) + ' TTC</p>'}`).join('') + `<h2 style="margin-top:14px">Total : ${eur(total.ttc)} TTC (HT ${eur(total.ht)} · TVA ${eur(total.tva)})</h2>`
+    : `<h1>${titre}</h1><h2>${sousTitre}</h2><p>${vide}</p>`;
   body.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => {
     const k = btn.dataset.print, ml = monthLabel(ym);
-    const foot = (tt, extra) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td>${extra || ''}</tr></tfoot>`;
-    if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>${postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal, ''))}`);
-    else if (k === 'virement') printHtml('Virements — ' + ml, `<h1>Virements bancaires</h1><h2>${ml} — par client</h2>${clientTbl(d.virementClients, true).replace('</tbody>', '</tbody>' + foot(d.virementTotal, '<td></td><td></td>'))}`);
-    else printHtml('Factures — ' + ml, `<h1>Factures pro</h1><h2>${ml} — par client</h2>${clientTbl(d.factureClients, true).replace('</tbody>', '</tbody>' + foot(d.factureTotal, '<td></td><td></td>'))}`);
+    const foot = (tt) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td></tr></tfoot>`;
+    if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>` + (d.liquidePosts.length ? postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal)) : '<p>Aucun paiement liquide ce mois.</p>'));
+    else if (k === 'virement') printHtml('Virements — ' + ml, detailPdf(d.virementClients, d.virementTotal, 'Virements bancaires — détail', ml + ' — par client et par cheval', 'Aucun virement ce mois.'));
+    else printHtml('Factures — ' + ml, detailPdf(d.factureClients, d.factureTotal, 'Factures pro — détail', ml + ' — par client et par cheval', 'Aucune facture ce mois.'));
   }));
 }
 // Analyse financière PAR CHEVAL (avec le nom du client), tous cumuls TTC.

@@ -277,19 +277,20 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .modal-head .x { border: 0; background: transparent; font-size: 1.2rem; color: var(--muted); cursor: pointer; }
 
-/* Impression (fiches Compta → PDF) : on n'affiche que #printArea */
+/* Impression (fiches Compta → PDF) : on n'affiche QUE #printArea (display, pas visibility → pas de pages blanches) */
 #printArea { display: none; }
-body.printing #printArea { display: block; }
 #printArea h1 { font-size: 19px; margin: 0 0 4px; color: #111; }
 #printArea h2 { font-size: 14px; color: #555; margin: 0 0 14px; font-weight: 600; }
-#printArea table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; color: #111; }
-#printArea th, #printArea td { border: 1px solid #999; padding: 6px 8px; text-align: right; }
+#printArea h3 { font-size: 14px; color: #111; margin: 16px 0 4px; }
+#printArea table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 4px; color: #111; }
+#printArea th, #printArea td { border: 1px solid #999; padding: 5px 7px; text-align: right; }
 #printArea th:first-child, #printArea td:first-child { text-align: left; }
-#printArea tfoot td { font-weight: 700; }
+#printArea tfoot td, #printArea .inv-total-row td { font-weight: 700; }
+#printArea .inv-sec-row td { background: #f0f0f0; font-weight: 700; text-transform: uppercase; font-size: 10px; }
 @media print {
-  body * { visibility: hidden; }
-  body.printing #printArea, body.printing #printArea * { visibility: visible; }
-  body.printing #printArea { position: absolute; left: 0; top: 0; width: 100%; padding: 6px; }
+  body.printing > *:not(#printArea) { display: none !important; }
+  body.printing #printArea { display: block !important; padding: 6px; }
+  @page { margin: 12mm; }
 }
 
 /* Sélecteur segmenté (article connu / nouvel article) */
