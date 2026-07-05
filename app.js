@@ -31,7 +31,7 @@ const CHANGELOG = [
       'Stats : nouvelle carte « Temps de trajet — estimé vs réel » (arrêts sans temps réel signalés).',
       'Suivi du temps de travail : « Démarrer la tournée » + « Valider l\'arrêt » + étape « Retour » (Waze + Route + Clôturer) → Stats « Temps de travail » (route + visite mesurée + retour réparti en parts égales) par client et par cheval.',
       'Paiement par arrêt (à la validation) : liquide / virement + « facture nécessaire » ; si liquide, saisie du montant réellement payé → ligne « Arrondi caisse » (facture, récap, ticket) et montant réel repris dans les stats.',
-      'Gestion → Compta (mensuelle) : 3 sections Liquide (postes globalisés, sans nom) · Virements · Factures pro, avec totaux HT/TVA/TTC, sélecteur de mois, statut « en attente / comptabilité encodée » par mois archivé, et fiche PDF imprimable par section.',
+      'Gestion → Compta (mensuelle) : 3 sections Liquide (postes globalisés, sans nom) · Virements · Factures pro, avec totaux HT/TVA/TTC, sélecteur de mois, statut « en attente / comptabilité encodée » par mois archivé, et fiche PDF imprimable par section. Suivi « paiement reçu » par client (virements/factures) → impayés signalés.',
       'Synchro multi-appareils (Réglages → Synchro) : mode Fichier (export/import avec FUSION, sans compte) ET Google Drive automatique — chacun renseigne SON propre ID client Google (rien de partagé), connexion unique puis silencieuse.',
       'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
@@ -133,6 +133,7 @@ if (typeof S.npasHT !== 'number') S.npasHT = 0;
 if (typeof S.infectionHT !== 'number') S.infectionHT = 0;
 S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
 if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; // { 'YYYY-MM': { liquide, virement, facture } }
+if (!S.comptaRecu || typeof S.comptaRecu !== 'object') S.comptaRecu = {};       // { 'YYYY-MM:kind:clientId': true } — paiement reçu (virement/facture)
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
@@ -1959,7 +1960,7 @@ function comptaData(ym) {
     if (!(t.date || '').startsWith(ym) || !t.result || !t.result.parClient) return;
     t.result.parClient.forEach((m) => {
       const p = (t.payments || {})[m.clientId]; if (!p) return;
-      const entry = { nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC };
+      const entry = { clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC };
       if (p.method === 'liquide') {
         const ttc = (p.montantPaye != null) ? p.montantPaye : m.totalTTC;
         const ht = ttc / (1 + r); liquideClients.push({ nom: m.nom, ht, tva: ttc - ht, ttc });
@@ -1994,21 +1995,26 @@ function renderCompta() {
   const body = $('comptaBody'); if (!body) return;
   const tot = (tt) => `HT ${eur(tt.ht)} · TVA ${eur(tt.tva)} · <b>TTC ${eur(tt.ttc)}</b>`;
   const statusOfKind = (k) => (S.comptaStatus[ym] && S.comptaStatus[ym][k]) || 'attente';
-  const clientTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.nom)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
+  const isRecu = (k, cid) => !!(S.comptaRecu && S.comptaRecu[ym + ':' + k + ':' + cid]);
+  // Table par client avec colonne « Reçu » (paiement encaissé) : cases à cocher à l'écran, texte à l'impression.
+  const clientTbl = (arr, k, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Reçu</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.nom)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td><td style="text-align:center">${forPrint ? (isRecu(k, x.clientId) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu="${k}" data-cid="${x.clientId}" ${isRecu(k, x.clientId) ? 'checked' : ''}/>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const statusRow = (k) => isCur ? '<p class="hint">Mois en cours (se clôture automatiquement le mois prochain).</p>' : `<label>Statut comptable<select data-status="${k}"><option value="attente"${statusOfKind(k) === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind(k) === 'encode' ? ' selected' : ''}>Comptabilité encodée</option></select></label>`;
-  const section = (title, k, total, detail) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${detail}${statusRow(k)}</section>`;
+  // Ligne « suivi des paiements reçus » (virement/facture) : combien encaissés, impayés signalés.
+  const recuRow = (k, arr) => { if (!arr.length) return ''; const n = arr.filter((x) => isRecu(k, x.clientId)).length; const imp = arr.length - n; return `<p class="hint"${imp ? ' style="color:var(--warn);font-weight:700"' : ''}>Paiements reçus : ${n}/${arr.length}${imp ? ` · ⚠ ${imp} impayé(s)` : ' ✅'}</p>`; };
+  const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(k, arr) : ''}${detail}${statusRow(k)}</section>`;
   body.innerHTML =
     section('💶 Liquide (globalisé)', 'liquide', d.liquideTotal, postTbl(d.liquidePosts)) +
-    section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients)) +
-    section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients));
+    section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients, 'virement', false), d.virementClients) +
+    section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients, 'facture', false), d.factureClients);
   body.querySelectorAll('[data-status]').forEach((selEl) => selEl.addEventListener('change', (e) => { S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][selEl.dataset.status] = e.target.value; saveSettings(); }));
+  body.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const key = ym + ':' + cb.dataset.recu + ':' + cb.dataset.cid; if (e.target.checked) S.comptaRecu[key] = true; else delete S.comptaRecu[key]; saveSettings(); renderCompta(); }));
   body.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => {
     const k = btn.dataset.print, ml = monthLabel(ym);
-    const foot = (tt) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td></tr></tfoot>`;
-    if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>${postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal))}`);
-    else if (k === 'virement') printHtml('Virements — ' + ml, `<h1>Virements bancaires</h1><h2>${ml} — par client</h2>${clientTbl(d.virementClients).replace('</tbody>', '</tbody>' + foot(d.virementTotal))}`);
-    else printHtml('Factures — ' + ml, `<h1>Factures pro</h1><h2>${ml} — par client</h2>${clientTbl(d.factureClients).replace('</tbody>', '</tbody>' + foot(d.factureTotal))}`);
+    const foot = (tt, extra) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td>${extra || ''}</tr></tfoot>`;
+    if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>${postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal, ''))}`);
+    else if (k === 'virement') printHtml('Virements — ' + ml, `<h1>Virements bancaires</h1><h2>${ml} — par client</h2>${clientTbl(d.virementClients, 'virement', true).replace('</tbody>', '</tbody>' + foot(d.virementTotal, '<td></td>'))}`);
+    else printHtml('Factures — ' + ml, `<h1>Factures pro</h1><h2>${ml} — par client</h2>${clientTbl(d.factureClients, 'facture', true).replace('</tbody>', '</tbody>' + foot(d.factureTotal, '<td></td>'))}`);
   }));
 }
 function renderFraisVehicule() {
