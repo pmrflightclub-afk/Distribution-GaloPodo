@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.14';
+const APP_VERSION = '1.1.15';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.15', date: '2026-07-05',
+    ajouts: [
+      'Heure de RDV par cheval : une colonne « Heure RDV » dans chaque arrêt (par cheval, par client) ; l\'heure s\'affiche dans le Trajet du jour.',
+      'Items d\'agenda récupérés : l\'horaire de l\'événement est repris automatiquement comme heure de RDV des chevaux dans la tournée (client connu ou nouveau).',
+      'Agenda privé : bouton « Agenda privé » sur chaque item (l\'événement quitte la liste et rejoint votre agenda perso). Une section « Agenda privé du jour » apparaît dans le Trajet du jour (Accueil).',
+      'Bouton « 📅 RDV » dans le paiement : programmez la prochaine visite du client. Un ou plusieurs RDV, chevaux au choix par RDV ; pour chaque date, aperçu des arrêts déjà prévus et de l\'agenda privé du jour. Les tournées sont créées si besoin, sinon le client/cheval est ajouté.',
+    ],
+  },
   {
     version: '1.1.14', date: '2026-07-05',
     ajouts: [
@@ -219,6 +228,7 @@ if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 if (S.syncMode !== 'drive') S.syncMode = 'file'; // défaut = mode fichier (section 1)
 if (!S.agendaImported || typeof S.agendaImported !== 'object') S.agendaImported = {}; // { eventId: {clientId, title, start, location} }
 if (!S.agendaInactive || typeof S.agendaInactive !== 'object') S.agendaInactive = {}; // { eventId: true } — items masqués (section Inactifs)
+if (!S.agendaPrive || typeof S.agendaPrive !== 'object') S.agendaPrive = {}; // { eventId: {title, day, start, location} } — agenda privé (perso, non facturé)
 if (!S.accentColor) S.accentColor = '#e8722a';
 if (typeof S.topbarColor !== 'string') S.topbarColor = '';
 if (typeof S.navBarColor !== 'string') S.navBarColor = '';
@@ -463,6 +473,7 @@ function mergeSettings(localS, remoteS) {
   // Items d'agenda : « fait sur un appareil = fait partout » → union des clés (eventId), jamais l'un n'efface l'autre.
   merged.agendaImported = Object.assign({}, (localS && localS.agendaImported) || {}, (remoteS && remoteS.agendaImported) || {});
   merged.agendaInactive = Object.assign({}, (localS && localS.agendaInactive) || {}, (remoteS && remoteS.agendaInactive) || {});
+  merged.agendaPrive = Object.assign({}, (localS && localS.agendaPrive) || {}, (remoteS && remoteS.agendaPrive) || {});
   // Adresse de départ (domicile) : ne jamais la perdre si l'appareil « gagnant » l'avait vide → reprendre celle qui est renseignée.
   const hasAddr = (a) => { try { return !!addrStr(a).trim(); } catch { return false; } };
   if (!hasAddr(merged.home)) { if (localS && hasAddr(localS.home)) merged.home = localS.home; else if (remoteS && hasAddr(remoteS.home)) merged.home = remoteS.home; }
@@ -977,6 +988,12 @@ function showGestion(sub) {
 }
 
 // ================= AGENDA (Google Calendar) — onglet Items =================
+// Heure "HH:MM" d'un événement (vide si journée entière).
+function eventHeure(ev) { const s = (ev && ev.start) || ''; return s.length > 10 ? s.slice(11, 16) : ''; }
+// Événements de l'agenda privé pour un jour donné (triés par heure).
+function privateEventsForDay(day) {
+  return Object.keys(S.agendaPrive || {}).map((id) => Object.assign({ id }, S.agendaPrive[id])).filter((x) => x.day === day).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+}
 // Crée un client si besoin, crée la tournée du jour si aucune n'existe (en cours / à venir), sinon ajoute le client
 // à la tournée déjà prévue à cette date ; puis l'item quitte la liste. (Jamais les tournées clôturées.)
 function attachEventToTour(ev, client) {
@@ -986,6 +1003,7 @@ function attachEventToTour(ev, client) {
   const prev = currentTour; currentTour = t; // addClientToTour opère sur currentTour → on bascule le temps de l'ajout
   addClientToTour(client, client.chevaux || []);
   currentTour = prev;
+  const heure = eventHeure(ev); if (heure) setChevalHeure(t, client.id, client.chevaux || [], heure); // reprend l'horaire de l'événement agenda sur les chevaux
   t.result = null; // arrêts modifiés → recalcul géométrie/km à la prochaine ouverture de la tournée
   saveTournees();
   S.agendaImported[ev.id] = { clientId: client.id, tourId: t.id, title: ev.title, start: ev.start, day: ev.day, location: ev.location };
@@ -1012,15 +1030,16 @@ function agendaItemRow(ev) {
   const el = document.createElement('div'); el.className = 'list-item';
   const linkTxt = match ? '≈ ' + esc(fullName(match)) + ' (proposé)' : '⚠ client inconnu → création';
   el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}</span></div>
-    <div class="li-act"><button class="btn small primary" data-rec>Récupérer</button> <button class="btn small" data-inact>Inactif</button></div>`;
+    <div class="li-act"><button class="btn small primary" data-rec>Récupérer</button> <button class="btn small" data-prive>Agenda privé</button> <button class="btn small" data-inact>Inactif</button></div>`;
   el.querySelector('[data-rec]').addEventListener('click', () => recuperateEvent(ev));
+  el.querySelector('[data-prive]').addEventListener('click', () => { S.agendaPrive[ev.id] = { title: ev.title, day: ev.day, start: ev.start, location: ev.location }; saveSettings(); renderAgendaItems(); if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHomeTrajet(); }); // → agenda privé (perso), quitte la liste
   el.querySelector('[data-inact]').addEventListener('click', () => { S.agendaInactive[ev.id] = true; saveSettings(); renderAgendaItems(); }); // → section Inactifs
   return el;
 }
 function renderAgendaItems() {
   const box = $('agendaItems'); if (!box) return; box.innerHTML = '';
   const inactBox = $('agendaInactifs'); if (inactBox) inactBox.innerHTML = '';
-  const active = _agendaEvents.filter((ev) => !S.agendaInactive[ev.id] && !S.agendaImported[ev.id]); // récupérés + inactifs quittent la liste
+  const active = _agendaEvents.filter((ev) => !S.agendaInactive[ev.id] && !S.agendaImported[ev.id] && !S.agendaPrive[ev.id]); // récupérés + privés + inactifs quittent la liste
   const inactive = _agendaEvents.filter((ev) => S.agendaInactive[ev.id]);
   if ($('agendaItemsEmpty')) $('agendaItemsEmpty').style.display = active.length ? 'none' : 'block';
   active.forEach((ev) => box.appendChild(agendaItemRow(ev)));
@@ -1285,7 +1304,7 @@ function reconcileTour(tour) {
         if (!h) return; // cheval supprimé → retiré
         const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
         let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [] }; arr.clients.push(ncl); }
-        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage });
+        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '' });
       });
     });
   });
@@ -1516,12 +1535,12 @@ function renderEditorArrets(locked) {
         if (S.fourbureHT > 0) cols.push({ key: 'fourbure', label: 'Fourbure' });
         if (S.npasHT > 0) cols.push({ key: 'npas', label: 'NPAS' });
         if (S.infectionHT > 0) cols.push({ key: 'infection', label: 'Infection' });
-        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th>${cols.map((c) => '<th>' + c.label + '</th>').join('')}</tr></thead><tbody>`;
+        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th>${cols.map((c) => '<th>' + c.label + '</th>').join('')}<th>Heure RDV</th></tr></thead><tbody>`;
         cl.chevaux.forEach((cv, ci) => {
           h += `<tr><td>🐴 ${esc(cv.nom)}</td>${cols.map((c) => {
             const dis = c.key !== 'parage' && !cv.parage ? ' disabled' : '';
             return `<td><input type="checkbox" data-key="${c.key}" data-ci="${ci}" ${cv[c.key] ? 'checked' : ''}${dis}/></td>`;
-          }).join('')}</tr>`;
+          }).join('')}<td><input type="time" class="heure-in" data-heure data-ci="${ci}" value="${cv.heure || ''}"/></td></tr>`;
         });
         h += '</tbody></table>';
         h += `<p class="hint" style="margin-top:2px">Fourbure / NPAS / Infection ne s'activent que si « Parage/Équil. » est coché (le matériel n'est facturé qu'avec un parage).</p>`;
@@ -1535,6 +1554,7 @@ function renderEditorArrets(locked) {
           if (key === 'parage') { if (!e.target.checked) { cv.fourbure = false; cv.npas = false; cv.infection = false; } recomputeMoney(); renderEditorArrets(locked); return; }
           recomputeMoney();
         }));
+        wrap.querySelectorAll('[data-heure]').forEach((inp) => inp.addEventListener('change', (e) => { cl.chevaux[+inp.dataset.ci].heure = e.target.value || ''; saveTournees(); })); // heure de RDV par cheval (n'affecte pas les montants)
         el.appendChild(wrap);
       });
     }
@@ -2765,7 +2785,22 @@ function durHm(ms) { return (ms == null || ms < 0) ? '—' : durMin(ms / 60000);
 function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
   const todays = [...tournees].filter((t) => statusOf(t) === 'active').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  $('homeTrajetEmpty').style.display = todays.length ? 'none' : 'block';
+  // Agenda privé du jour (événements perso récupérés du calendrier) — en tête du Trajet du jour.
+  const priv = privateEventsForDay(todayStr());
+  if (priv.length) {
+    const sec = document.createElement('div'); sec.className = 'card'; sec.style.marginBottom = '10px';
+    sec.innerHTML = '<div class="a-art-head"><span>📅 Agenda privé du jour</span></div>';
+    const list = document.createElement('div'); list.className = 'list';
+    priv.forEach((p) => {
+      const heure = eventHeure(p);
+      const row = document.createElement('div'); row.className = 'list-item';
+      row.innerHTML = `<div class="li-main"><b>${heure ? '🕘 ' + heure + ' · ' : ''}${esc(p.title)}</b>${p.location ? '<span class="li-sub">📍 ' + esc(p.location) + '</span>' : ''}</div><div class="li-act"><button class="btn small" data-rm>Retirer</button></div>`;
+      row.querySelector('[data-rm]').addEventListener('click', () => { delete S.agendaPrive[p.id]; saveSettings(); renderHomeTrajet(); });
+      list.appendChild(row);
+    });
+    sec.appendChild(list); box.appendChild(sec);
+  }
+  $('homeTrajetEmpty').style.display = (todays.length || priv.length) ? 'none' : 'block';
   todays.forEach((t) => {
     // 1ʳᵉ ligne : la tournée du jour elle-même (cliquable → ouvre l'éditeur).
     box.appendChild(tourListItem(t, false));
@@ -2781,6 +2816,7 @@ function renderHomeTrajet() {
     (t.arrets || []).forEach((a, i) => {
       const adresse = addrStr(a.addr);
       const chNames = (a.clients || []).flatMap((cl) => (cl.chevaux || []).map((c) => c.nom)).filter(Boolean).join(', ');
+      const chNamesH = (a.clients || []).flatMap((cl) => (cl.chevaux || []).map((c) => c.nom + (c.heure ? ' 🕘' + c.heure : ''))).filter(Boolean).join(', '); // avec l'heure de RDV
       const cl0 = (a.clients || [])[0] || {}; const c0 = clients.find((x) => x.id === cl0.clientId) || {};
       const est = mins[i] != null ? Math.round(mins[i]) : null;                       // temps estimé (précalculé)
       const real = (typeof a.realMin === 'number') ? a.realMin : null;                 // temps réel encodé (bouton Route)
@@ -2791,7 +2827,7 @@ function renderHomeTrajet() {
       // Bouton « Valider » (marque la fin de visite / départ) — visible seulement après « Démarrer ».
       const validBtn = t.startedAt ? (typeof a.validatedAt === 'number' ? ` <button class="btn small" data-valid title="Re-valider">✓ ${hm(a.validatedAt)}</button>` : ' <button class="btn small primary" data-valid>Valider</button>') : '';
       const validLbl = (typeof a.validatedAt === 'number') ? ' · ✅ ' + hm(a.validatedAt) : '';
-      el.innerHTML = `<div class="li-main"><b>${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
+      el.innerHTML = `<div class="li-main"><b>${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNamesH ? ' · 🐴 ' + esc(chNamesH) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
         <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button>${validBtn} <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
       el.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       el.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(t, a, est));
@@ -2881,7 +2917,7 @@ function modalPayment(t, arret, after) {
     const ttc = invTTC(cid);
     const rectVal = p.rectifie != null ? p.rectifie : (p.montantPaye != null && !p.partiel ? p.montantPaye : '');
     html += `<div class="pay-block" data-cid="${cid}">
-      <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture ${eur(ttc)} TTC</span></h3>
+      <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture ${eur(ttc)} TTC</span> <button type="button" class="btn small" data-rdv="${cid}">📅 RDV</button></h3>
       <div class="seg pay-method">
         <button type="button" class="seg-btn${p.method === 'virement' ? ' on' : ''}" data-m="virement">Virement</button>
         <button type="button" class="seg-btn${p.method === 'liquide' ? ' on' : ''}" data-m="liquide">Liquide</button>
@@ -2923,7 +2959,7 @@ function modalPayment(t, arret, after) {
     ['[data-rectifie]', '[data-impaye]'].forEach((sel) => { const i = block.querySelector(sel); if (i) { i.addEventListener('input', upd); i.addEventListener('blur', () => { if (i.value !== '') i.value = String(Math.max(0, Math.round(parseNum(i.value)))); }); } });
     upd();
   });
-  $('payOk').addEventListener('click', () => {
+  const commitPayments = () => {
     document.querySelectorAll('.pay-block').forEach((block) => {
       const cid = block.dataset.cid;
       const on = block.querySelector('.pay-method .seg-btn.on');
@@ -2940,8 +2976,11 @@ function modalPayment(t, arret, after) {
       const imp = (partiel && impaye != null) ? impaye : 0;
       setClientImpaye(t, cid, resteMode === 'report' ? imp : 0);
     });
-    persist(); saveClients(); closeModal(); if (after) after();
-  });
+    persist(); saveClients();
+  };
+  // Bouton « RDV » (programmer le suivi) : sauvegarde d'abord le paiement en cours, puis ouvre la planification ; retour au paiement à la fermeture.
+  document.querySelectorAll('[data-rdv]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalRDV(t, arret, b.dataset.rdv, () => modalPayment(t, arret, after)); }));
+  $('payOk').addEventListener('click', () => { commitPayments(); closeModal(); if (after) after(); });
 }
 // Reste « reporté » (liquide, à percevoir à la prochaine visite) rattaché au client.
 function setClientImpaye(t, cid, resteTTC) {
@@ -2954,6 +2993,74 @@ function setClientImpaye(t, cid, resteTTC) {
 function uncollectImpaye(impayeId) {
   clients.forEach((c) => (c.impayes || []).forEach((im) => { if (im.id === impayeId) { im.collected = false; im.collectedTourId = null; } }));
   saveClients();
+}
+// ---------- Programmation de suivi (RDV) ----------
+function addDaysStr(ymd, days) { const d = new Date((ymd || todayStr()) + 'T00:00:00'); d.setDate(d.getDate() + (days || 0)); return d.toISOString().slice(0, 10); }
+const RDV_INTERVAL_DAYS = 42; // proposition de prochaine visite par défaut = 6 semaines
+// Applique une heure de RDV aux chevaux (par id) d'un client dans une tournée.
+function setChevalHeure(t, clientId, chevalObjs, heure) {
+  const ids = new Set((chevalObjs || []).map((h) => h.id));
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; (cl.chevaux || []).forEach((cv) => { if (ids.has(cv.id)) cv.heure = heure; }); }));
+}
+// Planifie un client (avec des chevaux) sur une date : crée la tournée du jour si absente (en cours/à venir), sinon complète l'existante.
+function scheduleClientOnDate(date, client, chevalObjs, heure) {
+  let t = tournees.find((x) => x.date === date && statusOf(x) !== 'cloturee');
+  let created = false;
+  if (!t) { t = { id: uid(), date, nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, payments: {}, result: null, createdAt: Date.now() }; tournees.push(t); created = true; }
+  const prev = currentTour; currentTour = t;
+  addClientToTour(client, chevalObjs);
+  currentTour = prev;
+  if (heure) setChevalHeure(t, client.id, chevalObjs, heure);
+  t.result = null; saveTournees();
+  return { tour: t, created };
+}
+// Aperçu d'une journée : arrêts déjà prévus (toutes tournées) + agenda privé.
+function rdvDayPreview(date) {
+  const arrets = [];
+  allTours().forEach((x) => { if (x.date !== date) return; (x.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { const chn = (cl.chevaux || []).map((c) => c.nom).join(', '); arrets.push(clientName(cl.clientId) + (chn ? ' (' + chn + ')' : '') + (statusOf(x) === 'cloturee' ? ' — clôturée' : '')); })); });
+  return { arrets, priv: privateEventsForDay(date) };
+}
+// Modale « RDV » (depuis le paiement) : un ou plusieurs rendez-vous pour le client, chevaux par RDV, aperçu de la journée.
+function modalRDV(t, arret, cid, onDone) {
+  const client = clients.find((x) => x.id === cid);
+  if (!client) { if (onDone) onDone(); return; }
+  const arrCl = (arret.clients || []).find((x) => x.clientId === cid);
+  const poolIds = ((arrCl && arrCl.chevaux) || []).map((c) => c.id).filter(Boolean);
+  const chevalPool = (client.chevaux || []).filter((h) => !poolIds.length || poolIds.includes(h.id));
+  const pool = chevalPool.length ? chevalPool : (client.chevaux || []);
+  const proposed = addDaysStr(t.date || todayStr(), RDV_INTERVAL_DAYS);
+  const blocks = [{ date: proposed, ids: new Set(pool.map((h) => h.id)) }];
+  const render = () => {
+    openModal(`<div class="modal-head"><b>📅 Programmer le suivi (RDV)</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Client : <b>${esc(fullName(client))}</b>. Proposez la prochaine visite ; ajoutez plusieurs RDV si les chevaux ne reviennent pas le même jour. Les tournées sont créées si besoin, sinon le client/cheval est ajouté.</p>
+      <div id="rdvBlocks"></div>
+      <div class="actions two"><button class="btn" id="rdvAdd">+ Ajouter un RDV</button><button class="btn primary" id="rdvOk">Enregistrer les RDV</button></div>`);
+    $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
+    const box = $('rdvBlocks');
+    blocks.forEach((blk, bi) => {
+      const wrap = document.createElement('div'); wrap.className = 'card'; wrap.style.marginBottom = '8px';
+      wrap.innerHTML = `<div class="a-art-head"><span>RDV n°${bi + 1}</span>${blocks.length > 1 ? '<button class="btn small danger" data-rm>✕</button>' : ''}</div>
+        <label>Date<input type="date" data-date value="${blk.date}"/></label>
+        <div class="rdv-chevaux">${pool.map((hrs) => `<label class="chk"><input type="checkbox" data-cv="${hrs.id}" ${blk.ids.has(hrs.id) ? 'checked' : ''}/> 🐴 ${esc(hrs.nom)}</label>`).join('')}</div>
+        <p class="hint" data-prev></p>`;
+      const prev = wrap.querySelector('[data-prev]');
+      const upPrev = () => { const d = wrap.querySelector('[data-date]').value; const pv = rdvDayPreview(d); prev.innerHTML = `<b>${d ? fmtDateFr(d) : '—'}</b> — Arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}`; };
+      wrap.querySelector('[data-date]').addEventListener('change', (e) => { blk.date = e.target.value; upPrev(); });
+      wrap.querySelectorAll('[data-cv]').forEach((c) => c.addEventListener('change', (e) => { if (e.target.checked) blk.ids.add(e.target.dataset.cv); else blk.ids.delete(e.target.dataset.cv); }));
+      const rm = wrap.querySelector('[data-rm]'); if (rm) rm.addEventListener('click', () => { blocks.splice(bi, 1); render(); });
+      box.appendChild(wrap); upPrev();
+    });
+    $('rdvAdd').addEventListener('click', () => { blocks.push({ date: proposed, ids: new Set() }); render(); });
+    $('rdvOk').addEventListener('click', () => {
+      blocks.forEach((blk) => {
+        if (!blk.date || !blk.ids.size) return;
+        const chevalObjs = (client.chevaux || []).filter((h) => blk.ids.has(h.id));
+        if (chevalObjs.length) scheduleClientOnDate(blk.date, client, chevalObjs);
+      });
+      closeModal(); if (onDone) onDone();
+    });
+  };
+  render();
 }
 function renderHome() {
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
