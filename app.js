@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.8';
+const APP_VERSION = '1.1.9';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.9', date: '2026-07-05',
+    ajouts: [
+      'Agenda → Items : les deux cases à cocher sont remplacées par deux boutons « Récupérer » et « Inactif » (plus faciles à viser).',
+      '« Récupérer » : croise l\'événement avec vos clients (nom, prénom, société, cheval) et propose de lier un client connu OU d\'en créer un nouveau (le nom est pré-rempli avec le titre de l\'événement, à corriger si besoin). Puis crée la tournée du jour si elle n\'existe pas encore, sinon ajoute le client à la tournée déjà prévue (en cours ou à venir). L\'item quitte alors la liste.',
+      'Plus de renvoi vers la page d\'authentification Google pendant la navigation : les synchros automatiques (agenda / Drive) n\'utilisent que le jeton déjà obtenu et n\'ouvrent plus jamais d\'écran de connexion en cours d\'usage.',
+    ],
+  },
   {
     version: '1.1.8', date: '2026-07-05',
     ajouts: [
@@ -453,19 +461,30 @@ async function fetchCalendarEvents(interactive) {
 }
 // Rafraîchissement SILENCIEUX de l'agenda (jeton déjà consenti) — appelé à l'ouverture de l'app et à la navigation vers Agenda.
 // Non interactif : n'affiche jamais d'écran de connexion. Si le jeton n'est pas encore consenti, l'utilisateur clique « Rafraîchir » une fois.
-async function agendaAutoSync() {
+async function agendaAutoSync(allowAcquire) {
   if (!S.googleClientId) return;
+  if (!allowAcquire && !gTokenValid(GSCOPE_CAL)) return; // navigation : jamais d'écran d'auth si le jeton n'est pas déjà en cache
   try {
     _agendaEvents = await fetchCalendarEvents(false);
     if ($('tab-agenda') && $('tab-agenda').classList.contains('active')) renderAgendaItems();
     if (typeof renderAgendaCalendrier === 'function') renderAgendaCalendrier();
   } catch { /* jeton non consenti / hors-ligne : rafraîchissement manuel disponible */ }
 }
-// Cherche un client connu correspondant au titre de l'événement (nom/prénom/société).
-function matchClientForEvent(title) {
-  const q = norm(title); if (!q) return null;
-  return clients.find((c) => { const keys = [fullName(c), c.nom, c.prenom, c.societe].filter(Boolean).map(norm); return keys.some((k) => k && q.includes(k)); }) || null;
+// Croise un événement (titre + lieu + description) avec la base clients : nom, prénom, société ET noms de chevaux.
+// Renvoie TOUS les clients connus qui correspondent (pour proposer la liaison).
+function matchClientsForEvent(ev) {
+  const hay = norm([ev && ev.title, ev && ev.location, ev && ev.desc].filter(Boolean).join(' '));
+  if (!hay) return [];
+  const out = [];
+  clients.forEach((c) => {
+    const keys = [fullName(c), c.nom, c.prenom, c.societe].filter(Boolean).map(norm);
+    (c.chevaux || []).forEach((h) => { if (h.nom) keys.push(norm(h.nom)); });
+    if (keys.some((k) => k && k.length >= 2 && hay.includes(k))) out.push(c);
+  });
+  return out;
 }
+// Meilleure proposition unique (pour l'étiquette de l'item).
+function matchClientForEvent(title) { return matchClientsForEvent({ title })[0] || null; }
 // D3 (mode fichier) : télécharge l'instantané dans un fichier .json.
 function downloadSnapshot() {
   const data = JSON.stringify(exportSnapshot(), null, 2);
@@ -480,6 +499,8 @@ let _gTokens = {}; // scope → { token, exp }
 const GDRIVE_FILE = 'galopodo-sync.json';
 const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata';
 const GSCOPE_CAL = 'https://www.googleapis.com/auth/calendar.readonly';
+// Vrai si un jeton VALIDE est déjà en cache pour ce scope → autorise une opération silencieuse SANS jamais afficher d'écran d'auth.
+function gTokenValid(scope) { const c = _gTokens[scope || GSCOPE_DRIVE]; return !!(c && Date.now() < c.exp - 60000); }
 function loadGis() {
   return new Promise((res, rej) => {
     if (window.google && google.accounts && google.accounts.oauth2) return res();
@@ -538,8 +559,9 @@ function scheduleDrivePush() {
 }
 async function drivePushNow() {
   if (!(S.googleAutoSync && S.googleClientId)) return;
+  if (!gTokenValid(GSCOPE_DRIVE)) return; // pas de jeton en cache → on n'ouvre JAMAIS d'écran d'auth ici (évite le renvoi vers Google en pleine navigation) ; la synchro au boot rattrapera
   try {
-    const token = await googleToken(false); // silencieux : jeton déjà consenti (sinon la prochaine synchro manuelle/au boot rattrapera)
+    const token = await googleToken(false); // silencieux : jeton déjà en cache (retour immédiat, aucune UI)
     const f = await driveFindFile(token);
     if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); await driveUpload(token, f.id, exportSnapshot()); }
     else { await driveUpload(token, null, exportSnapshot()); }
@@ -883,28 +905,50 @@ function showGestion(sub) {
 }
 
 // ================= AGENDA (Google Calendar) — onglet Items =================
+// Crée un client si besoin, crée la tournée du jour si aucune n'existe (en cours / à venir), sinon ajoute le client
+// à la tournée déjà prévue à cette date ; puis l'item quitte la liste. (Jamais les tournées clôturées.)
+function attachEventToTour(ev, client) {
+  let t = tournees.find((x) => x.date === ev.day && statusOf(x) !== 'cloturee'); // tournée en cours / à venir à cette date
+  let created = false;
+  if (!t) { t = { id: uid(), date: ev.day, nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, payments: {}, result: null, createdAt: Date.now() }; tournees.push(t); created = true; }
+  const prev = currentTour; currentTour = t; // addClientToTour opère sur currentTour → on bascule le temps de l'ajout
+  addClientToTour(client, client.chevaux || []);
+  currentTour = prev;
+  t.result = null; // arrêts modifiés → recalcul géométrie/km à la prochaine ouverture de la tournée
+  saveTournees();
+  S.agendaImported[ev.id] = { clientId: client.id, tourId: t.id, title: ev.title, start: ev.start, day: ev.day, location: ev.location };
+  saveSettings();
+  renderAgendaItems(); if (typeof renderAgendaCalendrier === 'function') renderAgendaCalendrier();
+  return { tour: t, created };
+}
+// Bouton « Récupérer » : propose de lier un client connu (croisement nom/prénom/société/cheval) ou d'en créer un nouveau,
+// puis rattache l'événement à la tournée du jour.
+function recuperateEvent(ev) {
+  const matches = matchClientsForEvent(ev);
+  const attach = (client) => { const r = attachEventToTour(ev, client); closeModal(); const st = $('agendaStatus'); if (st) { st.className = 'status ok'; st.textContent = (r.created ? 'Tournée créée' : 'Ajouté à la tournée') + ' du ' + (ev.day ? fmtDateFr(ev.day) : '') + ' → ' + fullName(client) + '.'; } };
+  let h = `<div class="modal-head"><b>Récupérer l'événement</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">« ${esc(ev.title)} »${ev.day ? ' · ' + esc(fmtDateFr(ev.day)) : ''}${ev.location ? ' · 📍 ' + esc(ev.location) : ''}</p>`;
+  h += matches.length ? '<h2 style="font-size:.9rem">Client connu proposé</h2><div id="recMatches"></div>' : '<p class="hint">Aucun client connu ne correspond à cet événement.</p>';
+  h += '<div class="actions"><button class="btn primary block" id="recNew">+ Créer un nouveau client (nom pré-rempli)</button></div>';
+  openModal(h);
+  if ($('mX')) $('mX').addEventListener('click', closeModal);
+  if (matches.length && $('recMatches')) matches.forEach((c) => { const b = document.createElement('button'); b.className = 'btn block'; b.style.marginBottom = '6px'; b.textContent = 'Lier à ' + fullName(c) + (c.societe ? ' — ' + c.societe : ''); b.addEventListener('click', () => attach(c)); $('recMatches').appendChild(b); });
+  if ($('recNew')) $('recNew').addEventListener('click', () => editClient(null, (nc) => attach(nc), ev.title)); // nom pré-rempli avec le titre de l'item
+}
 function agendaItemRow(ev) {
-  const imp = S.agendaImported[ev.id];
-  const linked = imp ? clients.find((c) => c.id === imp.clientId) : null;
-  const match = linked || matchClientForEvent(ev.title);
+  const match = matchClientForEvent(ev.title);
   const el = document.createElement('div'); el.className = 'list-item';
-  const linkTxt = linked ? '→ ' + esc(fullName(linked)) : (match ? '≈ ' + esc(fullName(match)) + ' (proposé)' : '⚠ client inconnu → création');
+  const linkTxt = match ? '≈ ' + esc(fullName(match)) + ' (proposé)' : '⚠ client inconnu → création';
   el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}</span></div>
-    <div class="li-act"><label class="chk2"><input type="checkbox" data-imp ${imp ? 'checked' : ''}/> Récupérer</label> <label class="chk2"><input type="checkbox" data-actif checked/> Actif</label></div>`;
-  el.querySelector('[data-imp]').addEventListener('change', (e) => {
-    if (e.target.checked) {
-      const link = (cid) => { S.agendaImported[ev.id] = { clientId: cid, title: ev.title, start: ev.start, day: ev.day, location: ev.location }; saveSettings(); renderAgendaItems(); };
-      const m = matchClientForEvent(ev.title);
-      if (m) link(m.id); else editClient(null, (nc) => link(nc.id)); // inconnu → modale de création
-    } else { delete S.agendaImported[ev.id]; saveSettings(); renderAgendaItems(); }
-  });
-  el.querySelector('[data-actif]').addEventListener('change', () => { S.agendaInactive[ev.id] = true; saveSettings(); renderAgendaItems(); }); // → section Inactifs
+    <div class="li-act"><button class="btn small primary" data-rec>Récupérer</button> <button class="btn small" data-inact>Inactif</button></div>`;
+  el.querySelector('[data-rec]').addEventListener('click', () => recuperateEvent(ev));
+  el.querySelector('[data-inact]').addEventListener('click', () => { S.agendaInactive[ev.id] = true; saveSettings(); renderAgendaItems(); }); // → section Inactifs
   return el;
 }
 function renderAgendaItems() {
   const box = $('agendaItems'); if (!box) return; box.innerHTML = '';
   const inactBox = $('agendaInactifs'); if (inactBox) inactBox.innerHTML = '';
-  const active = _agendaEvents.filter((ev) => !S.agendaInactive[ev.id]);
+  const active = _agendaEvents.filter((ev) => !S.agendaInactive[ev.id] && !S.agendaImported[ev.id]); // récupérés + inactifs quittent la liste
   const inactive = _agendaEvents.filter((ev) => S.agendaInactive[ev.id]);
   if ($('agendaItemsEmpty')) $('agendaItemsEmpty').style.display = active.length ? 'none' : 'block';
   active.forEach((ev) => box.appendChild(agendaItemRow(ev)));
@@ -924,15 +968,18 @@ function renderAgendaCalendrier() {
   Object.keys(byDay).sort().forEach((day) => {
     const items = byDay[day];
     const el = document.createElement('div'); el.className = 'inv-client';
-    let h = `<div class="inv-head"><span>${esc(fmtDateFr(day))}</span><button class="btn small primary" data-newtour>Créer la tournée</button></div>`;
+    const existing = allTours().find((x) => x.date === day); // « Récupérer » a déjà créé/rempli la tournée du jour
+    let h = `<div class="inv-head"><span>${esc(fmtDateFr(day))}</span><button class="btn small primary" data-newtour>${existing ? 'Ouvrir la tournée' : 'Créer la tournée'}</button></div>`;
     items.forEach((x) => { const c = clients.find((cc) => cc.id === x.clientId); h += `<div class="inv-line"><span>${esc(x.title)}</span><span>${c ? esc(fullName(c)) : '⚠ client supprimé'}</span></div>`; });
     el.innerHTML = h;
     el.querySelector('[data-newtour]').addEventListener('click', () => createTourFromDay(day, items));
     box.appendChild(el);
   });
 }
-// Crée une tournée pré-remplie pour un jour, à partir des items importés (clients pré-suggérés à valider).
+// Ouvre la tournée du jour si elle existe déjà (créée par « Récupérer »), sinon en crée une pré-remplie à partir des items.
 function createTourFromDay(day, items) {
+  const existing = allTours().find((x) => x.date === day);
+  if (existing) { openTour(existing); return; } // pas de doublon
   currentTour = { id: uid(), date: day, nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, payments: {}, result: null, createdAt: Date.now() };
   const seen = {};
   items.forEach((x) => { const c = clients.find((cc) => cc.id === x.clientId); if (c && !seen[c.id]) { seen[c.id] = 1; addClientToTour(c, c.chevaux || []); } });
@@ -952,10 +999,10 @@ function renderClients() {
     list.appendChild(el);
   });
 }
-function editClient(existing, onSaved) {
+function editClient(existing, onSaved, prefillNom) {
   const key = 'client:' + (existing ? existing.id : 'new');
   const draft = DRAFTS.get(key);
-  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), prenom: '', nom: '', societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
+  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), prenom: '', nom: (prefillNom || ''), societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
   w.addr = toAddr(w.addr); w.societeAddr = toAddr(w.societeAddr);
   if (w.prenom === undefined) w.prenom = '';
   if (w.societe === undefined) w.societe = '';
@@ -3138,8 +3185,8 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
   // Synchro Drive automatique à l'ouverture (silencieuse, sans rechargement) si configurée.
   if (S.googleAutoSync && S.googleClientId) { try { googleSync(false, $('googleStatus'), false); } catch { /* ignore */ } }
-  // Agenda Google : rafraîchissement silencieux à l'ouverture (jeton déjà consenti).
-  if (S.googleClientId) { try { agendaAutoSync(); } catch { /* ignore */ } }
+  // Agenda Google : rafraîchissement à l'ouverture (peut acquérir le jeton une fois, silencieux si déjà consenti).
+  if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } }
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
