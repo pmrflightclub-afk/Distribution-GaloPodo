@@ -26,7 +26,7 @@ const CHANGELOG = [
       'Case « Infection » (comme Fourbure/NPAS) + tarif dédié dans les forfaits pathologiques.',
       'Numéro de version affiché dans le bandeau.',
       'Bouton pour activer/désactiver le réordonnancement des cases (fini les déplacements involontaires au défilement).',
-      'Bouton Waze : ouvre l\'application Waze installée (au lieu du site web).',
+      'Navigation GPS : le bouton ouvre l\'app installée (Waze par défaut, repli Google Maps si Waze absent) ; choix Waze/Google Maps dans Réglages → GPS.',
       'Bouton « Route » (Trajet du jour ET éditeur) : encoder le temps de trajet RÉEL ; repris automatiquement dans le SMS, le récap, le ticket et les stats (l\'estimé reste conservé). Boutons Waze + Route par arrêt dans l\'éditeur.',
       'Stats : nouvelle carte « Temps de trajet — estimé vs réel » (arrêts sans temps réel signalés).',
     ],
@@ -101,6 +101,7 @@ const DEFAULTS = {
   fourbureHT: 0, npasHT: 0, infectionHT: 0,     // forfaits pathologie ajoutés par cheval (option B)
   parage: { prixHT: 0, tvaPct: 21 },            // article « Parage et équilibrage » (coché par cheval)
   articlesCatalogue: [],                        // catalogue réutilisable : {id, libelle, prixHT, tvaPct}
+  navApp: 'waze',                               // application GPS : 'waze' (défaut) | 'gmaps'
   pays: 'be',                                   // pays (TVA) : 'be' | 'fr'
   seuilKm: 20, forfait: 15,
   repartition: 'egal', rayonMemeEcurieKm: 1, roadFactor: 1.30, vitesseKmh: 90,
@@ -126,6 +127,7 @@ if (typeof S.infectionHT !== 'number') S.infectionHT = 0;
 S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
+if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (!S.accentColor) S.accentColor = '#e8722a';
 if (typeof S.topbarColor !== 'string') S.topbarColor = '';
 if (typeof S.navBarColor !== 'string') S.navBarColor = '';
@@ -572,6 +574,21 @@ async function forceRelocate() {
   } catch (e) { hint.textContent = 'Erreur : ' + e.message; }
 }
 
+// ---------- Navigation GPS (Waze / Google Maps) ----------
+const navLabel = () => (S.navApp === 'gmaps' ? 'Maps' : 'Waze');
+// Ouvre l'app GPS choisie. Waze : tente l'app installée, repli Google Maps si absente (heuristique de visibilité).
+function openNav(addr) {
+  const adresse = addrStr(addr);
+  const ll = (addr && addr.lat && addr.lon) ? `${addr.lat},${addr.lon}` : null;
+  const gmaps = ll ? `https://www.google.com/maps/dir/?api=1&destination=${ll}` : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(adresse)}`;
+  try { if (navigator.clipboard) navigator.clipboard.writeText(adresse).catch(() => {}); } catch { /* ignore */ }
+  if (S.navApp === 'gmaps') { window.location.href = gmaps; return; }
+  const wazeApp = ll ? `waze://?ll=${ll}&navigate=yes` : `waze://?q=${encodeURIComponent(adresse)}&navigate=yes`;
+  const timer = setTimeout(() => { if (!document.hidden) window.location.href = gmaps; }, 1500); // app absente → repli Maps
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); }, { once: true });
+  window.location.href = wazeApp;
+}
+
 // ---------- Modal ----------
 function openModal(html) { $('modalBox').innerHTML = html; $('modal').classList.remove('hidden'); }
 function closeModal() { $('modal').classList.add('hidden'); $('modalBox').innerHTML = ''; }
@@ -998,13 +1015,8 @@ function renderEditorArrets(locked) {
     const nav = document.createElement('div'); nav.className = 'a-nav';
     const estMin = legMins[i] != null ? Math.round(legMins[i]) : null;
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? estMin + ' min est.' : '—'}${realMin != null ? ' · <b>' + realMin + ' min réel</b>' : ''}</span><span class="a-nav-b"><button class="btn small" data-waze>Waze</button>${locked ? '' : ' <button class="btn small" data-route>Route</button>'}</span>`;
-    nav.querySelector('[data-waze]').addEventListener('click', async () => {
-      const adresse = addrStr(a.addr);
-      try { await navigator.clipboard.writeText(adresse); } catch { /* ignore */ }
-      const app = (a.addr.lat && a.addr.lon) ? `waze://?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `waze://?q=${encodeURIComponent(adresse)}&navigate=yes`;
-      window.location.href = app;
-    });
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? estMin + ' min est.' : '—'}${realMin != null ? ' · <b>' + realMin + ' min réel</b>' : ''}</span><span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button>${locked ? '' : ' <button class="btn small" data-route>Route</button>'}</span>`;
+    nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
     if (!locked) { const rb = nav.querySelector('[data-route]'); if (rb) rb.addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets())); }
     el.appendChild(nav);
     if (!locked) {
@@ -1971,13 +1983,8 @@ function renderHomeTrajet() {
       const el = document.createElement('div'); el.className = 'list-item';
       // Nom du client d'abord, adresse en dessous.
       el.innerHTML = `<div class="li-main"><b>${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}</span></div>
-        <div class="li-act"><button class="btn small" data-waze>Waze</button> <button class="btn small" data-route>Route</button> <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
-      el.querySelector('[data-waze]').addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(adresse); } catch { /* ignore */ }
-        // Ouvre l'application Waze installée (schéma waze://) plutôt que le site web waze.com.
-        const app = (a.addr.lat && a.addr.lon) ? `waze://?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `waze://?q=${encodeURIComponent(adresse)}&navigate=yes`;
-        window.location.href = app;
-      });
+        <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button> <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
+      el.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       el.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(t, a, est));
       el.querySelector('[data-sms]').addEventListener('click', async () => {
         const msg = fillSms(S.smsTemplate, { prenom: c0.prenom || '', nom: c0.nom || '', client: fullName(c0), societe: c0.societe || '', cheval: chNames, trajet, adresse });
@@ -2177,6 +2184,7 @@ function bindSettings() {
   [['setPrixPleinHT', '€/L HT'], ['setAchatTTC', '€ TTC'], ['setAmortHT', '€/km HT'], ['setAmortTTC', '€/km TTC'], ['setForfaitTTC', '€ TTC'], ['setSeuilTarif', '€/km HT'], ['setSeuilDepHT', '€ HT'], ['setSeuilDepTTC', '€ TTC'], ['setFourbureTtc', '€ TTC'], ['setNpasTtc', '€ TTC'], ['setInfectionTtc', '€ TTC'], ['setParageTtc', '€ TTC'], ['setPrixHeureTtc', '€ TTC'], ['setTempsKmRo', '€/km']].forEach(([id, u]) => makeReadout($(id), u));
   if ($('setSeuilType')) { $('setSeuilType').value = S.seuilTarifType; $('setSeuilType').addEventListener('change', (e) => { S.seuilTarifType = e.target.value; saveSettings(); }); }
   updateReadouts();
+  if ($('setNavApp')) { $('setNavApp').value = S.navApp; $('setNavApp').addEventListener('change', (e) => { S.navApp = e.target.value === 'gmaps' ? 'gmaps' : 'waze'; saveSettings(); if ($('tab-accueil').classList.contains('active')) renderHome(); }); }
   if ($('setPays')) $('setPays').addEventListener('change', (e) => { S.pays = e.target.value; S.tvaRate = (PAYS_TVA[S.pays] || PAYS_TVA.be).std; if (paints.setTva) paints.setTva(); saveSettings(); });
   if ($('setDureeMode')) $('setDureeMode').addEventListener('change', (e) => { S.dureeAuto = e.target.value === 'auto'; saveSettings(); updateReglagesUI(); });
   $('setRepartition').addEventListener('change', (e) => { S.repartition = e.target.value; saveSettings(); });

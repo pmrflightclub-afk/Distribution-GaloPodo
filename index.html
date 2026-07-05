@@ -300,6 +300,7 @@
         <button class="subtab active" data-rsub="config">Configuration</button>
         <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
         <button class="subtab" data-rsub="service">Service</button>
+        <button class="subtab" data-rsub="gps">GPS</button>
         <button class="subtab" data-rsub="calcul">Calcul</button>
         <button class="subtab" data-rsub="analyse">Analyse</button>
         <button class="subtab" data-rsub="theme">Thème</button>
@@ -409,6 +410,19 @@
       <p class="hint" id="refreshToursHint">Recalcule les durées et montants des tournées <b>d'aujourd'hui et à venir</b>. Les clôturées et archivées ne sont pas modifiées.</p>
     </section>
     </div><!-- /rsub-service -->
+
+    <div id="rsub-gps" class="subpanel">
+    <section class="card">
+      <h2>Navigation (GPS)</h2>
+      <p class="hint">Application ouverte par le bouton de navigation (Trajet du jour et arrêts d'une tournée). Par défaut Waze ; si Waze n'est pas installé, l'app bascule automatiquement sur Google Maps.</p>
+      <label>Application GPS
+        <select id="setNavApp">
+          <option value="waze">Waze (défaut)</option>
+          <option value="gmaps">Google Maps</option>
+        </select>
+      </label>
+    </section>
+    </div><!-- /rsub-gps -->
 
     <div id="rsub-calcul" class="subpanel"><div id="calculBody"></div></div>
 
