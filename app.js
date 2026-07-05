@@ -26,6 +26,9 @@ const CHANGELOG = [
       'Case « Infection » (comme Fourbure/NPAS) + tarif dédié dans les forfaits pathologiques.',
       'Numéro de version affiché dans le bandeau.',
       'Bouton pour activer/désactiver le réordonnancement des cases (fini les déplacements involontaires au défilement).',
+      'Bouton Waze : ouvre l\'application Waze installée (au lieu du site web).',
+      'Bouton « Route » (Trajet du jour ET éditeur) : encoder le temps de trajet RÉEL ; repris automatiquement dans le SMS, le récap, le ticket et les stats (l\'estimé reste conservé). Boutons Waze + Route par arrêt dans l\'éditeur.',
+      'Stats : nouvelle carte « Temps de trajet — estimé vs réel » (arrêts sans temps réel signalés).',
     ],
     corrections: [
       'Trajet du jour : nom du client d\'abord, adresse en dessous ; la tournée du jour apparaît en 1ʳᵉ ligne.',
@@ -976,6 +979,7 @@ function renderEditorArrets(locked) {
   const box = $('edArrets'); box.innerHTML = '';
   $('edArretsEmpty').style.display = currentTour.arrets.length ? 'none' : 'block';
   const N = currentTour.arrets.length;
+  const legMins = legMinutesFor(currentTour); // temps de trajet estimé cumulé par arrêt
   currentTour.arrets.forEach((a, i) => {
     const nb = arretNbClients(a);
     const single = a.clients.length === 1 ? a.clients[0] : null; // réduction dans l'en-tête si 1 seul client
@@ -990,6 +994,19 @@ function renderEditorArrets(locked) {
       ${(!locked && single) ? `<label class="a-reduc-row"><span>Réduction articles</span><span class="fu"><input type="number" data-reduc-h min="0" max="100" step="1" value="${currentTour.reductions && currentTour.reductions[single.clientId] || ''}" placeholder="0"/><span class="fu-unit">%</span></span></label>` : ''}
       <div class="a-grid"><label class="grow">Tarif appliqué<select data-type ${locked ? 'disabled' : ''}><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label></div>`;
     el.querySelector('[data-type]').value = a.type || 'tournee';
+    // Waze + Route (temps réel) par arrêt, couplés au client de l'arrêt. Waze toujours actif ; Route seulement si non clôturée.
+    const nav = document.createElement('div'); nav.className = 'a-nav';
+    const estMin = legMins[i] != null ? Math.round(legMins[i]) : null;
+    const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? estMin + ' min est.' : '—'}${realMin != null ? ' · <b>' + realMin + ' min réel</b>' : ''}</span><span class="a-nav-b"><button class="btn small" data-waze>Waze</button>${locked ? '' : ' <button class="btn small" data-route>Route</button>'}</span>`;
+    nav.querySelector('[data-waze]').addEventListener('click', async () => {
+      const adresse = addrStr(a.addr);
+      try { await navigator.clipboard.writeText(adresse); } catch { /* ignore */ }
+      const app = (a.addr.lat && a.addr.lon) ? `waze://?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `waze://?q=${encodeURIComponent(adresse)}&navigate=yes`;
+      window.location.href = app;
+    });
+    if (!locked) { const rb = nav.querySelector('[data-route]'); if (rb) rb.addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets())); }
+    el.appendChild(nav);
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
@@ -1378,7 +1395,14 @@ function recapText(R, tour) {
   tour = tour || currentTour;
   const stdRate = rate(), htDep = R.htDeplacement || 0;
   let s = `Frais de tournée — ${tour ? tour.date : ''}\n`;
-  s += `Distance : ${km(R.totalKm)} · Durée : ${Math.round(R.totalMin)} min\n`;
+  s += `Distance : ${km(R.totalKm)} · Durée estimée : ${Math.round(R.totalMin)} min\n`;
+  // Temps de trajet RÉEL (encodé via le bouton Route) : total renseigné + arrêts sans temps réel.
+  if (tour && Array.isArray(tour.arrets) && tour.arrets.length) {
+    const withReal = tour.arrets.filter((a) => typeof a.realMin === 'number');
+    const realTot = withReal.reduce((acc, a) => acc + a.realMin, 0);
+    const missing = tour.arrets.length - withReal.length;
+    s += `Trajet réel renseigné : ${realTot} min (${withReal.length}/${tour.arrets.length} arrêt(s)${missing ? ` · ${missing} sans temps réel` : ''})\n`;
+  }
   s += `Carburant : ${eur(S.prixPleinL)}/L (TVAC)\n`;
   s += `Frais de déplacement — HT ${eur(htDep)} · TVA ${eur(htDep * stdRate)} · TTC ${eur(htDep * (1 + stdRate))}\n\n`;
   s += `Km par client (anonymisé) :\n`;
@@ -1595,7 +1619,28 @@ function renderStats() {
       el.innerHTML = h; box.appendChild(el);
     });
   }
+  renderTrajetTemps();
   renderFinance();
+}
+// Stats : temps de trajet estimé (tournée) vs réel encodé (par arrêt), avec arrêts manquants signalés.
+function renderTrajetTemps() {
+  const box = $('trajetTempsList'); if (!box) return; box.innerHTML = '';
+  const list = [...tournees].filter((t) => (t.arrets || []).length).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  if ($('trajetTempsEmpty')) $('trajetTempsEmpty').style.display = list.length ? 'none' : 'block';
+  list.forEach((t) => {
+    const na = (t.arrets || []).length;
+    const withReal = (t.arrets || []).filter((a) => typeof a.realMin === 'number');
+    const realTot = withReal.reduce((s, a) => s + a.realMin, 0);
+    const missing = na - withReal.length;
+    const estTot = t.result ? Math.round(t.result.totalMin) : null;
+    const el = document.createElement('div'); el.className = 'inv-client';
+    let h = `<div class="inv-head"><span>${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}</span><span>${withReal.length}/${na} réel</span></div>`;
+    h += `<div class="inv-line"><span>Durée estimée (tournée)</span><span>${estTot != null ? estTot + ' min' : '—'}</span></div>`;
+    h += `<div class="inv-line"><span>Temps réel renseigné (somme)</span><span>${withReal.length ? realTot + ' min' : '—'}</span></div>`;
+    if (missing) h += `<div class="inv-line" style="color:var(--warn)"><span>Arrêts sans temps réel</span><span>${missing}</span></div>`;
+    (t.arrets || []).forEach((a, i) => { const r = (typeof a.realMin === 'number') ? a.realMin + ' min' : '<i>non renseigné</i>'; h += `<div class="fin-cheval"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}</span><span>réel : ${r}</span></div>`; });
+    el.innerHTML = h; box.appendChild(el);
+  });
 }
 function financeStats() {
   const cmap = {};
@@ -1919,27 +1964,33 @@ function renderHomeTrajet() {
       const adresse = addrStr(a.addr);
       const chNames = (a.clients || []).flatMap((cl) => (cl.chevaux || []).map((c) => c.nom)).filter(Boolean).join(', ');
       const cl0 = (a.clients || [])[0] || {}; const c0 = clients.find((x) => x.id === cl0.clientId) || {};
-      const trajet = mins[i] != null ? Math.round(mins[i]) + ' min' : '—';
+      const est = mins[i] != null ? Math.round(mins[i]) : null;                       // temps estimé (précalculé)
+      const real = (typeof a.realMin === 'number') ? a.realMin : null;                 // temps réel encodé (bouton Route)
+      const trajet = real != null ? real + ' min' : (est != null ? est + ' min' : '—'); // SMS : réel si encodé, sinon estimé
+      const trajetLbl = (est != null ? est + ' min est.' : '—') + (real != null ? ' · <b>' + real + ' min réel</b>' : '');
       const el = document.createElement('div'); el.className = 'list-item';
       // Nom du client d'abord, adresse en dessous.
-      el.innerHTML = `<div class="li-main"><b>${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajet}</span></div>
-        <div class="li-act"><button class="btn small" data-waze>Waze</button> <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
+      el.innerHTML = `<div class="li-main"><b>${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}</span></div>
+        <div class="li-act"><button class="btn small" data-waze>Waze</button> <button class="btn small" data-route>Route</button> <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
       el.querySelector('[data-waze]').addEventListener('click', async () => {
         try { await navigator.clipboard.writeText(adresse); } catch { /* ignore */ }
-        const url = (a.addr.lat && a.addr.lon) ? `https://waze.com/ul?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `https://waze.com/ul?q=${encodeURIComponent(adresse)}&navigate=yes`;
-        window.open(url, '_blank');
+        // Ouvre l'application Waze installée (schéma waze://) plutôt que le site web waze.com.
+        const app = (a.addr.lat && a.addr.lon) ? `waze://?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `waze://?q=${encodeURIComponent(adresse)}&navigate=yes`;
+        window.location.href = app;
       });
+      el.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(t, a, est));
       el.querySelector('[data-sms]').addEventListener('click', async () => {
         const msg = fillSms(S.smsTemplate, { prenom: c0.prenom || '', nom: c0.nom || '', client: fullName(c0), societe: c0.societe || '', cheval: chNames, trajet, adresse });
         const btn = el.querySelector('[data-sms]');
         try { await navigator.clipboard.writeText(msg); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); }
         catch { alert(msg); }
       });
-      // Ticket = récap de la tournée + détail complet de la facture de CE client.
+      // Ticket = temps trajet (estimé + réel) + récap de la tournée + détail complet de la facture de CE client.
       el.querySelector('[data-ticket]').addEventListener('click', async () => {
         const btn = el.querySelector('[data-ticket]');
         const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
-        let txt = recapText(t.result, t);
+        let txt = `Trajet vers ${adresse}\n  Estimé : ${est != null ? est + ' min' : '—'} · Réel : ${real != null ? real + ' min' : 'non renseigné'}\n\n`;
+        txt += recapText(t.result, t);
         txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
         try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); }
         catch { alert(txt); }
@@ -1947,6 +1998,19 @@ function renderHomeTrajet() {
       box.appendChild(el);
     });
   });
+}
+// Encodage du temps de trajet RÉEL d'un arrêt (relevé sur Waze) — repris dans SMS / récap / ticket / stats.
+// `tour` peut être l'objet stocké (Trajet du jour) ou un clone en édition (éditeur) → on réécrit dans `tournees` par id.
+function modalRouteTime(tour, arret, estMin, after) {
+  const cur = (typeof arret.realMin === 'number') ? arret.realMin : '';
+  const persist = () => { const i = tournees.findIndex((t) => t.id === tour.id); if (i >= 0) tournees[i] = tour; else tournees.push(tour); saveTournees(); };
+  openModal(`<div class="modal-head"><b>⏱ Temps de trajet réel</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Estimé (précalculé) : <b>${estMin != null ? estMin + ' min' : '—'}</b>. Encodez le temps réel relevé sur Waze pour <b>${esc(labelFor(arret))}</b> — il sera repris automatiquement dans le SMS, le récap, le ticket et les stats (l'estimé reste conservé).</p>
+    <label>Temps réel (minutes)<input type="number" id="rtMin" step="1" min="0" inputmode="numeric" value="${cur}" /></label>
+    <div class="actions two"><button class="btn" id="rtClear">Effacer</button><button class="btn primary" id="rtOk">Enregistrer</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete arret.realMin; else arret.realMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
+  $('rtClear').addEventListener('click', () => { delete arret.realMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
 }
 function renderHome() {
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');

@@ -281,6 +281,11 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .seg-btn + .seg-btn { border-left: 1px solid var(--line); }
 .seg-btn.on { background: var(--accent); color: var(--accent-ink); }
 
+/* Barre Waze / Route (temps réel) par arrêt */
+.a-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.a-nav-t { font-size: .78rem; color: var(--muted); }
+.a-nav-b { flex: none; }
+
 /* Articles d'un arrêt (dans l'éditeur de tournée) */
 .a-articles { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
 .a-art-head { display: flex; align-items: center; justify-content: space-between; font-size: .72rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
