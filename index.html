@@ -139,11 +139,34 @@
 
   <!-- ============ COMPTA ============ -->
   <main id="tab-compta" class="tab-panel">
-    <section class="card">
-      <div class="card-head"><h2>Compta mensuelle</h2><select id="comptaMonth" style="width:auto;margin:0"></select></div>
-      <p class="hint">Pour votre comptable : <b>liquide</b> (postes globalisés, sans nom de client), <b>virements</b> et <b>factures pro</b> (par client). Toute tournée calculée apparaît ; tant que le paiement n'est pas classé, le client est en <b>Factures</b>. Classez le mode ici (menu <b>Mode</b>) ou via le bouton <b>💶 Paiement</b> d'un arrêt. Remise à zéro chaque mois ; mois passés archivés avec statut. 🖨 = fiche PDF par section.</p>
-      <div id="comptaBody"></div>
-    </section>
+    <nav class="subtabs" id="comptaSub">
+      <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Mois en cours</span><span class="nav-caret">▾</span></button>
+      <div class="subtabs-list">
+        <button class="subtab active" data-csub="mois">Mois en cours</button>
+        <button class="subtab" data-csub="decl">Déclaration compta</button>
+      </div>
+    </nav>
+
+    <div id="csub-mois" class="subpanel active">
+      <section class="card">
+        <h2>Compta — mois en cours</h2>
+        <p class="hint">Du 1ᵉʳ au dernier jour du mois. Classez le mode de paiement (via 💶 Paiement d'un arrêt) et suivez les <b>paiements reçus</b> (virements/factures). La validation des <b>démarches</b> comptables se fera dans « Déclaration compta », une fois le mois terminé.</p>
+        <div id="comptaMoisBody"></div>
+      </section>
+    </div>
+
+    <div id="csub-decl" class="subpanel">
+      <section class="card">
+        <h2>Déclaration compta</h2>
+        <div class="row">
+          <label class="grow">Trier par<select id="declType"><option value="mois">Mois</option><option value="trimestre">Trimestre</option><option value="semestre">Semestre</option><option value="annee">Année</option></select></label>
+          <label class="grow">Période<select id="declPeriod"></select></label>
+        </div>
+        <p class="hint">Plage pour votre comptable. Les mois <b>terminés</b> reçoivent la validation des <b>démarches</b> (liquide : 1 pour le mois ; virements/factures : 1 par client). Un mois en cours n'a pas de démarche. 🖨 = fiche PDF par section et par mois.</p>
+        <div id="comptaDeclBody"></div>
+        <p class="empty" id="comptaDeclEmpty">Aucune donnée sur cette plage.</p>
+      </section>
+    </div>
   </main>
 
   <!-- ============ GESTION (hub) ============ -->

@@ -51,6 +51,7 @@ const CHANGELOG = [
       'Compta : bouton PDF corrigé (impression via le navigateur, ne ferme plus l\'app). Compta et Agenda déplacés en onglets principaux.',
       'Paiement partiel liquide : option « reste à percevoir » (montant encaissé + reste). Le reste n\'est PAS une remise (créance). Reporté → ligne « Impayé du … » ajoutée automatiquement à la prochaine tournée du client ; ou demandé en virement (suivi en Compta). Repris dans facture, ticket, récap et stats.',
       'Clôture sécurisée : impossible de clôturer une tournée tant qu\'un client n\'a pas de mode de paiement (virement/liquide, aucun présélectionné par défaut) — en liquide, le montant encaissé est obligatoire. Message de blocage dans l\'éditeur.',
+      'Compta en 2 sous-onglets : « Mois en cours » (live : classement des paiements + suivi des reçus, sans démarche) et « Déclaration compta » (mois archivés empilés, avec filtre Mois / Trimestre / Semestre / Année + total de plage + PDF par mois). La démarche comptable n\'est validable qu\'une fois le mois terminé (à partir du 1ᵉʳ du mois suivant).',
       'Compta : mois en cours (paiements reçus gérables, sans démarche) vs mois archivé (validation des démarches — liquide 1 pour le mois, virement/facture 1 par client — qui grise et verrouille l\'élément traité). PDF corrigé (plus de page vide) : liquide = postes globalisés ; virements & factures = détail par client ET par cheval.',
       'Compta : statut « paiement reçu » par client (facture & virement, suivi payé/impayé) et statut « démarche comptable » par section (en attente / effectuée), indépendants, disponibles pour tous les mois.',
       'Facture : l\'arrondi caisse (liquide) apparaît en dernière ligne d\'article et corrige le total (facture, ticket, stats). Parage & Équilibrage en 1ʳᵉ position des articles.',
@@ -807,7 +808,7 @@ function showTab(name) {
   if (name === 'accueil') renderHome();
   if (name === 'tournees') renderTours();
   if (name === 'agenda') renderAgendaItems();
-  if (name === 'compta') renderCompta();
+  if (name === 'compta') showCompta(currentCsub);
   if (name === 'gestion') showGestion(currentGsub);
   if (name === 'stats') renderStats();
   if (name === 'reglages') showReglages(currentRsub);
@@ -2161,53 +2162,94 @@ function printHtml(title, bodyHtml) {
   setTimeout(() => { window.print(); }, 60);
   setTimeout(done, 120000); // filet de sécurité
 }
-let currentComptaMonth = null;
-function renderCompta() {
-  const cur = todayStr().slice(0, 7);
-  const months = comptaMonths(); if (!months.includes(cur)) months.unshift(cur);
-  if (!currentComptaMonth || !months.includes(currentComptaMonth)) currentComptaMonth = cur;
-  const sel = $('comptaMonth');
-  if (sel) { sel.innerHTML = months.map((m) => `<option value="${m}"${m === currentComptaMonth ? ' selected' : ''}>${monthLabel(m)}${m === cur ? ' (en cours)' : ''}</option>`).join(''); sel.onchange = () => { currentComptaMonth = sel.value; renderCompta(); }; }
-  const ym = currentComptaMonth, isCur = ym === cur, d = comptaData(ym);
-  const body = $('comptaBody'); if (!body) return;
+// --- Sous-navigation Compta : Mois en cours / Déclaration ---
+let currentCsub = 'mois';
+function showCompta(sub) {
+  currentCsub = sub || 'mois';
+  document.querySelectorAll('#comptaSub .subtab').forEach((b) => b.classList.toggle('active', b.dataset.csub === currentCsub));
+  document.querySelectorAll('#tab-compta .subpanel').forEach((p) => p.classList.toggle('active', p.id === 'csub-' + currentCsub));
+  const cb = document.querySelector('#comptaSub .subtab[data-csub="' + currentCsub + '"]'), cl = document.querySelector('#comptaSub .subnav-label');
+  if (cb && cl) cl.textContent = cb.textContent;
+  if ($('comptaSub')) $('comptaSub').classList.remove('open');
+  if (currentCsub === 'decl') renderComptaDecl(); else renderComptaMois();
+  window.scrollTo(0, 0);
+}
+// HTML des 3 sections d'UN mois. archived (ym < mois courant) = démarches disponibles.
+function comptaSectionsHtml(ym) {
+  const archived = ym < todayStr().slice(0, 7);
+  const d = comptaData(ym);
   const tot = (tt) => `HT ${eur(tt.ht)} · TVA ${eur(tt.tva)} · <b>TTC ${eur(tt.ttc)}</b>`;
   const statusOfKind = (k) => (S.comptaStatus[ym] && S.comptaStatus[ym][k]) || 'attente';
   const recuKeyOf = (e) => e.recuKey || (e.tourId + ':' + e.clientId);
   const isRecu = (e) => !!(S.comptaRecu && S.comptaRecu[recuKeyOf(e)]);
-  const modeOpts = (cur) => ['facture', 'virement', 'liquide'].map((v) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v === 'facture' ? 'Facture' : v === 'virement' ? 'Virement' : 'Liquide'}</option>`).join('');
-  // Table par client (virement/facture) : Mode (classe le paiement) + Reçu (paiement encaissé). Les restes dérivés (paiement partiel) ne sont pas reclassables.
   const isDem = (e) => !!(S.comptaDemarche && S.comptaDemarche[recuKeyOf(e)]);
-  // Table par client. Colonne « Démarche » seulement pour un mois archivé ; ligne grisée/verrouillée si démarche effectuée.
-  const clientTbl = (arr, forPrint) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th>${(!isCur && !forPrint) ? '<th>Démarche</th>' : ''}</tr></thead><tbody>${arr.map((e) => { const rk = recuKeyOf(e), dem = isDem(e); return `<tr${dem ? ' style="opacity:.45"' : ''}><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${(forPrint || e.derived || dem) ? (e.derived ? 'Reste (virement)' : (e.mode === 'virement' ? 'Virement' : 'Facture')) : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center">${forPrint ? (isRecu(e) ? 'Oui' : 'Non') : `<input type="checkbox" data-recu data-key="${rk}" ${isRecu(e) ? 'checked' : ''}${dem ? ' disabled' : ''}/>`}</td>${(!isCur && !forPrint) ? `<td style="text-align:center"><input type="checkbox" data-dem data-key="${rk}" ${dem ? 'checked' : ''}/></td>` : ''}</tr>`; }).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
+  const modeOpts = (m) => ['facture', 'virement', 'liquide'].map((v) => `<option value="${v}"${v === m ? ' selected' : ''}>${v === 'facture' ? 'Facture' : v === 'virement' ? 'Virement' : 'Liquide'}</option>`).join('');
+  const clientTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th>${archived ? '<th>Démarche</th>' : ''}</tr></thead><tbody>${arr.map((e) => { const rk = recuKeyOf(e), dem = isDem(e); return `<tr${dem ? ' style="opacity:.45"' : ''}><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${(e.derived || dem) ? (e.derived ? 'Reste (virement)' : (e.mode === 'virement' ? 'Virement' : 'Facture')) : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center"><input type="checkbox" data-recu data-key="${rk}" ${isRecu(e) ? 'checked' : ''}${dem ? ' disabled' : ''}/></td>${archived ? `<td style="text-align:center"><input type="checkbox" data-dem data-key="${rk}" ${dem ? 'checked' : ''}/></td>` : ''}</tr>`; }).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
-  // Ligne « suivi des paiements reçus » (virement/facture) : combien encaissés, impayés signalés.
   const recuRow = (arr) => { if (!arr.length) return ''; const n = arr.filter(isRecu).length; const imp = arr.length - n; return `<p class="hint"${imp ? ' style="color:var(--warn);font-weight:700"' : ''}>Paiements reçus : ${n}/${arr.length}${imp ? ` · ⚠ ${imp} impayé(s)` : ' ✅'}</p>`; };
-  const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(arr) : ''}${detail}</section>`;
-  // Démarche comptable : ABSENTE le mois en cours ; disponible seulement une fois le mois archivé.
-  // Liquide = 1 démarche pour le mois (grise toute la caisse) ; virement/facture = 1 par client (colonne Démarche du tableau).
-  const liqDem = !isCur && statusOfKind('liquide') === 'encode';
-  const liquideStatus = isCur ? '' : `<label>Démarche comptable (caisse du mois)<select data-status="liquide"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>`;
-  const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><button class="btn small" data-print="liquide">🖨 PDF</button></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
-  body.innerHTML =
-    `<p class="hint">${isCur ? '📅 <b>Mois en cours</b> (1ᵉʳ → dernier jour). Gérez les paiements reçus ; la validation des <b>démarches</b> comptables se fera une fois le mois archivé (mois suivant).' : '🗄 <b>Mois archivé</b> — validez les <b>démarches</b> comptables (l\'élément traité est grisé et verrouillé).'}</p>` +
-    liquideSec +
-    section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients, false), d.virementClients) +
-    section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients, false), d.factureClients);
-  body.querySelectorAll('[data-status]').forEach((selEl) => selEl.addEventListener('change', (e) => { S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][selEl.dataset.status] = e.target.value; saveSettings(); renderCompta(); }));
-  body.querySelectorAll('[data-dem]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaDemarche = S.comptaDemarche || {}; const key = cb.dataset.key; if (e.target.checked) S.comptaDemarche[key] = true; else delete S.comptaDemarche[key]; saveSettings(); renderCompta(); }));
-  body.querySelectorAll('[data-mode]').forEach((selEl) => selEl.addEventListener('change', () => { setComptaPayment(selEl.dataset.tour, selEl.dataset.cid, selEl.value); renderCompta(); }));
-  body.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const key = cb.dataset.key; if (e.target.checked) S.comptaRecu[key] = true; else delete S.comptaRecu[key]; saveSettings(); renderCompta(); }));
-  // Détail par client ET par cheval (réutilise la facture détaillée) — pour virements & factures.
+  const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(arr) : ''}${detail}</section>`;
+  const liqDem = archived && statusOfKind('liquide') === 'encode';
+  const liquideStatus = archived ? `<label>Démarche comptable (caisse du mois)<select data-status="liquide" data-ym="${ym}"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>` : '';
+  const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><button class="btn small" data-print="liquide" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
+  return liquideSec + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients) + section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients), d.factureClients);
+}
+function comptaWire(container, rerender) {
+  container.querySelectorAll('[data-status]').forEach((el) => el.addEventListener('change', (e) => { const ym = el.dataset.ym; S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][el.dataset.status] = e.target.value; saveSettings(); rerender(); }));
+  container.querySelectorAll('[data-dem]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaDemarche = S.comptaDemarche || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaDemarche[k] = true; else delete S.comptaDemarche[k]; saveSettings(); rerender(); }));
+  container.querySelectorAll('[data-mode]').forEach((el) => el.addEventListener('change', () => { setComptaPayment(el.dataset.tour, el.dataset.cid, el.value); rerender(); }));
+  container.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaRecu[k] = true; else delete S.comptaRecu[k]; saveSettings(); rerender(); }));
+  container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => comptaPrint(btn.dataset.ym, btn.dataset.print)));
+}
+function comptaPrint(ym, k) {
+  const d = comptaData(ym), ml = monthLabel(ym);
+  const foot = (tt) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td></tr></tfoot>`;
+  const postTbl = (arr) => arr.length ? `<table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table>` : '';
   const detailPdf = (entries, total, titre, sousTitre, vide) => entries.length
     ? `<h1>${titre}</h1><h2>${sousTitre}</h2>` + entries.map((e) => `<h3>${esc(e.nom)}${e.tourDate ? ' · ' + esc(fmtDateFr(e.tourDate)) : ''}</h3>${e.m ? clientInvoiceHtml(e.m, e.payment) : '<p>Reste impayé (paiement partiel liquide) : ' + eur(e.ttc) + ' TTC</p>'}`).join('') + `<h2 style="margin-top:14px">Total : ${eur(total.ttc)} TTC (HT ${eur(total.ht)} · TVA ${eur(total.tva)})</h2>`
     : `<h1>${titre}</h1><h2>${sousTitre}</h2><p>${vide}</p>`;
-  body.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => {
-    const k = btn.dataset.print, ml = monthLabel(ym);
-    const foot = (tt) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td></tr></tfoot>`;
-    if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>` + (d.liquidePosts.length ? postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal)) : '<p>Aucun paiement liquide ce mois.</p>'));
-    else if (k === 'virement') printHtml('Virements — ' + ml, detailPdf(d.virementClients, d.virementTotal, 'Virements bancaires — détail', ml + ' — par client et par cheval', 'Aucun virement ce mois.'));
-    else printHtml('Factures — ' + ml, detailPdf(d.factureClients, d.factureTotal, 'Factures pro — détail', ml + ' — par client et par cheval', 'Aucune facture ce mois.'));
-  }));
+  if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>` + (d.liquidePosts.length ? postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal)) : '<p>Aucun paiement liquide ce mois.</p>'));
+  else if (k === 'virement') printHtml('Virements — ' + ml, detailPdf(d.virementClients, d.virementTotal, 'Virements bancaires — détail', ml + ' — par client et par cheval', 'Aucun virement ce mois.'));
+  else printHtml('Factures — ' + ml, detailPdf(d.factureClients, d.factureTotal, 'Factures pro — détail', ml + ' — par client et par cheval', 'Aucune facture ce mois.'));
+}
+function renderComptaMois() {
+  const box = $('comptaMoisBody'); if (!box) return;
+  box.innerHTML = comptaSectionsHtml(todayStr().slice(0, 7));
+  comptaWire(box, renderComptaMois);
+}
+// --- Déclaration : filtre mois/trimestre/semestre/année → mois empilés ---
+const comptaYears = () => [...new Set(comptaMonths().map((m) => m.slice(0, 4)))].sort().reverse();
+function comptaPeriodOptions(type) {
+  if (type === 'mois') return comptaMonths().map((m) => ({ key: m, label: monthLabel(m) }));
+  const ys = comptaYears();
+  if (type === 'annee') return ys.map((y) => ({ key: y, label: 'Année ' + y }));
+  if (type === 'semestre') return ys.flatMap((y) => [{ key: y + '-S1', label: '1ᵉʳ semestre ' + y }, { key: y + '-S2', label: '2ᵉ semestre ' + y }]);
+  return ys.flatMap((y) => [1, 2, 3, 4].map((q) => ({ key: y + '-T' + q, label: 'Trimestre ' + q + ' ' + y })));
+}
+function monthsOfRange(type, key) {
+  const pad = (n) => String(n).padStart(2, '0');
+  if (type === 'mois') return [key];
+  const y = key.slice(0, 4);
+  if (type === 'annee') return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => y + '-' + pad(n));
+  if (type === 'semestre') { const base = key.endsWith('S1') ? 1 : 7; return [0, 1, 2, 3, 4, 5].map((i) => y + '-' + pad(base + i)); }
+  const q = +key.slice(-1); const base = (q - 1) * 3 + 1; return [0, 1, 2].map((i) => y + '-' + pad(base + i));
+}
+let declPeriod = null;
+function renderComptaDecl() {
+  const typeSel = $('declType'), perSel = $('declPeriod'), box = $('comptaDeclBody'); if (!typeSel || !perSel || !box) return;
+  const type = typeSel.value || 'mois';
+  const opts = comptaPeriodOptions(type);
+  typeSel.onchange = () => { declPeriod = null; renderComptaDecl(); };
+  perSel.onchange = () => { declPeriod = perSel.value; renderComptaDecl(); };
+  if (!opts.length) { perSel.innerHTML = ''; box.innerHTML = ''; if ($('comptaDeclEmpty')) $('comptaDeclEmpty').style.display = 'block'; return; }
+  if (!opts.some((o) => o.key === declPeriod)) declPeriod = opts[0].key;
+  perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === declPeriod ? ' selected' : ''}>${o.label}</option>`).join('');
+  const withData = comptaMonths();
+  const months = monthsOfRange(type, declPeriod).filter((m) => withData.includes(m));
+  if ($('comptaDeclEmpty')) $('comptaDeclEmpty').style.display = months.length ? 'none' : 'block';
+  const rt = months.reduce((a, m) => { const d = comptaData(m); a.liq += d.liquideTotal.ttc; a.vir += d.virementTotal.ttc; a.fac += d.factureTotal.ttc; return a; }, { liq: 0, vir: 0, fac: 0 });
+  box.innerHTML = (months.length ? `<p class="banner">Total plage — Liquide <b>${eur(rt.liq)}</b> · Virements <b>${eur(rt.vir)}</b> · Factures <b>${eur(rt.fac)}</b> (TTC)</p>` : '')
+    + months.sort().reverse().map((m) => `<h2 class="rsub" style="margin-top:16px">${monthLabel(m)}${m < todayStr().slice(0, 7) ? '' : ' (en cours — pas de démarche)'}</h2>` + comptaSectionsHtml(m)).join('');
+  comptaWire(box, renderComptaDecl);
 }
 // Analyse financière PAR CHEVAL (avec le nom du client), tous cumuls TTC.
 function chevalFinanceStats() {
@@ -2996,6 +3038,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => { showTab(b.dataset.goto); if (b.dataset.gsub) showGestion(b.dataset.gsub); if (b.dataset.rsub) showReglages(b.dataset.rsub); }));
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
+  document.querySelectorAll('#comptaSub .subtab').forEach((b) => b.addEventListener('click', () => showCompta(b.dataset.csub)));
   const agendaRefresh = async (statusEl) => { try { if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Chargement du calendrier…'; } _agendaEvents = await fetchCalendarEvents(true); renderAgendaItems(); renderAgendaCalendrier(); if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = _agendaEvents.length + ' événement(s) chargé(s).'; } } catch (e) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Erreur : ' + e.message; } else alert('Erreur : ' + e.message); } };
   if ($('agendaRefresh')) $('agendaRefresh').addEventListener('click', () => agendaRefresh($('agendaStatus')));
   if ($('agendaRefresh2')) $('agendaRefresh2').addEventListener('click', () => agendaRefresh(null));
