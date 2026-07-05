@@ -30,6 +30,7 @@
     <div class="tabs-inner" id="tabsInner">
       <button class="tab active" data-tab="accueil">Accueil</button>
       <button class="tab" data-tab="tournees">Tournées</button>
+      <button class="tab" data-tab="agenda">Agenda</button>
       <button class="tab" data-tab="gestion">Gestion</button>
       <button class="tab" data-tab="stats">Stats</button>
       <button class="tab" data-tab="reglages">Réglages</button>
@@ -119,6 +120,36 @@
       <p class="hint" style="text-align:center">🔄 Les frais se recalculent et s'enregistrent automatiquement à chaque changement.</p></div>
     <p class="status" id="edStatus"></p>
     <div class="actions"><button class="btn danger block" id="edDelete">Supprimer cette tournée</button></div>
+  </main>
+
+  <!-- ============ AGENDA (Google) ============ -->
+  <main id="tab-agenda" class="tab-panel">
+    <nav class="subtabs" id="agendaSub">
+      <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Calendrier</span><span class="nav-caret">▾</span></button>
+      <div class="subtabs-list">
+        <button class="subtab active" data-asub="calendrier">Calendrier</button>
+        <button class="subtab" data-asub="items">Items</button>
+      </div>
+    </nav>
+
+    <div id="asub-calendrier" class="subpanel active">
+      <section class="card">
+        <div class="card-head"><h2>Calendrier</h2><button class="btn small" id="agendaRefresh">↻ Google</button></div>
+        <p class="hint">Événements <b>importés</b> (onglet Items) regroupés par jour. Créez la tournée d'un jour en un clic, avec les clients déjà pré-remplis.</p>
+        <div id="agendaDays"></div>
+        <p class="empty" id="agendaDaysEmpty">Aucun item importé. Allez dans « Items » pour en sélectionner.</p>
+        <p class="status" id="agendaStatus"></p>
+      </section>
+    </div>
+
+    <div id="asub-items" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Items du calendrier</h2><button class="btn small" id="agendaRefresh2">↻ Google</button></div>
+        <p class="hint">Cochez les événements à récupérer. Chaque item est lié à un client connu ; s'il est inconnu, la création du client s'ouvre. Les nouveaux événements ne s'ajoutent jamais tout seuls — vous choisissez.</p>
+        <div id="agendaItems" class="list"></div>
+        <p class="empty" id="agendaItemsEmpty">Cliquez « ↻ Google » pour charger vos événements (nécessite l'ID client Google configuré dans Réglages → Synchro).</p>
+      </section>
+    </div>
   </main>
 
   <!-- ============ GESTION (hub) ============ -->
