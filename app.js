@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.18';
+const APP_VERSION = '1.1.19';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.19', date: '2026-07-05',
+    ajouts: [
+      'Réduction couplée au paiement liquide : quand un client paie en liquide, une réduction (20% par défaut) est appliquée automatiquement aux lignes éligibles (cases « Remise », dont le parage par défaut) et la facture est recalculée en direct. Elle ne s\'applique jamais en virement ni en facture — impossible d\'oublier.',
+      'Nouveau réglage : Gestion → Articles → section « Réduction » (pourcentage réglable). Dans la fenêtre de paiement, le total se met à jour dès que vous choisissez « Liquide ».',
+    ],
+  },
   {
     version: '1.1.18', date: '2026-07-05',
     ajouts: [
@@ -229,6 +236,7 @@ const DEFAULTS = {
   syncMode: 'file',                            // mode de synchro ACTIF (exclusif) : 'file' (multi-appareils par fichier, défaut) | 'drive' (Google Drive)
   rdvDelaiSemaines: 5,                          // proposition RDV : délai par défaut (semaines) — même jour de la semaine
   rdvJourSemaine: '',                          // proposition RDV : jour de la semaine imposé ('' = même jour ; 0=dim..6=sam, JS getDay)
+  reducLiquide: 20,                            // réduction (%) appliquée AUTOMATIQUEMENT aux lignes éligibles quand le paiement est en LIQUIDE
 };
 const _hadSettings = localStorage.getItem('ftr.settings') != null; // 1er lancement ? (pour la config usine)
 let S = Object.assign({}, DEFAULTS, LS.get('ftr.settings', {}));
@@ -253,6 +261,7 @@ if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 if (S.syncMode !== 'drive') S.syncMode = 'file'; // défaut = mode fichier (section 1)
 if (typeof S.rdvDelaiSemaines !== 'number' || S.rdvDelaiSemaines < 1) S.rdvDelaiSemaines = 5;
 if (typeof S.rdvJourSemaine !== 'string') S.rdvJourSemaine = (S.rdvJourSemaine == null ? '' : String(S.rdvJourSemaine));
+if (typeof S.reducLiquide !== 'number' || S.reducLiquide < 0) S.reducLiquide = 20;
 if (!S.agendaImported || typeof S.agendaImported !== 'object') S.agendaImported = {}; // { eventId: {clientId, title, start, location} }
 if (!S.agendaInactive || typeof S.agendaInactive !== 'object') S.agendaInactive = {}; // { eventId: true } — items masqués (section Inactifs)
 if (!S.agendaPrive || typeof S.agendaPrive !== 'object') S.agendaPrive = {}; // { eventId: {title, day, start, location} } — agenda privé (perso, non facturé)
@@ -1770,10 +1779,11 @@ function enableRowDrag(listEl, arr, save) {
 }
 
 // ----- Calcul : ARGENT (pur, instantané, sans API) à partir de la géométrie -----
-function computeResultMoney(rows, geom, articles, reducs, parageNoRemise) {
+function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
   parageNoRemise = parageNoRemise || (currentTour && currentTour.parageRemiseOff) || {}; // { clientId: true } → parage EXCLU de la remise client
+  payments = payments || (currentTour && currentTour.payments) || {}; // paiement par client → couplage réduction LIQUIDE
   const useSeuil = S.repartition === 'parclient'; // seuil/forfait « client proche » actifs seulement dans ce mode
   rows.forEach((r) => (r.proche = useSeuil && r.directKm < S.seuilKm));
   const loin = rows.filter((r) => !r.proche);
@@ -1833,7 +1843,10 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise) {
     });
   }
   const parClient = Object.values(cmap).map((m) => {
-    const rpct = reducs[m.clientId] || 0, rf = rpct / 100;
+    // Réduction effective : la réduction manuelle du client, ET si le paiement est en LIQUIDE, au moins la réduction liquide couplée (Réglages → Articles → Réduction). Jamais avec virement/facture.
+    const manual = reducs[m.clientId] || 0;
+    const isLiquide = (payments[m.clientId] || {}).method === 'liquide';
+    const rpct = isLiquide ? Math.max(manual, S.reducLiquide || 0) : manual, rf = rpct / 100;
     // Totaux « tarif plein » (avant toute remise) — capturés AVANT de réduire les lignes.
     const htArtBrut = m.articles.reduce((s, a) => s + a.ht, 0), tvaArtBrut = m.articles.reduce((s, a) => s + a.tva, 0);
     // Remise appliquée LIGNE PAR LIGNE : le HT de chaque article est réduit, puis TVA et TTC recalculés sur le net.
@@ -1897,7 +1910,7 @@ function recomputeTourLocal(t) {
   const prov = (R.providerMin != null ? R.providerMin : R.totalMin);
   const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 50));
   const geom = { totalKm: R.totalKm, totalMin, kmHomeFirst: R.kmHomeFirst, kmLastHome: R.kmLastHome };
-  const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff);
+  const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff, t.payments);
   res.providerMin = prov; res.routeGeo = R.routeGeo || [];
   t.result = res;
   return true;
@@ -3031,15 +3044,17 @@ function modalPayment(t, arret, after) {
   const clientsAt = (arret.clients || []).map((cl) => cl.clientId);
   if (!clientsAt.length) { if (after) after(); return; }
   if (!t.payments) t.payments = {};
+  const paySnapshot = JSON.parse(JSON.stringify(t.payments)); // pour restaurer si l'utilisateur annule (les bascules de méthode modifient les totaux en direct)
   const invTTC = (cid) => { const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; return m ? m.totalTTC : 0; };
   const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); return; } const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); return; } tournees.push(t); saveTournees(); };
+  recomputeTourLocal(t); // reflète la réduction liquide couplée dans les totaux affichés
   let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div><p class="hint">Choisissez le mode de paiement (obligatoire pour clôturer). En <b>liquide</b>, saisissez le <b>montant décimal rectifié</b> : le total arrondi à l\'euro que vous encaissez (la différence + ou − passe en facture).</p>';
   clientsAt.forEach((cid) => {
     const p = t.payments[cid] || { method: null, facture: false, rectifie: null, partiel: false, impaye: null }; // par défaut : aucun mode choisi (neutre)
     const ttc = invTTC(cid);
     const rectVal = p.rectifie != null ? p.rectifie : (p.montantPaye != null && !p.partiel ? p.montantPaye : '');
     html += `<div class="pay-block" data-cid="${cid}">
-      <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture ${eur(ttc)} TTC</span> <button type="button" class="btn small" data-rdv="${cid}">📅 RDV</button></h3>
+      <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture <span data-facture>${eur(ttc)}</span> TTC</span> <button type="button" class="btn small" data-rdv="${cid}">📅 RDV</button></h3>
       <div class="seg pay-method">
         <button type="button" class="seg-btn${p.method === 'virement' ? ' on' : ''}" data-m="virement">Virement</button>
         <button type="button" class="seg-btn${p.method === 'liquide' ? ' on' : ''}" data-m="liquide">Liquide</button>
@@ -3059,14 +3074,15 @@ function modalPayment(t, arret, after) {
   });
   html += '<div class="actions"><button class="btn primary block" id="payOk">Enregistrer</button></div>';
   openModal(html);
-  $('mX').addEventListener('click', () => { closeModal(); if (after) after(); });
+  $('mX').addEventListener('click', () => { t.payments = paySnapshot; recomputeTourLocal(t); closeModal(); if (after) after(); }); // annulation → restaure les méthodes/montants d'origine
   document.querySelectorAll('.pay-block').forEach((block) => {
-    const cid = block.dataset.cid; const ttc = invTTC(cid);
+    const cid = block.dataset.cid;
     const cash = block.querySelector('.pay-cash');
     const rectInt = () => { const v = block.querySelector('[data-rectifie]').value; return v === '' ? null : Math.max(0, Math.round(parseNum(v))); };
     const impInt = () => { const v = block.querySelector('[data-impaye]').value; return v === '' ? 0 : Math.max(0, Math.round(parseNum(v))); };
+    const refreshFacture = () => { const ttc = invTTC(cid); const f = block.querySelector('[data-facture]'); if (f) f.textContent = eur(ttc); const ri = block.querySelector('[data-rectifie]'); if (ri) ri.placeholder = ttc ? Math.round(ttc) : ''; };
     const upd = () => {
-      const rect = rectInt();
+      const ttc = invTTC(cid); const rect = rectInt();
       const diffEl = block.querySelector('[data-diff]');
       if (diffEl) {
         if (rect == null) diffEl.innerHTML = `Facture <b>${eur(ttc)}</b> TTC — arrondissez à l'euro (vers le haut ou le bas).`;
@@ -3075,7 +3091,13 @@ function modalPayment(t, arret, after) {
       const recuEl = block.querySelector('[data-recu]');
       if (recuEl) { const base = rect != null ? rect : ttc; const imp = impInt(); recuEl.innerHTML = `Montant réellement reçu : <b>${eur(base - imp)}</b> TTC <span class="li-sub">(rectifié ${eur(base)} − impayé ${eur(imp)})</span>`; }
     };
-    block.querySelectorAll('.pay-method .seg-btn').forEach((b) => b.addEventListener('click', () => { block.querySelectorAll('.pay-method .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); cash.style.display = b.dataset.m === 'liquide' ? '' : 'none'; upd(); }));
+    // Bascule de méthode : couple la réduction LIQUIDE en direct (recalcul de la facture).
+    block.querySelectorAll('.pay-method .seg-btn').forEach((b) => b.addEventListener('click', () => {
+      block.querySelectorAll('.pay-method .seg-btn').forEach((x) => x.classList.toggle('on', x === b));
+      cash.style.display = b.dataset.m === 'liquide' ? '' : 'none';
+      t.payments[cid] = Object.assign({}, t.payments[cid], { method: b.dataset.m }); // méthode provisoire → recalcul
+      recomputeTourLocal(t); refreshFacture(); upd();
+    }));
     const pt = block.querySelector('[data-partiel]'); if (pt) pt.addEventListener('change', () => { const pr = block.querySelector('.pay-reste'); if (pr) pr.style.display = pt.checked ? '' : 'none'; upd(); });
     // Champs à l'euro : recalcul en direct + normalisation (aucune décimale) à la sortie du champ.
     ['[data-rectifie]', '[data-impaye]'].forEach((sel) => { const i = block.querySelector(sel); if (i) { i.addEventListener('input', upd); i.addEventListener('blur', () => { if (i.value !== '') i.value = String(Math.max(0, Math.round(parseNum(i.value)))); }); } });
@@ -3098,6 +3120,8 @@ function modalPayment(t, arret, after) {
       const imp = (partiel && impaye != null) ? impaye : 0;
       setClientImpaye(t, cid, resteMode === 'report' ? imp : 0);
     });
+    recomputeTourLocal(t); // fige la réduction liquide couplée dans les totaux
+    if (t === currentTour && currentTour.result && typeof renderResultUI === 'function') renderResultUI(currentTour.result); // rafraîchit la facture de l'éditeur
     persist(); saveClients();
   };
   // Bouton « RDV » (programmer le suivi) : sauvegarde d'abord le paiement en cours, puis ouvre la planification ; retour au paiement à la fermeture.
@@ -3366,6 +3390,7 @@ function bindSettings() {
   wA('setAchat', 'achatHT', '€ HT', 0); wA('setDureeVie', 'dureeVieKm', 'km', 0);
   wS('setFourbure', 'fourbureHT', '€ HT', 2); wS('setNpas', 'npasHT', '€ HT', 2); wS('setInfection', 'infectionHT', '€ HT', 2);
   wP('setParagePrix', 'prixHT', '€ HT', 2); wP('setParageTva', 'tvaPct', '%', 1);
+  if ($('setReducLiquide')) { $('setReducLiquide').value = (S.reducLiquide != null ? S.reducLiquide : 20); $('setReducLiquide').addEventListener('input', (e) => { const v = parseInt(e.target.value, 10); S.reducLiquide = (!isNaN(v) && v >= 0) ? v : 0; saveSettings(); }); }
   _settingsPaints = paints;
   // Champs calculés (lecture seule) : unité affichée dans le champ.
   [['setPrixPleinHT', '€/L HT'], ['setAchatTTC', '€ TTC'], ['setAmortHT', '€/km HT'], ['setAmortTTC', '€/km TTC'], ['setForfaitTTC', '€ TTC'], ['setSeuilTarif', '€/km HT'], ['setSeuilDepHT', '€ HT'], ['setSeuilDepTTC', '€ TTC'], ['setFourbureTtc', '€ TTC'], ['setNpasTtc', '€ TTC'], ['setInfectionTtc', '€ TTC'], ['setParageTtc', '€ TTC'], ['setPrixHeureTtc', '€ TTC'], ['setTempsKmRo', '€/km']].forEach(([id, u]) => makeReadout($(id), u));

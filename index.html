@@ -252,6 +252,11 @@
         <p class="hint">Cochez « Parage/Équil. » par cheval dans la tournée → une ligne d'article « Parage et équilibrage » est ajoutée automatiquement à la facture.</p>
       </section>
       <section class="card">
+        <h2>Réduction</h2>
+        <label class="grow">Réduction paiement liquide<span class="fu"><input type="number" id="setReducLiquide" min="0" max="100" step="1" /><span class="fu-unit">%</span></span></label>
+        <p class="hint">Quand un client paie en <b>liquide</b>, cette réduction est <b>appliquée automatiquement</b> aux lignes éligibles (cases « Remise » cochées, dont le parage par défaut) et les montants de la facture sont recalculés. Elle ne s'applique <b>pas</b> en virement ni en facture. Ainsi vous ne pouvez pas oublier de l'appliquer.</p>
+      </section>
+      <section class="card">
         <h2>Tarifs par type — HTVA</h2>
         <p class="hint">Le <b>temps de déplacement</b> (visite &amp; urgence) est calculé : prix à l'heure ÷ km par heure.</p>
         <div class="row">
