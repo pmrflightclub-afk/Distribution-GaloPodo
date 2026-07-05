@@ -33,7 +33,7 @@ const CHANGELOG = [
       'Paiement par arrêt (à la validation) : liquide / virement + « facture nécessaire » ; si liquide, saisie du montant réellement payé → ligne « Arrondi caisse » (facture, récap, ticket) et montant réel repris dans les stats.',
       'Gestion → Compta (mensuelle) : 3 sections Liquide (postes globalisés, sans nom) · Virements · Factures pro, avec totaux HT/TVA/TTC, sélecteur de mois, statut « en attente / comptabilité encodée » par mois archivé, et fiche PDF imprimable par section. Suivi « paiement reçu » par client (virements/factures) → impayés signalés.',
       'Synchro multi-appareils (Réglages → Synchro) : mode Fichier (export/import avec FUSION, sans compte) ET Google Drive automatique — chacun renseigne SON propre ID client Google (rien de partagé), connexion unique puis silencieuse.',
-      'Onglet Agenda (Google Calendar) : sous-onglets Calendrier + Items ; on coche les événements à récupérer (liés à un client connu, création si inconnu), puis « Créer la tournée » d\'un jour avec les clients pré-remplis. Nécessite l\'ID client Google.',
+      'Onglet Agenda (Google Calendar) : entre Accueil et Tournées, affiche directement les Items (coche « Récupérer », lié à un client connu ou création). Case « Actif » pour retirer un événement → section « Inactifs ». La vue « Calendrier » (jours + « Créer la tournée ») est passée dans Réglages → Calendrier. Nécessite l\'ID client Google.',
       'Archivage automatique des tournées clôturées > 4 semaines (allège l\'app ; toujours dans Archives et incluses dans les stats).',
     ],
     corrections: [
@@ -160,6 +160,7 @@ if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (typeof S.googleClientId !== 'string') S.googleClientId = '';
 if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 if (!S.agendaImported || typeof S.agendaImported !== 'object') S.agendaImported = {}; // { eventId: {clientId, title, start, location} }
+if (!S.agendaInactive || typeof S.agendaInactive !== 'object') S.agendaInactive = {}; // { eventId: true } — items masqués (section Inactifs)
 if (!S.accentColor) S.accentColor = '#e8722a';
 if (typeof S.topbarColor !== 'string') S.topbarColor = '';
 if (typeof S.navBarColor !== 'string') S.navBarColor = '';
@@ -803,7 +804,7 @@ function showTab(name) {
   if ($('mainTabs')) $('mainTabs').classList.remove('open'); // referme le menu déroulant (mobile)
   if (name === 'accueil') renderHome();
   if (name === 'tournees') renderTours();
-  if (name === 'agenda') showAgenda(currentAsub);
+  if (name === 'agenda') renderAgendaItems();
   if (name === 'compta') renderCompta();
   if (name === 'gestion') showGestion(currentGsub);
   if (name === 'stats') renderStats();
@@ -822,6 +823,7 @@ function showReglages(sub) {
   if (currentRsub === 'calcul') renderCalcul();
   if (currentRsub === 'analyse') renderAnalyse();
   if (currentRsub === 'changelog') renderChangelog();
+  if (currentRsub === 'calendrier') renderAgendaCalendrier();
   window.scrollTo(0, 0);
 }
 
@@ -842,37 +844,38 @@ function showGestion(sub) {
   if (currentGsub === 'sms') renderSMS();
 }
 
-// ================= AGENDA (Google Calendar) =================
-let currentAsub = 'calendrier';
-function showAgenda(sub) {
-  currentAsub = sub || 'calendrier';
-  document.querySelectorAll('#agendaSub .subtab').forEach((b) => b.classList.toggle('active', b.dataset.asub === currentAsub));
-  document.querySelectorAll('#tab-agenda .subpanel').forEach((p) => p.classList.toggle('active', p.id === 'asub-' + currentAsub));
-  const ab = document.querySelector('#agendaSub .subtab[data-asub="' + currentAsub + '"]'), al = document.querySelector('#agendaSub .subnav-label');
-  if (ab && al) al.textContent = ab.textContent;
-  if ($('agendaSub')) $('agendaSub').classList.remove('open');
-  if (currentAsub === 'items') renderAgendaItems(); else renderAgendaCalendrier();
-  window.scrollTo(0, 0);
+// ================= AGENDA (Google Calendar) — onglet Items =================
+function agendaItemRow(ev) {
+  const imp = S.agendaImported[ev.id];
+  const linked = imp ? clients.find((c) => c.id === imp.clientId) : null;
+  const match = linked || matchClientForEvent(ev.title);
+  const el = document.createElement('div'); el.className = 'list-item';
+  const linkTxt = linked ? '→ ' + esc(fullName(linked)) : (match ? '≈ ' + esc(fullName(match)) + ' (proposé)' : '⚠ client inconnu → création');
+  el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}</span></div>
+    <div class="li-act"><label class="chk2"><input type="checkbox" data-imp ${imp ? 'checked' : ''}/> Récupérer</label> <label class="chk2"><input type="checkbox" data-actif checked/> Actif</label></div>`;
+  el.querySelector('[data-imp]').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      const link = (cid) => { S.agendaImported[ev.id] = { clientId: cid, title: ev.title, start: ev.start, day: ev.day, location: ev.location }; saveSettings(); renderAgendaItems(); };
+      const m = matchClientForEvent(ev.title);
+      if (m) link(m.id); else editClient(null, (nc) => link(nc.id)); // inconnu → modale de création
+    } else { delete S.agendaImported[ev.id]; saveSettings(); renderAgendaItems(); }
+  });
+  el.querySelector('[data-actif]').addEventListener('change', () => { S.agendaInactive[ev.id] = true; saveSettings(); renderAgendaItems(); }); // → section Inactifs
+  return el;
 }
 function renderAgendaItems() {
   const box = $('agendaItems'); if (!box) return; box.innerHTML = '';
-  if ($('agendaItemsEmpty')) $('agendaItemsEmpty').style.display = _agendaEvents.length ? 'none' : 'block';
-  _agendaEvents.forEach((ev) => {
-    const imp = S.agendaImported[ev.id];
-    const linked = imp ? clients.find((c) => c.id === imp.clientId) : null;
-    const match = linked || matchClientForEvent(ev.title);
+  const inactBox = $('agendaInactifs'); if (inactBox) inactBox.innerHTML = '';
+  const active = _agendaEvents.filter((ev) => !S.agendaInactive[ev.id]);
+  const inactive = _agendaEvents.filter((ev) => S.agendaInactive[ev.id]);
+  if ($('agendaItemsEmpty')) $('agendaItemsEmpty').style.display = active.length ? 'none' : 'block';
+  active.forEach((ev) => box.appendChild(agendaItemRow(ev)));
+  if ($('agendaInactifsEmpty')) $('agendaInactifsEmpty').style.display = inactive.length ? 'none' : 'block';
+  if (inactBox) inactive.forEach((ev) => {
     const el = document.createElement('div'); el.className = 'list-item';
-    const linkTxt = linked ? '→ ' + esc(fullName(linked)) : (match ? '≈ ' + esc(fullName(match)) + ' (proposé)' : '⚠ client inconnu → création');
-    el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}</span></div>
-      <div class="li-act"><label class="chk2"><input type="checkbox" data-imp ${imp ? 'checked' : ''}/> Récupérer</label></div>`;
-    el.querySelector('[data-imp]').addEventListener('change', (e) => {
-      if (e.target.checked) {
-        const link = (cid) => { S.agendaImported[ev.id] = { clientId: cid, title: ev.title, start: ev.start, day: ev.day, location: ev.location }; saveSettings(); renderAgendaItems(); };
-        const m = matchClientForEvent(ev.title);
-        if (m) link(m.id); else editClient(null, (nc) => link(nc.id)); // inconnu → modale de création
-      } else { delete S.agendaImported[ev.id]; saveSettings(); renderAgendaItems(); }
-    });
-    box.appendChild(el);
+    el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''}</span></div><div class="li-act"><button class="btn small" data-react>Réactiver</button></div>`;
+    el.querySelector('[data-react]').addEventListener('click', () => { delete S.agendaInactive[ev.id]; saveSettings(); renderAgendaItems(); });
+    inactBox.appendChild(el);
   });
 }
 function renderAgendaCalendrier() {
@@ -2980,7 +2983,6 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => { showTab(b.dataset.goto); if (b.dataset.gsub) showGestion(b.dataset.gsub); if (b.dataset.rsub) showReglages(b.dataset.rsub); }));
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
-  document.querySelectorAll('#agendaSub .subtab').forEach((b) => b.addEventListener('click', () => showAgenda(b.dataset.asub)));
   const agendaRefresh = async (statusEl) => { try { if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Chargement du calendrier…'; } _agendaEvents = await fetchCalendarEvents(true); renderAgendaItems(); renderAgendaCalendrier(); if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = _agendaEvents.length + ' événement(s) chargé(s).'; } } catch (e) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Erreur : ' + e.message; } else alert('Erreur : ' + e.message); } };
   if ($('agendaRefresh')) $('agendaRefresh').addEventListener('click', () => agendaRefresh($('agendaStatus')));
   if ($('agendaRefresh2')) $('agendaRefresh2').addEventListener('click', () => agendaRefresh(null));

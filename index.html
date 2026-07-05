@@ -31,9 +31,9 @@
     <button class="nav-current" id="navToggle" type="button" aria-expanded="false"><span id="navCurrentLabel">Accueil</span><span class="nav-caret">▾</span></button>
     <div class="tabs-inner" id="tabsInner">
       <button class="tab active" data-tab="accueil">Accueil</button>
+      <button class="tab" data-tab="agenda">Agenda</button>
       <button class="tab" data-tab="tournees">Tournées</button>
       <button class="tab" data-tab="compta">Compta</button>
-      <button class="tab" data-tab="agenda">Agenda</button>
       <button class="tab" data-tab="gestion">Gestion</button>
       <button class="tab" data-tab="stats">Stats</button>
       <button class="tab" data-tab="reglages">Réglages</button>
@@ -124,34 +124,17 @@
     <div class="actions"><button class="btn danger block" id="edDelete">Supprimer cette tournée</button></div>
   </main>
 
-  <!-- ============ AGENDA (Google) ============ -->
+  <!-- ============ AGENDA (Google) — Items ============ -->
   <main id="tab-agenda" class="tab-panel">
-    <nav class="subtabs" id="agendaSub">
-      <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Calendrier</span><span class="nav-caret">▾</span></button>
-      <div class="subtabs-list">
-        <button class="subtab active" data-asub="calendrier">Calendrier</button>
-        <button class="subtab" data-asub="items">Items</button>
-      </div>
-    </nav>
-
-    <div id="asub-calendrier" class="subpanel active">
-      <section class="card">
-        <div class="card-head"><h2>Calendrier</h2><button class="btn small" id="agendaRefresh">↻ Google</button></div>
-        <p class="hint">Événements <b>importés</b> (onglet Items) regroupés par jour. Créez la tournée d'un jour en un clic, avec les clients déjà pré-remplis.</p>
-        <div id="agendaDays"></div>
-        <p class="empty" id="agendaDaysEmpty">Aucun item importé. Allez dans « Items » pour en sélectionner.</p>
-        <p class="status" id="agendaStatus"></p>
-      </section>
-    </div>
-
-    <div id="asub-items" class="subpanel">
-      <section class="card">
-        <div class="card-head"><h2>Items du calendrier</h2><button class="btn small" id="agendaRefresh2">↻ Google</button></div>
-        <p class="hint">Cochez les événements à récupérer. Chaque item est lié à un client connu ; s'il est inconnu, la création du client s'ouvre. Les nouveaux événements ne s'ajoutent jamais tout seuls — vous choisissez.</p>
-        <div id="agendaItems" class="list"></div>
-        <p class="empty" id="agendaItemsEmpty">Cliquez « ↻ Google » pour charger vos événements (nécessite l'ID client Google configuré dans Réglages → Synchro).</p>
-      </section>
-    </div>
+    <section class="card">
+      <div class="card-head"><h2>Items du calendrier</h2><button class="btn small" id="agendaRefresh2">↻ Google</button></div>
+      <p class="hint">Cochez les événements à récupérer. Chaque item est lié à un client connu ; s'il est inconnu, la création du client s'ouvre. Décochez « Actif » pour retirer un événement de la liste (il passe en « Inactifs » plus bas). La création de tournée se fait dans Réglages → Calendrier.</p>
+      <div id="agendaItems" class="list"></div>
+      <p class="empty" id="agendaItemsEmpty">Cliquez « ↻ Google » pour charger vos événements (nécessite l'ID client Google — Réglages → Synchro).</p>
+      <h3 class="rsub">Inactifs</h3>
+      <div id="agendaInactifs" class="list"></div>
+      <p class="empty" id="agendaInactifsEmpty">Aucun item inactif.</p>
+    </section>
   </main>
 
   <!-- ============ COMPTA ============ -->
@@ -354,6 +337,7 @@
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Configuration</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
         <button class="subtab active" data-rsub="config">Configuration</button>
+        <button class="subtab" data-rsub="calendrier">Calendrier</button>
         <button class="subtab" data-rsub="synchro">Synchro</button>
         <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
         <button class="subtab" data-rsub="gps">GPS</button>
@@ -480,6 +464,16 @@
       </label>
     </section>
     </div><!-- /rsub-gps -->
+
+    <div id="rsub-calendrier" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Calendrier (Google)</h2><button class="btn small" id="agendaRefresh">↻ Google</button></div>
+        <p class="hint">Événements <b>récupérés</b> (cochés dans l'onglet Agenda) regroupés par jour. Créez la tournée d'un jour en un clic, avec les clients pré-remplis.</p>
+        <div id="agendaDays"></div>
+        <p class="empty" id="agendaDaysEmpty">Aucun item récupéré. Allez dans l'onglet Agenda pour en cocher.</p>
+        <p class="status" id="agendaStatus"></p>
+      </section>
+    </div>
 
     <div id="rsub-synchro" class="subpanel">
     <section class="card">
