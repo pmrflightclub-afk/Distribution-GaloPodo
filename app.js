@@ -11,8 +11,30 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.5';
+const APP_VERSION = '1.1.6';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
+// Journal des versions (message de passage de version). Concis : quelques puces max par version.
+const CHANGELOG = [
+  {
+    version: '1.1.6', date: '2026-07-05',
+    ajouts: [
+      'Sous-onglets « Sauvegarde » et « Changelog » dans Réglages.',
+      'Bouton « Clôturer la tournée » (fige la tournée), en plus de la clôture auto par date.',
+      'Nom de tournée + date en toutes lettres dans les listes (ex. « jeudi 6 novembre : Mons »).',
+      'Bouton « Changer l\'arrivée » (adresse d\'arrivée distincte du départ).',
+      'Bouton « Article » dans chaque arrêt (déjà couplé au client de l\'arrêt) ; modale « article connu / nouvel article ».',
+      'Case « Infection » (comme Fourbure/NPAS) + tarif dédié dans les forfaits pathologiques.',
+      'Numéro de version affiché dans le bandeau.',
+      'Bouton pour activer/désactiver le réordonnancement des cases (fini les déplacements involontaires au défilement).',
+    ],
+    corrections: [
+      'Trajet du jour : nom du client d\'abord, adresse en dessous ; la tournée du jour apparaît en 1ʳᵉ ligne.',
+      'Tournée clôturée réellement figée (changer départ, articles, suppression bloqués).',
+      'Palette de couleurs : contours de pastilles visibles, couleur personnalisée indiquée comme sélectionnée.',
+      'Catalogue par défaut : article « Parage & Équilibrage » retiré (doublon de la section dédiée).',
+    ],
+  },
+];
 function isNewerVersion(a, b) {
   const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const x = pa[i] || 0, y = pb[i] || 0; if (x > y) return true; if (x < y) return false; }
@@ -73,7 +95,7 @@ const DEFAULTS = {
   tempsKm: 0, urgenceSuppKm: 0.16,             // supplément urgence €/km
   prixHeure: 10, kmHeure: 75,                  // temps de déplacement = prix/heure ÷ km/heure
   materiel: [],                                // matériel : {id, libelle, montantHT} (base/cheval = Σ)
-  fourbureHT: 0, npasHT: 0,                     // forfaits pathologie ajoutés par cheval (option B)
+  fourbureHT: 0, npasHT: 0, infectionHT: 0,     // forfaits pathologie ajoutés par cheval (option B)
   parage: { prixHT: 0, tvaPct: 21 },            // article « Parage et équilibrage » (coché par cheval)
   articlesCatalogue: [],                        // catalogue réutilisable : {id, libelle, prixHT, tvaPct}
   pays: 'be',                                   // pays (TVA) : 'be' | 'fr'
@@ -85,6 +107,7 @@ const DEFAULTS = {
   statOrder: [],                               // ordre personnalisé des tuiles de la page Stats
   analyticOrder: [],                           // ordre personnalisé des cases Analytique (tournée)
   tileLabels: {},                              // titres personnalisés des cases (stats + analytique)
+  changelogRead: [],                           // versions dont le message de nouveautés a été « marqué comme lu »
 };
 const _hadSettings = localStorage.getItem('ftr.settings') != null; // 1er lancement ? (pour la config usine)
 let S = Object.assign({}, DEFAULTS, LS.get('ftr.settings', {}));
@@ -96,6 +119,8 @@ if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
 if (typeof S.npasHT !== 'number') S.npasHT = 0;
+if (typeof S.infectionHT !== 'number') S.infectionHT = 0;
+S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
 if (!S.accentColor) S.accentColor = '#e8722a';
@@ -145,10 +170,10 @@ const FACTORY_SETTINGS = {
     { id: 'idmr3zuedlajk8', libelle: 'Pince à déferrer', montantHT: 95, nbChevaux: 3000 },
     { id: 'idmr3zuedl1zqo', libelle: 'Pince à sonder', montantHT: 245, nbChevaux: 3000 },
   ],
-  fourbureHT: 12.9, npasHT: 6.45,
+  fourbureHT: 12.9, npasHT: 6.45, infectionHT: 9.9,
   parage: { prixHT: 60, tvaPct: 21 },
   articlesCatalogue: [
-    { id: 'idmr3umjbekeg5', libelle: 'Parage & Equilibrage', prixHT: 60, tvaPct: 21 },
+    // « Parage & Équilibrage » retiré du catalogue par défaut : il existe déjà comme article auto (section Parage/Équilibrage).
     { id: 'idmr4vkk6vi6ne', libelle: 'Visite 15min', prixHT: 10, tvaPct: 21 },
     { id: 'idmr4vl08gi77k', libelle: 'Visite 30min', prixHT: 25, tvaPct: 21 },
     { id: 'idmr4vlo0verc1', libelle: 'Visite ', prixHT: 40, tvaPct: 21 },
@@ -254,7 +279,7 @@ function idealInk(hex) {
   const r = parseInt(c.slice(0, 2), 16), g = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16);
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#1c2320' : '#ffffff';
 }
-const BG_PRESETS = ['#0d0d0d', '#000000', '#15120f', '#101418', '#f6f4f1', '#ffffff'];
+const BG_PRESETS = ['#0d0d0d', '#000000', '#15120f', '#101418', '#141a2b', '#0f1a14', '#f6f4f1', '#ffffff', '#fdf6ec', '#eef4ff'];
 const LOGO_BG_PRESETS = ['transparent', '#ffffff', '#000000', '#e8722a'];
 function lum(hex) { const c = String(hex).replace('#', ''); if (c.length < 6) return 1; const r = parseInt(c.slice(0, 2), 16), g = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16); return (0.299 * r + 0.587 * g + 0.114 * b) / 255; }
 function applyTheme() {
@@ -281,7 +306,11 @@ function applyTheme() {
 }
 function renderSwatchSet(boxId, presets, current, onPick) {
   const box = $(boxId); if (!box) return; box.innerHTML = '';
-  presets.forEach((c) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'swatch' + (c.toLowerCase() === (current || '').toLowerCase() ? ' on' : '') + (c === 'transparent' ? ' sw-trans' : ''); if (c !== 'transparent') b.style.background = c; b.title = c; b.addEventListener('click', () => onPick(c)); box.appendChild(b); });
+  const cur = (current || '').toLowerCase();
+  const inPresets = presets.some((c) => c.toLowerCase() === cur);
+  presets.forEach((c) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'swatch' + (c.toLowerCase() === cur ? ' on' : '') + (c === 'transparent' ? ' sw-trans' : ''); if (c !== 'transparent') b.style.background = c; b.title = c; b.addEventListener('click', () => onPick(c)); box.appendChild(b); });
+  // Couleur personnalisée (hors presets) : pastille « actuelle » marquée sélectionnée, pour qu'elle apparaisse bien choisie.
+  if (cur && cur !== 'transparent' && !inPresets) { const b = document.createElement('button'); b.type = 'button'; b.className = 'swatch on sw-custom'; b.style.background = current; b.title = 'Couleur personnalisée ' + current; b.addEventListener('click', () => onPick(current)); box.appendChild(b); }
 }
 function refreshSwatches() {
   const cardCol = () => (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff');
@@ -315,6 +344,9 @@ function saveTournees() { LS.set('ftr.tournees', tournees); }
   tournees.forEach((t) => {
     if (!Array.isArray(t.articles)) t.articles = [];
     if (!t.reductions) t.reductions = {};
+    if (t.nom === undefined) t.nom = '';           // nom / identification de la tournée
+    if (t.closed === undefined) t.closed = false;  // clôture manuelle (fige la tournée)
+    if (t.arrivee === undefined) t.arrivee = null; // adresse d'arrivée distincte (null = retour au départ)
     (t.arrets || []).forEach((a) => {
       if (!a.addr) { a.addr = toAddr(a.adresse); a.addr.lat = a.lat || null; a.addr.lon = a.lon || null; }
       if (!a.clients) a.clients = (a.clientIds || []).map((id, i) => ({ clientId: id, chevalNoms: i === 0 ? (a.chevalNoms || []) : [] }));
@@ -375,7 +407,11 @@ const norm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const todayStr = () => new Date().toISOString().slice(0, 10);
 function tourStatus(date) { const t = todayStr(); if (!date) return 'avenir'; if (date < t) return 'cloturee'; if (date === t) return 'active'; return 'avenir'; }
+// Statut d'une tournée : clôturée si fermée manuellement OU date passée ; sinon selon la date.
+function statusOf(tour) { return (tour && tour.closed) ? 'cloturee' : tourStatus(tour ? tour.date : null); }
 const STATUS_LBL = { cloturee: 'Clôturée', active: "Aujourd'hui", avenir: 'À venir' };
+// Date en toutes lettres (ex. « jeudi 6 novembre »).
+function fmtDateFr(d) { if (!d) return 'Sans date'; const dt = new Date(d + 'T00:00:00'); if (isNaN(dt.getTime())) return d; return dt.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }); }
 
 function haversineKm(a, b) {
   const R = 6371, r = (d) => d * Math.PI / 180;
@@ -400,6 +436,9 @@ const arretNbClients = (a) => (a.clients || []).length;
 // Adresse de départ effective : celle de la tournée si définie, sinon le domicile des Réglages.
 const tourHome = () => (currentTour && currentTour.home && addrStr(currentTour.home).trim()) ? currentTour.home : S.home;
 const homeXY = () => { const h = tourHome(); return { lat: h.lat, lon: h.lon }; };
+// Adresse d'arrivée : propre à la tournée si définie, sinon retour au départ.
+const tourArrivee = () => (currentTour && currentTour.arrivee && addrStr(currentTour.arrivee).trim()) ? currentTour.arrivee : tourHome();
+const arrivalXY = () => { const a = tourArrivee(); return { lat: a.lat, lon: a.lon }; };
 
 // ---------- Cartographie ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -488,7 +527,7 @@ function mountAddress(container, addr, onChange) {
 
 // ---------- Carte (Leaflet, marqueurs numérotés) ----------
 let _map = null, _mapLayer = null;
-function renderMap(rows, home, routeGeo) {
+function renderMap(rows, home, routeGeo, arrivee) {
   const hint = $('edMapHint');
   if (typeof L === 'undefined') { if (hint) hint.textContent = 'Carte indisponible (hors-ligne).'; return; }
   if (!_map) { _map = L.map('edMap'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(_map); }
@@ -496,9 +535,12 @@ function renderMap(rows, home, routeGeo) {
   _mapLayer = L.layerGroup().addTo(_map);
   const pts = [];
   const h = home && home.lat ? [home.lat, home.lon] : null;
-  if (h) { pts.push(h); L.marker(h, { icon: L.divIcon({ className: '', html: '<div class="map-home">🏠</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(_mapLayer).bindPopup('Départ / retour'); }
+  // Arrivée distincte du départ ?
+  const aDiff = arrivee && arrivee.lat != null && (!h || arrivee.lat !== home.lat || arrivee.lon !== home.lon);
+  if (h) { pts.push(h); L.marker(h, { icon: L.divIcon({ className: '', html: '<div class="map-home">🏠</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(_mapLayer).bindPopup(aDiff ? 'Départ' : 'Départ / retour'); }
   rows.forEach((r, i) => { if (r.lat) { const p = [r.lat, r.lon]; pts.push(p); L.marker(p, { icon: L.divIcon({ className: '', html: `<div class="map-num"><span>${i + 1}</span></div>`, iconSize: [26, 26], iconAnchor: [13, 26] }) }).addTo(_mapLayer).bindPopup(`${i + 1}. ${esc(r.label)}`); } });
-  if (h) pts.push(h);
+  if (aDiff) { const a = [arrivee.lat, arrivee.lon]; pts.push(a); L.marker(a, { icon: L.divIcon({ className: '', html: '<div class="map-home">🏁</div>', iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(_mapLayer).bindPopup('Arrivée'); }
+  else if (h) pts.push(h);
   const col = S.accentColor || '#e8722a';
   if (routeGeo && routeGeo.length > 1) { L.polyline(routeGeo, { color: col, weight: 4 }).addTo(_mapLayer); _map.fitBounds(routeGeo, { padding: [30, 30] }); }
   else if (pts.length > 1) { L.polyline(pts, { color: col, weight: 3, dashArray: '6 6' }).addTo(_mapLayer); _map.fitBounds(pts, { padding: [30, 30] }); }
@@ -511,7 +553,7 @@ async function showMapOnly() {
   hint.textContent = 'Localisation…';
   try {
     for (const a of currentTour.arrets) { if (!a.addr.lat) { const g = await geocode(a.addr); a.addr.lat = g.lat; a.addr.lon = g.lon; if (S.provider === 'osm') await sleep(1100); } }
-    renderMap(currentTour.arrets.map((a) => ({ lat: a.addr.lat, lon: a.addr.lon, label: labelFor(a) })), homeXY()); hint.textContent = '';
+    renderMap(currentTour.arrets.map((a) => ({ lat: a.addr.lat, lon: a.addr.lon, label: labelFor(a) })), homeXY(), null, arrivalXY()); hint.textContent = '';
   } catch (e) { hint.textContent = 'Erreur : ' + e.message; }
 }
 // Force la re-géolocalisation (efface le cache de positions) : domicile + tous les arrêts.
@@ -522,7 +564,7 @@ async function forceRelocate() {
     if (addrStr(H).trim()) { const g = await geocode(H); H.lat = g.lat; H.lon = g.lon; if (currentTour && currentTour.home) saveTournees(); else saveSettings(); if (S.provider === 'osm') await sleep(1100); }
     for (const a of currentTour.arrets) { a.addr.lat = null; a.addr.lon = null; }
     for (const a of currentTour.arrets) { hint.textContent = 'Re-localisation des arrêts…'; const g = await geocode(a.addr); a.addr.lat = g.lat; a.addr.lon = g.lon; if (S.provider === 'osm') await sleep(1100); }
-    renderMap(currentTour.arrets.map((a) => ({ lat: a.addr.lat, lon: a.addr.lon, label: labelFor(a) })), homeXY());
+    renderMap(currentTour.arrets.map((a) => ({ lat: a.addr.lat, lon: a.addr.lon, label: labelFor(a) })), homeXY(), null, arrivalXY());
     hint.textContent = 'Positions actualisées. Vérifiez le 🏠 puis relancez « Calculer les frais ».';
   } catch (e) { hint.textContent = 'Erreur : ' + e.message; }
 }
@@ -564,6 +606,7 @@ function showReglages(sub) {
   if ($('reglagesSub')) $('reglagesSub').classList.remove('open');
   if (currentRsub === 'calcul') renderCalcul();
   if (currentRsub === 'analyse') renderAnalyse();
+  if (currentRsub === 'changelog') renderChangelog();
   window.scrollTo(0, 0);
 }
 
@@ -736,12 +779,33 @@ function modalTourHome() {
   const box = $('thList');
   S.adresses.forEach((a) => { const b = document.createElement('button'); b.className = 'btn block'; b.style.textAlign = 'left'; b.style.marginBottom = '6px'; b.innerHTML = `<b>${esc(a.nom)}</b> <span class="li-sub">${esc(addrStr(a.addr))}</span>`; b.addEventListener('click', () => setHome(a.addr)); box.appendChild(b); });
 }
+// Modale « Changer l'arrivée » : adresse d'arrivée distincte du départ (ou retour au départ).
+function modalTourArrivee() {
+  if (!currentTour) return;
+  openModal(`<div class="modal-head"><b>Adresse d'arrivée de la tournée</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Par défaut, la tournée revient au point de départ. Choisissez une arrivée différente (adresse enregistrée ou nouvelle) pour plus de flexibilité.</p>
+    <div class="actions"><button class="btn block" id="taNew">➕ Créer une nouvelle adresse</button></div>
+    <div class="actions"><button class="btn block" id="taHome">🏠 Retour au départ (par défaut)</button></div>
+    <p class="hint">${S.adresses.length ? 'Adresses enregistrées :' : 'Aucune adresse enregistrée — créez-en une ci-dessus.'}</p>
+    <div class="list" id="taList"></div>`);
+  $('mX').addEventListener('click', closeModal);
+  const setArr = async (addr) => {
+    currentTour.arrivee = toAddr(addr);
+    if (!currentTour.arrivee.lat && addrStr(currentTour.arrivee).trim()) { try { const g = await geocode(currentTour.arrivee); currentTour.arrivee.lat = g.lat; currentTour.arrivee.lon = g.lon; } catch { /* localisation différée */ } }
+    saveTournees(); closeModal(); openEditor(); scheduleGeoRecalc();
+  };
+  $('taNew').addEventListener('click', () => modalAdresse(null, (na) => setArr(na.addr)));
+  $('taHome').addEventListener('click', () => { currentTour.arrivee = null; saveTournees(); closeModal(); openEditor(); scheduleGeoRecalc(); });
+  const box = $('taList');
+  S.adresses.forEach((a) => { const b = document.createElement('button'); b.className = 'btn block'; b.style.textAlign = 'left'; b.style.marginBottom = '6px'; b.innerHTML = `<b>${esc(a.nom)}</b> <span class="li-sub">${esc(addrStr(a.addr))}</span>`; b.addEventListener('click', () => setArr(a.addr)); box.appendChild(b); });
+}
 
 // ================= TOURNÉES =================
 function tourListItem(t, showBadge) {
-  const st = tourStatus(t.date);
+  const st = statusOf(t);
   const el = document.createElement('div'); el.className = 'list-item clickable';
-  el.innerHTML = `<div class="li-main"><b>${esc(t.date)}${showBadge ? ' · ' + STATUS_LBL[st] : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+  const titre = fmtDateFr(t.date) + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : '');
+  el.innerHTML = `<div class="li-main"><b>${titre}${showBadge ? ' · ' + STATUS_LBL[st] : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
@@ -749,19 +813,19 @@ function renderTours() {
   const d = new Date(); d.setDate(d.getDate() - 28); const fourWeeksAgo = d.toISOString().slice(0, 10);
   const asc = (a, b) => (a.date || '').localeCompare(b.date || ''), desc = (a, b) => (b.date || '').localeCompare(a.date || '');
   const t = [...tournees];
-  const closed = t.filter((x) => tourStatus(x.date) === 'cloturee');
+  const closed = t.filter((x) => statusOf(x) === 'cloturee');
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((x) => box.appendChild(tourListItem(x, true))); };
-  fill('trToday', 'trTodayEmpty', t.filter((x) => tourStatus(x.date) === 'active').sort(asc));
-  fill('trUpcoming', 'trUpcomingEmpty', t.filter((x) => tourStatus(x.date) === 'avenir').sort(asc));
+  // « À venir » regroupe désormais aujourd'hui (non clôturée) + les tournées futures.
+  fill('trUpcoming', 'trUpcomingEmpty', t.filter((x) => { const s = statusOf(x); return s === 'active' || s === 'avenir'; }).sort(asc));
   fill('trClosed', 'trClosedEmpty', closed.filter((x) => (x.date || '') >= fourWeeksAgo).sort(desc));
   fill('trArchive', 'trArchiveEmpty', closed.filter((x) => (x.date || '') < fourWeeksAgo).sort(desc));
 }
-function newTour() { currentTour = { id: uid(), date: todayStr(), arrets: [], articles: [], reductions: {}, result: null, createdAt: Date.now() }; openEditor(); }
+function newTour() { currentTour = { id: uid(), date: todayStr(), nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, result: null, createdAt: Date.now() }; openEditor(); }
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
 
 // Synchronise une tournée non clôturée avec les données client actuelles (chevaux ajoutés/supprimés/renommés).
 function reconcileTour(tour) {
-  if (tourStatus(tour.date) === 'cloturee') return false;
+  if (statusOf(tour) === 'cloturee') return false;
   let changed = false;
   (tour.arrets || []).forEach((a) => {
     const before = JSON.stringify(a.clients);
@@ -770,7 +834,7 @@ function reconcileTour(tour) {
       if (!c) return null;                                   // client supprimé → retirer
       if (!(c.chevaux || []).length) return { clientId: cl.clientId, chevaux: [] }; // client sans cheval : déplacement seul
       const atAddr = c.chevaux.filter((h) => norm(addrStr(chevalAddr(c, h))) === norm(addrStr(a.addr)));
-      const chevaux = atAddr.map((h) => { const old = (cl.chevaux || []).find((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom)); return { id: h.id, nom: h.nom, fourbure: !!(old && old.fourbure), npas: !!(old && old.npas), parage: !!(old && old.parage) }; });
+      const chevaux = atAddr.map((h) => { const old = (cl.chevaux || []).find((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom)); return { id: h.id, nom: h.nom, fourbure: !!(old && old.fourbure), npas: !!(old && old.npas), infection: !!(old && old.infection), parage: !!(old && old.parage) }; });
       return chevaux.length ? { clientId: cl.clientId, chevaux } : null; // plus aucun cheval de ce client ici → retirer
     }).filter(Boolean);
     if (JSON.stringify(a.clients) !== before) changed = true;
@@ -795,27 +859,34 @@ function reconcileTour(tour) {
 }
 
 function openEditor() {
-  const st = tourStatus(currentTour.date); const locked = st === 'cloturee';
+  const st = statusOf(currentTour); const locked = st === 'cloturee';
   reconcileTour(currentTour); // resync chevaux/clients (non clôturée)
-  $('edTitle').textContent = currentTour.result ? 'Tournée du ' + currentTour.date : 'Nouvelle tournée';
+  const dateLbl = currentTour.date ? fmtDateFr(currentTour.date) : '';
+  $('edTitle').textContent = currentTour.result ? ('Tournée — ' + dateLbl + (currentTour.nom ? ' : ' + currentTour.nom : '')) : 'Nouvelle tournée';
   $('edStatusBadge').textContent = STATUS_LBL[st];
   $('edDate').value = currentTour.date; $('edDate').disabled = locked;
+  if ($('edNom')) { $('edNom').value = currentTour.nom || ''; $('edNom').disabled = locked; }
   const H = tourHome();
   const hasHome = addrStr(H).trim();
-  $('edHome').textContent = hasHome ? ('Départ / retour : ' + addrStr(H) + (currentTour.home && addrStr(currentTour.home).trim() ? ' (propre à cette tournée)' : ' (domicile)')) : '⚠️ Départ non défini — cliquez « Changer le départ », ou renseignez-le dans Gestion → Mes adresses → Point de départ.';
+  $('edHome').textContent = hasHome ? ('Départ : ' + addrStr(H) + (currentTour.home && addrStr(currentTour.home).trim() ? ' (propre à cette tournée)' : ' (domicile)')) : '⚠️ Départ non défini — cliquez « Changer le départ », ou renseignez-le dans Gestion → Mes adresses → Point de départ.';
   if ($('edHome')) $('edHome').classList.toggle('err', !hasHome);
+  // Arrivée : distincte si définie, sinon retour au départ.
+  const hasArr = currentTour.arrivee && addrStr(currentTour.arrivee).trim();
+  if ($('edArrivee')) $('edArrivee').textContent = hasArr ? ('Arrivée : ' + addrStr(currentTour.arrivee) + ' (propre à cette tournée)') : (hasHome ? 'Arrivée : retour au départ' : 'Arrivée : non définie');
+  if ($('edChangeHome')) $('edChangeHome').style.display = locked ? 'none' : '';
+  if ($('edChangeArrivee')) $('edChangeArrivee').style.display = locked ? 'none' : '';
+  if ($('edCloseWrap')) $('edCloseWrap').style.display = locked ? 'none' : '';
   $('edLockBanner').classList.toggle('hidden', !locked);
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
   $('edDelete').style.display = '';
   renderEditorArrets(locked);
-  renderTourArticles();
   if (currentTour.result && currentTour.result.rows && currentTour.result.rows.length === currentTour.arrets.length) recomputeMoney();
   else { renderResultUI(null); if (!locked && currentTour.arrets.length) scheduleGeoRecalc(); }
   $('edStatus').textContent = '';
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
   $('tab-editeur').classList.add('active'); window.scrollTo(0, 0);
-  if (currentTour.result) renderMap(currentTour.result.rows.map((r) => ({ lat: r.lat, lon: r.lon, label: r.label })), homeXY(), currentTour.result.routeGeo);
+  if (currentTour.result) renderMap(currentTour.result.rows.map((r) => ({ lat: r.lat, lon: r.lon, label: r.label })), homeXY(), currentTour.result.routeGeo, arrivalXY());
   else if (_mapLayer) { _mapLayer.remove(); _mapLayer = null; }
 }
 
@@ -890,7 +961,7 @@ function chooseClientTargets(c) {
 }
 function addClientToTour(c, chevaux) {
   const groups = {};
-  const push = (addr, ch) => { const k = norm(addrStr(addr)); if (!groups[k]) groups[k] = { addr: toAddr(addr), chevaux: [] }; if (ch) groups[k].chevaux.push({ id: ch.id, nom: ch.nom || 'cheval', fourbure: false, npas: false }); };
+  const push = (addr, ch) => { const k = norm(addrStr(addr)); if (!groups[k]) groups[k] = { addr: toAddr(addr), chevaux: [] }; if (ch) groups[k].chevaux.push({ id: ch.id, nom: ch.nom || 'cheval', fourbure: false, npas: false, infection: false }); };
   if (!chevaux.length) push(c.addr, null);
   else chevaux.forEach((h) => push(chevalAddr(c, h), h));
   Object.values(groups).forEach((g) => {
@@ -901,7 +972,7 @@ function addClientToTour(c, chevaux) {
 }
 
 function renderEditorArrets(locked) {
-  if (locked === undefined) locked = tourStatus(currentTour.date) === 'cloturee';
+  if (locked === undefined) locked = statusOf(currentTour) === 'cloturee';
   const box = $('edArrets'); box.innerHTML = '';
   $('edArretsEmpty').style.display = currentTour.arrets.length ? 'none' : 'block';
   const N = currentTour.arrets.length;
@@ -949,6 +1020,7 @@ function renderEditorArrets(locked) {
         const cols = [{ key: 'parage', label: 'Parage/Équil.' }];
         if (S.fourbureHT > 0) cols.push({ key: 'fourbure', label: 'Fourbure' });
         if (S.npasHT > 0) cols.push({ key: 'npas', label: 'NPAS' });
+        if (S.infectionHT > 0) cols.push({ key: 'infection', label: 'Infection' });
         h += `<table class="patho-tbl"><thead><tr><th>Cheval</th>${cols.map((c) => '<th>' + c.label + '</th>').join('')}</tr></thead><tbody>`;
         cl.chevaux.forEach((cv, ci) => {
           h += `<tr><td>🐴 ${esc(cv.nom)}</td>${cols.map((c) => {
@@ -957,7 +1029,7 @@ function renderEditorArrets(locked) {
           }).join('')}</tr>`;
         });
         h += '</tbody></table>';
-        h += `<p class="hint" style="margin-top:2px">Fourbure / NPAS ne s'activent que si « Parage/Équil. » est coché (le matériel n'est facturé qu'avec un parage).</p>`;
+        h += `<p class="hint" style="margin-top:2px">Fourbure / NPAS / Infection ne s'activent que si « Parage/Équil. » est coché (le matériel n'est facturé qu'avec un parage).</p>`;
         wrap.innerHTML = h;
         const rin = wrap.querySelector('[data-reduc]');
         if (rin) rin.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
@@ -965,12 +1037,32 @@ function renderEditorArrets(locked) {
           const cv = cl.chevaux[+inp.dataset.ci], key = inp.dataset.key;
           cv[key] = e.target.checked;
           // Parage (dé)verrouille Fourbure/NPAS → il faut re-render pour mettre à jour l'état "disabled" des cases.
-          if (key === 'parage') { if (!e.target.checked) { cv.fourbure = false; cv.npas = false; } recomputeMoney(); renderEditorArrets(locked); return; }
+          if (key === 'parage') { if (!e.target.checked) { cv.fourbure = false; cv.npas = false; cv.infection = false; } recomputeMoney(); renderEditorArrets(locked); return; }
           recomputeMoney();
         }));
         el.appendChild(wrap);
       });
     }
+    // ----- Articles de cet arrêt (couplés au client de l'arrêt) -----
+    const artWrap = document.createElement('div'); artWrap.className = 'a-articles';
+    const arts = articlesForArret(a);
+    artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<button class="btn small" data-add-art>+ Article</button>'}</div>`;
+    const alist = document.createElement('div'); alist.className = 'list';
+    if (!arts.length) alist.innerHTML = '<p class="hint">Aucun article pour cet arrêt.</p>';
+    arts.forEach((art) => {
+      const rr = (art.tvaPct || 0) / 100, qte = Math.max(1, (art.chevalNoms || []).length || 1), ttcv = (art.prixHT || 0) * qte * (1 + rr);
+      const row = document.createElement('div'); row.className = 'list-item';
+      const chn = (art.chevalNoms || []).join(', ');
+      row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${eur(ttcv)} TTC</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>'}`;
+      if (!locked) {
+        row.querySelector('[data-e]').addEventListener('click', () => modalTourArticle(art, { arret: a }));
+        row.querySelector('[data-d]').addEventListener('click', () => { currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
+      }
+      alist.appendChild(row);
+    });
+    artWrap.appendChild(alist);
+    if (!locked) { const ab = artWrap.querySelector('[data-add-art]'); if (ab) ab.addEventListener('click', () => modalTourArticle(null, { arret: a, clientId: a.clients.length === 1 ? a.clients[0].clientId : undefined })); }
+    el.appendChild(artWrap);
     box.appendChild(el);
   });
   if (!locked) enableDrag(box);
@@ -1071,8 +1163,8 @@ function computeResultMoney(rows, geom, articles, reducs) {
       m.htDep += partHT;
       cl.chevaux.forEach((c) => {
         if (!c.parage) return; // pas de parage → pas de matériel facturé pour ce cheval
-        const mat = baseMat + (c.fourbure ? S.fourbureHT : 0) + (c.npas ? S.npasHT : 0);
-        if (mat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: !!c.fourbure, npas: !!c.npas, ht: mat, ttc: mat * (1 + stdRate) }); m.htMat += mat; }
+        const mat = baseMat + (c.fourbure ? S.fourbureHT : 0) + (c.npas ? S.npasHT : 0) + (c.infection ? S.infectionHT : 0);
+        if (mat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, ht: mat, ttc: mat * (1 + stdRate) }); m.htMat += mat; }
       });
     });
   });
@@ -1125,7 +1217,7 @@ function computeResultMoney(rows, geom, articles, reducs) {
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: (cl.chevaux || []).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, parage: !!c.parage })) })),
+    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: (cl.chevaux || []).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage })) })),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
@@ -1163,7 +1255,7 @@ function recomputeTourLocal(t) {
 function refreshActiveTours() {
   let n = 0, skipped = 0;
   tournees.forEach((t) => {
-    const st = tourStatus(t.date);
+    const st = statusOf(t);
     if (st !== 'active' && st !== 'avenir') return; // on ne touche pas aux clôturées / archivées
     reconcileTour(t);
     if (recomputeTourLocal(t)) n++; else if (t.result) skipped++;
@@ -1187,7 +1279,7 @@ async function calcTour(silent) {
   if (!currentTour.arrets.length) {
     currentTour.result = null;
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour;
-    saveTournees(); renderResultUI(null); renderTourArticles();
+    saveTournees(); renderResultUI(null); renderEditorArrets();
     if (_mapLayer) { _mapLayer.remove(); _mapLayer = null; }
     if (!silent) { st.className = 'status err'; st.textContent = 'Ajoutez au moins un arrêt.'; }
     return;
@@ -1206,8 +1298,12 @@ async function calcTour(silent) {
     let directs;
     try { directs = await directMatrix(home, stops); directs = directs.map((d, i) => (d != null ? d : fallbackDirect(stops[i]))); }
     catch { directs = []; for (const s of stops) { try { const dr = await route([home, s]); directs.push(dr.totalKm); if (S.provider === 'osm') await sleep(1100); } catch { directs.push(fallbackDirect(s)); } } }
+    // Arrivée : propre à la tournée si définie (sinon retour au départ). Géocodée si besoin.
+    const A = tourArrivee();
+    if (A.lat == null && addrStr(A).trim()) { try { const g = await geocode(A); A.lat = g.lat; A.lon = g.lon; if (currentTour.arrivee) saveTournees(); if (S.provider === 'osm') await sleep(1100); } catch { /* repli sur le départ */ } }
+    const arrXY = (A.lat != null) ? { lat: A.lat, lon: A.lon } : home;
     if (!silent) st.textContent = 'Itinéraire de la tournée…';
-    const points = [home, ...stops, home];
+    const points = [home, ...stops, arrXY];
     const rt = await route(points); const legs = rt.legsKm;
 
     const rows = currentTour.arrets.map((a, i) => rowFromArret(a, { segKm: legs[i] != null ? legs[i] : 0, directKm: directs[i] }));
@@ -1220,7 +1316,7 @@ async function calcTour(silent) {
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
     saveTournees();
     renderResultUI(currentTour.result);
-    renderMap(rows.map((r) => ({ lat: r.lat, lon: r.lon, label: r.label })), home, currentTour.result.routeGeo);
+    renderMap(rows.map((r) => ({ lat: r.lat, lon: r.lon, label: r.label })), home, currentTour.result.routeGeo, arrXY);
     st.className = 'status ok'; st.textContent = silent ? 'À jour ✔' : 'Frais calculés et enregistrés.';
   } catch (e) { st.className = 'status err'; st.textContent = 'Erreur : ' + e.message; }
 }
@@ -1259,7 +1355,7 @@ function clientInvoiceHtml(m) {
   }
   if (m.materiel.length) {
     rows += sec('Matériel');
-    m.materiel.forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : ''].filter(Boolean).join(', '); rows += row(`🐴 ${esc(x.nom)}${tags ? ' (' + tags + ')' : ''}`, eur(x.ht), x.ht, x.ht * stdRate, x.ttc); });
+    m.materiel.forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : '', x.infection ? 'Infection' : ''].filter(Boolean).join(', '); rows += row(`🐴 ${esc(x.nom)}${tags ? ' (' + tags + ')' : ''}`, eur(x.ht), x.ht, x.ht * stdRate, x.ttc); });
   }
   if (m.deplacement.length) {
     rows += sec('Déplacement');
@@ -1301,7 +1397,7 @@ function invoiceTextForClient(m) {
   }
   if (m.materiel.length) {
     L.push('— Matériel —');
-    m.materiel.forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : ''].filter(Boolean).join(', '); L.push(`  ${x.nom}${tags ? ' (' + tags + ')' : ''} : ${eur(x.ht)} HT · ${eur(x.ht * stdRate)} TVA · ${eur(x.ttc)} TTC`); });
+    m.materiel.forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : '', x.infection ? 'Infection' : ''].filter(Boolean).join(', '); L.push(`  ${x.nom}${tags ? ' (' + tags + ')' : ''} : ${eur(x.ht)} HT · ${eur(x.ht * stdRate)} TVA · ${eur(x.ttc)} TTC`); });
   }
   if (m.deplacement.length) {
     L.push('— Déplacement —');
@@ -1438,9 +1534,18 @@ function renderAnalytique(R) {
   });
   wireTileDrag(box, 'analyticOrder');
 }
+// Réordonnancement des cases activable/désactivable par section (évite les déplacements involontaires au défilement).
+const _tileDrag = { analyticOrder: false, statOrder: false };
+function toggleTileDrag(orderKey, box, btn) {
+  _tileDrag[orderKey] = !_tileDrag[orderKey];
+  if (box) box.classList.toggle('reorder-on', _tileDrag[orderKey]);
+  if (btn) { btn.classList.toggle('primary', _tileDrag[orderKey]); btn.textContent = _tileDrag[orderKey] ? '✓ Ordre activé' : '⇅ Réordonner'; }
+}
 function wireTileDrag(box, orderKey) {
+  if (box) box.classList.toggle('reorder-on', !!_tileDrag[orderKey]);
   box.querySelectorAll('.tile.draggable').forEach((tile) => {
     tile.addEventListener('pointerdown', (e) => {
+      if (!_tileDrag[orderKey]) return; // réordonnancement désactivé → le défilement reste normal
       e.preventDefault(); tile.classList.add('dragging'); tile.setPointerCapture && tile.setPointerCapture(e.pointerId);
       const move = (ev) => {
         const sibs = [...box.querySelectorAll('.tile:not(.dragging)')];
@@ -1680,61 +1785,85 @@ function tourClientChevaux(clientId) {
   (currentTour.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId === clientId) cl.chevaux.forEach((c) => { const k = c.id || c.nom; if (!seen[k]) { seen[k] = 1; out.push({ id: c.id, nom: c.nom }); } }); }));
   return out;
 }
-function renderTourArticles() {
-  const box = $('edArticles'); if (!box) return; box.innerHTML = '';
-  const arts = currentTour.articles || [];
-  $('edArticlesEmpty').style.display = arts.length ? 'none' : 'block';
-  arts.forEach((a, idx) => {
-    const rr = (a.tvaPct || 0) / 100, qte = Math.max(1, (a.chevalNoms || []).length || 1), ttc = (a.prixHT || 0) * qte * (1 + rr);
-    const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>${esc(a.libelle)}</b><span class="li-sub">${esc(clientName(a.clientId))} · ×${qte} · ${eur(ttc)} TTC (TVA ${a.tvaPct}%)</span></div><div class="li-act"><button class="btn small" data-edit>Éditer</button><button class="btn small danger" data-del>✕</button></div>`;
-    el.querySelector('[data-edit]').addEventListener('click', () => modalTourArticle(a));
-    el.querySelector('[data-del]').addEventListener('click', () => { currentTour.articles.splice(idx, 1); saveTournees(); renderTourArticles(); recomputeMoney(); });
-    box.appendChild(el);
+// Chevaux d'un client PRÉSENTS à cet arrêt (article couplé à l'arrêt).
+function arretClientChevaux(arret, clientId) {
+  const cl = (arret.clients || []).find((x) => x.clientId === clientId);
+  return cl ? (cl.chevaux || []).map((c) => ({ id: c.id, nom: c.nom })) : [];
+}
+// Articles rattachés à un arrêt (par le client + au moins un cheval présent à l'arrêt).
+function articlesForArret(arret) {
+  return (currentTour.articles || []).filter((art) => {
+    const cl = (arret.clients || []).find((x) => x.clientId === art.clientId);
+    if (!cl) return false;
+    const ids = new Set((cl.chevaux || []).map((c) => c.id || c.nom));
+    const noms = new Set((cl.chevaux || []).map((c) => norm(c.nom)));
+    return (art.chevalIds || []).some((id) => ids.has(id)) || (art.chevalNoms || []).some((n) => noms.has(norm(n)));
   });
 }
-function modalTourArticle(existing) {
+// Modale article (ouverte depuis un arrêt) : « article connu » (catalogue) ou « nouvel article ».
+// opts = { arret, clientId }. Si clientId fourni (ou 1 seul client à l'arrêt), le client est verrouillé (couplé à l'arrêt).
+function modalTourArticle(existing, opts) {
+  opts = opts || {};
+  const arret = opts.arret || null;
   const tourClients = [...new Set((currentTour.arrets || []).flatMap((a) => a.clients.map((c) => c.clientId)))];
   const pool = tourClients.length ? tourClients : clients.map((c) => c.id);
   if (!pool.length) { alert('Ajoutez d\'abord un arrêt (client) à la tournée.'); return; }
-  const catOpts = ['<option value="">— depuis le catalogue —</option>'].concat(S.articlesCatalogue.map((a) => `<option value="${a.id}">${esc(a.libelle)} (${eur(a.prixHT)})</option>`)).join('');
+  let selClient = opts.clientId || (existing && existing.clientId) || (arret && arret.clients[0] && arret.clients[0].clientId) || pool[0];
+  if (!pool.includes(selClient)) selClient = pool[0];
+  const lockClient = !!opts.clientId || !!existing || (arret && arret.clients.length === 1);
+  const idsFor = (cid) => arret ? arretClientChevaux(arret, cid) : tourClientChevaux(cid);
+  const catOpts = ['<option value="">— choisir —</option>'].concat(S.articlesCatalogue.map((a) => `<option value="${a.id}">${esc(a.libelle)} (${eur(a.prixHT)})</option>`)).join('');
   const tvaOpts = tvaRatesPays().map((r) => `<option value="${r}">${r}%</option>`).join('');
-  const w = existing ? Object.assign({}, existing) : { id: uid(), clientId: pool[0], chevalNoms: [], libelle: '', prixHT: 0, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std };
+  const w = existing ? Object.assign({}, existing) : { id: uid(), clientId: selClient, chevalNoms: [], libelle: '', prixHT: 0, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std };
+  let mode = existing ? 'nouveau' : (S.articlesCatalogue.length ? 'catalogue' : 'nouveau');
   openModal(`<div class="modal-head"><b>${existing ? 'Éditer' : 'Nouvel'} article</b><button class="x" id="mX">✕</button></div>
-    <label>Depuis le catalogue<select id="aCat">${catOpts}</select></label>
-    <label>Client (dans la tournée)</label><div id="aClientPicker"></div><p class="hint" id="aClientSel"></p>
-    <label>Chevaux (quantité = nb cochés)</label><div id="aChevaux"></div>
-    <label>Intitulé<input type="text" id="aLib" value="${esc(w.libelle)}" /></label>
-    <div class="row"><label class="grow">TVA<select id="aTva">${tvaOpts}</select></label><label class="grow">Prix<input type="number" id="aPrix" step="0.01" min="0" value="${w.prixHT || ''}" /></label></div>
+    ${lockClient ? '<p class="hint" id="aClientSel"></p>' : '<label>Client (dans la tournée)</label><div id="aClientPicker"></div><p class="hint" id="aClientSel"></p>'}
+    <label>Chevaux concernés (quantité = nb cochés)</label><div id="aChevaux"></div>
+    <div class="seg" id="aMode">
+      <button type="button" class="seg-btn" data-mode="catalogue">Article connu</button>
+      <button type="button" class="seg-btn" data-mode="nouveau">Nouvel article</button>
+    </div>
+    <div id="aCatWrap"><label>Choisir dans le catalogue<select id="aCat">${catOpts}</select></label></div>
+    <div id="aNewWrap">
+      <label>Intitulé<input type="text" id="aLib" value="${esc(w.libelle)}" /></label>
+      <div class="row"><label class="grow">TVA<select id="aTva">${tvaOpts}</select></label><label class="grow">Prix<input type="number" id="aPrix" step="0.01" min="0" value="${w.prixHT || ''}" /></label></div>
+      <label class="chk"><input type="checkbox" id="aSaveCat" checked/> Ajouter au catalogue réutilisable</label>
+    </div>
     <p class="hint" id="aBreak"></p>
-    <label class="chk"><input type="checkbox" id="aSaveCat" checked/> Ajouter au catalogue réutilisable</label>
     <div class="actions"><button class="btn primary block" id="aOk">Enregistrer</button></div>`);
   $('aTva').value = String(w.tvaPct); mUnit('aPrix', '€ HT', 2);
-  const poolClients = pool.map((id) => clients.find((c) => c.id === id)).filter(Boolean);
-  let selClient = (w.clientId && pool.includes(w.clientId)) ? w.clientId : pool[0];
-  const setSel = (id) => { selClient = id; const c = clients.find((x) => x.id === id); if ($('aClientSel')) $('aClientSel').innerHTML = c ? 'Client : <b>' + esc(fullName(c)) + (c.societe ? ' — ' + esc(c.societe) : '') + '</b>' : ''; };
-  const idsFor = (cid) => tourClientChevaux(cid);
+  const setSel = (id) => { selClient = id; const c = clients.find((x) => x.id === id); if ($('aClientSel')) $('aClientSel').innerHTML = c ? 'Client : <b>' + esc(fullName(c)) + (c.societe ? ' — ' + esc(c.societe) : '') + '</b>' + (arret ? ' · arrêt : ' + esc(addrStr(arret.addr)) : '') : ''; };
   const picked = new Set(w.chevalIds || (w.chevalNoms || []).map((n) => { const c = idsFor(selClient).find((x) => x.nom === n); return c ? c.id : n; }));
   const upd = () => { const qte = Math.max(1, picked.size || 1), p = parseNum($('aPrix').value), rr = (parseFloat($('aTva').value) || 0) / 100; $('aBreak').innerHTML = `Quantité ${qte} · HT ${eur(p * qte)} · TVA ${eur(p * qte * rr)} · <b>TTC ${eur(p * qte * (1 + rr))}</b>`; };
   const renderCh = () => {
     const box = $('aChevaux'); box.innerHTML = ''; const chs = idsFor(selClient);
-    if (!chs.length) { box.innerHTML = '<p class="hint" style="color:var(--danger)">Ce client n\'a pas de cheval dans la tournée — un article doit être lié à au moins un cheval.</p>'; return; }
+    if (!chs.length) { box.innerHTML = '<p class="hint" style="color:var(--danger)">Ce client n\'a pas de cheval à cet arrêt — un article doit être lié à au moins un cheval.</p>'; return; }
     chs.forEach((c) => { const row = document.createElement('label'); row.className = 'chk'; row.innerHTML = `<input type="checkbox" ${picked.has(c.id) ? 'checked' : ''}/> 🐴 ${esc(c.nom)}`; row.querySelector('input').addEventListener('change', (e) => { e.target.checked ? picked.add(c.id) : picked.delete(c.id); upd(); }); box.appendChild(row); });
   };
-  const pk = mountClientPicker($('aClientPicker'), { list: poolClients, getSelected: () => selClient, onPick: (c) => { setSel(c.id); picked.clear(); renderCh(); upd(); pk.render(); } });
-  setSel(selClient); renderCh(); upd();
+  const applyMode = (m) => {
+    mode = m;
+    document.querySelectorAll('#aMode .seg-btn').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
+    $('aCatWrap').style.display = m === 'catalogue' ? '' : 'none';
+    $('aNewWrap').style.display = m === 'nouveau' ? '' : 'none';
+  };
+  setSel(selClient);
+  if (!lockClient) { const poolClients = pool.map((id) => clients.find((c) => c.id === id)).filter(Boolean); const pk = mountClientPicker($('aClientPicker'), { list: poolClients, getSelected: () => selClient, onPick: (c) => { setSel(c.id); picked.clear(); renderCh(); upd(); pk.render(); } }); }
+  renderCh(); upd(); applyMode(mode);
+  document.querySelectorAll('#aMode .seg-btn').forEach((b) => b.addEventListener('click', () => applyMode(b.dataset.mode)));
   $('aPrix').addEventListener('input', upd); $('aTva').addEventListener('change', upd);
   $('aCat').addEventListener('change', (e) => { const c = S.articlesCatalogue.find((x) => x.id === e.target.value); if (c) { $('aLib').value = c.libelle; $('aPrix').value = fmtNum(c.prixHT, 2); $('aTva').value = String(c.tvaPct); upd(); } });
   $('mX').addEventListener('click', closeModal);
   $('aOk').addEventListener('click', () => {
     if (!selClient) { alert('Choisissez un client.'); return; }
     if (!picked.size) { alert('Sélectionnez au moins un cheval pour cet article.'); return; }
+    if (mode === 'catalogue' && !$('aCat').value) { alert('Choisissez un article dans le catalogue, ou passez en « Nouvel article ».'); return; }
     const cid = selClient; const chs = idsFor(cid).filter((c) => picked.has(c.id));
     const art = { id: w.id || uid(), clientId: cid, chevalIds: chs.map((c) => c.id), chevalNoms: chs.map((c) => c.nom), libelle: $('aLib').value.trim() || 'Article', prixHT: parseNum($('aPrix').value), tvaPct: parseFloat($('aTva').value) || 0 };
     if (!currentTour.articles) currentTour.articles = [];
     const i = currentTour.articles.findIndex((x) => x.id === art.id); if (i >= 0) currentTour.articles[i] = art; else currentTour.articles.push(art);
-    if ($('aSaveCat').checked && !S.articlesCatalogue.some((x) => norm(x.libelle) === norm(art.libelle))) { S.articlesCatalogue.push({ id: uid(), libelle: art.libelle, prixHT: art.prixHT, tvaPct: art.tvaPct }); saveSettings(); }
-    saveTournees(); closeModal(); renderTourArticles(); recomputeMoney();
+    // Ajout au catalogue seulement en mode « nouvel article » (case cochée) et si le libellé n'y est pas déjà.
+    if (mode === 'nouveau' && $('aSaveCat') && $('aSaveCat').checked && !S.articlesCatalogue.some((x) => norm(x.libelle) === norm(art.libelle))) { S.articlesCatalogue.push({ id: uid(), libelle: art.libelle, prixHT: art.prixHT, tvaPct: art.tvaPct }); saveSettings(); }
+    saveTournees(); closeModal(); renderEditorArrets(); recomputeMoney();
   });
 }
 
@@ -1780,50 +1909,90 @@ function legMinutesFor(t) {
 }
 function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
-  const todays = [...tournees].filter((t) => tourStatus(t.date) === 'active');
-  const rows = [];
-  todays.forEach((t) => { const mins = legMinutesFor(t); (t.arrets || []).forEach((a, i) => rows.push({ t, a, trajetMin: mins[i] })); });
-  $('homeTrajetEmpty').style.display = rows.length ? 'none' : 'block';
-  rows.forEach((r, idx) => {
-    const a = r.a;
-    const adresse = addrStr(a.addr);
-    const chNames = (a.clients || []).flatMap((cl) => (cl.chevaux || []).map((c) => c.nom)).filter(Boolean).join(', ');
-    const cl0 = (a.clients || [])[0] || {}; const c0 = clients.find((x) => x.id === cl0.clientId) || {};
-    const trajet = r.trajetMin != null ? Math.round(r.trajetMin) + ' min' : '—';
-    const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>${idx + 1}. 📍 ${esc(adresse) || '<i>adresse ?</i>'}</b><span class="li-sub">${esc(labelFor(a))}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajet}</span></div>
-      <div class="li-act"><button class="btn small" data-waze>Waze</button> <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
-    el.querySelector('[data-waze]').addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(adresse); } catch { /* ignore */ }
-      const url = (a.addr.lat && a.addr.lon) ? `https://waze.com/ul?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `https://waze.com/ul?q=${encodeURIComponent(adresse)}&navigate=yes`;
-      window.open(url, '_blank');
+  const todays = [...tournees].filter((t) => statusOf(t) === 'active').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  $('homeTrajetEmpty').style.display = todays.length ? 'none' : 'block';
+  todays.forEach((t) => {
+    // 1ʳᵉ ligne : la tournée du jour elle-même (cliquable → ouvre l'éditeur).
+    box.appendChild(tourListItem(t, false));
+    const mins = legMinutesFor(t);
+    (t.arrets || []).forEach((a, i) => {
+      const adresse = addrStr(a.addr);
+      const chNames = (a.clients || []).flatMap((cl) => (cl.chevaux || []).map((c) => c.nom)).filter(Boolean).join(', ');
+      const cl0 = (a.clients || [])[0] || {}; const c0 = clients.find((x) => x.id === cl0.clientId) || {};
+      const trajet = mins[i] != null ? Math.round(mins[i]) + ' min' : '—';
+      const el = document.createElement('div'); el.className = 'list-item';
+      // Nom du client d'abord, adresse en dessous.
+      el.innerHTML = `<div class="li-main"><b>${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajet}</span></div>
+        <div class="li-act"><button class="btn small" data-waze>Waze</button> <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
+      el.querySelector('[data-waze]').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(adresse); } catch { /* ignore */ }
+        const url = (a.addr.lat && a.addr.lon) ? `https://waze.com/ul?ll=${a.addr.lat},${a.addr.lon}&navigate=yes` : `https://waze.com/ul?q=${encodeURIComponent(adresse)}&navigate=yes`;
+        window.open(url, '_blank');
+      });
+      el.querySelector('[data-sms]').addEventListener('click', async () => {
+        const msg = fillSms(S.smsTemplate, { prenom: c0.prenom || '', nom: c0.nom || '', client: fullName(c0), societe: c0.societe || '', cheval: chNames, trajet, adresse });
+        const btn = el.querySelector('[data-sms]');
+        try { await navigator.clipboard.writeText(msg); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); }
+        catch { alert(msg); }
+      });
+      // Ticket = récap de la tournée + détail complet de la facture de CE client.
+      el.querySelector('[data-ticket]').addEventListener('click', async () => {
+        const btn = el.querySelector('[data-ticket]');
+        const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
+        let txt = recapText(t.result, t);
+        txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
+        try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); }
+        catch { alert(txt); }
+      });
+      box.appendChild(el);
     });
-    el.querySelector('[data-sms]').addEventListener('click', async () => {
-      const msg = fillSms(S.smsTemplate, { prenom: c0.prenom || '', nom: c0.nom || '', client: fullName(c0), societe: c0.societe || '', cheval: chNames, trajet, adresse });
-      const btn = el.querySelector('[data-sms]');
-      try { await navigator.clipboard.writeText(msg); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); }
-      catch { alert(msg); }
-    });
-    // Ticket = récap de la tournée + détail complet de la facture de CE client (articles/matériel/déplacement + tarif plein).
-    el.querySelector('[data-ticket]').addEventListener('click', async () => {
-      const btn = el.querySelector('[data-ticket]');
-      const m = (r.t.result && r.t.result.parClient) ? r.t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
-      let txt = recapText(r.t.result, r.t);
-      txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
-      try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); }
-      catch { alert(txt); }
-    });
-    box.appendChild(el);
   });
 }
 function renderHome() {
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
-  const today = [...tournees].filter((t) => tourStatus(t.date) === 'active').sort(byDate);
-  const upcoming = [...tournees].filter((t) => tourStatus(t.date) === 'avenir').sort(byDate); // du plus proche au plus lointain
+  const upcoming = [...tournees].filter((t) => statusOf(t) === 'avenir').sort(byDate); // du plus proche au plus lointain
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((t) => box.appendChild(tourListItem(t, true))); };
+  renderHomeChangelog();
   renderHomeTrajet();
-  fill('homeToday', 'homeTodayEmpty', today);
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
+}
+// ================= CHANGELOG / message de passage de version =================
+const changelogUnread = () => CHANGELOG.filter((e) => !(S.changelogRead || []).includes(e.version));
+function markChangelogRead(version) { if (!Array.isArray(S.changelogRead)) S.changelogRead = []; if (!S.changelogRead.includes(version)) S.changelogRead.push(version); LS.set('ftr.settings', S); }
+function changelogEntryHtml(e) {
+  const li = (arr) => (arr || []).map((x) => `<li>${esc(x)}</li>`).join('');
+  return `<h3 style="margin:.2rem 0 .3rem">Version ${esc(e.version)} <span class="li-sub">· ${esc(e.date || '')}</span></h3>
+    ${e.ajouts && e.ajouts.length ? `<p class="cl-h">✨ Nouveautés</p><ul class="cl-ul">${li(e.ajouts)}</ul>` : ''}
+    ${e.corrections && e.corrections.length ? `<p class="cl-h">🔧 Corrections</p><ul class="cl-ul">${li(e.corrections)}</ul>` : ''}`;
+}
+function openChangelogEntry(e) {
+  openModal(`<div class="modal-head"><b>📣 Nouveautés</b><button class="x" id="mX">✕</button></div>
+    ${changelogEntryHtml(e)}
+    <div class="actions"><button class="btn primary block" id="clRead">✔ Marquer comme lu</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  $('clRead').addEventListener('click', () => { markChangelogRead(e.version); closeModal(); if ($('tab-reglages') && $('tab-reglages').classList.contains('active') && currentRsub === 'changelog') renderChangelog(); if ($('tab-accueil').classList.contains('active')) renderHome(); else renderHomeChangelog(); });
+}
+// Carte « message de passage de version » sur l'Accueil (seulement si version non lue).
+function renderHomeChangelog() {
+  const card = $('homeChangelog'); if (!card) return;
+  const unread = changelogUnread();
+  if (!unread.length) { card.classList.add('hidden'); card.innerHTML = ''; card.onclick = null; return; }
+  const e = unread[0];
+  card.classList.remove('hidden');
+  card.innerHTML = `<div class="cl-msg"><div class="li-main"><b>📣 Nouveautés — version ${esc(e.version)}</b><span class="li-sub">Appuyez pour découvrir les nouveautés et corrections.</span></div><span class="li-chev">›</span></div>`;
+  card.onclick = () => openChangelogEntry(e);
+}
+// Réglages → Changelog : toutes les versions ; non lues mises en avant, lues grisées.
+function renderChangelog() {
+  const box = $('changelogList'); if (!box) return; box.innerHTML = '';
+  if (!CHANGELOG.length) { box.innerHTML = '<p class="empty">Aucune note de version.</p>'; return; }
+  CHANGELOG.forEach((e) => {
+    const read = (S.changelogRead || []).includes(e.version);
+    const el = document.createElement('div'); el.className = 'card cl-entry' + (read ? ' cl-read' : ' cl-unread'); el.style.cursor = 'pointer';
+    el.innerHTML = changelogEntryHtml(e) + `<p class="li-sub">${read ? '✔ Lu' : '● Non lu — appuyez pour lire'}</p>`;
+    el.addEventListener('click', () => openChangelogEntry(e));
+    box.appendChild(el);
+  });
 }
 function modalVehicule() {
   openModal(`<div class="modal-head"><b>📋 Déclarer un événement</b><button class="x" id="mX">✕</button></div>
@@ -1937,11 +2106,11 @@ function bindSettings() {
   wS('setSeuil', 'seuilKm', 'km', 0); wS('setForfait', 'forfait', '€ HT', 2); wS('setRayon', 'rayonMemeEcurieKm', 'km', 1);
   wS('setVitesse', 'vitesseKmh', 'km/h', 0);
   wA('setAchat', 'achatHT', '€ HT', 0); wA('setDureeVie', 'dureeVieKm', 'km', 0);
-  wS('setFourbure', 'fourbureHT', '€ HT', 2); wS('setNpas', 'npasHT', '€ HT', 2);
+  wS('setFourbure', 'fourbureHT', '€ HT', 2); wS('setNpas', 'npasHT', '€ HT', 2); wS('setInfection', 'infectionHT', '€ HT', 2);
   wP('setParagePrix', 'prixHT', '€ HT', 2); wP('setParageTva', 'tvaPct', '%', 1);
   _settingsPaints = paints;
   // Champs calculés (lecture seule) : unité affichée dans le champ.
-  [['setPrixPleinHT', '€/L HT'], ['setAchatTTC', '€ TTC'], ['setAmortHT', '€/km HT'], ['setAmortTTC', '€/km TTC'], ['setForfaitTTC', '€ TTC'], ['setSeuilTarif', '€/km HT'], ['setSeuilDepHT', '€ HT'], ['setSeuilDepTTC', '€ TTC'], ['setFourbureTtc', '€ TTC'], ['setNpasTtc', '€ TTC'], ['setParageTtc', '€ TTC'], ['setPrixHeureTtc', '€ TTC'], ['setTempsKmRo', '€/km']].forEach(([id, u]) => makeReadout($(id), u));
+  [['setPrixPleinHT', '€/L HT'], ['setAchatTTC', '€ TTC'], ['setAmortHT', '€/km HT'], ['setAmortTTC', '€/km TTC'], ['setForfaitTTC', '€ TTC'], ['setSeuilTarif', '€/km HT'], ['setSeuilDepHT', '€ HT'], ['setSeuilDepTTC', '€ TTC'], ['setFourbureTtc', '€ TTC'], ['setNpasTtc', '€ TTC'], ['setInfectionTtc', '€ TTC'], ['setParageTtc', '€ TTC'], ['setPrixHeureTtc', '€ TTC'], ['setTempsKmRo', '€/km']].forEach(([id, u]) => makeReadout($(id), u));
   if ($('setSeuilType')) { $('setSeuilType').value = S.seuilTarifType; $('setSeuilType').addEventListener('change', (e) => { S.seuilTarifType = e.target.value; saveSettings(); }); }
   updateReadouts();
   if ($('setPays')) $('setPays').addEventListener('change', (e) => { S.pays = e.target.value; S.tvaRate = (PAYS_TVA[S.pays] || PAYS_TVA.be).std; if (paints.setTva) paints.setTva(); saveSettings(); });
@@ -2003,7 +2172,7 @@ function updateReadouts() {
   const tarif = tarifHT(seuilType), dep = S.seuilKm * tarif;
   put('setSeuilTarif', tarif, 3);
   put('setSeuilDepHT', dep, 2); put('setSeuilDepTTC', ttc(dep), 2);
-  put('setFourbureTtc', ttc(S.fourbureHT), 2); put('setNpasTtc', ttc(S.npasHT), 2);
+  put('setFourbureTtc', ttc(S.fourbureHT), 2); put('setNpasTtc', ttc(S.npasHT), 2); put('setInfectionTtc', ttc(S.infectionHT), 2);
   put('setParageTtc', S.parage.prixHT * (1 + (S.parage.tvaPct || 0) / 100), 2);
   put('setPrixHeureTtc', ttc(S.prixHeure), 2); put('setTempsKmRo', tempsPerKm(), 3);
 }
@@ -2048,6 +2217,7 @@ window.addEventListener('DOMContentLoaded', () => {
   checkForUpdate(); // vérifie une nouvelle version au lancement (ne bloque pas l'ouverture)
   applyTheme(); // couleur du thème (bandeau & boutons)
   const av = $('appVersion'); if (av) av.textContent = 'v' + APP_VERSION;
+  const avTop = $('appVerTop'); if (avTop) avTop.textContent = 'v' + APP_VERSION;
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
   document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => { showTab(b.dataset.goto); if (b.dataset.gsub) showGestion(b.dataset.gsub); if (b.dataset.rsub) showReglages(b.dataset.rsub); }));
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
@@ -2069,7 +2239,8 @@ window.addEventListener('DOMContentLoaded', () => {
   $('btnAddFrais').addEventListener('click', () => { S.frais.push({ id: uid(), poste: '', nature: 'recurrent', montantHT: 0, kmPrevus: 0, kmDebut: odometer() }); saveSettings(); renderFraisVehicule(); });
   $('btnAddMateriel').addEventListener('click', () => { S.materiel.push({ id: uid(), libelle: '', montantHT: 0, nbChevaux: 1 }); saveSettings(); renderMateriel(); });
   $('btnNewArticleCat').addEventListener('click', () => { S.articlesCatalogue.push({ id: uid(), libelle: '', prixHT: 0, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std }); saveSettings(); renderArticlesCat(); });
-  $('edAddArticle').addEventListener('click', () => modalTourArticle(null));
+  if ($('analyticDragBtn')) $('analyticDragBtn').addEventListener('click', () => toggleTileDrag('analyticOrder', $('analyticTiles'), $('analyticDragBtn')));
+  if ($('statDragBtn')) $('statDragBtn').addEventListener('click', () => toggleTileDrag('statOrder', $('statTiles'), $('statDragBtn')));
   $('btnNewTour').addEventListener('click', newTour);
   $('btnNewTour2').addEventListener('click', newTour);
   $('btnNewClient').addEventListener('click', () => editClient(null));
@@ -2090,6 +2261,15 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('btnBackup')) $('btnBackup').addEventListener('click', modalBackup);
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
+  if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
+  if ($('edNom')) $('edNom').addEventListener('input', (e) => { if (currentTour) { currentTour.nom = e.target.value; saveTournees(); } });
+  if ($('edClose')) $('edClose').addEventListener('click', () => {
+    if (!currentTour || currentTour.closed) return;
+    if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
+    currentTour.closed = true;
+    const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
+    saveTournees(); openEditor();
+  });
   $('edBack').addEventListener('click', () => showTab('tournees'));
   $('edAddArret').addEventListener('click', pickClientForArret);
   $('edMapBtn').addEventListener('click', showMapOnly);

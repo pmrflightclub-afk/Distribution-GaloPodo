@@ -15,10 +15,13 @@
 <body>
   <header class="topbar">
     <div class="brand"><img class="brand-logo" src="icons/logo-mark.png" alt="GaloPodo" /> <span>GaloPodo</span></div>
-    <div class="chips">
-      <div class="fuel-chip" id="fuelChip" title="Prix du dernier plein (TVAC)">⛽ —</div>
-      <div class="fuel-chip" id="consoChip" title="Consommation moyenne">🚗 —</div>
-      <div class="fuel-chip" id="kmMonthChip" title="Parcours mensuel (km ce mois)">🗓 —</div>
+    <div class="chips-wrap">
+      <div class="chips">
+        <div class="fuel-chip" id="fuelChip" title="Prix du dernier plein (TVAC)">⛽ —</div>
+        <div class="fuel-chip" id="consoChip" title="Consommation moyenne">🚗 —</div>
+        <div class="fuel-chip" id="kmMonthChip" title="Parcours mensuel (km ce mois)">🗓 —</div>
+      </div>
+      <div class="app-ver" id="appVerTop" title="Version de l'application"></div>
     </div>
   </header>
 
@@ -40,16 +43,12 @@
       <button class="btn" data-goto="reglages" data-rsub="calcul">❓ Comment ça marche</button>
     </div>
     <div class="actions"><button class="btn primary block big" id="btnNewTour">➕ Créer une tournée</button></div>
+    <div class="card changelog-card hidden" id="homeChangelog"></div>
     <section class="card">
       <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
-      <p class="hint">Chaque arrêt de la tournée d'aujourd'hui, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
+      <p class="hint">La tournée du jour puis chaque arrêt, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
       <div id="homeTrajet" class="list"></div>
       <p class="empty" id="homeTrajetEmpty">Aucune tournée aujourd'hui.</p>
-    </section>
-    <section class="card">
-      <h2>Aujourd'hui</h2>
-      <div id="homeToday" class="list"></div>
-      <p class="empty" id="homeTodayEmpty">Aucune tournée aujourd'hui.</p>
     </section>
     <section class="card">
       <h2>À venir</h2>
@@ -61,7 +60,6 @@
   <!-- ============ TOURNÉES ============ -->
   <main id="tab-tournees" class="tab-panel">
     <div class="actions"><button class="btn primary block" id="btnNewTour2">➕ Créer une tournée</button></div>
-    <section class="card"><h2>Aujourd'hui</h2><div id="trToday" class="list"></div><p class="empty" id="trTodayEmpty">Aucune tournée aujourd'hui.</p></section>
     <section class="card"><h2>À venir</h2><div id="trUpcoming" class="list"></div><p class="empty" id="trUpcomingEmpty">Aucune tournée à venir.</p></section>
     <section class="card"><h2>Clôturées (4 dernières semaines)</h2><div id="trClosed" class="list"></div><p class="empty" id="trClosedEmpty">Aucune.</p></section>
     <section class="card"><h2>Archives (plus de 4 semaines)</h2><div id="trArchive" class="list"></div><p class="empty" id="trArchiveEmpty">Aucune.</p></section>
@@ -73,8 +71,13 @@
     <p class="banner hidden" id="edLockBanner">🔒 Tournée clôturée — non modifiable.</p>
 
     <section class="card">
-      <label>Date de la tournée<input type="date" id="edDate" /></label>
+      <div class="row">
+        <label class="grow">Date de la tournée<input type="date" id="edDate" /></label>
+        <label class="grow">Nom de la tournée<input type="text" id="edNom" placeholder="Mons, secteur Nord… (identification)" /></label>
+      </div>
       <div class="card-head"><p class="hint" id="edHome" style="margin:0"></p><button class="btn small" id="edChangeHome">Changer le départ</button></div>
+      <div class="card-head"><p class="hint" id="edArrivee" style="margin:0"></p><button class="btn small" id="edChangeArrivee">Changer l'arrivée</button></div>
+      <div class="actions" id="edCloseWrap" style="margin-top:10px"><button class="btn block" id="edClose">🔒 Clôturer la tournée (figer)</button></div>
     </section>
 
     <section class="card">
@@ -93,7 +96,7 @@
       </div>
     </section>
     <section class="card">
-      <h2>Analytique (HT)</h2>
+      <div class="card-head"><h2>Analytique (HT)</h2><button class="btn small" id="analyticDragBtn">⇅ Réordonner</button></div>
       <div class="tiles tiles-3" id="analyticTiles"></div>
       <p class="hint">Répartition HT de la tournée : Services + Matériel + Véhicule + Marge = Total HT. Glissez les cases pour les réordonner ; renommez-les dans Réglages → Analyse.</p>
     </section>
@@ -102,12 +105,6 @@
       <div id="edArrets" class="arrets"></div>
       <p class="empty" id="edArretsEmpty">Ajoutez un arrêt (par client ou par cheval).</p>
       <p class="hint">Glissez la poignée ⠿ à gauche pour changer l'ordre des arrêts.</p>
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h2>Articles (facture)</h2><button class="btn small" id="edAddArticle">+ Ajouter</button></div>
-      <div id="edArticles" class="list"></div>
-      <p class="empty" id="edArticlesEmpty">Aucun article. Ajoutez des lignes facturables (plaques, produits…).</p>
     </section>
 
     <section class="card">
@@ -169,6 +166,10 @@
         <div class="row">
           <label class="grow">NPAS<input type="number" id="setNpas" step="0.01" min="0" /></label>
           <label class="grow">NPAS<input id="setNpasTtc" /></label>
+        </div>
+        <div class="row">
+          <label class="grow">Infection<input type="number" id="setInfection" step="0.01" min="0" /></label>
+          <label class="grow">Infection<input id="setInfectionTtc" /></label>
         </div>
         <p class="hint">Montants forfaitaires ajoutés au matériel d'un cheval quand la case est cochée (seulement si « Parage/Équil. » est coché).</p>
       </section>
@@ -261,7 +262,7 @@
   <!-- ============ STATS ============ -->
   <main id="tab-stats" class="tab-panel">
     <section class="card">
-      <h2>Utilisation du véhicule</h2>
+      <div class="card-head"><h2>Utilisation du véhicule</h2><button class="btn small" id="statDragBtn">⇅ Réordonner</button></div>
       <div class="tiles tiles-3" id="statTiles">
         <div class="tile draggable" data-key="kmMonth"><span class="t-label">Km ce mois</span><span class="t-val" id="kmMonth">—</span></div>
         <div class="tile draggable" data-key="kmYear"><span class="t-label">Km cette année</span><span class="t-val" id="kmYear">—</span></div>
@@ -290,10 +291,12 @@
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Configuration</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
         <button class="subtab active" data-rsub="config">Configuration</button>
+        <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
         <button class="subtab" data-rsub="service">Service</button>
         <button class="subtab" data-rsub="calcul">Calcul</button>
         <button class="subtab" data-rsub="analyse">Analyse</button>
         <button class="subtab" data-rsub="theme">Thème</button>
+        <button class="subtab" data-rsub="changelog">Changelog</button>
       </div>
     </nav>
 
@@ -364,12 +367,15 @@
       <p class="hint" id="amortHint"></p>
     </section>
 
+    </div><!-- /rsub-config -->
+
+    <div id="rsub-sauvegarde" class="subpanel">
     <section class="card">
       <h2>Sauvegarde &amp; transfert</h2>
       <p class="hint">Exportez vos réglages, articles, frais et données (sauvegarde, transfert d'appareil, ou pour définir les valeurs par défaut de l'app). Importez une sauvegarde pour tout restaurer.</p>
       <button class="btn small" id="btnBackup">💾 Sauvegarde / restauration</button>
     </section>
-    </div><!-- /rsub-config -->
+    </div><!-- /rsub-sauvegarde -->
 
     <div id="rsub-service" class="subpanel">
     <section class="card">
@@ -428,6 +434,14 @@
       </section>
       <p class="status ok">Réglages enregistrés automatiquement. · <span id="appVersion"></span></p>
     </div><!-- /rsub-theme -->
+
+    <div id="rsub-changelog" class="subpanel">
+      <section class="card">
+        <h2>Journal des versions</h2>
+        <p class="hint">Nouveautés et corrections apportées à chaque version. Les versions non lues sont mises en avant ; les lues sont grisées.</p>
+        <div id="changelogList" class="list"></div>
+      </section>
+    </div><!-- /rsub-changelog -->
   </main>
 
   <div id="modal" class="modal-overlay hidden"><div class="modal" id="modalBox"></div></div>
