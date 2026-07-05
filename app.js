@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.12';
+const APP_VERSION = '1.1.13';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.13', date: '2026-07-05',
+    ajouts: [
+      'Case « Infection » : elle réapparaît à côté de Fourbure et NPAS dans chaque arrêt (un prix par défaut lui est attribué ; réglable dans Réglages → Calcul). Elle était masquée tant qu\'aucun prix n\'était défini.',
+      'Synchro plus complète : l\'adresse de départ (domicile), le carnet « Mes adresses » et le statut « changelog lu » sont désormais conservés/fusionnés entre appareils (jamais écrasés par un appareil qui les avait vides).',
+    ],
+  },
   {
     version: '1.1.12', date: '2026-07-05',
     ajouts: [
@@ -303,6 +310,8 @@ if (!S.seededServos) {
   if (!S.frais.length) S.frais = mkFrais();
   LS.set('ftr.settings', S);
 }
+// Infection ajoutée après Fourbure/NPAS : back-fill unique d'un prix par défaut pour que la case apparaisse aussi (les anciens utilisateurs avaient infectionHT=0 → colonne masquée).
+if (!S.infectionSeeded) { S.infectionSeeded = true; if (!S.infectionHT) S.infectionHT = 9.90; LS.set('ftr.settings', S); }
 S.materiel.forEach((m) => { if (typeof m.nbChevaux !== 'number') m.nbChevaux = 1; }); // migration nbChevaux
 // V2 : retire les anciens produits, itemise le matériel, ajoute les catégories véhicule
 if (!S.seededV2) {
@@ -446,6 +455,11 @@ function mergeSettings(localS, remoteS) {
   // Items d'agenda : « fait sur un appareil = fait partout » → union des clés (eventId), jamais l'un n'efface l'autre.
   merged.agendaImported = Object.assign({}, (localS && localS.agendaImported) || {}, (remoteS && remoteS.agendaImported) || {});
   merged.agendaInactive = Object.assign({}, (localS && localS.agendaInactive) || {}, (remoteS && remoteS.agendaInactive) || {});
+  // Adresse de départ (domicile) : ne jamais la perdre si l'appareil « gagnant » l'avait vide → reprendre celle qui est renseignée.
+  const hasAddr = (a) => { try { return !!addrStr(a).trim(); } catch { return false; } };
+  if (!hasAddr(merged.home)) { if (localS && hasAddr(localS.home)) merged.home = localS.home; else if (remoteS && hasAddr(remoteS.home)) merged.home = remoteS.home; }
+  // Carnet « Mes adresses » de départ : union par id (ne pas perdre celles saisies sur l'autre appareil).
+  { const byId = {}; ((localS && localS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); ((remoteS && remoteS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); merged.adresses = Object.values(byId); }
   return merged;
 }
 // Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
