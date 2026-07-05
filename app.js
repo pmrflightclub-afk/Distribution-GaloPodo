@@ -40,6 +40,10 @@ const CHANGELOG = [
       'Durées unifiées partout : moins d\'1h → minutes, à partir d\'1h → « 1h30 » (trajets, temps de travail, stats, SMS, saisie Route avec aperçu en direct).',
       'Thème : couleurs enfin fidèles sur téléphone/iOS (les pastilles et boutons ne prennent plus le style système gris) ; l\'app impose ses couleurs quel que soit le mode sombre du téléphone.',
       'Google : aide « Cloud Console » clarifiée (avec lien direct) ; un seul ID client active Drive ET Agenda, au choix (indépendants).',
+      'Compta : toute tournée calculée y apparaît (avant, seules les tournées avec paiement enregistré comptaient) ; non classé → « Factures » par défaut. Bouton « 💶 Paiement » ajouté dans l\'éditeur pour classer n\'importe quelle tournée.',
+      'Stats « Km & heures » : temps RÉEL par cheval quand la tournée a été suivie (Démarrer→Clôturer), sinon estimé ; toutes les tournées (clôturées, du jour, à venir, archivées).',
+      'Réglages : sous-onglets réordonnés (Configuration · Synchro · GPS · Service · Calcul · Analyse · Thème · Changelog · Sauvegarde).',
+      'Bandeau : numéro de version déplacé sous le logo (à gauche), en petit, sans réduire le logo.',
       'Trajet du jour : nom du client d\'abord, adresse en dessous ; la tournée du jour apparaît en 1ʳᵉ ligne.',
       'Tournée clôturée réellement figée (changer départ, articles, suppression bloqués).',
       'Palette de couleurs : contours de pastilles visibles, couleur personnalisée indiquée comme sélectionnée.',
@@ -1260,9 +1264,10 @@ function renderEditorArrets(locked) {
     const nav = document.createElement('div'); nav.className = 'a-nav';
     const estMin = legMins[i] != null ? Math.round(legMins[i]) : null;
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span><span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button>${locked ? '' : ' <button class="btn small" data-route>Route</button>'}</span>`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span><span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button>${locked ? '' : ' <button class="btn small" data-route>Route</button>'} <button class="btn small" data-pay>💶 Paiement</button></span>`;
     nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
     if (!locked) { const rb = nav.querySelector('[data-route]'); if (rb) rb.addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets())); }
+    nav.querySelector('[data-pay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets())); // classer le paiement (liquide/virement/facture) pour la Compta
     el.appendChild(nav);
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
@@ -1789,7 +1794,9 @@ function kmStats() {
     if (!t.result) return;
     if ((t.date || '').startsWith(ym)) mois += t.result.totalKm;
     if ((t.date || '').startsWith(y)) annee += t.result.totalKm;
-    const mpk = t.result.totalKm > 0 ? t.result.totalMin / t.result.totalKm : 0; // minutes par km
+    const w = travailForTour(t); // temps réel si la tournée a été suivie (Démarrer→Clôturer), sinon durée estimée
+    const totMin = (w && w.totalMs != null) ? w.totalMs / 60000 : t.result.totalMin;
+    const mpk = t.result.totalKm > 0 ? totMin / t.result.totalKm : 0; // minutes par km (réel si dispo)
     (t.result.rows || []).forEach((r) => {
       const kmClient = (r.kmAttribue || 0) / Math.max(1, r.nbClients);
       (r.clients || []).forEach((cl) => {
@@ -2039,9 +2046,11 @@ function comptaData(ym) {
   allTours().forEach((t) => {
     if (!(t.date || '').startsWith(ym) || !t.result || !t.result.parClient) return;
     t.result.parClient.forEach((m) => {
-      const p = (t.payments || {})[m.clientId]; if (!p) return;
+      const p = (t.payments || {})[m.clientId];
       const entry = { clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC };
-      if (p.method === 'liquide') {
+      const method = p ? p.method : null;
+      const facture = p ? p.facture : true; // paiement non renseigné → une facture est due par défaut
+      if (method === 'liquide') {
         const ttc = (p.montantPaye != null) ? p.montantPaye : m.totalTTC;
         const ht = ttc / (1 + r); liquideClients.push({ nom: m.nom, ht, tva: ttc - ht, ttc });
         // Globalisation par poste (sans nom de client) : articles par libellé + Matériel + Déplacement + Arrondi.
@@ -2049,9 +2058,8 @@ function comptaData(ym) {
         if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
         const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
         if (p.montantPaye != null) { const diff = p.montantPaye - m.totalTTC; if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); } }
-      }
-      if (p.method === 'virement') virementClients.push(entry);
-      if (p.facture) factureClients.push(entry);
+      } else if (method === 'virement') virementClients.push(entry);
+      if (facture || !method) factureClients.push(entry); // non classé → apparaît en « Factures » (à classer)
     });
   });
   const sum = (arr) => arr.reduce((a, x) => ({ ht: a.ht + x.ht, tva: a.tva + x.tva, ttc: a.ttc + x.ttc }), { ht: 0, tva: 0, ttc: 0 });
@@ -2495,7 +2503,7 @@ function modalPayment(t, arret, after) {
   if (!clientsAt.length) { if (after) after(); return; }
   if (!t.payments) t.payments = {};
   const invTTC = (cid) => { const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; return m ? m.totalTTC : 0; };
-  const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; saveTournees(); };
+  const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); return; } const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); return; } tournees.push(t); saveTournees(); };
   let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div>';
   clientsAt.forEach((cid) => {
     const p = t.payments[cid] || { method: 'virement', facture: false, montantPaye: null };

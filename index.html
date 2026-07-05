@@ -14,14 +14,16 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="icons/logo-mark.png" alt="GaloPodo" /> <span>GaloPodo</span></div>
+    <div class="brand">
+      <span class="brand-logo-wrap"><img class="brand-logo" src="icons/logo-mark.png" alt="GaloPodo" /><span class="app-ver" id="appVerTop" title="Version de l'application"></span></span>
+      <span>GaloPodo</span>
+    </div>
     <div class="chips-wrap">
       <div class="chips">
         <div class="fuel-chip" id="fuelChip" title="Prix du dernier plein (TVAC)">⛽ —</div>
         <div class="fuel-chip" id="consoChip" title="Consommation moyenne">🚗 —</div>
         <div class="fuel-chip" id="kmMonthChip" title="Parcours mensuel (km ce mois)">🗓 —</div>
       </div>
-      <div class="app-ver" id="appVerTop" title="Version de l'application"></div>
     </div>
   </header>
 
@@ -283,7 +285,7 @@
     <div id="gsub-compta" class="subpanel">
       <section class="card">
         <div class="card-head"><h2>Compta mensuelle</h2><select id="comptaMonth" style="width:auto;margin:0"></select></div>
-        <p class="hint">Pour votre comptable : <b>liquide</b> (postes globalisés, sans nom de client), <b>virements</b> et <b>factures pro</b> (par client). Remise à zéro chaque mois ; les mois passés sont archivés avec un statut. Bouton 🖨 = fiche PDF par section (via l'impression du navigateur).</p>
+        <p class="hint">Pour votre comptable : <b>liquide</b> (postes globalisés, sans nom de client), <b>virements</b> et <b>factures pro</b> (par client). Toute tournée calculée apparaît ; tant que le paiement n'est pas classé, le client est en <b>Factures</b> (à émettre). Classez le mode via le bouton <b>💶 Paiement</b> d'un arrêt (Trajet du jour ou éditeur). Remise à zéro chaque mois ; mois passés archivés avec statut. 🖨 = fiche PDF par section.</p>
         <div id="comptaBody"></div>
       </section>
     </div>
@@ -345,14 +347,14 @@
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Configuration</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
         <button class="subtab active" data-rsub="config">Configuration</button>
-        <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
-        <button class="subtab" data-rsub="service">Service</button>
-        <button class="subtab" data-rsub="gps">GPS</button>
         <button class="subtab" data-rsub="synchro">Synchro</button>
+        <button class="subtab" data-rsub="gps">GPS</button>
+        <button class="subtab" data-rsub="service">Service</button>
         <button class="subtab" data-rsub="calcul">Calcul</button>
         <button class="subtab" data-rsub="analyse">Analyse</button>
         <button class="subtab" data-rsub="theme">Thème</button>
         <button class="subtab" data-rsub="changelog">Changelog</button>
+        <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
       </div>
     </nav>
 
