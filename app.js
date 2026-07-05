@@ -48,6 +48,10 @@ const CHANGELOG = [
       'Stats : nouvelle section « Analyse financière par cheval » (avec le nom du client).',
       'Suppression : confirmation systématique avant de supprimer un client, un cheval, un arrêt, un article, un frais ou du matériel.',
       'Éditeur de tournée : la carte du trajet est placée juste au-dessus des arrêts.',
+      'Compta : bouton PDF corrigé (impression via le navigateur, ne ferme plus l\'app). Compta et Agenda déplacés en onglets principaux.',
+      'Facture : l\'arrondi caisse (liquide) apparaît en dernière ligne d\'article et corrige le total (facture, ticket, stats). Parage & Équilibrage en 1ʳᵉ position des articles.',
+      'Client proche : la ligne « forfait » affiche le km du seuil (ex. 15 km) et ce km est compté dans les stats par client/cheval.',
+      'Tournée clôturée : boutons Waze / Route / Paiement masqués dans les arrêts (le paiement se classe dans la Compta).',
       'Correctifs téléphone : logo et n° de version réaffichés (masqués par erreur sur petit écran) ; couleur du bandeau/thème bien appliquée sur iOS (le sélecteur natif émettant « change ») ; le mode sombre du système ne teinte plus l\'app (color-scheme). Sous-onglets Réglages : Synchro · Sauvegarde · Changelog (en dernier).',
       'Trajet du jour : nom du client d\'abord, adresse en dessous ; la tournée du jour apparaît en 1ʳᵉ ligne.',
       'Tournée clôturée réellement figée (changer départ, articles, suppression bloqués).',
@@ -796,6 +800,7 @@ function showTab(name) {
   if (name === 'accueil') renderHome();
   if (name === 'tournees') renderTours();
   if (name === 'agenda') showAgenda(currentAsub);
+  if (name === 'compta') renderCompta();
   if (name === 'gestion') showGestion(currentGsub);
   if (name === 'stats') renderStats();
   if (name === 'reglages') showReglages(currentRsub);
@@ -830,7 +835,6 @@ function showGestion(sub) {
   if (currentGsub === 'articles') renderArticlesPage();
   if (currentGsub === 'materiel') renderMateriel();
   if (currentGsub === 'vehicule') renderFraisVehicule();
-  if (currentGsub === 'compta') renderCompta();
   if (currentGsub === 'sms') renderSMS();
 }
 
@@ -1265,14 +1269,16 @@ function renderEditorArrets(locked) {
       ${(!locked && single) ? `<label class="a-reduc-row"><span>Réduction articles</span><span class="fu"><input type="number" data-reduc-h min="0" max="100" step="1" value="${currentTour.reductions && currentTour.reductions[single.clientId] || ''}" placeholder="0"/><span class="fu-unit">%</span></span></label>` : ''}
       <div class="a-grid"><label class="grow">Tarif appliqué<select data-type ${locked ? 'disabled' : ''}><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label></div>`;
     el.querySelector('[data-type]').value = a.type || 'tournee';
-    // Waze + Route (temps réel) par arrêt, couplés au client de l'arrêt. Waze toujours actif ; Route seulement si non clôturée.
+    // Temps trajet + (tournée non clôturée) Waze / Route / Paiement. Tournée clôturée = figée : aucun bouton (paiement se gère en Compta).
     const nav = document.createElement('div'); nav.className = 'a-nav';
     const estMin = legMins[i] != null ? Math.round(legMins[i]) : null;
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span><span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button>${locked ? '' : ' <button class="btn small" data-route>Route</button>'} <button class="btn small" data-pay>💶 Paiement</button></span>`;
-    nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
-    if (!locked) { const rb = nav.querySelector('[data-route]'); if (rb) rb.addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets())); }
-    nav.querySelector('[data-pay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets())); // classer le paiement (liquide/virement/facture) pour la Compta
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button> <button class="btn small" data-pay>💶 Paiement</button></span>`}`;
+    if (!locked) {
+      nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
+      nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
+      nav.querySelector('[data-pay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets())); // classer le paiement pour la Compta
+    }
     el.appendChild(nav);
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
@@ -1424,7 +1430,7 @@ function computeResultMoney(rows, geom, articles, reducs) {
   const sumSegLoin = loin.reduce((s, r) => s + r.segKm, 0);
   const totClientsLoin = loin.reduce((s, r) => s + r.nbClients, 0);
   rows.forEach((r) => {
-    if (r.proche) { r.kmAttribue = 0; r.tarifHT = 0; r.montantHT = S.forfait; }
+    if (r.proche) { r.kmAttribue = S.seuilKm || 0; r.tarifHT = 0; r.montantHT = S.forfait; } // forfait = km du seuil (compté dans les stats), montant = forfait fixe
     else {
       if (S.repartition === 'prorata' && sumSegLoin > 0) r.kmAttribue = kmRestant * r.segKm / sumSegLoin;
       else if (S.repartition === 'parclient' && totClientsLoin > 0) r.kmAttribue = kmRestant * r.nbClients / totClientsLoin;
@@ -1467,7 +1473,7 @@ function computeResultMoney(rows, geom, articles, reducs) {
     Object.keys(pa).forEach((cid) => {
       const noms = pa[cid], qte = noms.length, rr = (S.parage.tvaPct || 0) / 100, lineHT = S.parage.prixHT * qte;
       const m = getC(cid, clientName(cid));
-      m.articles.push({ libelle: 'Parage et équilibrage', chevaux: noms, qte, prixHT: S.parage.prixHT, tvaPct: S.parage.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr) });
+      m.articles.unshift({ libelle: 'Parage et équilibrage', chevaux: noms, qte, prixHT: S.parage.prixHT, tvaPct: S.parage.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr) }); // Parage en 1ʳᵉ position dans la facture
       m.htArt += lineHT; m.tvaArt += lineHT * rr;
     });
   }
@@ -1623,34 +1629,37 @@ function renderResultUI(R) {
   if (!R || !R.parClient || !R.parClient.length) { $('edInvoiceEmpty').style.display = 'block'; box.style.display = 'none'; return; }
   $('edInvoiceEmpty').style.display = 'none'; box.style.display = '';
   const pays = (currentTour && currentTour.payments) || {};
-  R.parClient.forEach((m) => { box.appendChild(clientInvoiceEl(m, pays[m.clientId])); });
+  let arHT = 0, arTVA = 0, arTTC = 0;
+  R.parClient.forEach((m) => { const ar = cashRounding(m, pays[m.clientId]); arHT += ar.ht; arTVA += ar.tva; arTTC += ar.ttc; box.appendChild(clientInvoiceEl(m, pays[m.clientId])); });
   const f = document.createElement('div'); f.className = 'inv-footer';
-  f.innerHTML = `<div class="inv-line"><span>Total HT</span><span>${eur(R.totalHT)}</span></div>
-    <div class="inv-line"><span>TVA</span><span>${eur(R.totalTVA)}</span></div>
-    <div class="inv-line inv-total"><span>Total TTC</span><span>${eur(R.totalTTC)}</span></div>`;
+  f.innerHTML = `<div class="inv-line"><span>Total HT</span><span>${eur(R.totalHT + arHT)}</span></div>
+    <div class="inv-line"><span>TVA</span><span>${eur(R.totalTVA + arTVA)}</span></div>
+    ${Math.abs(arTTC) >= 0.005 ? `<div class="inv-line" style="color:var(--warn)"><span>dont arrondi caisse (liquide)</span><span>${eur(arTTC)}</span></div>` : ''}
+    <div class="inv-line inv-total"><span>Total TTC</span><span>${eur(R.totalTTC + arTTC)}</span></div>`;
   box.appendChild(f);
 }
 
 // Un bloc facture pour un client : 3 sections (Articles · Matériel · Déplacement), par cheval.
 function clientInvoiceEl(m, payment) { const el = document.createElement('div'); el.className = 'inv-client'; el.innerHTML = clientInvoiceHtml(m, payment); return el; }
-// Ligne d'arrondi caisse (paiement liquide arrondi) : différence TTC (+ HT/TVA au taux standard) et net encaissé.
-function cashRoundingRows(m, payment, rowFn) {
-  if (!payment || payment.method !== 'liquide' || payment.montantPaye == null) return '';
+// Arrondi caisse d'un client (paiement liquide arrondi) : { has, ht, tva, ttc } — différence à intégrer dans la facture.
+function cashRounding(m, payment) {
+  if (!payment || payment.method !== 'liquide' || payment.montantPaye == null) return { has: false, ht: 0, tva: 0, ttc: 0 };
   const diffTTC = payment.montantPaye - m.totalTTC;
-  if (Math.abs(diffTTC) < 0.005) return '';
-  const r = rate(); const dHT = diffTTC / (1 + r), dTVA = diffTTC - dHT;
-  const nHT = payment.montantPaye / (1 + r), nTVA = payment.montantPaye - nHT;
-  return rowFn('💶 Arrondi caisse', '', dHT, dTVA, diffTTC, 'inv-reduc') + rowFn('Net encaissé (liquide)', '', nHT, nTVA, payment.montantPaye, 'inv-total-row');
+  if (Math.abs(diffTTC) < 0.005) return { has: false, ht: 0, tva: 0, ttc: 0 };
+  const r = rate(); const ht = diffTTC / (1 + r); return { has: true, ht, tva: diffTTC - ht, ttc: diffTTC };
 }
 function clientInvoiceHtml(m, payment) {
   const stdRate = rate();
   // Colonnes : Poste | Prix unitaire | Base HT (×quantité, remise incluse) | TVA | TTC.
   const row = (label, unitStr, baseHT, tva, ttc, cls) => `<tr${cls ? ' class="' + cls + '"' : ''}><td>${label}</td><td>${unitStr}</td><td>${eur(baseHT)}</td><td>${eur(tva)}</td><td>${eur(ttc)}</td></tr>`;
   const sec = (t) => `<tr class="inv-sec-row"><td colspan="5">${t}</td></tr>`;
+  const arr = cashRounding(m, payment); // arrondi caisse (liquide)
   let rows = '';
-  if (m.articles.length) {
+  if (m.articles.length || arr.has) {
     rows += sec('Articles');
     m.articles.forEach((a) => { const noms = a.chevaux.length ? ' — ' + a.chevaux.map(esc).join(', ') : ''; const rem = a.remisePct ? ` <span class="rem-tag">−${a.remisePct}%</span>` : ''; rows += row(`🧾 ${esc(a.libelle)} ×${a.qte}${noms} (TVA ${a.tvaPct}%)${rem}`, eur(a.prixHT), a.ht, a.tva, a.ttc); });
+    // Arrondi caisse en DERNIÈRE position des articles → impacte le sous-total.
+    if (arr.has) rows += row('💶 Arrondi caisse (liquide)', '', arr.ht, arr.tva, arr.ttc, 'inv-reduc');
   }
   if (m.materiel.length) {
     rows += sec('Matériel');
@@ -1661,14 +1670,15 @@ function clientInvoiceHtml(m, payment) {
     m.deplacement.forEach((l) => {
       const noms = l.chevaux.length ? ' — ' + l.chevaux.map(esc).join(', ') : '';
       const unitStr = l.proche ? 'forfait' : `${eurkm(l.tarifHT)}/km`;
-      const mult = l.proche ? '' : ` · ${km(l.km)}`;
+      const mult = ` · ${km(l.km)}`; // toujours afficher le km (client proche = km du seuil)
       rows += row(`📍 ${esc(l.adresse)} ${TYPES[l.type]}${noms}${mult}`, unitStr, l.partHT, l.partHT * stdRate, l.partTTC);
     });
   }
-  return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(m.totalTTC)} TTC</span></div>
+  const netHT = m.totalHT + arr.ht, netTVA = m.totalTVA + arr.tva, netTTC = m.totalTTC + arr.ttc; // total corrigé (arrondi inclus)
+  return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(netTTC)} TTC</span></div>
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${row('Sous-total', '', m.totalHT, m.totalTVA, m.totalTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${cashRoundingRows(m, payment, row)}</tfoot></table></div>`;
+    <tfoot>${row(arr.has ? 'Sous-total (net encaissé)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}</tfoot></table></div>`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
@@ -1696,10 +1706,12 @@ function recapText(R, tour) {
 // Détail nominatif d'UN client (toutes ses lignes de facture) — pour le « Ticket ».
 function invoiceTextForClient(m, payment) {
   const stdRate = rate();
+  const arr = cashRounding(m, payment);
   const L = [`Client : ${m.nom}`];
-  if (m.articles.length) {
+  if (m.articles.length || arr.has) {
     L.push('— Articles —');
     m.articles.forEach((a) => { const ch = a.chevaux.length ? ' (' + a.chevaux.join(', ') + ')' : ''; const rem = a.remisePct ? ` −${a.remisePct}%` : ''; L.push(`  ${a.libelle} ×${a.qte}${ch}${rem} : ${eur(a.ht)} HT · ${eur(a.tva)} TVA · ${eur(a.ttc)} TTC`); });
+    if (arr.has) L.push(`  Arrondi caisse (liquide) : ${eur(arr.ht)} HT · ${eur(arr.tva)} TVA · ${eur(arr.ttc)} TTC`);
   }
   if (m.materiel.length) {
     L.push('— Matériel —');
@@ -1707,18 +1719,12 @@ function invoiceTextForClient(m, payment) {
   }
   if (m.deplacement.length) {
     L.push('— Déplacement —');
-    m.deplacement.forEach((l) => { const ch = l.chevaux.length ? ' (' + l.chevaux.join(', ') + ')' : ''; const u = l.proche ? 'forfait' : `${km(l.km)} × ${eurkm(l.tarifHT)}/km`; L.push(`  ${l.adresse} ${TYPES[l.type]}${ch} — ${u} : ${eur(l.partHT)} HT · ${eur(l.partHT * stdRate)} TVA · ${eur(l.partTTC)} TTC`); });
+    m.deplacement.forEach((l) => { const ch = l.chevaux.length ? ' (' + l.chevaux.join(', ') + ')' : ''; const u = l.proche ? `${km(l.km)} (forfait)` : `${km(l.km)} × ${eurkm(l.tarifHT)}/km`; L.push(`  ${l.adresse} ${TYPES[l.type]}${ch} — ${u} : ${eur(l.partHT)} HT · ${eur(l.partHT * stdRate)} TVA · ${eur(l.partTTC)} TTC`); });
   }
-  L.push(`Sous-total (à payer) : ${eur(m.totalHT)} HT · ${eur(m.totalTVA)} TVA · ${eur(m.totalTTC)} TTC`);
+  L.push(`Sous-total${arr.has ? ' (net encaissé)' : ' (à payer)'} : ${eur(m.totalHT + arr.ht)} HT · ${eur(m.totalTVA + arr.tva)} TVA · ${eur(m.totalTTC + arr.ttc)} TTC`);
   const pHT = m.pleinHT != null ? m.pleinHT : m.totalHT, pTVA = m.pleinTVA != null ? m.pleinTVA : m.totalTVA, pTTC = m.pleinTTC != null ? m.pleinTTC : m.totalTTC;
   L.push(`Tarif plein : ${eur(pHT)} HT · ${eur(pTVA)} TVA · ${eur(pTTC)} TTC`);
-  if (payment && payment.method === 'liquide' && payment.montantPaye != null) {
-    const diffTTC = payment.montantPaye - m.totalTTC;
-    if (Math.abs(diffTTC) >= 0.005) { const r = rate(); const dHT = diffTTC / (1 + r); L.push(`Arrondi caisse : ${eur(dHT)} HT · ${eur(diffTTC - dHT)} TVA · ${eur(diffTTC)} TTC`); }
-    L.push(`Net encaissé (liquide) : ${eur(payment.montantPaye)} TTC`);
-  } else if (payment && payment.method) {
-    L.push(`Paiement : ${payment.method === 'liquide' ? 'liquide' : 'virement'}${payment.facture ? ' · facture demandée' : ''}`);
-  }
+  if (payment && payment.method) L.push(`Paiement : ${payment.method === 'liquide' ? 'liquide' : 'virement'}${payment.facture ? ' · facture demandée' : ''}`);
   return L.join('\n');
 }
 
@@ -2085,12 +2091,18 @@ function comptaData(ym) {
   const sum = (arr) => arr.reduce((a, x) => ({ ht: a.ht + x.ht, tva: a.tva + x.tva, ttc: a.ttc + x.ttc }), { ht: 0, tva: 0, ttc: 0 });
   return { liquideClients, virementClients, factureClients, liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients), factureTotal: sum(factureClients) };
 }
-// Ouvre une fenêtre imprimable (→ PDF via le navigateur).
+// Génère le PDF via l'impression du navigateur, dans le document courant (compatible PWA installée,
+// contrairement à window.open('_blank') qui est bloqué / ferme l'app sur mobile).
 function printHtml(title, bodyHtml) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Autorisez les fenêtres pop-up pour générer le PDF.'); return; }
-  w.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:22px;color:#111}h1{font-size:19px;margin:0 0 4px}h2{font-size:14px;color:#555;margin:0 0 16px;font-weight:600}table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}th,td{border:1px solid #ccc;padding:6px 8px;text-align:right}th:first-child,td:first-child{text-align:left}tfoot td{font-weight:700}</style></head><body>${bodyHtml}<script>window.onload=function(){setTimeout(function(){window.print()},150)}<\/script></body></html>`);
-  w.document.close();
+  let pa = document.getElementById('printArea');
+  if (!pa) { pa = document.createElement('div'); pa.id = 'printArea'; document.body.appendChild(pa); }
+  pa.innerHTML = bodyHtml;
+  document.title = title;
+  document.body.classList.add('printing');
+  const done = () => { document.body.classList.remove('printing'); pa.innerHTML = ''; document.title = 'GaloPodo'; window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  setTimeout(() => { window.print(); }, 60);
+  setTimeout(done, 120000); // filet de sécurité
 }
 let currentComptaMonth = null;
 function renderCompta() {

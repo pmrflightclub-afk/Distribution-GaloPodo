@@ -32,6 +32,7 @@
     <div class="tabs-inner" id="tabsInner">
       <button class="tab active" data-tab="accueil">Accueil</button>
       <button class="tab" data-tab="tournees">Tournées</button>
+      <button class="tab" data-tab="compta">Compta</button>
       <button class="tab" data-tab="agenda">Agenda</button>
       <button class="tab" data-tab="gestion">Gestion</button>
       <button class="tab" data-tab="stats">Stats</button>
@@ -153,6 +154,15 @@
     </div>
   </main>
 
+  <!-- ============ COMPTA ============ -->
+  <main id="tab-compta" class="tab-panel">
+    <section class="card">
+      <div class="card-head"><h2>Compta mensuelle</h2><select id="comptaMonth" style="width:auto;margin:0"></select></div>
+      <p class="hint">Pour votre comptable : <b>liquide</b> (postes globalisés, sans nom de client), <b>virements</b> et <b>factures pro</b> (par client). Toute tournée calculée apparaît ; tant que le paiement n'est pas classé, le client est en <b>Factures</b>. Classez le mode ici (menu <b>Mode</b>) ou via le bouton <b>💶 Paiement</b> d'un arrêt. Remise à zéro chaque mois ; mois passés archivés avec statut. 🖨 = fiche PDF par section.</p>
+      <div id="comptaBody"></div>
+    </section>
+  </main>
+
   <!-- ============ GESTION (hub) ============ -->
   <main id="tab-gestion" class="tab-panel">
     <nav class="subtabs" id="gestionSub">
@@ -163,7 +173,6 @@
         <button class="subtab" data-gsub="articles">Articles</button>
         <button class="subtab" data-gsub="materiel">Frais matériel</button>
         <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
-        <button class="subtab" data-gsub="compta">Compta</button>
         <button class="subtab" data-gsub="sms">SMS</button>
       </div>
     </nav>
@@ -278,14 +287,6 @@
         <p class="hint">Amortissement + chaque poste ci-dessous forment la base véhicule au km. Modifiez les champs directement dans la ligne.</p>
         <div id="fraisList" class="edit-list"></div>
         <p class="empty" id="fraisEmpty">Aucun frais. Ajoutez entretien, assurance, réparations…</p>
-      </section>
-    </div>
-
-    <div id="gsub-compta" class="subpanel">
-      <section class="card">
-        <div class="card-head"><h2>Compta mensuelle</h2><select id="comptaMonth" style="width:auto;margin:0"></select></div>
-        <p class="hint">Pour votre comptable : <b>liquide</b> (postes globalisés, sans nom de client), <b>virements</b> et <b>factures pro</b> (par client). Toute tournée calculée apparaît ; tant que le paiement n'est pas classé, le client est en <b>Factures</b> (à émettre). Classez le mode via le bouton <b>💶 Paiement</b> d'un arrêt (Trajet du jour ou éditeur). Remise à zéro chaque mois ; mois passés archivés avec statut. 🖨 = fiche PDF par section.</p>
-        <div id="comptaBody"></div>
       </section>
     </div>
 

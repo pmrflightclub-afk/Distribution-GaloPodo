@@ -277,6 +277,21 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .modal-head .x { border: 0; background: transparent; font-size: 1.2rem; color: var(--muted); cursor: pointer; }
 
+/* Impression (fiches Compta → PDF) : on n'affiche que #printArea */
+#printArea { display: none; }
+body.printing #printArea { display: block; }
+#printArea h1 { font-size: 19px; margin: 0 0 4px; color: #111; }
+#printArea h2 { font-size: 14px; color: #555; margin: 0 0 14px; font-weight: 600; }
+#printArea table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; color: #111; }
+#printArea th, #printArea td { border: 1px solid #999; padding: 6px 8px; text-align: right; }
+#printArea th:first-child, #printArea td:first-child { text-align: left; }
+#printArea tfoot td { font-weight: 700; }
+@media print {
+  body * { visibility: hidden; }
+  body.printing #printArea, body.printing #printArea * { visibility: visible; }
+  body.printing #printArea { position: absolute; left: 0; top: 0; width: 100%; padding: 6px; }
+}
+
 /* Sélecteur segmenté (article connu / nouvel article) */
 .seg { display: flex; gap: 0; margin: 10px 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .seg-btn { flex: 1; padding: 11px; border: 0; background: var(--card); color: var(--muted); font-weight: 700; cursor: pointer; font-size: .9rem; }
