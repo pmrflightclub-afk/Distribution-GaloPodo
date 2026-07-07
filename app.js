@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.26';
+const APP_VERSION = '1.1.27';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.27', date: '2026-07-07',
+    ajouts: [
+      'Fiche client : Civilité (Mr/Mme) + case « Politesse dans le SMS » (activée par défaut).',
+      'SMS : deux modèles — « standard » (au prénom, si la politesse est désactivée) et « politesse » (Mr/Mme + nom, si activée). Le bon modèle est choisi automatiquement selon le client.',
+    ],
+  },
   {
     version: '1.1.26', date: '2026-07-07',
     ajouts: [
@@ -263,7 +270,8 @@ const DEFAULTS = {
   navBarColor: '',                             // couleur de fond de la barre d'onglets (vide = couleur carte)
   appBg: '#0d0d0d',                            // fond de l'app (sombre) — noir par défaut, réglable
   logoBg: 'transparent',                       // fond derrière le logo (transparent/blanc/noir/couleur)
-  smsTemplate: 'Bonjour {client}, je passe aujourd\'hui pour {cheval}. J\'arrive dans environ {trajet}. À tout de suite !',
+  smsTemplate: 'Bonjour {prenom}, je passe aujourd\'hui pour {cheval}. J\'arrive dans environ {trajet}. À tout de suite !',
+  smsTemplatePolitesse: 'Bonjour {civilite} {nom}, je passe aujourd\'hui pour {cheval}. J\'arrive dans environ {trajet}. À tout de suite !',
   frais: [],                                   // frais véhicule : {id, poste, nature:'recurrent'|'exceptionnel', montantHT, kmPrevus, kmDebut}
   amortissement: { achatHT: 0, dureeVieKm: 0 },// achat & amortissement (réglé une fois)
   tempsKm: 0, urgenceSuppKm: 0.16,             // supplément urgence €/km
@@ -321,6 +329,7 @@ if (!S.accentColor) S.accentColor = '#e8722a';
 if (typeof S.topbarColor !== 'string') S.topbarColor = '';
 if (typeof S.navBarColor !== 'string') S.navBarColor = '';
 if (typeof S.smsTemplate !== 'string') S.smsTemplate = DEFAULTS.smsTemplate;
+if (typeof S.smsTemplatePolitesse !== 'string') S.smsTemplatePolitesse = DEFAULTS.smsTemplatePolitesse;
 if (!S.appBg) S.appBg = '#0d0d0d';
 if (!S.logoBg) S.logoBg = 'transparent';
 S.home = toAddr(S.home && S.home.adresse !== undefined ? { rue: S.home.adresse, lat: S.home.lat, lon: S.home.lon } : S.home);
@@ -1270,7 +1279,7 @@ function renderClients() {
 function editClient(existing, onSaved, prefillNom) {
   const key = 'client:' + (existing ? existing.id : 'new');
   const draft = DRAFTS.get(key);
-  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), prenom: '', nom: (prefillNom || ''), societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
+  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), civilite: '', politesse: true, prenom: '', nom: (prefillNom || ''), societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
   w.addr = toAddr(w.addr); w.societeAddr = toAddr(w.societeAddr);
   if (w.prenom === undefined) w.prenom = '';
   if (w.societe === undefined) w.societe = '';
@@ -1279,8 +1288,9 @@ function editClient(existing, onSaved, prefillNom) {
   openModal(`
     <div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} client</b><button class="x" id="mX">✕</button></div>
     ${draft ? '<div class="draft-bar">✏️ Brouillon en cours restauré<button class="btn small" id="cDraftReset">Effacer le brouillon</button></div>' : ''}
-    <div class="row"><label class="grow">Prénom<input type="text" id="cPrenom" value="${esc(w.prenom || '')}" /></label><label class="grow">Nom<input type="text" id="cNom" value="${esc(w.nom)}" /></label></div>
+    <div class="row"><label style="flex:0 0 90px">Civilité<select id="cCivilite"><option value="">—</option><option value="Mr"${w.civilite === 'Mr' ? ' selected' : ''}>Mr</option><option value="Mme"${w.civilite === 'Mme' ? ' selected' : ''}>Mme</option></select></label><label class="grow">Prénom<input type="text" id="cPrenom" value="${esc(w.prenom || '')}" /></label><label class="grow">Nom<input type="text" id="cNom" value="${esc(w.nom)}" /></label></div>
     <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
+    <label class="chk2"><input type="checkbox" id="cPolitesse" ${w.politesse !== false ? 'checked' : ''}/> Politesse dans le SMS (Mr/Mme + nom ; sinon prénom)</label>
     <label class="chk2"><input type="checkbox" id="cActif" ${w.actif !== false ? 'checked' : ''}/> Client actif</label>
     <h2 style="font-size:.9rem">Adresse du client</h2><div id="cAddr"></div>
     <div id="cLegal">
@@ -1338,6 +1348,8 @@ function editClient(existing, onSaved, prefillNom) {
   $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
   $('cSociete').addEventListener('input', (e) => { w.societe = e.target.value; updateLegalState(); saveDraft(); });
   if ($('cActif')) $('cActif').addEventListener('change', (e) => { w.actif = e.target.checked; saveDraft(); });
+  if ($('cCivilite')) $('cCivilite').addEventListener('change', (e) => { w.civilite = e.target.value; saveDraft(); });
+  if ($('cPolitesse')) $('cPolitesse').addEventListener('change', (e) => { w.politesse = e.target.checked; saveDraft(); });
   $('cAssuj').addEventListener('change', (e) => { w.assujettiTva = e.target.checked; saveDraft(); });
   $('cTvaNum').addEventListener('input', (e) => { w.tvaNum = e.target.value; saveDraft(); });
   $('cEntNum').addEventListener('input', (e) => { w.entrepriseNum = e.target.value; saveDraft(); });
@@ -3036,6 +3048,7 @@ function modalTourArticle(existing, opts) {
 
 // ================= SMS (modèle) =================
 const SMS_FIELDS = [
+  { k: '{civilite}', label: 'Civilité (Mr/Mme)' },
   { k: '{prenom}', label: 'Prénom' },
   { k: '{nom}', label: 'Nom' },
   { k: '{client}', label: 'Client (prénom nom)' },
@@ -3044,24 +3057,32 @@ const SMS_FIELDS = [
   { k: '{trajet}', label: 'Temps de trajet' },
   { k: '{adresse}', label: 'Adresse' },
 ];
-// Remplace {champ} par les valeurs fournies (laisse le jeton tel quel si absent).
-function fillSms(tpl, data) { return String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (data[k] != null && data[k] !== '' ? data[k] : m)); }
+// Remplace {champ} par les valeurs fournies (jeton connu mais vide → supprimé ; jeton inconnu → laissé tel quel) puis nettoie les espaces.
+function fillSms(tpl, data) { return String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (k in data ? (data[k] == null ? '' : String(data[k])) : m)).replace(/ {2,}/g, ' ').replace(/ ([,.!?])/g, '$1').trim(); }
+// Modèle SMS à utiliser pour un client : « politesse » (Mr/Mme + nom) si activé, sinon le modèle standard (prénom).
+function smsTemplateFor(c) { return (c && c.politesse !== false) ? (S.smsTemplatePolitesse || S.smsTemplate) : S.smsTemplate; }
+// Données de fusion SMS pour un client (toutes les clés, pour que les 2 modèles marchent).
+function smsDataFor(c, extra) { return Object.assign({ civilite: (c && c.civilite) || '', prenom: (c && c.prenom) || '', nom: (c && c.nom) || '', client: fullName(c || {}), societe: (c && c.societe) || '' }, extra || {}); }
 function insertAtCursor(ta, text) {
   const s = ta.selectionStart != null ? ta.selectionStart : ta.value.length, e = ta.selectionEnd != null ? ta.selectionEnd : ta.value.length;
   ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
   ta.selectionStart = ta.selectionEnd = s + text.length; ta.focus();
-  S.smsTemplate = ta.value; saveSettings(); updateSmsPreview();
+  // La sauvegarde (dans le bon modèle) est faite par l'appelant.
 }
+const SMS_SAMPLE = { civilite: 'Mme', prenom: 'Jean', nom: 'Dupont', client: 'Jean Dupont', societe: 'Écurie du Nord', cheval: 'Indianna', trajet: '15 min', adresse: 'Rue de l\'Exemple 1, 5000 Namur' };
 function updateSmsPreview() {
-  const p = $('smsPreview'); if (!p) return;
-  const sample = fillSms(S.smsTemplate, { prenom: 'Jean', nom: 'Dupont', client: 'Jean Dupont', societe: 'Écurie du Nord', cheval: 'Indianna', trajet: '15 min', adresse: 'Rue de l\'Exemple 1, 5000 Namur' });
-  p.innerHTML = '<b>Aperçu :</b> ' + esc(sample);
+  if ($('smsPreview')) $('smsPreview').innerHTML = '<b>Aperçu :</b> ' + esc(fillSms(S.smsTemplate, SMS_SAMPLE));
+  if ($('smsPreviewPol')) $('smsPreviewPol').innerHTML = '<b>Aperçu :</b> ' + esc(fillSms(S.smsTemplatePolitesse, SMS_SAMPLE));
 }
 function renderSMS() {
-  const ta = $('smsTemplate'); if (!ta) return;
-  ta.value = S.smsTemplate || '';
-  ta.oninput = () => { S.smsTemplate = ta.value; saveSettings(); updateSmsPreview(); };
-  const box = $('smsFields'); if (box) { box.innerHTML = ''; SMS_FIELDS.forEach((f) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small'; b.textContent = '+ ' + f.label; b.addEventListener('click', () => insertAtCursor(ta, f.k)); box.appendChild(b); }); }
+  const wire = (taId, key, fieldsId) => {
+    const ta = $(taId); if (!ta) return;
+    ta.value = S[key] || '';
+    ta.oninput = () => { S[key] = ta.value; saveSettings(); updateSmsPreview(); };
+    const box = $(fieldsId); if (box) { box.innerHTML = ''; SMS_FIELDS.forEach((f) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small'; b.textContent = '+ ' + f.label; b.addEventListener('click', () => { insertAtCursor(ta, f.k); S[key] = ta.value; saveSettings(); updateSmsPreview(); }); box.appendChild(b); }); }
+  };
+  wire('smsTemplate', 'smsTemplate', 'smsFields');
+  wire('smsTemplatePol', 'smsTemplatePolitesse', 'smsFieldsPol');
   updateSmsPreview();
 }
 
@@ -3130,7 +3151,7 @@ function renderHomeTrajet() {
       el.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(t, a, est));
       const vb = el.querySelector('[data-valid]'); if (vb) vb.addEventListener('click', () => { a.validatedAt = Date.now(); persistTour(); renderHomeTrajet(); modalPayment(t, a, renderHomeTrajet); });
       el.querySelector('[data-sms]').addEventListener('click', async () => {
-        const msg = fillSms(S.smsTemplate, { prenom: c0.prenom || '', nom: c0.nom || '', client: fullName(c0), societe: c0.societe || '', cheval: chNames, trajet, adresse });
+        const msg = fillSms(smsTemplateFor(c0), smsDataFor(c0, { cheval: chNames, trajet, adresse }));
         const btn = el.querySelector('[data-sms]');
         try { await navigator.clipboard.writeText(msg); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); }
         catch { alert(msg); }

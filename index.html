@@ -364,11 +364,18 @@
 
     <div id="gsub-sms" class="subpanel">
       <section class="card">
-        <h2>Modèle de SMS</h2>
-        <p class="hint">Ce message est copié depuis « Trajet du jour » (bouton SMS par arrêt). Cliquez un champ pour l'insérer — il sera remplacé automatiquement par les infos de l'arrêt.</p>
+        <h2>Modèle de SMS — standard</h2>
+        <p class="hint">Copié depuis « Trajet du jour » (bouton SMS). Utilisé pour les clients dont la <b>politesse est désactivée</b> (on s'adresse au prénom). Cliquez un champ pour l'insérer.</p>
         <div class="sms-fields" id="smsFields"></div>
-        <textarea id="smsTemplate" class="bk-area" spellcheck="false" style="height:150px"></textarea>
+        <textarea id="smsTemplate" class="bk-area" spellcheck="false" style="height:130px"></textarea>
         <p class="hint" id="smsPreview"></p>
+      </section>
+      <section class="card">
+        <h2>Modèle de SMS — politesse (Mr/Mme)</h2>
+        <p class="hint">Utilisé pour les clients dont la <b>politesse est activée</b> (fiche client) — on s'adresse par « Mr/Mme + nom ».</p>
+        <div class="sms-fields" id="smsFieldsPol"></div>
+        <textarea id="smsTemplatePol" class="bk-area" spellcheck="false" style="height:130px"></textarea>
+        <p class="hint" id="smsPreviewPol"></p>
       </section>
     </div>
   </main>
