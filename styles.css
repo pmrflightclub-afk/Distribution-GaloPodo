@@ -103,6 +103,8 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .chk input, .chk2 input { width: auto; margin: 0; }
 .chk2 { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--muted); align-self: center; white-space: nowrap; }
 .art-remise { font-size: .72rem; margin-right: 4px; }
+.er-flags { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+.er-flags .chk2 { font-size: .74rem; }
 .heure-in { width: 92px; padding: 4px 6px; }
 .rdv-chevaux { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .rdv-chevaux .chk { white-space: nowrap; }

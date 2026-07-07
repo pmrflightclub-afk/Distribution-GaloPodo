@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.28';
+const APP_VERSION = '1.1.29';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.29', date: '2026-07-07',
+    ajouts: [
+      'Catalogue d\'articles (Gestion → Articles) : 3 cases par article — « Remise produit » (autorise la réduction manuelle), « Remise liquide » (éligibilité à la réduction automatique en liquide), « Visite » (marque l\'article comme prestation de visite).',
+      'Les deux réductions sont désormais indépendantes ligne par ligne : la remise manuelle du client (case « Remise » de la ligne + « remise produit ») et la remise liquide auto (« remise liquide »). Si « remise produit » est décochée, la case « Remise » de la ligne est verrouillée.',
+    ],
+  },
   {
     version: '1.1.28', date: '2026-07-07',
     ajouts: [
@@ -1771,7 +1778,7 @@ function renderEditorArrets(locked) {
     artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<button class="btn small" data-add-art>+ Article</button>'}</div>`;
     const alist = document.createElement('div'); alist.className = 'list';
     // Case « Remise » (à cocher) = la réduction client s'applique à cette ligne. Cochée par défaut.
-    const remiseChkHtml = (off) => locked ? '' : `<label class="chk2 art-remise" title="La réduction client s'applique à cette ligne"><input type="checkbox" data-remise ${off ? '' : 'checked'}/> Remise</label>`;
+    const remiseChkHtml = (off, dis) => locked ? '' : `<label class="chk2 art-remise" title="${dis ? 'Remise produit désactivée (catalogue) — ligne non remisable manuellement' : 'La réduction client s\'applique à cette ligne'}"><input type="checkbox" data-remise ${off ? '' : 'checked'}${dis ? ' disabled' : ''}/> Remise</label>`;
     // Ligne(s) Parage & équilibrage (auto, par cheval coché) : affichée avec sa case Remise (remisée par défaut).
     if (S.parage && S.parage.prixHT > 0) {
       if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {};
@@ -1790,7 +1797,7 @@ function renderEditorArrets(locked) {
       const rr = (art.tvaPct || 0) / 100, qte = Math.max(1, (art.chevalNoms || []).length || 1), ttcv = (art.prixHT || 0) * qte * (1 + rr);
       const row = document.createElement('div'); row.className = 'list-item';
       const chn = (art.chevalNoms || []).join(', ');
-      const remiseChk = art.impaye ? '' : remiseChkHtml(!!art.remiseOff); // l'impayé (créance) n'est jamais remisé
+      const remiseChk = art.impaye ? '' : remiseChkHtml(!!art.remiseOff, art.remiseProduit === false); // impayé jamais remisé ; verrouillé si « remise produit » off au catalogue
       row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${eur(ttcv)} TTC</span></div>${locked ? '' : `<div class="li-act">${remiseChk}<button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>`}`;
       if (!locked) {
         const rc = row.querySelector('[data-remise]'); if (rc) rc.addEventListener('change', (e) => { art.remiseOff = !e.target.checked; saveTournees(); recomputeMoney(); });
@@ -1909,7 +1916,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
         if (baseMat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: false, npas: false, infection: false, ht: baseMat, ttc: baseMat * (1 + stdRate) }); m.htMat += baseMat; }
         // Fourbure / NPAS / Infection → lignes d'ARTICLE (par cheval), non remisées (forfaits de soin fixes).
         [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([key, lbl, prix]) => {
-          if (c[key] && prix > 0) { const rr = stdRate; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), patho: true, remiseOff: true }); m.htArt += prix; m.tvaArt += prix * rr; }
+          if (c[key] && prix > 0) { const rr = stdRate; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), patho: true, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += prix; m.tvaArt += prix * rr; }
         });
       });
     });
@@ -1921,7 +1928,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     const qte = a.impaye ? 1 : noms.length;
     const lineHT = (a.prixHT || 0) * qte, rr = (a.tvaPct || 0) / 100;
     const m = getC(a.clientId, clientName(a.clientId));
-    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, remiseOff: !!(a.remiseOff || a.impaye) }); // impayé (créance) jamais remisé
+    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, remiseOff: !!(a.remiseOff || a.impaye), remiseProduit: a.impaye ? false : (a.remiseProduit !== false), remiseLiquide: a.impaye ? false : (a.remiseLiquide !== false) }); // impayé (créance) jamais remisé
     m.htArt += lineHT; m.tvaArt += lineHT * rr;
   });
   // Parage & équilibrage auto (cheval coché) → ligne d'article
@@ -1931,19 +1938,27 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     Object.keys(pa).forEach((cid) => {
       const noms = pa[cid], qte = noms.length, rr = (S.parage.tvaPct || 0) / 100, lineHT = S.parage.prixHT * qte;
       const m = getC(cid, clientName(cid));
-      m.articles.unshift({ libelle: 'Parage et équilibrage', chevaux: noms, qte, prixHT: S.parage.prixHT, tvaPct: S.parage.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), parage: true, remiseOff: !!parageNoRemise[cid] }); // Parage en 1ʳᵉ position ; remisé par défaut (sauf si exclu)
+      m.articles.unshift({ libelle: 'Parage et équilibrage', chevaux: noms, qte, prixHT: S.parage.prixHT, tvaPct: S.parage.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), parage: true, remiseOff: !!parageNoRemise[cid], remiseProduit: true, remiseLiquide: true }); // Parage en 1ʳᵉ position ; remisable (manuel + liquide) par défaut
       m.htArt += lineHT; m.tvaArt += lineHT * rr;
     });
   }
   const parClient = Object.values(cmap).map((m) => {
-    // Réduction effective : la réduction manuelle du client, ET si le paiement est en LIQUIDE, au moins la réduction liquide couplée (Réglages → Articles → Réduction). Jamais avec virement/facture.
+    // Deux réductions INDÉPENDANTES, par ligne :
+    //  • MANUELLE (réduction client) : ligne éligible si case « Remise » cochée (!remiseOff) ET produit remisable (remiseProduit).
+    //  • LIQUIDE auto (Réglages → Articles → Réduction) si paiement liquide : ligne éligible si « remise liquide » (remiseLiquide).
+    // On applique la plus forte des deux qui s'appliquent, ligne par ligne.
     const manual = reducs[m.clientId] || 0;
-    const isLiquide = (payments[m.clientId] || {}).method === 'liquide';
-    const rpct = isLiquide ? Math.max(manual, S.reducLiquide || 0) : manual, rf = rpct / 100;
-    // Totaux « tarif plein » (avant toute remise) — capturés AVANT de réduire les lignes.
-    const htArtBrut = m.articles.reduce((s, a) => s + a.ht, 0), tvaArtBrut = m.articles.reduce((s, a) => s + a.tva, 0);
-    // Remise appliquée LIGNE PAR LIGNE : le HT de chaque article est réduit, puis TVA et TTC recalculés sur le net.
-    if (rpct) m.articles.forEach((a) => { if (a.remiseOff) return; a.remisePct = rpct; a.htBrut = a.ht; a.ht = a.ht * (1 - rf); a.tva = a.tva * (1 - rf); a.ttc = a.ttc * (1 - rf); }); // remise SEULEMENT sur les lignes activées
+    const liq = ((payments[m.clientId] || {}).method === 'liquide') ? (S.reducLiquide || 0) : 0;
+    const htArtBrut = m.articles.reduce((s, a) => s + a.ht, 0), tvaArtBrut = m.articles.reduce((s, a) => s + a.tva, 0); // tarif plein AVANT remise
+    let anyReduc = 0;
+    m.articles.forEach((a) => {
+      let pct = 0;
+      if (manual && !a.remiseOff && a.remiseProduit !== false) pct = Math.max(pct, manual); // remise manuelle
+      if (liq && a.remiseLiquide !== false) pct = Math.max(pct, liq);                        // remise liquide auto
+      if (pct <= 0) return;
+      const rf = pct / 100; a.remisePct = pct; a.htBrut = a.ht; a.ht *= (1 - rf); a.tva *= (1 - rf); a.ttc *= (1 - rf); anyReduc = Math.max(anyReduc, pct);
+    });
+    const rpct = anyReduc;
     const htArt = m.articles.reduce((s, a) => s + a.ht, 0), tvaArt = m.articles.reduce((s, a) => s + a.tva, 0);
     const totalHT = m.htDep + m.htMat + htArt;
     const totalTVA = (m.htDep + m.htMat) * stdRate + tvaArt;
@@ -2940,6 +2955,11 @@ function renderArticlesCat() {
         <label>TVA<select data-k="tvaPct">${tvaOpts}</select></label>
         <label>Prix<input data-k="prixHT" type="number" step="0.01" min="0" value="${a.prixHT || ''}"/></label>
         <label>Prix<input data-ro="ttc" readonly/></label>
+      </div>
+      <div class="er-flags">
+        <label class="chk2"><input type="checkbox" data-f="remiseProduit" ${a.remiseProduit !== false ? 'checked' : ''}/> Remise produit</label>
+        <label class="chk2"><input type="checkbox" data-f="remiseLiquide" ${a.remiseLiquide !== false ? 'checked' : ''}/> Remise liquide</label>
+        <label class="chk2"><input type="checkbox" data-f="visite" ${a.visite ? 'checked' : ''}/> Visite</label>
       </div>`;
     el.querySelector('[data-k="tvaPct"]').value = String(a.tvaPct);
     const ro = el.querySelector('[data-ro="ttc"]'), prixEl = el.querySelector('[data-k="prixHT"]');
@@ -2950,6 +2970,7 @@ function renderArticlesCat() {
     el.querySelector('[data-k="libelle"]').addEventListener('input', (e) => { a.libelle = e.target.value; saveSettings(); });
     el.querySelector('[data-k="tvaPct"]').addEventListener('change', (e) => { a.tvaPct = parseFloat(e.target.value) || 0; paintRo(); saveSettings(); });
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer cet article du catalogue ?')) return; S.articlesCatalogue = S.articlesCatalogue.filter((x) => x.id !== a.id); saveSettings(); renderArticlesCat(); });
+    el.querySelectorAll('[data-f]').forEach((cb) => cb.addEventListener('change', (e) => { a[cb.dataset.f] = e.target.checked; saveSettings(); }));
     box.appendChild(el);
   });
   enableRowDrag(box, S.articlesCatalogue, () => saveSettings());
@@ -3048,10 +3069,14 @@ function modalTourArticle(existing, opts) {
     if (mode === 'catalogue' && !$('aCat').value) { alert('Choisissez un article dans le catalogue, ou passez en « Nouvel article ».'); return; }
     const cid = selClient; const chs = idsFor(cid).filter((c) => picked.has(c.id));
     const art = { id: w.id || uid(), clientId: cid, chevalIds: chs.map((c) => c.id), chevalNoms: chs.map((c) => c.nom), libelle: $('aLib').value.trim() || 'Article', prixHT: parseNum($('aPrix').value), tvaPct: parseFloat($('aTva').value) || 0 };
+    // Éligibilité remise (héritée du catalogue si connu, sinon de l'article existant, sinon défaut) : remiseProduit (remise manuelle), remiseLiquide (remise auto liquide).
+    const cat = mode === 'catalogue' ? S.articlesCatalogue.find((x) => x.id === $('aCat').value) : S.articlesCatalogue.find((x) => norm(x.libelle) === norm(art.libelle));
+    const src = cat || w || {};
+    art.remiseProduit = src.remiseProduit !== false; art.remiseLiquide = src.remiseLiquide !== false; art.visite = !!src.visite;
     if (!currentTour.articles) currentTour.articles = [];
     const i = currentTour.articles.findIndex((x) => x.id === art.id); if (i >= 0) currentTour.articles[i] = art; else currentTour.articles.push(art);
     // Ajout au catalogue seulement en mode « nouvel article » (case cochée) et si le libellé n'y est pas déjà.
-    if (mode === 'nouveau' && $('aSaveCat') && $('aSaveCat').checked && !S.articlesCatalogue.some((x) => norm(x.libelle) === norm(art.libelle))) { S.articlesCatalogue.push({ id: uid(), libelle: art.libelle, prixHT: art.prixHT, tvaPct: art.tvaPct }); saveSettings(); }
+    if (mode === 'nouveau' && $('aSaveCat') && $('aSaveCat').checked && !S.articlesCatalogue.some((x) => norm(x.libelle) === norm(art.libelle))) { S.articlesCatalogue.push({ id: uid(), libelle: art.libelle, prixHT: art.prixHT, tvaPct: art.tvaPct, remiseProduit: true, remiseLiquide: true, visite: false }); saveSettings(); }
     saveTournees(); closeModal(); renderEditorArrets(); recomputeMoney();
   });
 }
