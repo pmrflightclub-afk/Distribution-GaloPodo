@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.32';
+const APP_VERSION = '1.1.33';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.33', date: '2026-07-07',
+    ajouts: [
+      'Onglet Statistiques réorganisé en sous-onglets : Utilisation véhicule · Temps de trajet · Temps de travail · Analyse cheval · Analyse client · Graphiques.',
+      'Utilisation véhicule : nouvelle section « Pièces & usage » — pour chaque frais véhicule, le kilométrage à l\'achat et les km parcourus depuis. Le km à l\'achat est modifiable dans Gestion → Frais véhicule (nouveau champ « Km à l\'achat »).',
+      'Graphiques (nouveau) : filtre de période Mois / Trimestre / Semestre / Année (comme la Déclaration compta), puis un graphe par indicateur — chiffre d\'affaires, kilomètres et nombre de tournées en barres, encaissements (liquide / virement / facture) en barres empilées, et répartition des encaissements en anneau. Rendu intégré, sans connexion.',
+    ],
+  },
   {
     version: '1.1.32', date: '2026-07-07',
     ajouts: [
@@ -2457,7 +2465,30 @@ function renderAnalyse() {
   build('analyseAnalytic', ANALYTIC_DEFS);
   build('analyseStats', STAT_TILE_DEFS);
 }
-function renderStats() {
+// --- Sous-navigation Stats : Utilisation véhicule / Temps de trajet / Temps de travail / Analyse cheval / Analyse client / Graphiques ---
+let currentSsub = 'vehicule';
+function showStats(sub) {
+  currentSsub = sub || 'vehicule';
+  document.querySelectorAll('#statsSub .subtab').forEach((b) => b.classList.toggle('active', b.dataset.ssub === currentSsub));
+  document.querySelectorAll('#tab-stats .subpanel').forEach((p) => p.classList.toggle('active', p.id === 'ssub-' + currentSsub));
+  const cb = document.querySelector('#statsSub .subtab[data-ssub="' + currentSsub + '"]'), cl = document.querySelector('#statsSub .subnav-label');
+  if (cb && cl) cl.textContent = cb.textContent;
+  if ($('statsSub')) $('statsSub').classList.remove('open');
+  renderStatsSub(currentSsub);
+  window.scrollTo(0, 0);
+}
+function renderStatsSub(sub) {
+  if (sub === 'trajet') renderTrajetTemps();
+  else if (sub === 'travail') renderTravail();
+  else if (sub === 'cheval') renderFinanceCheval();
+  else if (sub === 'client') renderFinance();
+  else if (sub === 'graph') renderGraphiques();
+  else renderVehiculePanel();
+}
+// Point d'entrée depuis l'onglet Stats : affiche le sous-onglet courant.
+function renderStats() { showStats(currentSsub); }
+// Sous-onglet « Utilisation véhicule » : tuiles + pièces & usage km + km/heures par client › cheval.
+function renderVehiculePanel() {
   applyStatOrder();
   const st = kmStats();
   if ($('kmMonth')) $('kmMonth').textContent = km(st.mois);
@@ -2466,6 +2497,7 @@ function renderStats() {
   if ($('baseVeh')) $('baseVeh').textContent = eurkm(baseVehiculeHT());
   if ($('tCarb')) $('tCarb').textContent = eurkm(fuelPerKmHT()) + ' HT';
   if ($('tTournee')) $('tTournee').textContent = eurkm(tarifHT('tournee')) + ' HT';
+  renderVehiculePieces();
   const box = $('kmParClient'); if (box) {
     box.innerHTML = ''; $('kmParClientEmpty').style.display = st.parClient.length ? 'none' : 'block';
     st.parClient.forEach((c) => {
@@ -2475,10 +2507,113 @@ function renderStats() {
       el.innerHTML = h; box.appendChild(el);
     });
   }
-  renderTrajetTemps();
-  renderTravail();
-  renderFinance();
-  renderFinanceCheval();
+}
+// Pièces & usage : par frais véhicule, km à l'achat (frais.kmDebut) et km parcourus depuis (odomètre − kmDebut).
+function renderVehiculePieces() {
+  const box = $('vehiculePieces'); if (!box) return; box.innerHTML = '';
+  const odo = odometer();
+  if ($('vehiculePiecesEmpty')) $('vehiculePiecesEmpty').style.display = (S.frais && S.frais.length) ? 'none' : 'block';
+  (S.frais || []).forEach((f) => {
+    const kmDebut = f.kmDebut || 0; const usage = Math.max(0, odo - kmDebut);
+    const reste = f.kmPrevus ? Math.max(0, f.kmPrevus - usage) : null;
+    const el = document.createElement('div'); el.className = 'inv-client';
+    let h = `<div class="inv-head"><span>${esc(f.poste || 'Pièce')}</span><span>${km(usage)} d'usage</span></div>`;
+    h += `<div class="inv-line"><span>Km à l'achat</span><span>${km(kmDebut)}</span></div>`;
+    h += `<div class="inv-line"><span>Km parcourus depuis l'achat</span><span>${km(usage)}</span></div>`;
+    if (f.kmPrevus) h += `<div class="inv-line"><span>${f.nature === 'recurrent' ? 'Avant échéance' : 'Reste avant épuisement'}</span><span>${km(f.kmPrevus)} prévus · ${reste != null ? km(reste) + ' restants' : '—'}</span></div>`;
+    el.innerHTML = h; box.appendChild(el);
+  });
+}
+// ---------- Graphiques (Proposition 1 : tous ensemble, 1 graphe par indicateur) — SVG intégré, 100 % offline ----------
+const GRAPH_ENC = [{ key: 'liquide', color: '#2e9e5b', label: 'Liquide' }, { key: 'virement', color: '#3b82c4', label: 'Virement' }, { key: 'facture', color: '#e0912f', label: 'Facture pro' }];
+const shortMonthLabel = (ym) => { const d = new Date(ym + '-01T00:00:00'); return isNaN(d.getTime()) ? ym : d.toLocaleDateString('fr-FR', { month: 'short' }); };
+// Agrégats par mois : CA (Σ m.totalTTC), km (Σ result.totalKm), nb tournées, encaissements (comptaData).
+function graphMonthData(months) {
+  return months.map((ym) => {
+    let ca = 0, kmv = 0, tours = 0;
+    allTours().forEach((t) => {
+      if (!(t.date || '').startsWith(ym) || !t.result) return;
+      if (!(t.result.parClient && t.result.parClient.length)) return;
+      tours++; kmv += t.result.totalKm || 0;
+      (t.result.parClient || []).forEach((m) => { ca += m.totalTTC || 0; });
+    });
+    const d = comptaData(ym);
+    const enc = { liquide: d.liquideTotal.ttc, virement: d.virementTotal.ttc, facture: d.factureLiqTotal.ttc + d.factureVirTotal.ttc };
+    return { ym, label: shortMonthLabel(ym), ca, km: kmv, tours, enc };
+  });
+}
+// Diagramme en barres simple.
+function gBars(items, valOf, fmt, color, showVals) {
+  const W = 340, H = 180, pl = 8, pr = 8, pt = 14, pb = 32, iw = W - pl - pr, ih = H - pt - pb;
+  const max = Math.max(1, ...items.map(valOf));
+  const n = items.length || 1, bw = iw / n, gap = Math.min(10, bw * 0.28);
+  let g = `<line x1="${pl}" y1="${pt + ih}" x2="${pl + iw}" y2="${pt + ih}" style="stroke:var(--line)"/>`;
+  [0.5, 1].forEach((f) => { const y = (pt + ih - ih * f).toFixed(1); g += `<line x1="${pl}" y1="${y}" x2="${pl + iw}" y2="${y}" style="stroke:var(--line);opacity:.35"/>`; });
+  items.forEach((it, i) => {
+    const v = valOf(it), bh = max ? v / max * ih : 0, x = pl + i * bw + gap / 2, y = pt + ih - bh, w = Math.max(0, bw - gap);
+    g += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${bh.toFixed(1)}" rx="2" style="fill:${color}"/>`;
+    if (showVals && v > 0) g += `<text x="${(x + w / 2).toFixed(1)}" y="${(y - 3).toFixed(1)}" text-anchor="middle" style="fill:var(--ink);font-size:9px;font-weight:700">${esc(fmt(v))}</text>`;
+    g += `<text x="${(x + w / 2).toFixed(1)}" y="${(pt + ih + 13).toFixed(1)}" text-anchor="middle" style="fill:var(--muted);font-size:9px">${esc(it.label)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+}
+// Barres empilées (encaissements par mode).
+function gStacked(items, series) {
+  const W = 340, H = 180, pl = 8, pr = 8, pt = 14, pb = 32, iw = W - pl - pr, ih = H - pt - pb;
+  const totals = items.map((it) => series.reduce((s, se) => s + (it.enc[se.key] || 0), 0));
+  const max = Math.max(1, ...totals);
+  const n = items.length || 1, bw = iw / n, gap = Math.min(10, bw * 0.28);
+  let g = `<line x1="${pl}" y1="${pt + ih}" x2="${pl + iw}" y2="${pt + ih}" style="stroke:var(--line)"/>`;
+  items.forEach((it, i) => {
+    const x = pl + i * bw + gap / 2, w = Math.max(0, bw - gap); let acc = 0;
+    series.forEach((se) => { const v = it.enc[se.key] || 0; if (v <= 0) return; const bh = v / max * ih; const y = pt + ih - (acc + v) / max * ih; g += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${bh.toFixed(1)}" style="fill:${se.color}"/>`; acc += v; });
+    g += `<text x="${(x + w / 2).toFixed(1)}" y="${(pt + ih + 13).toFixed(1)}" text-anchor="middle" style="fill:var(--muted);font-size:9px">${esc(it.label)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+}
+// Anneau (donut) de répartition + légende intégrée.
+function gDonut(segs) {
+  const total = segs.reduce((s, x) => s + x.value, 0);
+  if (total <= 0) return '';
+  const W = 340, H = 180, cx = 78, cy = H / 2, r = 62, ir = 36;
+  let a = -Math.PI / 2, g = '';
+  segs.forEach((se) => {
+    if (se.value <= 0) return; const ang = se.value / total * Math.PI * 2, a2 = a + ang, large = ang > Math.PI ? 1 : 0;
+    const x1 = cx + r * Math.cos(a), y1 = cy + r * Math.sin(a), x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2);
+    const xi1 = cx + ir * Math.cos(a), yi1 = cy + ir * Math.sin(a), xi2 = cx + ir * Math.cos(a2), yi2 = cy + ir * Math.sin(a2);
+    g += `<path d="M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(1)} ${y2.toFixed(1)} L ${xi2.toFixed(1)} ${yi2.toFixed(1)} A ${ir} ${ir} 0 ${large} 0 ${xi1.toFixed(1)} ${yi1.toFixed(1)} Z" style="fill:${se.color}"/>`;
+    a = a2;
+  });
+  let lx = cx + r + 18, yy = 34;
+  segs.forEach((se) => { if (se.value <= 0) return; const pct = Math.round(se.value / total * 100); g += `<rect x="${lx}" y="${yy}" width="11" height="11" rx="2" style="fill:${se.color}"/><text x="${lx + 16}" y="${yy + 10}" style="fill:var(--ink);font-size:10px">${esc(se.label)} — ${pct}%</text>`; yy += 22; });
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+}
+const gBlock = (title, svg) => `<div style="margin:16px 0 6px"><h3 class="rsub" style="margin-bottom:6px">${esc(title)}</h3>${svg}</div>`;
+const gLegend = (series) => `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px">${series.map((s) => `<span style="display:inline-flex;align-items:center;gap:5px;font-size:.82rem;color:var(--muted)"><span style="width:11px;height:11px;border-radius:2px;background:${s.color};display:inline-block"></span>${esc(s.label)}</span>`).join('')}</div>`;
+let graphType = 'mois', graphPeriodKey = null;
+function renderGraphiques() {
+  const seg = $('graphTypeSeg'), perSel = $('graphPeriod'), box = $('graphBody'); if (!seg || !perSel || !box) return;
+  seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._gw) { b._gw = true; b.addEventListener('click', () => { graphType = b.dataset.gtype; graphPeriodKey = null; renderGraphiques(); }); } b.classList.toggle('on', b.dataset.gtype === graphType); });
+  const opts = comptaPeriodOptions(graphType);
+  if (!opts.length) { perSel.innerHTML = ''; box.innerHTML = ''; if ($('graphEmpty')) $('graphEmpty').style.display = 'block'; return; }
+  if (!opts.some((o) => o.key === graphPeriodKey)) graphPeriodKey = opts[0].key;
+  perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === graphPeriodKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+  perSel.onchange = () => { graphPeriodKey = perSel.value; renderGraphiques(); };
+  const withData = comptaMonths();
+  const months = monthsOfRange(graphType, graphPeriodKey);
+  const hasAny = months.some((m) => withData.includes(m));
+  if ($('graphEmpty')) $('graphEmpty').style.display = hasAny ? 'none' : 'block';
+  if (!hasAny) { box.innerHTML = ''; return; }
+  const data = graphMonthData(months);
+  const showVals = data.length <= 6;
+  const encTot = { liquide: 0, virement: 0, facture: 0 };
+  data.forEach((d) => { encTot.liquide += d.enc.liquide; encTot.virement += d.enc.virement; encTot.facture += d.enc.facture; });
+  box.innerHTML =
+    gBlock('Chiffre d\'affaires (TTC)', gBars(data, (d) => d.ca, (v) => eur(v), '#3b82c4', showVals))
+    + gBlock('Kilomètres', gBars(data, (d) => d.km, (v) => km(v), '#7a869a', showVals))
+    + gBlock('Nombre de tournées', gBars(data, (d) => d.tours, (v) => String(Math.round(v)), '#8a63c4', showVals))
+    + gBlock('Encaissements par mode', gStacked(data, GRAPH_ENC) + gLegend(GRAPH_ENC))
+    + gBlock('Répartition des encaissements (période)', gDonut(GRAPH_ENC.map((s) => ({ label: s.label, value: encTot[s.key], color: s.color }))));
 }
 // Stats : temps de trajet estimé (tournée) vs réel encodé (par arrêt), avec arrêts manquants signalés.
 function renderTrajetTemps() {
@@ -2908,15 +3043,17 @@ function renderFraisVehicule() {
         <label>Nature<select data-k="nature"><option value="recurrent">Récurrent</option><option value="exceptionnel">Exceptionnel</option></select></label>
         <label>Montant<input data-k="montantHT" type="number" step="1" min="0" value="${f.montantHT || ''}"/></label>
         <label>Km prévus<input data-k="kmPrevus" type="number" step="1000" min="0" value="${f.kmPrevus || ''}"/></label>
+        <label>Km à l'achat<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>
         <label>Contribution<input data-ro="contrib" readonly/></label>
       </div>
       <p class="hint er-jauge">${jauge}</p>`;
     el.querySelector('[data-k="nature"]').value = f.nature;
     const ro = el.querySelector('[data-ro="contrib"]');
-    const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]');
-    addUnit(montEl, '€ HT'); addUnit(kmEl, 'km'); makeReadout(ro, '€/km');
+    const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]'), kmDebEl = el.querySelector('[data-k="kmDebut"]');
+    addUnit(montEl, '€ HT'); addUnit(kmEl, 'km'); addUnit(kmDebEl, 'km'); makeReadout(ro, '€/km');
     wireNum(montEl, { get: () => f.montantHT, dec: 0, set: (v) => { f.montantHT = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
     wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
+    wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; }, after: () => { saveSettings(); const p = el.querySelector('.er-jauge'); const par = odometer() - (f.kmDebut || 0); if (p) p.textContent = f.nature === 'recurrent' ? `récurrent · ${km(Math.max(0, par))} roulés / ${km(f.kmPrevus)} avant échéance` : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, f.kmPrevus - par))}` : 'exceptionnel · épuisé ✔'); } });
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
     el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; if (f.nature === 'exceptionnel' && !f.kmDebut) f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); });
@@ -3855,6 +3992,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
   document.querySelectorAll('#comptaSub .subtab').forEach((b) => b.addEventListener('click', () => showCompta(b.dataset.csub)));
+  document.querySelectorAll('#statsSub .subtab').forEach((b) => b.addEventListener('click', () => showStats(b.dataset.ssub)));
   document.querySelectorAll('#agendaSub .subtab').forEach((b) => b.addEventListener('click', () => showAgenda(b.dataset.asub)));
   const agendaRefresh = async (statusEl) => { try { if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Chargement du calendrier…'; } _agendaEvents = await fetchCalendarEvents(true); renderAgendaItems(); renderAgendaCalendrier(); if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = _agendaEvents.length + ' événement(s) chargé(s).'; } } catch (e) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Erreur : ' + e.message; } else alert('Erreur : ' + e.message); } };
   if ($('agendaRefresh')) $('agendaRefresh').addEventListener('click', () => agendaRefresh($('agendaStatus')));

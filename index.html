@@ -382,49 +382,90 @@
 
   <!-- ============ STATS ============ -->
   <main id="tab-stats" class="tab-panel">
-    <section class="card">
-      <div class="card-head"><h2>Utilisation du véhicule</h2><button class="btn small" id="statDragBtn">⇅ Réordonner</button></div>
-      <div class="tiles tiles-3" id="statTiles">
-        <div class="tile draggable" data-key="kmMonth"><span class="t-label">Km ce mois</span><span class="t-val" id="kmMonth">—</span></div>
-        <div class="tile draggable" data-key="kmYear"><span class="t-label">Km cette année</span><span class="t-val" id="kmYear">—</span></div>
-        <div class="tile draggable" data-key="kmOdo"><span class="t-label">Odomètre (total)</span><span class="t-val" id="kmOdo">—</span></div>
-        <div class="tile strong draggable" data-key="baseVeh"><span class="t-label">Base véhicule /km</span><span class="t-val" id="baseVeh">—</span></div>
-        <div class="tile draggable" data-key="tCarb"><span class="t-label">Carburant /km</span><span class="t-val" id="tCarb">—</span></div>
-        <div class="tile draggable" data-key="tTournee"><span class="t-label">Tarif tournée /km</span><span class="t-val" id="tTournee">—</span></div>
+    <nav class="subtabs" id="statsSub">
+      <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Utilisation véhicule</span><span class="nav-caret">▾</span></button>
+      <div class="subtabs-list">
+        <button class="subtab active" data-ssub="vehicule">Utilisation véhicule</button>
+        <button class="subtab" data-ssub="trajet">Temps de trajet</button>
+        <button class="subtab" data-ssub="travail">Temps de travail</button>
+        <button class="subtab" data-ssub="cheval">Analyse cheval</button>
+        <button class="subtab" data-ssub="client">Analyse client</button>
+        <button class="subtab" data-ssub="graph">Graphiques</button>
       </div>
-      <p class="hint">Km & durée basés sur tes tournées ; « ce mois » repart de 0 le 1er. Glisse les tuiles pour les réordonner.</p>
-      <h3 class="rsub">Km &amp; heures — par client › cheval</h3>
-      <div id="kmParClient" class="list"></div>
-      <p class="empty" id="kmParClientEmpty">Aucune tournée calculée.</p>
-    </section>
+    </nav>
 
-    <section class="card">
-      <h2>Temps de trajet — estimé vs réel</h2>
-      <p class="hint">Par tournée : durée estimée (précalculée, retour compris) vs somme des temps réels encodés (bouton Route). Les arrêts sans temps réel sont signalés.</p>
-      <div id="trajetTempsList" class="list"></div>
-      <p class="empty" id="trajetTempsEmpty">Aucune tournée avec arrêt.</p>
-    </section>
+    <div id="ssub-vehicule" class="subpanel active">
+      <section class="card">
+        <div class="card-head"><h2>Utilisation du véhicule</h2><button class="btn small" id="statDragBtn">⇅ Réordonner</button></div>
+        <div class="tiles tiles-3" id="statTiles">
+          <div class="tile draggable" data-key="kmMonth"><span class="t-label">Km ce mois</span><span class="t-val" id="kmMonth">—</span></div>
+          <div class="tile draggable" data-key="kmYear"><span class="t-label">Km cette année</span><span class="t-val" id="kmYear">—</span></div>
+          <div class="tile draggable" data-key="kmOdo"><span class="t-label">Odomètre (total)</span><span class="t-val" id="kmOdo">—</span></div>
+          <div class="tile strong draggable" data-key="baseVeh"><span class="t-label">Base véhicule /km</span><span class="t-val" id="baseVeh">—</span></div>
+          <div class="tile draggable" data-key="tCarb"><span class="t-label">Carburant /km</span><span class="t-val" id="tCarb">—</span></div>
+          <div class="tile draggable" data-key="tTournee"><span class="t-label">Tarif tournée /km</span><span class="t-val" id="tTournee">—</span></div>
+        </div>
+        <p class="hint">Km & durée basés sur tes tournées ; « ce mois » repart de 0 le 1er. Glisse les tuiles pour les réordonner.</p>
+        <h3 class="rsub">Pièces & usage — km depuis l'achat</h3>
+        <p class="hint">Pour chaque pièce/frais véhicule : kilométrage à l'achat et km parcourus depuis. Modifiez le km à l'achat dans Gestion → Frais véhicule.</p>
+        <div id="vehiculePieces" class="list"></div>
+        <p class="empty" id="vehiculePiecesEmpty">Aucune pièce/frais véhicule enregistré.</p>
+        <h3 class="rsub">Km &amp; heures — par client › cheval</h3>
+        <div id="kmParClient" class="list"></div>
+        <p class="empty" id="kmParClientEmpty">Aucune tournée calculée.</p>
+      </section>
+    </div>
 
-    <section class="card">
-      <h2>Temps de travail (suivi réel)</h2>
-      <p class="hint">Depuis « Démarrer la tournée » + « Valider l'arrêt » (Trajet du jour). Route (domicile→1ᵉʳ client, puis vers chaque client suivant) + visite mesurée + retour réparti en parts égales entre tous les clients. ⚠ = arrêts non validés (temps partiel).</p>
-      <div id="travailList" class="list"></div>
-      <p class="empty" id="travailEmpty">Aucune tournée suivie. Utilisez « Démarrer la tournée » puis « Valider l'arrêt » dans Trajet du jour.</p>
-    </section>
+    <div id="ssub-trajet" class="subpanel">
+      <section class="card">
+        <h2>Temps de trajet — estimé vs réel</h2>
+        <p class="hint">Par tournée : durée estimée (précalculée, retour compris) vs somme des temps réels encodés (bouton Route). Les arrêts sans temps réel sont signalés.</p>
+        <div id="trajetTempsList" class="list"></div>
+        <p class="empty" id="trajetTempsEmpty">Aucune tournée avec arrêt.</p>
+      </section>
+    </div>
 
-    <section class="card">
-      <h2>Analyse financière par client</h2>
-      <p class="hint">Totaux TTC cumulés sur toutes les tournées, séparés <b>Articles · Matériel · Déplacement</b>, détaillés par cheval.</p>
-      <div id="financeList" class="list"></div>
-      <p class="empty" id="financeEmpty">Aucune tournée calculée.</p>
-    </section>
+    <div id="ssub-travail" class="subpanel">
+      <section class="card">
+        <h2>Temps de travail (suivi réel)</h2>
+        <p class="hint">Depuis « Démarrer la tournée » + « Valider l'arrêt » (Trajet du jour). Route (domicile→1ᵉʳ client, puis vers chaque client suivant) + visite mesurée + retour réparti en parts égales entre tous les clients. ⚠ = arrêts non validés (temps partiel).</p>
+        <div id="travailList" class="list"></div>
+        <p class="empty" id="travailEmpty">Aucune tournée suivie. Utilisez « Démarrer la tournée » puis « Valider l'arrêt » dans Trajet du jour.</p>
+      </section>
+    </div>
 
-    <section class="card">
-      <h2>Analyse financière par cheval</h2>
-      <p class="hint">Totaux TTC cumulés <b>par cheval</b> (avec le nom du client), sur toutes les tournées : Articles · Matériel · Déplacement.</p>
-      <div id="financeChevalList" class="list"></div>
-      <p class="empty" id="financeChevalEmpty">Aucune tournée calculée.</p>
-    </section>
+    <div id="ssub-cheval" class="subpanel">
+      <section class="card">
+        <h2>Analyse financière par cheval</h2>
+        <p class="hint">Totaux TTC cumulés <b>par cheval</b> (avec le nom du client), sur toutes les tournées : Articles · Matériel · Déplacement.</p>
+        <div id="financeChevalList" class="list"></div>
+        <p class="empty" id="financeChevalEmpty">Aucune tournée calculée.</p>
+      </section>
+    </div>
+
+    <div id="ssub-client" class="subpanel">
+      <section class="card">
+        <h2>Analyse financière par client</h2>
+        <p class="hint">Totaux TTC cumulés sur toutes les tournées, séparés <b>Articles · Matériel · Déplacement</b>, détaillés par cheval.</p>
+        <div id="financeList" class="list"></div>
+        <p class="empty" id="financeEmpty">Aucune tournée calculée.</p>
+      </section>
+    </div>
+
+    <div id="ssub-graph" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Graphiques</h2></div>
+        <div class="seg" id="graphTypeSeg">
+          <button class="seg-btn on" data-gtype="mois">Mois</button>
+          <button class="seg-btn" data-gtype="trimestre">Trimestre</button>
+          <button class="seg-btn" data-gtype="semestre">Semestre</button>
+          <button class="seg-btn" data-gtype="annee">Année</button>
+        </div>
+        <label>Période<select id="graphPeriod"></select></label>
+        <div id="graphBody"></div>
+        <p class="empty" id="graphEmpty">Aucune tournée calculée sur cette période.</p>
+      </section>
+    </div>
   </main>
 
   <!-- ============ RÉGLAGES ============ -->
