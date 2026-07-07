@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.44';
+const APP_VERSION = '1.1.45';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.45', date: '2026-07-07',
+    ajouts: [
+      'Visite : cocher « Visite » sur un cheval ouvre désormais une fenêtre pour choisir la prestation dans le catalogue. Une fois choisie, elle s\'affiche sous le tableau de l\'arrêt avec un bouton « Modifier » pour la changer.',
+      'Fenêtre de paiement sécurisée : le bouton « Enregistrer » reste bloqué tant qu\'un champ obligatoire manque (mode de paiement non choisi, montant liquide vide, ou — si « paiement partiel » est coché — montant impayé non renseigné). Un message indique ce qu\'il reste à compléter.',
+      'Trajet du jour : le paiement clôture l\'arrêt. Le bouton devient « 💶 Paiement & clôture » ; enregistrer un paiement valide marque l\'arrêt comme terminé (heure de fin = 1ʳᵉ validation). Impossible de clôturer un arrêt tant que le paiement est incomplet. On peut clôturer avec un reste impayé, à condition d\'en saisir le montant.',
+    ],
+  },
   {
     version: '1.1.44', date: '2026-07-07',
     ajouts: [
@@ -1975,9 +1983,8 @@ function renderEditorArrets(locked) {
         if (S.fourbureHT > 0) pathoCols.push({ key: 'fourbure', label: 'Fourbure' });
         if (S.npasHT > 0) pathoCols.push({ key: 'npas', label: 'NPAS' });
         if (S.infectionHT > 0) pathoCols.push({ key: 'infection', label: 'Infection' });
-        // Prestations « visite » du catalogue (case Visite par cheval → menu déroulant).
+        // Prestations « visite » du catalogue (case Visite par cheval → modale de choix).
         const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
-        const visOpts = (sel) => ['<option value="">— choisir la prestation —</option>'].concat(visArts.map((x) => `<option value="${x.id}"${x.id === sel ? ' selected' : ''}>${esc(x.libelle)} (${eur(x.prixHT)})</option>`)).join('');
         h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Parage</th><th>Visite</th>${pathoCols.map((c) => '<th>' + c.label + '</th>').join('')}</tr></thead><tbody>`;
         pool.forEach((ph, pi) => {
           const cv = cvOf(ph); const acte = !!(cv && (cv.parage || cv.visite)); // parage OU visite = cheval pris en charge
@@ -1988,8 +1995,8 @@ function renderEditorArrets(locked) {
           h += '</tr>';
         });
         h += '</tbody></table>';
-        // Sélecteurs d'article visite (par cheval dont la case Visite est cochée).
-        pool.forEach((ph, pi) => { const cv = cvOf(ph); if (cv && cv.visite) h += `<label class="reduc-row"><span class="grow">🐴 ${esc(ph.nom)} — Visite</span><select data-visart data-pi="${pi}">${visOpts(cv.visiteArtId)}</select></label>`; });
+        // Prestation visite choisie (affichée sous le tableau, modifiable) — par cheval dont la case Visite est cochée.
+        pool.forEach((ph, pi) => { const cv = cvOf(ph); if (cv && cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; h += `<div class="reduc-row"><span class="grow">🐴 ${esc(ph.nom)} — Visite : <b>${art ? esc(art.libelle) + ' (' + eur(art.prixHT) + ')' : '<i>à choisir</i>'}</b></span><button class="btn small" data-vispick="${pi}">${art ? 'Modifier' : 'Choisir'}</button></div>`; } });
         h += `<p class="hint" style="margin-top:2px"><b>Parage</b> et <b>Visite</b> sont les 2 prestations qui rattachent un cheval à la tournée : un cheval sans parage ni visite n'est ni compté ni facturé. Fourbure / NPAS / Infection s'activent dès que Parage <b>ou</b> Visite est coché. « Visite » ouvre la liste des prestations « Visite » du catalogue et l'ajoute à la facture (section Articles), sans changer le tarif de déplacement de l'arrêt.</p>`;
         wrap.innerHTML = h;
         const rin = wrap.querySelector('[data-reduc]');
@@ -2002,13 +2009,14 @@ function renderEditorArrets(locked) {
           recomputeMoney();
         }));
         wrap.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => {
-          const cv = ensureCv(pool[+inp.dataset.pi]);
+          const pi = +inp.dataset.pi, ph = pool[pi], cv = ensureCv(ph);
           cv.visite = e.target.checked;
-          if (!cv.visite) { cv.visiteArtId = null; if (!cv.parage) { cv.fourbure = false; cv.npas = false; cv.infection = false; } } // plus de visite ni parage → pathologies effacées
-          else if (!cv.visiteArtId && visArts.length === 1) cv.visiteArtId = visArts[0].id; // une seule prestation → pré-sélection
-          saveTournees(); recomputeMoney(); renderEditorArrets(locked); // re-render : (dé)verrouille pathologies + affiche/masque le sélecteur
+          if (!cv.visite) { cv.visiteArtId = null; if (!cv.parage) { cv.fourbure = false; cv.npas = false; cv.infection = false; } saveTournees(); recomputeMoney(); renderEditorArrets(locked); return; }
+          if (visArts.length === 1) { cv.visiteArtId = visArts[0].id; saveTournees(); recomputeMoney(); renderEditorArrets(locked); return; } // une seule prestation → pas de modale
+          saveTournees();
+          modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // ouvre la modale de choix
         }));
-        wrap.querySelectorAll('[data-visart]').forEach((sel) => sel.addEventListener('change', (e) => { ensureCv(pool[+sel.dataset.pi]).visiteArtId = e.target.value || null; saveTournees(); recomputeMoney(); }));
+        wrap.querySelectorAll('[data-vispick]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.vispick], cv = ensureCv(ph); modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); }));
         el.appendChild(wrap);
       });
     }
@@ -3617,9 +3625,9 @@ function renderHomeTrajet() {
       const trajet = real != null ? durMin(real) : (est != null ? durMin(est) : '—'); // SMS : réel si encodé, sinon estimé
       const trajetLbl = (est != null ? durMin(est) + ' est.' : '—') + (real != null ? ' · <b>' + durMin(real) + ' réel</b>' : '');
       const el = document.createElement('div'); el.className = 'list-item';
-      // « Clôture arrêt » (ex-« Valider ») : TOUJOURS visible, inactif tant que la tournée n'est pas démarrée.
+      // « Paiement & clôture » : ouvre le paiement ; l'enregistrement (valide) clôture l'arrêt. Inactif tant que la tournée n'est pas démarrée.
       const validated = typeof a.validatedAt === 'number';
-      const clotBtn = `<button class="btn small${!t.startedAt ? '' : (validated ? ' done' : ' primary')}" data-valid${t.startedAt ? '' : ' disabled'} title="${t.startedAt ? 'Marque la fin de visite / départ' : 'Démarrez d\'abord la tournée'}">${validated ? '✓ ' + hm(a.validatedAt) : 'Clôture arrêt'}</button>`;
+      const clotBtn = `<button class="btn small${!t.startedAt ? '' : (validated ? ' done' : ' primary')}" data-valid${t.startedAt ? '' : ' disabled'} title="${t.startedAt ? 'Encaisser le paiement puis clôturer cet arrêt' : 'Démarrez d\'abord la tournée'}">${validated ? '✓ clôturé ' + hm(a.validatedAt) : '💶 Paiement & clôture'}</button>`;
       const validLbl = validated ? ' · ✅ ' + hm(a.validatedAt) : '';
       el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
         <div class="li-act"><button class="btn small" data-agir>⚡ Agir</button> ${clotBtn}</div>`;
@@ -3638,7 +3646,7 @@ function renderHomeTrajet() {
         { label: 'SMS', keepOpen: true, onClick: smsAction },
         { label: 'Ticket', keepOpen: true, onClick: ticketAction },
       ]));
-      const vb = el.querySelector('[data-valid]'); if (vb && t.startedAt) vb.addEventListener('click', () => { a.validatedAt = Date.now(); persistTour(); renderHomeTrajet(); modalPayment(t, a, renderHomeTrajet); });
+      const vb = el.querySelector('[data-valid]'); if (vb && t.startedAt) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); })); // paiement enregistré (valide) → clôture l'arrêt (heure = 1re validation)
       box.appendChild(el);
     });
     // ----- Retour → domicile/arrivée : « Agir » (Waze + Route retour) + « Clôturer tournée » (inactif tant que non démarrée) -----
@@ -3706,8 +3714,17 @@ function modalReturnTime(t, estMin, after) {
   $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete t.returnRealMin; else t.returnRealMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
   $('rtClear').addEventListener('click', () => { delete t.returnRealMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
 }
+// Choix de la prestation « Visite » d'un cheval (modale) → onPick(id | undefined si annulé).
+function modalVisitePick(nom, currentId, visArts, onPick) {
+  openModal(`<div class="modal-head"><b>Prestation « Visite » — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Choisissez la prestation dans le catalogue (Gestion → Articles, case « Visite »). Elle s'ajoute à la facture de ce cheval.</p>
+    <div class="actions-col">${visArts.map((x) => `<button class="btn block${x.id === currentId ? ' primary' : ''}" data-vid="${x.id}">${esc(x.libelle)} · ${eur(x.prixHT)}</button>`).join('')}</div>`);
+  $('mX').addEventListener('click', () => { closeModal(); onPick(undefined); });
+  document.querySelectorAll('[data-vid]').forEach((b) => b.addEventListener('click', () => { closeModal(); onPick(b.dataset.vid); }));
+}
 // Paiement d'un arrêt (par client) : liquide / virement + facture ? + (si liquide) montant réel payé (arrondi caisse).
-function modalPayment(t, arret, after) {
+// onCommit (optionnel) : appelé UNIQUEMENT quand le paiement est enregistré et valide (sert à clôturer l'arrêt).
+function modalPayment(t, arret, after, onCommit) {
   const clientsAt = (arret.clients || []).map((cl) => cl.clientId);
   if (!clientsAt.length) { if (after) after(); return; }
   if (!t.payments) t.payments = {};
@@ -3739,9 +3756,26 @@ function modalPayment(t, arret, after) {
       </div>
     </div>`;
   });
-  html += '<div class="actions"><button class="btn primary block" id="payOk">Enregistrer</button></div>';
+  html += `<p class="status" id="payWarn"></p><div class="actions"><button class="btn primary block" id="payOk">${onCommit ? 'Enregistrer &amp; clôturer l\'arrêt' : 'Enregistrer'}</button></div>`;
   openModal(html);
   $('mX').addEventListener('click', () => { t.payments = paySnapshot; recomputeTourLocal(t); closeModal(); if (after) after(); }); // annulation → restaure les méthodes/montants d'origine
+  // Blocage : tant qu'un champ conditionnel manque (mode non choisi, montant liquide vide, ou impayé sans montant), « Enregistrer » est désactivé.
+  const blockIssue = (block) => {
+    const on = block.querySelector('.pay-method .seg-btn.on'); const method = on ? on.dataset.m : null;
+    if (method !== 'liquide' && method !== 'virement') return 'mode de paiement non choisi';
+    if (method === 'liquide') {
+      if (block.querySelector('[data-rectifie]').value === '') return 'montant liquide non renseigné';
+      if (block.querySelector('[data-partiel]').checked) { const iv = block.querySelector('[data-impaye]').value; if (iv === '' || Math.round(parseNum(iv)) <= 0) return 'montant impayé non renseigné'; }
+    }
+    return null;
+  };
+  const refreshValidity = () => {
+    let issue = null;
+    document.querySelectorAll('.pay-block').forEach((block) => { if (issue) return; const iss = blockIssue(block); if (iss) issue = { cid: block.dataset.cid, iss }; });
+    const ok = $('payOk'), warn = $('payWarn');
+    if (issue) { if (ok) ok.disabled = true; if (warn) warn.textContent = '⚠ ' + clientName(issue.cid) + ' : ' + issue.iss + ' — à compléter pour enregistrer.'; }
+    else { if (ok) ok.disabled = false; if (warn) warn.textContent = ''; }
+  };
   document.querySelectorAll('.pay-block').forEach((block) => {
     const cid = block.dataset.cid;
     const cash = block.querySelector('.pay-cash');
@@ -3757,6 +3791,7 @@ function modalPayment(t, arret, after) {
       }
       const recuEl = block.querySelector('[data-recu]');
       if (recuEl) { const base = rect != null ? rect : ttc; const imp = impInt(); recuEl.innerHTML = `Montant réellement reçu : <b>${eur(base - imp)}</b> TTC <span class="li-sub">(rectifié ${eur(base)} − impayé ${eur(imp)})</span>`; }
+      refreshValidity();
     };
     // Bascule de méthode : couple la réduction LIQUIDE en direct (recalcul de la facture).
     block.querySelectorAll('.pay-method .seg-btn').forEach((b) => b.addEventListener('click', () => {
@@ -3770,6 +3805,7 @@ function modalPayment(t, arret, after) {
     ['[data-rectifie]', '[data-impaye]'].forEach((sel) => { const i = block.querySelector(sel); if (i) { i.addEventListener('input', upd); i.addEventListener('blur', () => { if (i.value !== '') i.value = String(Math.max(0, Math.round(parseNum(i.value)))); }); } });
     upd();
   });
+  refreshValidity();
   const commitPayments = () => {
     document.querySelectorAll('.pay-block').forEach((block) => {
       const cid = block.dataset.cid;
@@ -3792,8 +3828,8 @@ function modalPayment(t, arret, after) {
     persist(); saveClients();
   };
   // Bouton « RDV » (programmer le suivi) : sauvegarde d'abord le paiement en cours, puis ouvre la planification ; retour au paiement à la fermeture.
-  document.querySelectorAll('[data-rdv]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalRDV(t, arret, b.dataset.rdv, () => modalPayment(t, arret, after)); }));
-  $('payOk').addEventListener('click', () => { commitPayments(); closeModal(); if (after) after(); });
+  document.querySelectorAll('[data-rdv]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalRDV(t, arret, b.dataset.rdv, () => modalPayment(t, arret, after, onCommit)); }));
+  $('payOk').addEventListener('click', () => { if ($('payOk').disabled) return; commitPayments(); if (onCommit) onCommit(); closeModal(); if (after) after(); }); // payOk désactivé si incomplet → pas de validation possible
 }
 // Reste « reporté » (liquide, à percevoir à la prochaine visite) rattaché au client.
 function setClientImpaye(t, cid, resteTTC) {
