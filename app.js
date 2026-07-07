@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.25';
+const APP_VERSION = '1.1.26';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.26', date: '2026-07-07',
+    ajouts: [
+      'Auto-clôture : une tournée démarrée mais oubliée se clôture automatiquement 3 h après l\'heure d\'arrivée (validation du dernier arrêt + temps de retour réel/estimé). Notée « clôturée automatiquement · HH:MM ».',
+      'Temps de travail : les clients « proche » (forfait seuil) ne se voient plus imputer de temps de trajet retour — le retour est réparti sur les autres clients, comme la facturation des km.',
+    ],
+  },
   {
     version: '1.1.25', date: '2026-07-07',
     ajouts: [
@@ -1549,6 +1556,7 @@ function openEditor() {
   if ($('edCloseWrap')) $('edCloseWrap').style.display = locked ? 'none' : '';
   if ($('edCloseWarn')) { const blk = locked ? [] : tourCloseBlock(currentTour); $('edCloseWarn').innerHTML = blk.length ? '🔒 Clôture bloquée — paiement à renseigner :<br>• ' + blk.map(esc).join('<br>• ') + '<br>Ouvrez l\'arrêt concerné → <b>💶 Paiement</b>.' : ''; $('edCloseWarn').classList.toggle('hidden', !blk.length); }
   $('edLockBanner').classList.toggle('hidden', !locked);
+  if (locked && $('edLockBanner')) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.';
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
   $('edDelete').style.display = '';
@@ -2431,7 +2439,11 @@ function travailStats() {
   allTours().forEach((t) => {
     const w = travailForTour(t); if (!w) return;
     const clientIds = new Set(); t.arrets.forEach((a) => (a.clients || []).forEach((cl) => clientIds.add(cl.clientId)));
-    const returnPer = w.returnMs / (clientIds.size || 1); // retour : parts égales par client
+    // Retour : réparti UNIQUEMENT sur les clients « loin » (comme la facturation km). Les clients « proche » (forfait seuil) n'ont pas de temps de retour.
+    const rows = (t.result && t.result.rows) || [];
+    const loin = new Set(); t.arrets.forEach((a, i) => { if (!(rows[i] && rows[i].proche)) (a.clients || []).forEach((cl) => loin.add(cl.clientId)); });
+    const returnSet = loin.size ? loin : clientIds;
+    const returnPer = w.returnMs / (returnSet.size || 1);
     const cmap = {};
     t.arrets.forEach((a, i) => {
       const nc = (a.clients || []).length || 1;
@@ -2445,14 +2457,34 @@ function travailStats() {
       });
     });
     const clientsArr = Object.values(cmap).map((c) => {
-      const chList = Object.values(c.chevaux); const rpc = chList.length ? returnPer / chList.length : 0;
+      const rMs = returnSet.has(c.clientId) ? returnPer : 0; // client proche → aucun temps de retour
+      const chList = Object.values(c.chevaux); const rpc = chList.length ? rMs / chList.length : 0;
       chList.forEach((cv) => { cv.ms += rpc; });
-      return Object.assign({}, c, { returnMs: returnPer, totalMs: c.travelMs + c.visitMs + returnPer, chevaux: chList });
+      return Object.assign({}, c, { returnMs: rMs, totalMs: c.travelMs + c.visitMs + rMs, chevaux: chList });
     });
     out.push({ tour: t, clients: clientsArr, totalMs: w.totalMs, complete: w.complete, startedAt: t.startedAt, endTs: w.endTs });
   });
   out.sort((a, b) => (b.tour.date || '').localeCompare(a.tour.date || ''));
   return out;
+}
+// Heure d'arrivée estimée/réelle au retour (timestamp) : dernier arrêt validé + temps de retour (réel encodé sinon estimé) ;
+// repli si aucun arrêt validé : démarrage + durée estimée totale de la tournée.
+function estimatedArrivalTs(t) {
+  const w = travailForTour(t);
+  if (w && w.endTs != null) return w.endTs;
+  if (t.startedAt && t.result && t.result.totalMin) return t.startedAt + t.result.totalMin * 60000;
+  return null;
+}
+// Auto-clôture : une tournée DÉMARRÉE non clôturée manuellement se clôture seule 3 h après l'heure d'arrivée (indication + log).
+function autoCloseOverdueTours() {
+  let changed = false;
+  (tournees || []).forEach((t) => {
+    if (!t.startedAt || t.endedAt || t.closed) return;
+    const arr = estimatedArrivalTs(t); if (arr == null) return;
+    const deadline = arr + 3 * 3600 * 1000;
+    if (Date.now() > deadline) { t.endedAt = deadline; t.closed = true; t.autoClosedAt = deadline; changed = true; }
+  });
+  if (changed) saveTournees();
 }
 function renderTravail() {
   const box = $('travailList'); if (!box) return; box.innerHTML = '';
@@ -3369,6 +3401,7 @@ function modalRDV(t, arret, cid, onDone) {
   render();
 }
 function renderHome() {
+  autoCloseOverdueTours(); // vérifie à chaque affichage de l'Accueil
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
   const upcoming = [...tournees].filter((t) => statusOf(t) === 'avenir').sort(byDate); // du plus proche au plus lointain
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((t) => box.appendChild(tourListItem(t, true))); };
@@ -3697,6 +3730,7 @@ window.addEventListener('DOMContentLoaded', () => {
   updateStickyOffsets(); setTimeout(updateStickyOffsets, 300);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 
+  autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   bindSettings(); refreshEverywhere(); renderHome();
 
