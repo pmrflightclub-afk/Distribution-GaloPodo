@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.30';
+const APP_VERSION = '1.1.31';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.31', date: '2026-07-07',
+    ajouts: [
+      'Article : on peut définir une quantité par cheval (au lieu d\'une par cheval coché). Chaque cheval sélectionné a son propre champ quantité ; la répartition financière par cheval en tient compte.',
+    ],
+  },
   {
     version: '1.1.30', date: '2026-07-07',
     ajouts: [
@@ -1932,10 +1938,12 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
   (articles || []).forEach((a) => {
     const noms = a.chevalNoms || [];
     if (!a.impaye && !noms.length) return; // article normal : lié à ≥1 cheval ; impayé : sans cheval, quantité 1
-    const qte = a.impaye ? 1 : noms.length;
+    // Quantité PAR cheval (chevalQtes id→qté) ; à défaut 1/cheval. Carte nom→qté pour la répartition dans les stats.
+    const qByNom = {}; if (!a.impaye) noms.forEach((n, idx) => { const id = (a.chevalIds || [])[idx]; qByNom[n] = Math.max(1, (a.chevalQtes && id != null && a.chevalQtes[id]) || 1); });
+    const qte = a.impaye ? 1 : noms.reduce((s, n) => s + (qByNom[n] || 1), 0);
     const lineHT = (a.prixHT || 0) * qte, rr = (a.tvaPct || 0) / 100;
     const m = getC(a.clientId, clientName(a.clientId));
-    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, remiseOff: !!(a.remiseOff || a.impaye), remiseProduit: a.impaye ? false : (a.remiseProduit !== false), remiseLiquide: a.impaye ? false : (a.remiseLiquide !== false) }); // impayé (créance) jamais remisé
+    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, qtesByNom: a.impaye ? null : qByNom, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, remiseOff: !!(a.remiseOff || a.impaye), remiseProduit: a.impaye ? false : (a.remiseProduit !== false), remiseLiquide: a.impaye ? false : (a.remiseLiquide !== false) }); // impayé (créance) jamais remisé
     m.htArt += lineHT; m.tvaArt += lineHT * rr;
   });
   // Parage & équilibrage auto (cheval coché) → ligne d'article
@@ -2547,6 +2555,12 @@ function renderTravail() {
     el.innerHTML = h; box.appendChild(el);
   });
 }
+// Part TTC d'un article attribuée à chaque cheval, pondérée par la quantité par cheval (à défaut : parts égales).
+function artPerCheval(a) {
+  const q = a.qtesByNom, noms = a.chevaux || [];
+  const tot = q ? noms.reduce((s, n) => s + (q[n] || 1), 0) : noms.length;
+  return (n) => tot ? a.ttc * (q ? (q[n] || 1) : 1) / tot : 0;
+}
 function financeStats() {
   const cmap = {};
   allTours().forEach((t) => {
@@ -2563,7 +2577,7 @@ function financeStats() {
       c.impaye += payImpaye(m, pay);
       (m.materiel || []).forEach((x) => { const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0 }; ch.mat += x.ttc; });
       (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.dep += per; }); });
-      (m.articles || []).forEach((a) => { const per = a.chevaux.length ? a.ttc / a.chevaux.length : 0; a.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.art += per; }); });
+      (m.articles || []).forEach((a) => { const share = artPerCheval(a); a.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.art += share(n); }); });
     });
   });
   return Object.values(cmap).map((c) => ({ ...c, total: c.dep + c.mat + c.art + (c.arrondi || 0), recu: c.dep + c.mat + c.art + (c.arrondi || 0) - (c.impaye || 0), chevaux: Object.values(c.chevaux) })).sort((a, b) => b.total - a.total);
@@ -2796,7 +2810,7 @@ function chevalFinanceDetail() {
   allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return; const date = t.date;
     t.result.parClient.forEach((m) => {
-      (m.articles || []).forEach((a) => { const per = (a.chevaux && a.chevaux.length) ? a.ttc / a.chevaux.length : 0; (a.chevaux || []).forEach((n) => { const g = get(m.clientId, n, m.nom); g.art.push({ date, libelle: a.libelle + (a.remisePct ? ' (−' + a.remisePct + '%)' : ''), ttc: per }); g.total += per; }); });
+      (m.articles || []).forEach((a) => { const share = artPerCheval(a); (a.chevaux || []).forEach((n) => { const per = share(n); const g = get(m.clientId, n, m.nom); g.art.push({ date, libelle: a.libelle + (a.qtesByNom && a.qtesByNom[n] > 1 ? ' ×' + a.qtesByNom[n] : '') + (a.remisePct ? ' (−' + a.remisePct + '%)' : ''), ttc: per }); g.total += per; }); });
       (m.materiel || []).forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : '', x.infection ? 'Infection' : ''].filter(Boolean).join('+'); const g = get(m.clientId, x.nom, m.nom); g.mat.push({ date, libelle: 'Matériel' + (tags ? ' (' + tags + ')' : ''), ttc: x.ttc }); g.total += x.ttc; });
       (m.deplacement || []).forEach((l) => { const per = (l.chevaux && l.chevaux.length) ? l.partTTC / l.chevaux.length : 0; (l.chevaux || []).forEach((n) => { const g = get(m.clientId, n, m.nom); g.dep.push({ date, libelle: (l.adresse || 'Déplacement') + ' ' + (TYPES[l.type] || ''), ttc: per }); g.total += per; }); });
     });
@@ -3035,7 +3049,7 @@ function modalTourArticle(existing, opts) {
   let mode = existing ? 'nouveau' : (S.articlesCatalogue.length ? 'catalogue' : 'nouveau');
   openModal(`<div class="modal-head"><b>${existing ? 'Éditer' : 'Nouvel'} article</b><button class="x" id="mX">✕</button></div>
     ${lockClient ? '<p class="hint" id="aClientSel"></p>' : '<label>Client (dans la tournée)</label><div id="aClientPicker"></div><p class="hint" id="aClientSel"></p>'}
-    <label>Chevaux concernés (quantité = nb cochés)</label><div id="aChevaux"></div>
+    <label>Chevaux concernés (quantité par cheval)</label><div id="aChevaux"></div>
     <div class="seg" id="aMode">
       <button type="button" class="seg-btn" data-mode="catalogue">Article connu</button>
       <button type="button" class="seg-btn" data-mode="nouveau">Nouvel article</button>
@@ -3051,11 +3065,21 @@ function modalTourArticle(existing, opts) {
   $('aTva').value = String(w.tvaPct); mUnit('aPrix', '€ HT', 2);
   const setSel = (id) => { selClient = id; const c = clients.find((x) => x.id === id); if ($('aClientSel')) $('aClientSel').innerHTML = c ? 'Client : <b>' + esc(fullName(c)) + (c.societe ? ' — ' + esc(c.societe) : '') + '</b>' + (arret ? ' · arrêt : ' + esc(addrStr(arret.addr)) : '') : ''; };
   const picked = new Set(w.chevalIds || (w.chevalNoms || []).map((n) => { const c = idsFor(selClient).find((x) => x.nom === n); return c ? c.id : n; }));
-  const upd = () => { const qte = Math.max(1, picked.size || 1), p = parseNum($('aPrix').value), rr = (parseFloat($('aTva').value) || 0) / 100; $('aBreak').innerHTML = `Quantité ${qte} · HT ${eur(p * qte)} · TVA ${eur(p * qte * rr)} · <b>TTC ${eur(p * qte * (1 + rr))}</b>`; };
+  const qtes = {}; picked.forEach((id) => { qtes[id] = (w.chevalQtes && w.chevalQtes[id]) || 1; }); // quantité par cheval
+  const totalQte = () => { let q = 0; picked.forEach((id) => q += Math.max(1, qtes[id] || 1)); return Math.max(1, q); };
+  const upd = () => { const qte = totalQte(), p = parseNum($('aPrix').value), rr = (parseFloat($('aTva').value) || 0) / 100; $('aBreak').innerHTML = `Quantité totale ${qte} · HT ${eur(p * qte)} · TVA ${eur(p * qte * rr)} · <b>TTC ${eur(p * qte * (1 + rr))}</b>`; };
   const renderCh = () => {
     const box = $('aChevaux'); box.innerHTML = ''; const chs = idsFor(selClient);
     if (!chs.length) { box.innerHTML = '<p class="hint" style="color:var(--danger)">Ce client n\'a pas de cheval à cet arrêt — un article doit être lié à au moins un cheval.</p>'; return; }
-    chs.forEach((c) => { const row = document.createElement('label'); row.className = 'chk'; row.innerHTML = `<input type="checkbox" ${picked.has(c.id) ? 'checked' : ''}/> 🐴 ${esc(c.nom)}`; row.querySelector('input').addEventListener('change', (e) => { e.target.checked ? picked.add(c.id) : picked.delete(c.id); upd(); }); box.appendChild(row); });
+    chs.forEach((c) => {
+      const on = picked.has(c.id);
+      const row = document.createElement('div'); row.className = 'chk-qrow';
+      row.innerHTML = `<label class="chk" style="flex:1"><input type="checkbox" ${on ? 'checked' : ''}/> 🐴 ${esc(c.nom)}</label><input type="number" class="qty-in" min="1" step="1" value="${qtes[c.id] || 1}" title="Quantité"${on ? '' : ' style="visibility:hidden"'}/>`;
+      const cb = row.querySelector('input[type=checkbox]'), qi = row.querySelector('.qty-in');
+      cb.addEventListener('change', (e) => { if (e.target.checked) { picked.add(c.id); if (!qtes[c.id]) qtes[c.id] = 1; qi.style.visibility = ''; } else { picked.delete(c.id); qi.style.visibility = 'hidden'; } upd(); });
+      qi.addEventListener('input', () => { qtes[c.id] = Math.max(1, parseInt(qi.value, 10) || 1); upd(); });
+      box.appendChild(row);
+    });
   };
   const applyMode = (m) => {
     mode = m;
@@ -3075,7 +3099,8 @@ function modalTourArticle(existing, opts) {
     if (!picked.size) { alert('Sélectionnez au moins un cheval pour cet article.'); return; }
     if (mode === 'catalogue' && !$('aCat').value) { alert('Choisissez un article dans le catalogue, ou passez en « Nouvel article ».'); return; }
     const cid = selClient; const chs = idsFor(cid).filter((c) => picked.has(c.id));
-    const art = { id: w.id || uid(), clientId: cid, chevalIds: chs.map((c) => c.id), chevalNoms: chs.map((c) => c.nom), libelle: $('aLib').value.trim() || 'Article', prixHT: parseNum($('aPrix').value), tvaPct: parseFloat($('aTva').value) || 0 };
+    const chevalQtes = {}; chs.forEach((c) => { chevalQtes[c.id] = Math.max(1, qtes[c.id] || 1); });
+    const art = { id: w.id || uid(), clientId: cid, chevalIds: chs.map((c) => c.id), chevalNoms: chs.map((c) => c.nom), chevalQtes, libelle: $('aLib').value.trim() || 'Article', prixHT: parseNum($('aPrix').value), tvaPct: parseFloat($('aTva').value) || 0 };
     // Éligibilité remise (héritée du catalogue si connu, sinon de l'article existant, sinon défaut) : remiseProduit (remise manuelle), remiseLiquide (remise auto liquide).
     const cat = mode === 'catalogue' ? S.articlesCatalogue.find((x) => x.id === $('aCat').value) : S.articlesCatalogue.find((x) => norm(x.libelle) === norm(art.libelle));
     const src = cat || w || {};

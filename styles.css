@@ -105,6 +105,8 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .art-remise { font-size: .72rem; margin-right: 4px; }
 .er-flags { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
 .er-flags .chk2 { font-size: .74rem; }
+.chk-qrow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.chk-qrow .qty-in { width: 66px; flex: 0 0 66px; }
 .heure-in { width: 92px; padding: 4px 6px; }
 .rdv-chevaux { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .rdv-chevaux .chk { white-space: nowrap; }
