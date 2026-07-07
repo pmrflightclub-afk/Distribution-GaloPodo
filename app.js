@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.34';
+const APP_VERSION = '1.1.35';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.35', date: '2026-07-07',
+    ajouts: [
+      'Visite par cheval : dans un arrêt, une case « Visite » par cheval fait apparaître un menu déroulant des prestations « Visite » du catalogue. La prestation choisie est ajoutée à la facture de ce cheval, à son prix, sans changer le tarif d\'arrêt (Tournée/Visite/Urgence).',
+      'Trois prestations sont fournies par défaut : Visite 1h (50 €), Visite 30 min (30 €), Visite 15 min (20 €). Vous pouvez en ajouter d\'autres via Gestion → Articles en cochant « Visite ».',
+    ],
+  },
   {
     version: '1.1.34', date: '2026-07-07',
     ajouts: [
@@ -423,9 +430,9 @@ const FACTORY_SETTINGS = {
   parage: { prixHT: 60, tvaPct: 21 },
   articlesCatalogue: [
     // « Parage & Équilibrage » retiré du catalogue par défaut : il existe déjà comme article auto (section Parage/Équilibrage).
-    { id: 'idmr4vkk6vi6ne', libelle: 'Visite 15min', prixHT: 10, tvaPct: 21 },
-    { id: 'idmr4vl08gi77k', libelle: 'Visite 30min', prixHT: 25, tvaPct: 21 },
-    { id: 'idmr4vlo0verc1', libelle: 'Visite ', prixHT: 40, tvaPct: 21 },
+    { id: 'idmr4vkk6vi6ne', libelle: 'Visite 15 min', prixHT: 20, tvaPct: 21, visite: true },
+    { id: 'idmr4vl08gi77k', libelle: 'Visite 30 min', prixHT: 30, tvaPct: 21, visite: true },
+    { id: 'idmr4vlo0verc1', libelle: 'Visite 1h', prixHT: 50, tvaPct: 21, visite: true },
     { id: 'idmr4vmxvz7rva', libelle: 'M.O. 2p', prixHT: 50, tvaPct: 21 },
     { id: 'idmr4vmzb37iis', libelle: 'Evaluation 1er Cheval', prixHT: 120, tvaPct: 21 },
     { id: 'idmr4vnee7ix1q', libelle: 'Evaluation cheval Supp.', prixHT: 25, tvaPct: 21 },
@@ -473,6 +480,25 @@ if (!S.seededServos) {
 }
 // Infection ajoutée après Fourbure/NPAS : back-fill unique d'un prix par défaut pour que la case apparaisse aussi (les anciens utilisateurs avaient infectionHT=0 → colonne masquée).
 if (!S.infectionSeeded) { S.infectionSeeded = true; if (!S.infectionHT) S.infectionHT = 9.90; LS.set('ftr.settings', S); }
+// Articles « Visite » (prestation) : flag `visite:true` → proposés dans la case Visite par cheval de l'arrêt.
+// Marque les 3 articles visite d'usine (prix normalisés 15min 20 / 30min 30 / 1h 50 s'ils n'ont pas été personnalisés) ; sinon seed 3 canoniques.
+if (!S.visiteSeeded) {
+  S.visiteSeeded = true;
+  const byId = (id) => (S.articlesCatalogue || []).find((x) => x.id === id);
+  const upd = (id, lib, oldP, newP) => { const a = byId(id); if (a) { a.visite = true; a.libelle = lib; if (Math.abs((a.prixHT || 0) - oldP) < 0.005) a.prixHT = newP; } };
+  upd('idmr4vkk6vi6ne', 'Visite 15 min', 10, 20);
+  upd('idmr4vl08gi77k', 'Visite 30 min', 25, 30);
+  upd('idmr4vlo0verc1', 'Visite 1h', 40, 50);
+  if (!(S.articlesCatalogue || []).some((x) => x.visite)) {
+    const tv = S.tvaRate || 21;
+    S.articlesCatalogue = (S.articlesCatalogue || []).concat([
+      { id: uid(), libelle: 'Visite 1h', prixHT: 50, tvaPct: tv, visite: true, remiseProduit: true, remiseLiquide: true },
+      { id: uid(), libelle: 'Visite 30 min', prixHT: 30, tvaPct: tv, visite: true, remiseProduit: true, remiseLiquide: true },
+      { id: uid(), libelle: 'Visite 15 min', prixHT: 20, tvaPct: tv, visite: true, remiseProduit: true, remiseLiquide: true },
+    ]);
+  }
+  LS.set('ftr.settings', S);
+}
 S.materiel.forEach((m) => { if (typeof m.nbChevaux !== 'number') m.nbChevaux = 1; }); // migration nbChevaux
 // V2 : retire les anciens produits, itemise le matériel, ajoute les catégories véhicule
 if (!S.seededV2) {
@@ -1816,7 +1842,10 @@ function renderEditorArrets(locked) {
         if (S.fourbureHT > 0) cols.push({ key: 'fourbure', label: 'Fourbure' });
         if (S.npasHT > 0) cols.push({ key: 'npas', label: 'NPAS' });
         if (S.infectionHT > 0) cols.push({ key: 'infection', label: 'Infection' });
-        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Présent</th>${cols.map((c) => '<th>' + c.label + '</th>').join('')}<th>Heure RDV</th></tr></thead><tbody>`;
+        // Prestations « visite » du catalogue (case Visite par cheval → menu déroulant).
+        const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
+        const visOpts = (sel) => ['<option value="">— choisir la prestation —</option>'].concat(visArts.map((x) => `<option value="${x.id}"${x.id === sel ? ' selected' : ''}>${esc(x.libelle)} (${eur(x.prixHT)})</option>`)).join('');
+        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Présent</th>${cols.map((c) => '<th>' + c.label + '</th>').join('')}<th>Visite</th><th>Heure RDV</th></tr></thead><tbody>`;
         pool.forEach((ph, pi) => {
           const cv = cvOf(ph); const present = chevalPresent(cv);
           h += `<tr${present ? '' : ' class="ch-absent"'}><td>🐴 ${esc(ph.nom)}</td>`;
@@ -1825,10 +1854,13 @@ function renderEditorArrets(locked) {
             const dis = (!present || (c.key !== 'parage' && !(cv && cv.parage))) ? ' disabled' : '';
             return `<td><input type="checkbox" data-key="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${dis}/></td>`;
           }).join('');
+          h += `<td><input type="checkbox" data-vis data-pi="${pi}" ${cv && cv.visite ? 'checked' : ''}${present && visArts.length ? '' : ' disabled'}/></td>`;
           h += `<td><input type="time" class="heure-in" data-heure data-pi="${pi}" value="${(cv && cv.heure) || ''}"${present ? '' : ' disabled'}/></td></tr>`;
         });
         h += '</tbody></table>';
-        h += `<p class="hint" style="margin-top:2px">Décochez « Présent » pour un cheval absent (non compté ni facturé). Fourbure / NPAS / Infection ne s'activent que si « Parage/Équil. » est coché.</p>`;
+        // Sélecteurs d'article visite (par cheval présent dont la case Visite est cochée).
+        pool.forEach((ph, pi) => { const cv = cvOf(ph); if (cv && chevalPresent(cv) && cv.visite) h += `<label class="reduc-row"><span class="grow">🐴 ${esc(ph.nom)} — Visite</span><select data-visart data-pi="${pi}">${visOpts(cv.visiteArtId)}</select></label>`; });
+        h += `<p class="hint" style="margin-top:2px">Décochez « Présent » pour un cheval absent (non compté ni facturé). Fourbure / NPAS / Infection ne s'activent que si « Parage/Équil. » est coché. La case « Visite » ajoute la prestation choisie à la facture, sans changer le tarif d'arrêt.</p>`;
         wrap.innerHTML = h;
         const rin = wrap.querySelector('[data-reduc]');
         if (rin) rin.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
@@ -1846,6 +1878,13 @@ function renderEditorArrets(locked) {
           recomputeMoney();
         }));
         wrap.querySelectorAll('[data-heure]').forEach((inp) => inp.addEventListener('change', (e) => { ensureCv(pool[+inp.dataset.pi]).heure = e.target.value || ''; saveTournees(); })); // heure de RDV par cheval (n'affecte pas les montants)
+        wrap.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => {
+          const cv = ensureCv(pool[+inp.dataset.pi]);
+          cv.visite = e.target.checked;
+          if (!cv.visite) cv.visiteArtId = null; else if (!cv.visiteArtId && visArts.length === 1) cv.visiteArtId = visArts[0].id; // une seule prestation → pré-sélection
+          saveTournees(); recomputeMoney(); renderEditorArrets(locked); // re-render pour afficher/masquer le sélecteur
+        }));
+        wrap.querySelectorAll('[data-visart]').forEach((sel) => sel.addEventListener('change', (e) => { ensureCv(pool[+sel.dataset.pi]).visiteArtId = e.target.value || null; saveTournees(); recomputeMoney(); }));
         el.appendChild(wrap);
       });
     }
@@ -1994,6 +2033,11 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
       m.deplacement.push({ adresse: r.adresse, type: r.type, partHT, partTTC, km: kmClient, tarifHT: r.tarifHT || 0, proche: !!r.proche, chevaux: cl.chevaux.map((c) => c.nom) });
       m.htDep += partHT;
       cl.chevaux.forEach((c) => {
+        // Visite par cheval (INDÉPENDANTE du parage) : article choisi au catalogue (visite:true) → ligne à son prix.
+        if (c.visite && c.visiteArtId) {
+          const av = (S.articlesCatalogue || []).find((x) => x.id === c.visiteArtId);
+          if (av) { const rr = (av.tvaPct || 0) / 100, prix = av.prixHT || 0; m.articles.push({ libelle: av.libelle, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: av.tvaPct || 0, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), visite: true, remiseOff: false, remiseProduit: av.remiseProduit !== false, remiseLiquide: av.remiseLiquide !== false }); m.htArt += prix; m.tvaArt += prix * rr; }
+        }
         if (!c.parage) return; // pas de parage → ni matériel ni forfait pathologie facturés pour ce cheval
         // Matériel = base seule (le matériel consommable). Les forfaits pathologie passent en ARTICLES (voir ci-dessous).
         if (baseMat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: false, npas: false, infection: false, ht: baseMat, ttc: baseMat * (1 + stdRate) }); m.htMat += baseMat; }
@@ -2068,7 +2112,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: (cl.chevaux || []).filter(chevalFait).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage })) })),
+    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: (cl.chevaux || []).filter(chevalFait).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null })) })),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
