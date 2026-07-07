@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.41';
+const APP_VERSION = '1.1.42';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.42', date: '2026-07-07',
+    ajouts: [
+      'Grille de l\'arrêt : la colonne « Parage/Équil. » est raccourcie en « Parage » (gagne de la largeur). Nouvelle légende sous le tableau qui explique chaque colonne : Présent, Parage, Fourbure/NPAS/Infection, Visite.',
+    ],
+  },
   {
     version: '1.1.41', date: '2026-07-07',
     ajouts: [
@@ -1937,7 +1943,7 @@ function renderEditorArrets(locked) {
         let h = single ? '' : `<div class="patho-client">${esc(clientName(cl.clientId))}</div>`;
         if (!single) h += `<label class="reduc-row"><span class="grow">Réduction articles</span><input type="number" data-reduc step="1" min="0" max="100" value="${currentTour.reductions[cl.clientId] || ''}" placeholder="0" style="width:70px"/><span>%</span></label>`;
         // Parage en 1er (déclencheur) ; Fourbure / NPAS actifs UNIQUEMENT si Parage coché pour ce cheval.
-        const cols = [{ key: 'parage', label: 'Parage/Équil.' }];
+        const cols = [{ key: 'parage', label: 'Parage' }];
         if (S.fourbureHT > 0) cols.push({ key: 'fourbure', label: 'Fourbure' });
         if (S.npasHT > 0) cols.push({ key: 'npas', label: 'NPAS' });
         if (S.infectionHT > 0) cols.push({ key: 'infection', label: 'Infection' });
@@ -1958,7 +1964,7 @@ function renderEditorArrets(locked) {
         h += '</tbody></table>';
         // Sélecteurs d'article visite (par cheval présent dont la case Visite est cochée).
         pool.forEach((ph, pi) => { const cv = cvOf(ph); if (cv && chevalPresent(cv) && cv.visite) h += `<label class="reduc-row"><span class="grow">🐴 ${esc(ph.nom)} — Visite</span><select data-visart data-pi="${pi}">${visOpts(cv.visiteArtId)}</select></label>`; });
-        h += `<p class="hint" style="margin-top:2px">Décochez « Présent » pour un cheval absent (non compté ni facturé). Fourbure / NPAS / Infection ne s'activent que si « Parage/Équil. » est coché. La case « Visite » ajoute la prestation choisie à la facture, sans changer le tarif d'arrêt.</p>`;
+        h += `<p class="hint" style="margin-top:2px"><b>Présent</b> = le cheval est bien là (décochez-le s'il est absent → non compté ni facturé). <b>Parage</b> = parage/équilibrage effectué. Fourbure / NPAS / Infection ne s'activent que si « Parage » est coché. <b>Visite</b> = ajoute une prestation de visite du catalogue à la facture, sans changer le tarif d'arrêt.</p>`;
         wrap.innerHTML = h;
         const rin = wrap.querySelector('[data-reduc]');
         if (rin) rin.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
