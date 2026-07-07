@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.70';
+const APP_VERSION = '1.1.71';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.71', date: '2026-07-08',
+    ajouts: [
+      'Stats → Suivi chevaux : nouvelles statistiques générales par Mois / Trimestre / Semestre / Année (tournées, déplacements, chevaux servis, parage, visite, fourbure, NPAS, infection).',
+      'Répartition des chevaux par tranche d\'âge et par durée de prise en charge (comptages).',
+      'Réglages → « Statistiques » (nouveau, entre Analyse et Thème) : modifiez et ajoutez librement les tranches d\'âge et de prise en charge utilisées pour ces comptages.',
+    ],
+  },
   {
     version: '1.1.70', date: '2026-07-08',
     ajouts: [
@@ -635,6 +643,11 @@ S.articlesCatalogue = Array.isArray(S.articlesCatalogue) ? S.articlesCatalogue :
 S.amortissement = Object.assign({ achatHT: 0, dureeVieKm: 0 }, S.amortissement || {});
 S.vehicule = Object.assign({ dateAchat: '', dateMiseEnCirculation: '' }, S.vehicule || {}); // dates véhicule (amortissement / âge)
 if (!Array.isArray(S.odoReleves)) S.odoReleves = []; // relevés RÉELS du compteur : { ym:'YYYY-MM', date:'YYYY-MM-DD', km, ecart } ; ecart = usage privé (réel − estimé depuis le relevé précédent)
+// Tranches (configurables) pour la page Stats → Suivi chevaux. max = borne haute EXCLUSIVE en mois ; null = « et plus » (dernière tranche).
+const DEF_TRANCHES_AGE = [{ label: 'Poulain (< 1 an)', max: 12 }, { label: '1–3 ans', max: 48 }, { label: '4–7 ans', max: 96 }, { label: '8–15 ans', max: 192 }, { label: '16–20 ans', max: 252 }, { label: '> 20 ans', max: null }];
+const DEF_TRANCHES_SUIVI = [{ label: '< 6 mois', max: 6 }, { label: '6–12 mois', max: 12 }, { label: '1–2 ans', max: 24 }, { label: '2–5 ans', max: 60 }, { label: '> 5 ans', max: null }];
+S.statTranchesAge = (Array.isArray(S.statTranchesAge) && S.statTranchesAge.length) ? S.statTranchesAge : DEF_TRANCHES_AGE.map((x) => Object.assign({}, x));
+S.statTranchesSuivi = (Array.isArray(S.statTranchesSuivi) && S.statTranchesSuivi.length) ? S.statTranchesSuivi : DEF_TRANCHES_SUIVI.map((x) => Object.assign({}, x));
 if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
@@ -1480,6 +1493,7 @@ function showReglages(sub) {
   if (rb && rl) rl.textContent = rb.textContent;
   if ($('reglagesSub')) $('reglagesSub').classList.remove('open');
   if (currentRsub === 'config') renderAmortStats();
+  if (currentRsub === 'statistiques') renderStatConfig();
   if (currentRsub === 'calcul') renderCalcul();
   if (currentRsub === 'analyse') renderAnalyse();
   if (currentRsub === 'changelog') renderChangelog();
@@ -3121,8 +3135,56 @@ function renderVehiculePanel() {
   if ($('tTournee')) $('tTournee').textContent = eurkm(tarifHT('tournee')) + ' HT';
   renderVehiculePieces();
 }
-// Sous-onglet « Suivi chevaux » : âge (date de naissance) et durée de prise en charge de chaque cheval.
+// Classe un nombre de mois dans une tranche : 1ʳᵉ dont max==null (et plus) ou months < max.
+function trancheOf(tranches, months) { if (months == null) return null; for (const t of (tranches || [])) { if (t.max == null || months < t.max) return t.label; } const l = (tranches || [])[(tranches || []).length - 1]; return l ? l.label : null; }
+// Compteurs d'actes sur une période (ensemble de mois 'YYYY-MM') : tournées, déplacements (arrêts), chevaux servis distincts, parage/visite/pathologies.
+function chevGenStats(range) {
+  let nTour = 0, nArret = 0, parage = 0, visite = 0, fourbure = 0, npas = 0, infection = 0; const chevSet = new Set();
+  allTours().forEach((t) => {
+    if (!t.result || !range.has((t.date || '').slice(0, 7))) return;
+    nTour++;
+    (t.arrets || []).forEach((a) => { nArret++; (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => {
+      if (!chevalFait(cv)) return;
+      chevSet.add(cl.clientId + '|' + norm(cv.nom));
+      if (cv.parage) parage++; if (cv.visite) visite++; if (cv.fourbure) fourbure++; if (cv.npas) npas++; if (cv.infection) infection++;
+    })); });
+  });
+  return { nTour, nArret, chevaux: chevSet.size, parage, visite, fourbure, npas, infection };
+}
+function renderChevGenStats(range) {
+  const g = chevGenStats(range); const box = $('chevGenStats'); if (!box) return;
+  if ($('chevGenEmpty')) $('chevGenEmpty').style.display = g.nTour ? 'none' : 'block';
+  box.innerHTML = `<div class="tiles tiles-3" style="margin:8px 0">
+    <div class="tile"><span class="t-label">Tournées</span><span class="t-val">${g.nTour}</span></div>
+    <div class="tile"><span class="t-label">Déplacements</span><span class="t-val">${g.nArret}</span></div>
+    <div class="tile"><span class="t-label">Chevaux servis</span><span class="t-val">${g.chevaux}</span></div>
+    <div class="tile"><span class="t-label">Parage</span><span class="t-val">${g.parage}</span></div>
+    <div class="tile"><span class="t-label">Visite</span><span class="t-val">${g.visite}</span></div>
+    <div class="tile"><span class="t-label">Fourbure</span><span class="t-val">${g.fourbure}</span></div>
+    <div class="tile"><span class="t-label">NPAS</span><span class="t-val">${g.npas}</span></div>
+    <div class="tile"><span class="t-label">Infection</span><span class="t-val">${g.infection}</span></div></div>`;
+}
+function renderChevGroupes() {
+  const box = $('chevGroupes'); if (!box) return;
+  const chevaux = []; clients.forEach((c) => (c.chevaux || []).forEach((h) => chevaux.push(h)));
+  const countBy = (tranches, key) => { const m = {}; (tranches || []).forEach((t) => m[t.label] = 0); let sans = 0; chevaux.forEach((h) => { const d = h[key]; if (!d) { sans++; return; } const lbl = trancheOf(tranches, monthsBetween(d)); if (lbl != null) m[lbl] = (m[lbl] || 0) + 1; }); return { m, sans }; };
+  const sec = (titre, tranches, res, sansLbl) => { let h = `<h3 class="rsub">${esc(titre)}</h3>`; (tranches || []).forEach((t) => { h += `<div class="inv-line"><span>${esc(t.label)}</span><span>${res.m[t.label] || 0}</span></div>`; }); if (res.sans) h += `<div class="inv-line" style="color:var(--muted)"><span>${esc(sansLbl)}</span><span>${res.sans}</span></div>`; return h; };
+  box.innerHTML = sec('Par tranche d\'âge', S.statTranchesAge, countBy(S.statTranchesAge, 'dateNaissance'), 'Sans date de naissance')
+    + sec('Par durée de prise en charge', S.statTranchesSuivi, countBy(S.statTranchesSuivi, 'datePriseEnCharge'), 'Sans date de prise en charge');
+}
+let chevPtype = 'mois', chevPkey = null;
+// Sous-onglet « Suivi chevaux » : stats générales (période) + répartition (âge / prise en charge) + liste par cheval (âge = naissance ; prise en charge = date de début, distincts).
 function renderChevauxSuivi() {
+  const seg = $('chevPeriodSeg'), perSel = $('chevPeriod');
+  if (seg) seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._cw) { b._cw = true; b.addEventListener('click', () => { chevPtype = b.dataset.cptype; chevPkey = null; renderChevauxSuivi(); }); } b.classList.toggle('on', b.dataset.cptype === chevPtype); });
+  const opts = comptaPeriodOptions(chevPtype);
+  if (perSel) {
+    if (!opts.length) perSel.innerHTML = '';
+    else { if (!opts.some((o) => o.key === chevPkey)) chevPkey = opts[0].key; perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === chevPkey ? ' selected' : ''}>${esc(o.label)}</option>`).join(''); perSel.onchange = () => { chevPkey = perSel.value; renderChevauxSuivi(); }; }
+    perSel.style.display = opts.length ? '' : 'none';
+  }
+  renderChevGenStats(new Set(opts.length ? monthsOfRange(chevPtype, chevPkey) : []));
+  renderChevGroupes();
   const box = $('chevauxSuiviList'); if (!box) return; box.innerHTML = '';
   const rows = [];
   clients.forEach((c) => (c.chevaux || []).forEach((h) => rows.push({ h, c })));
@@ -3137,6 +3199,26 @@ function renderChevauxSuivi() {
     hh += `<div class="inv-line"><span>Prise en charge</span><span>${pec}${h.datePriseEnCharge ? ' <span class="li-sub">(depuis le ' + esc(fmtDateFr(h.datePriseEnCharge)) + ')</span>' : ''}</span></div>`;
     el.innerHTML = hh; box.appendChild(el);
   });
+}
+// Réglages → Statistiques : éditer/ajouter les tranches (âge, prise en charge).
+function renderStatConfig() {
+  const build = (boxId, key, addId) => {
+    const box = $(boxId);
+    if (box) { box.innerHTML = '';
+      (S[key] || []).forEach((t) => {
+        const row = document.createElement('div'); row.className = 'edit-row';
+        row.innerHTML = `<div class="er-top"><input class="grow er-title" data-lbl value="${esc(t.label)}" placeholder="Libellé"/><button class="a-del" data-del title="Supprimer">✕</button></div>
+          <div class="er-grid"><label>Jusqu'à (mois · vide = et plus)<input data-max type="number" min="0" step="1" value="${t.max == null ? '' : t.max}"/></label></div>`;
+        row.querySelector('[data-lbl]').addEventListener('input', (e) => { t.label = e.target.value; saveSettings(); });
+        row.querySelector('[data-max]').addEventListener('change', (e) => { const v = (e.target.value || '').trim(); t.max = v === '' ? null : Math.max(0, Math.round(parseNum(v))); saveSettings(); });
+        row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer cette tranche ?')) return; S[key] = (S[key] || []).filter((x) => x !== t); saveSettings(); renderStatConfig(); });
+        box.appendChild(row);
+      });
+    }
+    if ($(addId)) $(addId).onclick = () => { S[key] = (S[key] || []).concat([{ label: 'Nouvelle tranche', max: null }]); saveSettings(); renderStatConfig(); };
+  };
+  build('statAgeList', 'statTranchesAge', 'statAgeAdd');
+  build('statSuiviList', 'statTranchesSuivi', 'statSuiviAdd');
 }
 // Sous-onglet « Véhicule par cheval » : km & durée attribués par client, détaillés par cheval.
 function renderVehiculeCheval() {

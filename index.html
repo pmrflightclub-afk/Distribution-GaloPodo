@@ -471,6 +471,17 @@
 
     <div id="ssub-chevaux" class="subpanel">
       <section class="card">
+        <h2>Statistiques générales</h2>
+        <div class="seg" id="chevPeriodSeg"><button type="button" class="seg-btn on" data-cptype="mois">Mois</button><button type="button" class="seg-btn" data-cptype="trimestre">Trimestre</button><button type="button" class="seg-btn" data-cptype="semestre">Semestre</button><button type="button" class="seg-btn" data-cptype="annee">Année</button></div>
+        <select id="chevPeriod" class="sel" style="margin-top:8px"></select>
+        <div id="chevGenStats"></div>
+        <p class="empty" id="chevGenEmpty">Aucune tournée calculée sur la période.</p>
+      </section>
+      <section class="card">
+        <h2>Répartition des chevaux</h2>
+        <div id="chevGroupes"></div>
+      </section>
+      <section class="card">
         <h2>Suivi des chevaux</h2>
         <p class="hint">Âge et durée de prise en charge de chaque cheval. Renseignez la date de naissance et la date de prise en charge dans Gestion → fiche client.</p>
         <div id="chevauxSuiviList" class="list"></div>
@@ -585,6 +596,7 @@
         <button class="subtab" data-rsub="gps">GPS</button>
         <button class="subtab" data-rsub="service">Service</button>
         <button class="subtab" data-rsub="analyse">Analyse</button>
+        <button class="subtab" data-rsub="statistiques">Statistiques</button>
         <button class="subtab" data-rsub="theme">Thème</button>
         <button class="subtab" data-rsub="calcul">Calcul</button>
         <button class="subtab" data-rsub="changelog">Changelog</button>
@@ -784,6 +796,19 @@
         <h2>Titres des cases — Statistiques</h2>
         <p class="hint">Renommez les cases affichées sur la page <b>Stats</b> (utilisation du véhicule).</p>
         <div id="analyseStats"></div>
+      </section>
+    </div>
+
+    <div id="rsub-statistiques" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Tranches d'âge</h2><button class="btn small" id="statAgeAdd">+ Ajouter</button></div>
+        <p class="hint">Comptage des chevaux par tranche d'âge (Stats → Suivi chevaux). « Jusqu'à » = borne haute en mois (vide = « et plus »). Ordonnez du plus petit au plus grand.</p>
+        <div id="statAgeList" class="edit-list"></div>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Tranches de prise en charge</h2><button class="btn small" id="statSuiviAdd">+ Ajouter</button></div>
+        <p class="hint">Comptage des chevaux par durée de prise en charge. « Jusqu'à » = borne haute en mois (vide = « et plus »).</p>
+        <div id="statSuiviList" class="edit-list"></div>
       </section>
     </div>
 
