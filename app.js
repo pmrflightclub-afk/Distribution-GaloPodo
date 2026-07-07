@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.73';
+const APP_VERSION = '1.1.74';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.74', date: '2026-07-08',
+    ajouts: [
+      'Correctif « Trajet du jour » vide : l\'app utilise désormais votre date LOCALE pour « aujourd\'hui » (avant : heure UTC). En fuseau +1/+2, une tournée du jour pouvait être considérée comme « à venir » et ne pas apparaître dans le Trajet du jour — c\'est corrigé.',
+    ],
+  },
   {
     version: '1.1.73', date: '2026-07-08',
     ajouts: [
@@ -1228,7 +1234,8 @@ function mUnit(id, unit, dec) {
 const TYPES = { tournee: 'Tournée', visite: 'Visite', urgence: 'Urgence' };
 const norm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// « Aujourd'hui » en date LOCALE (comme les sélecteurs de date et fmtDateFr) — évite qu'en fuseau +1/+2, près de minuit, « aujourd'hui » soit décalé d'un jour (UTC) et qu'une tournée du jour tombe à tort en « à venir ».
+const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 function tourStatus(date) { const t = todayStr(); if (!date) return 'avenir'; if (date < t) return 'cloturee'; if (date === t) return 'active'; return 'avenir'; }
 // Statut d'une tournée : clôturée si fermée manuellement OU date passée ; sinon selon la date.
 // Une tournée DÉMARRÉE et non clôturée reste « active » (modifiable) même si sa date est passée — pour pouvoir finaliser ses arrêts ouverts.
