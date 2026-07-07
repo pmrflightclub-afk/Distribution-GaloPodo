@@ -358,6 +358,8 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 
 /* Articles d'un arrêt (dans l'éditeur de tournée) */
 .a-articles { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.a-prets { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.a-prets .a-art-head span:first-child { color: var(--accent); }
 .a-art-head { display: flex; align-items: center; justify-content: space-between; font-size: .72rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
 
 /* Changelog / message de passage de version */

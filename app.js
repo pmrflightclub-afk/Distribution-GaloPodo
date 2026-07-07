@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.46';
+const APP_VERSION = '1.1.47';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.47', date: '2026-07-07',
+    ajouts: [
+      'Prêt d\'un objet au client : bouton « ＋ Prêt » dans l\'arrêt (au-dessus de « + Article »). Vous notez l\'objet prêté ; il est rappelé aux prochaines tournées de ce client, sous les articles (hors facture), avec les boutons « Maintenir » et « Récupéré ». Une fois récupéré, la mémoire du prêt disparaît.',
+      'Sécurité : on ne peut pas payer/clôturer un arrêt tant qu\'aucun cheval n\'a « Parage » ou « Visite » coché (sauf client sans cheval = déplacement seul).',
+      'Un arrêt clôturé est verrouillé dans « Trajet du jour » (l\'heure de fin de visite ne bouge plus) ; les corrections se font en rouvrant la tournée ou via la Compta.',
+      'Section « Arrêts à finaliser » élargie : elle couvre les tournées en cours et dépassées (démarrées, non clôturées), jamais les tournées à venir.',
+    ],
+  },
   {
     version: '1.1.46', date: '2026-07-07',
     ajouts: [
@@ -1791,13 +1800,24 @@ function tourCloseBlock(t) {
   }));
   return out;
 }
-// Un arrêt est « finalisé » = clôturé (validatedAt posé via Paiement & clôture) ET paiement complet de tous ses clients.
-function arretFinalise(t, a) { return typeof a.validatedAt === 'number' && arretPaiementDone(t, a); }
-// Ce qui empêche de finaliser/figer une tournée : arrêts non clôturés ou paiement incomplet (dans l'ordre des arrêts).
+// Sécurité « au moins un cheval fait » : chaque client de l'arrêt QUI A des chevaux à cette adresse doit en avoir ≥1 coché (parage OU visite).
+// Un client SANS cheval à l'adresse (déplacement seul) est OK. Empêche de payer/clôturer un arrêt où aucun cheval n'a été pris en charge.
+function arretActeOK(a) {
+  return (a.clients || []).every((cl) => {
+    if ((cl.chevaux || []).some(chevalFait)) return true;
+    const c = clients.find((x) => x.id === cl.clientId);
+    const hasHorsesHere = c ? activeChevaux(c).some((h) => norm(addrStr(chevalAddr(c, h))) === norm(addrStr(a.addr))) : (cl.chevaux || []).length > 0;
+    return !hasHorsesHere;
+  });
+}
+// Un arrêt est « finalisé » = au moins un cheval fait, clôturé (validatedAt via Paiement & clôture) ET paiement complet.
+function arretFinalise(t, a) { return arretActeOK(a) && typeof a.validatedAt === 'number' && arretPaiementDone(t, a); }
+// Ce qui empêche de finaliser/figer une tournée : arrêt sans cheval coché, non clôturé, ou paiement incomplet (dans l'ordre).
 function tourFinalizeBlock(t) {
   const out = [];
   (t.arrets || []).forEach((a, i) => {
     const lbl = (i + 1) + '. ' + (labelFor(a) || 'arrêt');
+    if (!arretActeOK(a)) { out.push(lbl + ' : aucun cheval coché (Parage ou Visite obligatoire)'); return; }
     if (typeof a.validatedAt !== 'number') { out.push(lbl + ' : arrêt non clôturé (💶 Paiement & clôture à valider)'); return; }
     (a.clients || []).forEach((cl) => { const iss = clientPaiementIssue(t, cl.clientId); if (iss) out.push(lbl + ' — ' + clientName(cl.clientId) + ' : ' + iss); });
   });
@@ -2045,7 +2065,7 @@ function renderEditorArrets(locked) {
     // ----- Articles de cet arrêt (couplés au client de l'arrêt) -----
     const artWrap = document.createElement('div'); artWrap.className = 'a-articles';
     const arts = articlesForArret(a);
-    artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<button class="btn small" data-add-art>+ Article</button>'}</div>`;
+    artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<span><button class="btn small" data-add-pret>＋ Prêt</button> <button class="btn small" data-add-art>+ Article</button></span>'}</div>`;
     const alist = document.createElement('div'); alist.className = 'list';
     // Case « Remise » (à cocher) = la réduction client s'applique à cette ligne. Cochée par défaut.
     const remiseChkHtml = (off, dis) => locked ? '' : `<label class="chk2 art-remise" title="${dis ? 'Remise produit désactivée (catalogue) — ligne non remisable manuellement' : 'La réduction client s\'applique à cette ligne'}"><input type="checkbox" data-remise ${off ? '' : 'checked'}${dis ? ' disabled' : ''}/> Remise</label>`;
@@ -2079,7 +2099,20 @@ function renderEditorArrets(locked) {
     if (!alist.children.length) alist.innerHTML = '<p class="hint">Aucun article pour cet arrêt.</p>';
     artWrap.appendChild(alist);
     if (!locked) { const ab = artWrap.querySelector('[data-add-art]'); if (ab) ab.addEventListener('click', () => modalTourArticle(null, { arret: a, clientId: a.clients.length === 1 ? a.clients[0].clientId : undefined })); }
+    if (!locked) { const pb = artWrap.querySelector('[data-add-pret]'); if (pb) pb.addEventListener('click', () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, currentTour); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, currentTour) }))); }); }
     el.appendChild(artWrap);
+    // ----- Prêts en cours du/des client(s) (mémoire par client, hors facture) : affichés SOUS les articles -----
+    let pretHtml = '';
+    a.clients.forEach((cl) => { const c = clients.find((x) => x.id === cl.clientId); (c && c.prets || []).forEach((pr) => { pretHtml += `<div class="list-item" data-pretcid="${cl.clientId}" data-pretid="${pr.id}"><div class="li-main"><b>🎁 ${esc(pr.text)}</b><span class="li-sub">${esc(clientName(cl.clientId))} · prêté le ${esc(fmtDateFr(pr.date))}</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-pret-keep>Maintenir</button> <button class="btn small danger" data-pret-back>Récupéré</button></div>'}</div>`; }); });
+    if (pretHtml) {
+      const pretBox = document.createElement('div'); pretBox.className = 'a-prets';
+      pretBox.innerHTML = '<div class="a-art-head"><span>🎁 Prêts en cours</span></div>' + pretHtml;
+      el.appendChild(pretBox);
+      if (!locked) {
+        pretBox.querySelectorAll('[data-pret-back]').forEach((b) => b.addEventListener('click', () => { const row = b.closest('[data-pretcid]'); const c = clients.find((x) => x.id === row.dataset.pretcid); if (c) { c.prets = (c.prets || []).filter((p) => p.id !== row.dataset.pretid); saveClients(); } renderEditorArrets(locked); })); // récupéré → mémoire effacée
+        pretBox.querySelectorAll('[data-pret-keep]').forEach((b) => b.addEventListener('click', () => { b.textContent = 'Maintenu ✓'; setTimeout(() => { b.textContent = 'Maintenir'; }, 1200); })); // maintenu → reste lié au client (aucune donnée à changer)
+      }
+    }
     // Répartition facture par client, fusionnée sous l'arrêt (remplie par renderArretInvoices).
     const invBox = document.createElement('div'); invBox.className = 'a-invoices'; invBox.dataset.aidx = i; el.appendChild(invBox);
     box.appendChild(el);
@@ -3608,18 +3641,14 @@ const hm = (ts) => ts ? new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digi
 // Durée à partir de MINUTES : < 1h → « 45 min » ; ≥ 1h → « 1h30 » / « 2h ». Format unique partout.
 function durMin(min) { if (min == null || isNaN(min) || min < 0) return '—'; min = Math.round(min); const h = Math.floor(min / 60), m = min % 60; if (!h) return m + ' min'; return m ? `${h}h${m < 10 ? '0' + m : m}` : `${h}h`; }
 function durHm(ms) { return (ms == null || ms < 0) ? '—' : durMin(ms / 60000); }
-// Tournées démarrées, dépassées (retour + 3 h) mais NON clôturables car des arrêts ne sont pas finalisés.
-function overdueBlockedTours() {
-  return (tournees || []).filter((t) => {
-    if (!t.startedAt || t.endedAt || t.closed) return false;
-    const arr = estimatedArrivalTs(t); if (arr == null) return false;
-    return Date.now() > arr + 3 * 3600 * 1000 && tourFinalizeBlock(t).length > 0;
-  });
+// Tournées EN COURS / dépassées (démarrées, non clôturées) qui ont des arrêts non finalisés. Jamais les tournées à venir (non démarrées).
+function blockingTours() {
+  return (tournees || []).filter((t) => t.startedAt && !t.endedAt && !t.closed && tourFinalizeBlock(t).length > 0);
 }
 // Section « Arrêts à finaliser » (au-dessus du Trajet du jour) : rend visibles les tournées bloquées + accès rapide au 1ᵉʳ arrêt à finaliser.
 function renderBlockingArrets() {
   const card = $('homeBlocking'), list = $('homeBlockingList'); if (!card || !list) return;
-  const stuck = overdueBlockedTours();
+  const stuck = blockingTours();
   card.classList.toggle('hidden', !stuck.length);
   list.innerHTML = '';
   stuck.forEach((t) => {
@@ -3628,6 +3657,7 @@ function renderBlockingArrets() {
     el.innerHTML = `<div class="li-main"><b>🚩 ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}</b><span class="li-sub">${blk.map(esc).join('<br>')}</span></div><div class="li-act"><button class="btn small primary" data-fin>💶 Finaliser</button></div>`;
     el.querySelector('[data-fin]').addEventListener('click', () => {
       const a = (t.arrets || [])[firstOpenArret(t)]; if (!a) { renderHome(); return; }
+      if (!arretActeOK(a)) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); return; } // aucun cheval coché → ouvrir la tournée pour cocher Parage/Visite
       modalPayment(t, a, renderHome, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } });
     });
     list.appendChild(el);
@@ -3677,11 +3707,12 @@ function renderHomeTrajet() {
       const trajet = real != null ? durMin(real) : (est != null ? durMin(est) : '—'); // SMS : réel si encodé, sinon estimé
       const trajetLbl = (est != null ? durMin(est) + ' est.' : '—') + (real != null ? ' · <b>' + durMin(real) + ' réel</b>' : '');
       const el = document.createElement('div'); el.className = 'list-item';
-      // « Paiement & clôture » : ouvre le paiement ; l'enregistrement (valide) clôture l'arrêt. Inactif si tournée non démarrée OU arrêt précédent non finalisé.
+      // « Paiement & clôture » : ouvre le paiement ; l'enregistrement (valide) clôture l'arrêt. Verrouillé si : non démarrée, arrêt précédent non finalisé, aucun cheval coché, ou déjà clôturé.
       const validated = typeof a.validatedAt === 'number';
-      const clotDis = !t.startedAt || seqLocked;
-      const clotTitle = !t.startedAt ? 'Démarrez d\'abord la tournée' : (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : 'Encaisser le paiement puis clôturer cet arrêt');
-      const clotBtn = `<button class="btn small${clotDis ? '' : (validated ? ' done' : ' primary')}" data-valid${clotDis ? ' disabled' : ''} title="${clotTitle}">${validated ? '✓ clôturé ' + hm(a.validatedAt) : '💶 Paiement & clôture'}</button>`;
+      const acteOK = arretActeOK(a);
+      const clotDis = !t.startedAt || seqLocked || validated || !acteOK;
+      const clotTitle = !t.startedAt ? 'Démarrez d\'abord la tournée' : (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : (!acteOK ? 'Cochez au moins un cheval (Parage ou Visite) — ouvrez la tournée' : (validated ? 'Arrêt clôturé (corrections via la tournée ou la Compta)' : 'Encaisser le paiement puis clôturer cet arrêt')));
+      const clotBtn = `<button class="btn small${clotDis ? (validated ? ' done' : '') : ' primary'}" data-valid${clotDis ? ' disabled' : ''} title="${clotTitle}">${validated ? '✓ clôturé ' + hm(a.validatedAt) : '💶 Paiement & clôture'}</button>`;
       const validLbl = validated ? ' · ✅ ' + hm(a.validatedAt) : '';
       el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
         <div class="li-act"><button class="btn small" data-agir${seqLocked ? ' disabled title="Finalisez d\'abord l\'arrêt précédent"' : ''}>⚡ Agir</button> ${clotBtn}</div>`;
@@ -3700,7 +3731,7 @@ function renderHomeTrajet() {
         { label: 'SMS', keepOpen: true, onClick: smsAction },
         { label: 'Ticket', keepOpen: true, onClick: ticketAction },
       ]));
-      const vb = el.querySelector('[data-valid]'); if (vb && t.startedAt && !seqLocked) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); })); // paiement enregistré (valide) → clôture l'arrêt (heure = 1re validation)
+      const vb = el.querySelector('[data-valid]'); if (vb && !clotDis) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); })); // paiement enregistré (valide) → clôture l'arrêt (heure = 1re validation) ; verrouillé une fois clôturé
       box.appendChild(el);
     });
     // ----- Retour → domicile/arrivée : « Agir » (Waze + Route retour) + « Clôturer tournée » (inactif tant que non démarrée) -----
@@ -3767,6 +3798,17 @@ function modalReturnTime(t, estMin, after) {
   $('rtMin').addEventListener('input', rtConv); rtConv();
   $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete t.returnRealMin; else t.returnRealMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
   $('rtClear').addEventListener('click', () => { delete t.returnRealMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
+}
+// Prêt d'un objet à un client (mémoire par client, rappelée aux tournées suivantes jusqu'à récupération).
+function modalPret(clientId, tour) {
+  const c = clients.find((x) => x.id === clientId); if (!c) return;
+  openModal(`<div class="modal-head"><b>🎁 Prêt à ${esc(fullName(c))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Notez l'objet prêté au client. Il sera rappelé à ses prochaines tournées, sous les articles de l'arrêt (hors facture), jusqu'à ce que vous le marquiez « Récupéré ».</p>
+    <label>Objet prêté<input type="text" id="pretText" placeholder="ex. cloche, chaussure de marche, tapis…" /></label>
+    <div class="actions"><button class="btn primary block" id="pretOk">Enregistrer le prêt</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  const inp = $('pretText'); if (inp) inp.focus();
+  $('pretOk').addEventListener('click', () => { const txt = $('pretText').value.trim(); if (!txt) { closeModal(); return; } if (!Array.isArray(c.prets)) c.prets = []; c.prets.push({ id: uid(), text: txt, date: (tour && tour.date) || todayStr(), sourceTourId: tour ? tour.id : null }); saveClients(); closeModal(); renderEditorArrets(); });
 }
 // Choix de la prestation « Visite » d'un cheval (modale) → onPick(id | undefined si annulé).
 function modalVisitePick(nom, currentId, visArts, onPick) {
