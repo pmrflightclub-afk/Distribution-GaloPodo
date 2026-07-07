@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.43';
+const APP_VERSION = '1.1.44';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.44', date: '2026-07-07',
+    ajouts: [
+      'Grille de l\'arrêt simplifiée : la colonne « Présent » disparaît. Tous les chevaux du client sont listés ; un cheval est compté et facturé dès que « Parage » OU « Visite » est coché (les deux prestations qui rattachent un cheval à la tournée).',
+      'La colonne « Visite » est placée juste après « Parage ».',
+      'Fourbure / NPAS / Infection s\'activent désormais dès que Parage OU Visite est coché (avant : Parage seul).',
+      'Paiement partiel : si « reste impayé » est coché sans montant, le paiement reste non finalisé (bouton pas en ✓) et la clôture de la tournée est bloquée tant que le montant impayé n\'est pas renseigné.',
+    ],
+  },
   {
     version: '1.1.43', date: '2026-07-07',
     ajouts: [
@@ -1741,14 +1750,18 @@ function reconcileActiveTours() {
   return any;
 }
 
-// Sécurité de clôture : chaque client doit avoir un mode de paiement (virement/liquide) ; en liquide, le montant encaissé est requis.
-// Le paiement d'un client est-il complètement renseigné ? (même règle que la clôture : mode choisi + montant liquide si liquide)
-function clientPaiementDone(t, cid) {
+// Ce qui manque au paiement d'un client (chaîne) ou null si complet. Règle UNIQUE, partagée par le bouton « fait » et la clôture.
+// Mode choisi ; en liquide : montant encaissé requis ; si « paiement partiel » coché : le montant impayé doit être renseigné (> 0).
+function clientPaiementIssue(t, cid) {
   const p = (t.payments || {})[cid]; const method = p ? p.method : null;
-  if (method === 'virement') return true;
-  if (method === 'liquide') return !!(p && (p.rectifie != null || p.montantPaye != null));
-  return false;
+  if (method !== 'virement' && method !== 'liquide') return 'mode de paiement non choisi';
+  if (method === 'liquide') {
+    if (!(p.rectifie != null || p.montantPaye != null)) return 'montant liquide non renseigné';
+    if (p.partiel && !(p.impaye != null && p.impaye > 0)) return 'montant impayé non renseigné';
+  }
+  return null;
 }
+function clientPaiementDone(t, cid) { return !clientPaiementIssue(t, cid); }
 // Le paiement de l'arrêt est « fait » si TOUS ses clients ont un paiement complet.
 function arretPaiementDone(t, a) {
   const cls = (a.clients || []); if (!cls.length) return false;
@@ -1758,10 +1771,7 @@ function tourCloseBlock(t) {
   const out = []; const seen = new Set();
   (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => {
     if (seen.has(cl.clientId)) return; seen.add(cl.clientId);
-    const p = (t.payments || {})[cl.clientId];
-    const method = p ? p.method : null;
-    if (method !== 'virement' && method !== 'liquide') out.push(clientName(cl.clientId) + ' : mode de paiement non choisi');
-    else if (method === 'liquide' && (!p || (p.rectifie == null && p.montantPaye == null))) out.push(clientName(cl.clientId) + ' : montant liquide non renseigné');
+    const iss = clientPaiementIssue(t, cl.clientId); if (iss) out.push(clientName(cl.clientId) + ' : ' + iss);
   }));
   return out;
 }
@@ -1960,50 +1970,43 @@ function renderEditorArrets(locked) {
         // Nom + réduction affichés ici SEULEMENT si plusieurs clients (sinon c'est dans l'en-tête de l'arrêt).
         let h = single ? '' : `<div class="patho-client">${esc(clientName(cl.clientId))}</div>`;
         if (!single) h += `<label class="reduc-row"><span class="grow">Réduction articles</span><input type="number" data-reduc step="1" min="0" max="100" value="${currentTour.reductions[cl.clientId] || ''}" placeholder="0" style="width:70px"/><span>%</span></label>`;
-        // Parage en 1er (déclencheur) ; Fourbure / NPAS actifs UNIQUEMENT si Parage coché pour ce cheval.
-        const cols = [{ key: 'parage', label: 'Parage' }];
-        if (S.fourbureHT > 0) cols.push({ key: 'fourbure', label: 'Fourbure' });
-        if (S.npasHT > 0) cols.push({ key: 'npas', label: 'NPAS' });
-        if (S.infectionHT > 0) cols.push({ key: 'infection', label: 'Infection' });
+        // Colonnes : Parage puis Visite (les 2 prestations qui rattachent un cheval), puis pathologies. Pas de colonne « Présent » : la présence est IMPLICITE (parage OU visite).
+        const pathoCols = [];
+        if (S.fourbureHT > 0) pathoCols.push({ key: 'fourbure', label: 'Fourbure' });
+        if (S.npasHT > 0) pathoCols.push({ key: 'npas', label: 'NPAS' });
+        if (S.infectionHT > 0) pathoCols.push({ key: 'infection', label: 'Infection' });
         // Prestations « visite » du catalogue (case Visite par cheval → menu déroulant).
         const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
         const visOpts = (sel) => ['<option value="">— choisir la prestation —</option>'].concat(visArts.map((x) => `<option value="${x.id}"${x.id === sel ? ' selected' : ''}>${esc(x.libelle)} (${eur(x.prixHT)})</option>`)).join('');
-        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Présent</th>${cols.map((c) => '<th>' + c.label + '</th>').join('')}<th>Visite</th></tr></thead><tbody>`;
+        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Parage</th><th>Visite</th>${pathoCols.map((c) => '<th>' + c.label + '</th>').join('')}</tr></thead><tbody>`;
         pool.forEach((ph, pi) => {
-          const cv = cvOf(ph); const present = chevalPresent(cv);
-          h += `<tr${present ? '' : ' class="ch-absent"'}><td>🐴 ${esc(ph.nom)}</td>`;
-          h += `<td><input type="checkbox" data-present data-pi="${pi}" ${present ? 'checked' : ''}/></td>`;
-          h += cols.map((c) => {
-            const dis = (!present || (c.key !== 'parage' && !(cv && cv.parage))) ? ' disabled' : '';
-            return `<td><input type="checkbox" data-key="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${dis}/></td>`;
-          }).join('');
-          h += `<td><input type="checkbox" data-vis data-pi="${pi}" ${cv && cv.visite ? 'checked' : ''}${present && visArts.length ? '' : ' disabled'}/></td></tr>`;
+          const cv = cvOf(ph); const acte = !!(cv && (cv.parage || cv.visite)); // parage OU visite = cheval pris en charge
+          h += `<tr><td>🐴 ${esc(ph.nom)}</td>`;
+          h += `<td><input type="checkbox" data-key="parage" data-pi="${pi}" ${cv && cv.parage ? 'checked' : ''}/></td>`;
+          h += `<td><input type="checkbox" data-vis data-pi="${pi}" ${cv && cv.visite ? 'checked' : ''}${visArts.length ? '' : ' disabled'}/></td>`;
+          h += pathoCols.map((c) => `<td><input type="checkbox" data-key="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${acte ? '' : ' disabled'}/></td>`).join('');
+          h += '</tr>';
         });
         h += '</tbody></table>';
-        // Sélecteurs d'article visite (par cheval présent dont la case Visite est cochée).
-        pool.forEach((ph, pi) => { const cv = cvOf(ph); if (cv && chevalPresent(cv) && cv.visite) h += `<label class="reduc-row"><span class="grow">🐴 ${esc(ph.nom)} — Visite</span><select data-visart data-pi="${pi}">${visOpts(cv.visiteArtId)}</select></label>`; });
-        h += `<p class="hint" style="margin-top:2px"><b>Présent</b> = le cheval est bien là (décochez-le s'il est absent → non compté ni facturé). <b>Parage</b> = parage/équilibrage effectué. Fourbure / NPAS / Infection ne s'activent que si « Parage » est coché. <b>Visite</b> = ajoute une prestation de visite du catalogue à la facture, sans changer le tarif d'arrêt.</p>`;
+        // Sélecteurs d'article visite (par cheval dont la case Visite est cochée).
+        pool.forEach((ph, pi) => { const cv = cvOf(ph); if (cv && cv.visite) h += `<label class="reduc-row"><span class="grow">🐴 ${esc(ph.nom)} — Visite</span><select data-visart data-pi="${pi}">${visOpts(cv.visiteArtId)}</select></label>`; });
+        h += `<p class="hint" style="margin-top:2px"><b>Parage</b> et <b>Visite</b> sont les 2 prestations qui rattachent un cheval à la tournée : un cheval sans parage ni visite n'est ni compté ni facturé. Fourbure / NPAS / Infection s'activent dès que Parage <b>ou</b> Visite est coché. « Visite » ouvre la liste des prestations « Visite » du catalogue et l'ajoute à la facture (section Articles), sans changer le tarif de déplacement de l'arrêt.</p>`;
         wrap.innerHTML = h;
         const rin = wrap.querySelector('[data-reduc]');
         if (rin) rin.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
-        wrap.querySelectorAll('[data-present]').forEach((inp) => inp.addEventListener('change', (e) => {
-          const ph = pool[+inp.dataset.pi];
-          if (e.target.checked) ensureCv(ph).present = true;
-          else { const cv = cvOf(ph); if (cv) { cv.present = false; cv.parage = false; cv.fourbure = false; cv.npas = false; cv.infection = false; cv.visite = false; } } // absent = aucun acte
-          saveTournees(); recomputeMoney(); renderEditorArrets(locked);
-        }));
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
           const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.key;
           cv[key] = e.target.checked;
-          // Parage (dé)verrouille Fourbure/NPAS → il faut re-render pour mettre à jour l'état "disabled" des cases.
-          if (key === 'parage') { if (!e.target.checked) { cv.fourbure = false; cv.npas = false; cv.infection = false; } recomputeMoney(); renderEditorArrets(locked); return; }
+          // Parage (dé)coché : recharge la grille (verrouille/déverrouille les pathologies) ; si plus de parage NI visite → efface les pathologies.
+          if (key === 'parage') { if (!e.target.checked && !cv.visite) { cv.fourbure = false; cv.npas = false; cv.infection = false; } recomputeMoney(); renderEditorArrets(locked); return; }
           recomputeMoney();
         }));
         wrap.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => {
           const cv = ensureCv(pool[+inp.dataset.pi]);
           cv.visite = e.target.checked;
-          if (!cv.visite) cv.visiteArtId = null; else if (!cv.visiteArtId && visArts.length === 1) cv.visiteArtId = visArts[0].id; // une seule prestation → pré-sélection
-          saveTournees(); recomputeMoney(); renderEditorArrets(locked); // re-render pour afficher/masquer le sélecteur
+          if (!cv.visite) { cv.visiteArtId = null; if (!cv.parage) { cv.fourbure = false; cv.npas = false; cv.infection = false; } } // plus de visite ni parage → pathologies effacées
+          else if (!cv.visiteArtId && visArts.length === 1) cv.visiteArtId = visArts[0].id; // une seule prestation → pré-sélection
+          saveTournees(); recomputeMoney(); renderEditorArrets(locked); // re-render : (dé)verrouille pathologies + affiche/masque le sélecteur
         }));
         wrap.querySelectorAll('[data-visart]').forEach((sel) => sel.addEventListener('change', (e) => { ensureCv(pool[+sel.dataset.pi]).visiteArtId = e.target.value || null; saveTournees(); recomputeMoney(); }));
         el.appendChild(wrap);
@@ -2115,12 +2118,10 @@ function enableRowDrag(listEl, arr, save) {
 }
 
 // ----- Calcul : ARGENT (pur, instantané, sans API) à partir de la géométrie -----
-// Présence : un cheval décoché « Présent » (present === false) est absent de l'arrêt → jamais compté ni facturé.
-function chevalPresent(c) { return !!c && c.present !== false; }
-// Un cheval « fait » = PRÉSENT et réellement pris en charge à l'arrêt (parage OU pathologie OU visite cochée).
-// Seuls les chevaux faits comptent dans les stats (temps, km, analyses cheval/client) et la répartition déplacement.
-// Un cheval présent mais sans acte reste dans l'arrêt mais n'est PAS imputé (corrige le « cheval fantôme »).
-function chevalFait(c) { return chevalPresent(c) && !!(c.parage || c.fourbure || c.npas || c.infection || c.visite); }
+// Présence IMPLICITE : un cheval est « pris en charge » dès qu'il a un acte (parage OU visite OU pathologie).
+// Plus de case « Présent » : un cheval sans acte reste listé mais n'est ni compté (stats) ni facturé (corrige le « cheval fantôme »).
+function chevalPresent(c) { return !!c; } // conservé pour compat : la présence ne dépend plus d'un drapeau
+function chevalFait(c) { return !!(c && (c.parage || c.fourbure || c.npas || c.infection || c.visite)); }
 function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
@@ -2162,13 +2163,14 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
           const av = (S.articlesCatalogue || []).find((x) => x.id === c.visiteArtId);
           if (av) { const rr = (av.tvaPct || 0) / 100, prix = av.prixHT || 0; m.articles.push({ libelle: av.libelle, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: av.tvaPct || 0, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), visite: true, remiseOff: false, remiseProduit: av.remiseProduit !== false, remiseLiquide: av.remiseLiquide !== false }); m.htArt += prix; m.tvaArt += prix * rr; }
         }
-        if (!c.parage) return; // pas de parage → ni matériel ni forfait pathologie facturés pour ce cheval
-        // Matériel = base seule (le matériel consommable). Les forfaits pathologie passent en ARTICLES (voir ci-dessous).
-        if (baseMat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: false, npas: false, infection: false, ht: baseMat, ttc: baseMat * (1 + stdRate) }); m.htMat += baseMat; }
-        // Fourbure / NPAS / Infection → lignes d'ARTICLE (par cheval), non remisées (forfaits de soin fixes).
-        [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([key, lbl, prix]) => {
-          if (c[key] && prix > 0) { const rr = stdRate; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), patho: true, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += prix; m.tvaArt += prix * rr; }
-        });
+        // Matériel consommable = base seule, facturé UNIQUEMENT avec un parage.
+        if (c.parage && baseMat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: false, npas: false, infection: false, ht: baseMat, ttc: baseMat * (1 + stdRate) }); m.htMat += baseMat; }
+        // Fourbure / NPAS / Infection → lignes d'ARTICLE (par cheval), facturées si parage OU visite (forfaits de soin fixes, non remisés).
+        if (c.parage || c.visite) {
+          [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([key, lbl, prix]) => {
+            if (c[key] && prix > 0) { const rr = stdRate; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), patho: true, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += prix; m.tvaArt += prix * rr; }
+          });
+        }
       });
     });
   });
