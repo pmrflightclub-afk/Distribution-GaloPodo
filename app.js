@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.56';
+const APP_VERSION = '1.1.57';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.57', date: '2026-07-07',
+    ajouts: [
+      'Correctif comptable important : quand vous annulez un RDV déjà payé, la note de crédit et la facture ne se déduisent plus deux fois. La facture encaissée reste intacte et la note de crédit la neutralise exactement (chiffre d\'affaires net juste, même après avoir rouvert la tournée).',
+      'La note de crédit reprend désormais le montant RÉELLEMENT facturé au cheval (réduction liquide/client incluse), pas le tarif plein : le remboursement colle à ce qui a été encaissé.',
+      'Rétablir un RDV payé annulé supprime automatiquement sa note de crédit (bloqué proprement si elle a déjà été remboursée).',
+    ],
+  },
   {
     version: '1.1.56', date: '2026-07-07',
     ajouts: [
@@ -1893,6 +1901,20 @@ function sanitizeAllTourStats() {
   (archive || []).forEach((t) => { if (sanitizeTourStats(t)) b = true; });
   if (a) saveTournees(); if (b) saveArchive();
 }
+// Migration 1.1.57 : un cheval annulé qui porte une note de crédit doit être marqué « credited »
+// (facturé dans le result figé, la NC le neutralise). Sans ça, l'ancienne donnée le sortait de la facture ET la NC le soustrayait → double réduction.
+function migrateCreditedCancellations() {
+  const ncByKey = {};
+  (S.notesCredit || []).forEach((n) => { ncByKey[n.tourId + '|' + n.clientId + '|' + norm(n.chevalNom)] = n; });
+  let ta = false, tb = false;
+  const scan = (list) => { let ch = false; (list || []).forEach((t) => (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => {
+    if (!chevalCancelled(cv) || cv.cancel.credited) return;
+    const nc = ncByKey[t.id + '|' + cl.clientId + '|' + norm(cv.nom)];
+    if (nc) { cv.cancel.credited = true; cv.cancel.creditNoteId = nc.id; ch = true; }
+  })))); return ch; };
+  if (scan(tournees)) ta = true; if (scan(archive)) tb = true;
+  if (ta) saveTournees(); if (tb) saveArchive();
+}
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
 
 // Synchronise une tournée non clôturée avec les données client actuelles (chevaux ajoutés/supprimés/renommés
@@ -1982,7 +2004,7 @@ function tourCloseBlock(t) {
 // Un client SANS cheval à l'adresse (déplacement seul) est OK. Empêche de payer/clôturer un arrêt où aucun cheval n'a été pris en charge.
 function arretActeOK(a) {
   return (a.clients || []).every((cl) => {
-    if ((cl.chevaux || []).some(chevalFait)) return true;
+    if ((cl.chevaux || []).some(chevalBilled)) return true;
     const c = clients.find((x) => x.id === cl.clientId);
     const hasHorsesHere = c ? activeChevaux(c).some((h) => norm(addrStr(chevalAddr(c, h))) === norm(addrStr(a.addr))) : (cl.chevaux || []).length > 0;
     return !hasHorsesHere;
@@ -2370,8 +2392,12 @@ function chevalPresent(c) { return !!c; } // conservé pour compat : la présenc
 // RDV annulé/reporté : le cheval reste dans l'arrêt (traçabilité) mais est EXCLU du calcul (facture/stats/compta). Cf. cv.cancel = { status:'annule'|'reporte', reason, note, at, replacedTourId }.
 function chevalCancelled(c) { return !!(c && c.cancel && c.cancel.status); }
 function chevalFait(c) { return !chevalCancelled(c) && !!(c && (c.parage || c.fourbure || c.npas || c.infection || c.visite)); }
-// Client entièrement annulé à un arrêt = avait des chevaux, tous annulés (→ pas de déplacement facturé, mais compte toujours dans la géométrie figée).
-function clientAllCancelled(cl) { const ch = (cl && cl.chevaux) || []; return ch.length > 0 && ch.every(chevalCancelled); }
+// Annulé APRÈS paiement : la facture encaissée reste figée (le cheval RESTE facturé) et une note de crédit neutralise le CA. « credited » posé à la création de la NC.
+function chevalCredited(c) { return !!(c && c.cancel && c.cancel.credited); }
+// « Facturé » = pris en charge OU payé-puis-annulé (facture figée). Sert au recalcul argent : un cheval crédité ne doit JAMAIS sortir de la facture (sinon double réduction avec la NC).
+function chevalBilled(c) { return chevalFait(c) || chevalCredited(c); }
+// Client entièrement annulé à un arrêt = avait des chevaux, aucun facturé (→ pas de déplacement facturé, mais compte toujours dans la géométrie figée).
+function clientAllCancelled(cl) { const ch = (cl && cl.chevaux) || []; return ch.length > 0 && !ch.some(chevalBilled); }
 function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
@@ -2495,7 +2521,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter(chevalCancelled).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalFait).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null })) })),
+    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalBilled).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null })) })),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
@@ -4172,10 +4198,29 @@ function comptaLocked(tour, clientId) {
   const ym = (tour.date || '').slice(0, 7); const st = S.comptaStatus && S.comptaStatus[ym];
   return !!(st && st.liquide === 'encode');
 }
-// Crée une note de crédit (RDV payé annulé) : montant = ce que le cheval aurait été facturé.
+// Montant RÉELLEMENT facturé (post-réduction, tarif figé) d'un cheval : lu dans le résultat figé de la tournée
+// (part du cheval dans les lignes d'articles + son matériel), hors déplacement. Repli tarif plein si résultat absent.
+function chevalInvoicedTTC(tour, clientId, cv) {
+  const R = tour && tour.result;
+  const m = R && R.parClient && R.parClient.find((x) => x.clientId === clientId);
+  if (!m) return chevalWouldBeTTC(cv);
+  const nn = norm(cv.nom); let ttc = 0;
+  (m.articles || []).forEach((a) => {
+    if (a.impaye) return;
+    const names = (a.chevaux || []).map(norm); const idx = names.indexOf(nn);
+    if (idx < 0) return;
+    const share = a.qtesByNom ? ((a.qtesByNom[a.chevaux[idx]] || 1) / (a.qte || 1)) : (1 / ((a.chevaux || []).length || 1));
+    ttc += (a.ttc || 0) * share; // a.ttc est déjà net de réduction (parage/visite remisés)
+  });
+  (m.materiel || []).forEach((mt) => { if (norm(mt.nom) === nn) ttc += (mt.ttc || 0); });
+  return ttc;
+}
+// Crée une note de crédit (RDV payé annulé) : montant = ce que le cheval a réellement été facturé (post-réduction). Retourne l'id.
 function createCreditNote(clientId, tour, cv, motif, note) {
-  S.notesCredit.push({ id: uid(), clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: chevalWouldBeTTC(cv), motif: motif || 'client', note: note || '', date: todayStr(), rembourse: false, rembourseAt: null });
+  const id = uid();
+  S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: chevalInvoicedTTC(tour, clientId, cv), motif: motif || 'client', note: note || '', date: todayStr(), rembourse: false, rembourseAt: null });
   saveSettings();
+  return id;
 }
 // Annuler / reporter le RDV d'un cheval. opts : { cv, clientId, tour, paid, locked, onDone }.
 // RDV payé → une note de crédit (à rembourser par virement) est créée en plus. Période compta validée → bloqué.
@@ -4194,7 +4239,14 @@ function modalCancelRdv(nom, opts) {
       <p class="hint">Motif : <b>${cv.cancel.reason === 'pro' ? 'professionnel' : 'client'}</b>${cv.cancel.note ? ' · ' + esc(cv.cancel.note) : ''}.</p>
       <div class="actions"><button class="btn primary block" id="cxRestore">↩ Rétablir ce RDV</button></div>`);
     $('mX').addEventListener('click', closeModal);
-    $('cxRestore').addEventListener('click', () => { cv.cancel = null; closeModal(); opts.onDone(); });
+    $('cxRestore').addEventListener('click', () => {
+      if (cv.cancel.credited) { // RDV payé annulé : nettoyer la note de crédit liée avant de rétablir
+        const nc = (S.notesCredit || []).find((n) => n.id === cv.cancel.creditNoteId);
+        if (nc && nc.rembourse) { alert('La note de crédit de ce cheval a déjà été remboursée. Annulez d\'abord le remboursement en Compta avant de rétablir le RDV.'); return; }
+        if (nc) { S.notesCredit = S.notesCredit.filter((n) => n.id !== nc.id); saveSettings(); }
+      }
+      cv.cancel = null; closeModal(); opts.onDone();
+    });
     return;
   }
   let status = 'annule', reason = 'client';
@@ -4209,8 +4261,8 @@ function modalCancelRdv(nom, opts) {
   document.querySelectorAll('#cxReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
   $('cxOk').addEventListener('click', () => {
     const note = $('cxNote').value.trim();
-    cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null };
-    if (opts.paid) createCreditNote(opts.clientId, opts.tour, cv, reason, note); // note de crédit pour RDV payé
+    cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
+    if (opts.paid) { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note); cv.cancel.credited = true; } // RDV payé : facture figée conservée + note de crédit ; le cheval reste facturé (chevalBilled) pour éviter la double réduction du CA
     closeModal(); opts.onDone();
   });
 }
@@ -4808,6 +4860,7 @@ window.addEventListener('DOMContentLoaded', () => {
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
+  migrateCreditedCancellations(); // 1.1.57 : marque « credited » les chevaux annulés portant une note de crédit (évite la double réduction du CA)
   bindSettings(); refreshEverywhere(); renderHome();
 
   if ($('btnRefreshTours')) $('btnRefreshTours').addEventListener('click', refreshActiveTours);
