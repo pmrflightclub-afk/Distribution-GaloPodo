@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.58';
+const APP_VERSION = '1.1.59';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.59', date: '2026-07-07',
+    ajouts: [
+      'Import « Données seules » plus sûr : le statut comptable (période verrouillée, démarche effectuée, paiements reçus) est désormais conservé lors de l\'import — après un retour usine, une période déjà validée reste protégée (on ne peut pas y annuler par erreur).',
+      'Nettoyage interne (aucun changement visible) : suppression d\'un ancien écran de report de tournée devenu inutilisé depuis la page « Replacer un RDV ».',
+    ],
+  },
   {
     version: '1.1.58', date: '2026-07-07',
     ajouts: [
@@ -4032,43 +4039,6 @@ function renderBlockingArrets() {
     list.appendChild(el);
   });
 }
-// Reporter une tournée jamais démarrée : chaque client coché est replacé à une nouvelle date (inséré dans la tournée de cette date sinon nouvelle) ; la tournée d'origine est retirée des clients reportés (supprimée si vide).
-function modalReporterTour(t) {
-  const entries = [];
-  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { let e = entries.find((x) => x.cid === cl.clientId); if (!e) { e = { cid: cl.clientId, ids: new Set() }; entries.push(e); } (cl.chevaux || []).forEach((cv) => { if (cv.id != null) e.ids.add(cv.id); }); }));
-  if (!entries.length) { if (confirm('Cette tournée n\'a aucun client. La supprimer ?')) { deleteTourById(t.id); renderHome(); } return; }
-  const proposed = proposedRdvDate(todayStr());
-  const state = {}; entries.forEach((e) => state[e.cid] = { date: proposed, on: true });
-  openModal(`<div class="modal-head"><b>📅 Reporter — ${esc(fmtDateFr(t.date))}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Reportez chaque client à une nouvelle date : il est inséré dans la tournée de cette date si elle existe, sinon une nouvelle tournée est créée. Les clients non cochés restent sur la tournée d'origine.</p>
-    <div id="repList" class="list"></div>
-    <div class="actions two"><button class="btn danger" id="repDel">🗑 Supprimer</button><button class="btn primary" id="repOk">Reporter les cochés</button></div>`);
-  $('mX').addEventListener('click', closeModal);
-  const box = $('repList');
-  entries.forEach((e) => {
-    const row = document.createElement('div'); row.className = 'list-item';
-    row.innerHTML = `<div class="li-main"><label class="chk2"><input type="checkbox" data-on ${state[e.cid].on ? 'checked' : ''}/> <b>${esc(clientName(e.cid))}</b></label></div><div class="li-act"><input type="date" data-date value="${state[e.cid].date}"/></div>`;
-    row.querySelector('[data-on]').addEventListener('change', (ev) => state[e.cid].on = ev.target.checked);
-    row.querySelector('[data-date]').addEventListener('change', (ev) => state[e.cid].date = ev.target.value);
-    box.appendChild(row);
-  });
-  $('repDel').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée non démarrée ?')) { deleteTourById(t.id); closeModal(); renderHome(); } });
-  $('repOk').addEventListener('click', () => {
-    const movedCids = new Set();
-    entries.forEach((e) => {
-      const st = state[e.cid]; if (!st.on || !st.date) return;
-      const client = clients.find((x) => x.id === e.cid); if (!client) return;
-      const chevalObjs = (client.chevaux || []).filter((h) => e.ids.has(h.id));
-      scheduleClientOnDate(st.date, client, chevalObjs.length ? chevalObjs : activeChevaux(client));
-      movedCids.add(e.cid);
-    });
-    if (movedCids.size) {
-      t.arrets = (t.arrets || []).map((a) => Object.assign({}, a, { clients: (a.clients || []).filter((cl) => !movedCids.has(cl.clientId)) })).filter((a) => (a.clients || []).length);
-      if (!t.arrets.length) deleteTourById(t.id); else { t.result = null; const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; saveTournees(); }
-    }
-    closeModal(); renderHome();
-  });
-}
 function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
   const todays = [...tournees].filter((t) => statusOf(t) === 'active' && !isOverdue(t)).sort((a, b) => (a.date || '').localeCompare(b.date || '')); // du jour ; les dépassées (jour passé) vont dans la section dédiée
@@ -4752,7 +4722,14 @@ function modalBackup() {
       if (!o.tours && Array.isArray(o.tournees)) o.tours = o.tournees;
       if (!Array.isArray(o.clients) || !Array.isArray(o.tours)) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'Format non reconnu (clients/tours attendus).'; return; }
       LS.set('ftr.clients', o.clients);
-      if (o.settings && Array.isArray(o.settings.notesCredit)) { S.notesCredit = o.settings.notesCredit; LS.set('ftr.settings', S); } // récupère les notes de crédit (financier), garde le reste des réglages
+      if (o.settings) { // récupère les données FINANCIÈRES liées aux tournées (garde le reste des réglages locaux) : notes de crédit + verrou/statut compta + paiements reçus, sinon les périodes verrouillées redeviendraient modifiables après un retour usine
+        const os = o.settings;
+        if (Array.isArray(os.notesCredit)) S.notesCredit = os.notesCredit;
+        if (os.comptaRecu && typeof os.comptaRecu === 'object') S.comptaRecu = Object.assign({}, S.comptaRecu, os.comptaRecu);
+        if (os.comptaDemarche && typeof os.comptaDemarche === 'object') S.comptaDemarche = Object.assign({}, S.comptaDemarche, os.comptaDemarche);
+        if (os.comptaStatus && typeof os.comptaStatus === 'object') S.comptaStatus = Object.assign({}, S.comptaStatus, os.comptaStatus);
+        LS.set('ftr.settings', S);
+      }
       const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
       const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
       const tours = markToursReview(o.tours);
