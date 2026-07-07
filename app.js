@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.60';
+const APP_VERSION = '1.1.61';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.61', date: '2026-07-07',
+    ajouts: [
+      'Statistiques : la vue « Km & heures par client › cheval » a son propre sous-onglet « Véhicule par cheval » (entre « Utilisation véhicule » et « Temps de trajet »), pour une lecture plus claire.',
+    ],
+  },
   {
     version: '1.1.60', date: '2026-07-07',
     ajouts: [
@@ -2998,7 +3004,8 @@ function showStats(sub) {
   window.scrollTo(0, 0);
 }
 function renderStatsSub(sub) {
-  if (sub === 'trajet') renderTrajetTemps();
+  if (sub === 'vehcheval') renderVehiculeCheval();
+  else if (sub === 'trajet') renderTrajetTemps();
   else if (sub === 'travail') renderTravail();
   else if (sub === 'cheval') renderFinanceCheval();
   else if (sub === 'client') renderFinance();
@@ -3019,15 +3026,18 @@ function renderVehiculePanel() {
   if ($('tCarb')) $('tCarb').textContent = eurkm(fuelPerKmHT()) + ' HT';
   if ($('tTournee')) $('tTournee').textContent = eurkm(tarifHT('tournee')) + ' HT';
   renderVehiculePieces();
-  const box = $('kmParClient'); if (box) {
-    box.innerHTML = ''; $('kmParClientEmpty').style.display = st.parClient.length ? 'none' : 'block';
-    st.parClient.forEach((c) => {
-      const el = document.createElement('div'); el.className = 'inv-client';
-      let h = `<div class="inv-head"><span>${esc(c.nom)}</span><span>${km(c.km)} · ${durMin(c.min)}</span></div>`;
-      c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)}</span><span>${km(cv.km)} · ${durMin(cv.min)}</span></div>`; });
-      el.innerHTML = h; box.appendChild(el);
-    });
-  }
+}
+// Sous-onglet « Véhicule par cheval » : km & durée attribués par client, détaillés par cheval.
+function renderVehiculeCheval() {
+  const st = kmStats();
+  const box = $('kmParClient'); if (!box) return;
+  box.innerHTML = ''; if ($('kmParClientEmpty')) $('kmParClientEmpty').style.display = st.parClient.length ? 'none' : 'block';
+  st.parClient.forEach((c) => {
+    const el = document.createElement('div'); el.className = 'inv-client';
+    let h = `<div class="inv-head"><span>${esc(c.nom)}</span><span>${km(c.km)} · ${durMin(c.min)}</span></div>`;
+    c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)}</span><span>${km(cv.km)} · ${durMin(cv.min)}</span></div>`; });
+    el.innerHTML = h; box.appendChild(el);
+  });
 }
 // Pièces & usage : par frais véhicule, km à l'achat (frais.kmDebut) et km parcourus depuis (odomètre − kmDebut).
 function renderVehiculePieces() {

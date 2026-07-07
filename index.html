@@ -440,6 +440,7 @@
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Utilisation véhicule</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
         <button class="subtab active" data-ssub="vehicule">Utilisation véhicule</button>
+        <button class="subtab" data-ssub="vehcheval">Véhicule par cheval</button>
         <button class="subtab" data-ssub="trajet">Temps de trajet</button>
         <button class="subtab" data-ssub="travail">Temps de travail</button>
         <button class="subtab" data-ssub="cheval">Analyse cheval</button>
@@ -465,7 +466,13 @@
         <p class="hint">Pour chaque pièce/frais véhicule : kilométrage à l'achat et km parcourus depuis. Modifiez le km à l'achat dans Gestion → Frais véhicule.</p>
         <div id="vehiculePieces" class="list"></div>
         <p class="empty" id="vehiculePiecesEmpty">Aucune pièce/frais véhicule enregistré.</p>
-        <h3 class="rsub">Km &amp; heures — par client › cheval</h3>
+      </section>
+    </div>
+
+    <div id="ssub-vehcheval" class="subpanel">
+      <section class="card">
+        <h2>Véhicule par cheval</h2>
+        <p class="hint">Km &amp; durée de tournée attribués à chaque client, détaillés par cheval.</p>
         <div id="kmParClient" class="list"></div>
         <p class="empty" id="kmParClientEmpty">Aucune tournée calculée.</p>
       </section>
