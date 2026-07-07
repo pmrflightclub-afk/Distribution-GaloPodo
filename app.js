@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.54';
+const APP_VERSION = '1.1.55';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.55', date: '2026-07-07',
+    ajouts: [
+      'Notes de crédit : annuler un RDV DÉJÀ PAYÉ crée automatiquement une note de crédit (la facture encaissée n\'est jamais modifiée). Nouveau sous-onglet Compta « Notes de crédit » : liste « à rembourser » / « remboursées », bouton « ✓ Remboursée » (virement) qui fige la note, et PDF imprimable à envoyer au client.',
+      'Les notes de crédit réduisent le chiffre d\'affaires de leur période (Compta + Déclaration affichent le total net).',
+      'Sécurité comptable : impossible d\'annuler un RDV dont la démarche comptable de la période est déjà validée.',
+    ],
+  },
   {
     version: '1.1.54', date: '2026-07-07',
     ajouts: [
@@ -532,6 +540,7 @@ S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
 if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; // { 'YYYY-MM': { liquide, virement, facture } }
 if (!S.comptaRecu || typeof S.comptaRecu !== 'object') S.comptaRecu = {};       // { 'tourId:clientId': true } — paiement reçu (virement/facture)
 if (!S.comptaDemarche || typeof S.comptaDemarche !== 'object') S.comptaDemarche = {}; // { 'tourId:clientId': true } — démarche comptable effectuée (mois archivé)
+if (!Array.isArray(S.notesCredit)) S.notesCredit = []; // notes de crédit : { id, clientId, clientNom, tourId, tourDate, chevalNom, montantTTC, motif, note, date, rembourse, rembourseAt }
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
@@ -2223,7 +2232,7 @@ function renderEditorArrets(locked) {
           modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // ouvre la modale de choix
         }));
         wrap.querySelectorAll('[data-vispick]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.vispick], cv = ensureCv(ph); modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); }));
-        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); modalCancelRdv(ph.nom, { cv, paid: clientPaiementDone(currentTour, cl.clientId), onDone: () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); } }); }));
+        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
         el.appendChild(wrap);
       });
     }
@@ -3322,9 +3331,15 @@ function comptaData(ym) {
     });
   });
   const sum = (arr) => arr.reduce((a, x) => ({ ht: a.ht + x.ht, tva: a.tva + x.tva, ttc: a.ttc + x.ttc }), { ht: 0, tva: 0, ttc: 0 });
+  // Notes de crédit du mois (émission) → réduisent le CA (montant négatif).
+  const rr = rate();
+  const ncMonth = (S.notesCredit || []).filter((n) => (n.date || '').startsWith(ym));
+  const ncTTC = ncMonth.reduce((s, n) => s + (n.montantTTC || 0), 0);
+  const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
     liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
-    factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients) };
+    factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
+    notesCredit: ncMonth, notesCreditTotal };
 }
 // Génère le PDF via l'impression du navigateur, dans le document courant (compatible PWA installée,
 // contrairement à window.open('_blank') qui est bloqué / ferme l'app sur mobile).
@@ -3348,7 +3363,7 @@ function showCompta(sub) {
   const cb = document.querySelector('#comptaSub .subtab[data-csub="' + currentCsub + '"]'), cl = document.querySelector('#comptaSub .subnav-label');
   if (cb && cl) cl.textContent = cb.textContent;
   if ($('comptaSub')) $('comptaSub').classList.remove('open');
-  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else if (currentCsub === 'avenir') renderComptaAvenir(); else renderComptaMois();
+  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else if (currentCsub === 'nc') renderComptaNC(); else if (currentCsub === 'avenir') renderComptaAvenir(); else renderComptaMois();
   window.scrollTo(0, 0);
 }
 // Sous-onglet Compta « Impayés » : tous les impayés clients, séparés « en attente » / « régularisés » (paiement reçu).
@@ -3375,6 +3390,36 @@ function renderComptaImpayes() {
     regul.appendChild(el);
   });
 }
+// Sous-onglet Compta « Notes de crédit » : à rembourser (virement) / remboursées ; PDF + marquage figé.
+function renderComptaNC() {
+  const pend = $('ncPending'), done = $('ncDone'); if (!pend || !done) return;
+  pend.innerHTML = ''; done.innerHTML = '';
+  const list = (S.notesCredit || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const enAtt = list.filter((n) => !n.rembourse), fait = list.filter((n) => n.rembourse);
+  const totAtt = enAtt.reduce((s, n) => s + (n.montantTTC || 0), 0);
+  if ($('ncPendingEmpty')) $('ncPendingEmpty').style.display = enAtt.length ? 'none' : 'block';
+  if ($('ncDoneEmpty')) $('ncDoneEmpty').style.display = fait.length ? 'none' : 'block';
+  if ($('ncTot')) $('ncTot').innerHTML = enAtt.length ? `À rembourser (virement) : <b>${eur(totAtt)}</b>` : '';
+  const row = (n, isDone) => {
+    const el = document.createElement('div'); el.className = 'list-item';
+    el.innerHTML = `<div class="li-main"><b>Note de crédit · ${esc(n.clientNom)}</b><span class="li-sub">🐴 ${esc(n.chevalNom)} · RDV du ${esc(fmtDateFr(n.tourDate))} · émise le ${esc(fmtDateFr(n.date))} · motif ${n.motif === 'pro' ? 'pro' : 'client'}${n.rembourse ? ' · remboursée le ' + esc(fmtDateFr(n.rembourseAt)) : ''}</span></div><div class="li-act"><b>${eur(n.montantTTC)}</b> <button class="btn small" data-pdf>🖨 PDF</button>${isDone ? '' : ' <button class="btn small primary" data-rmb>✓ Remboursée</button>'}</div>`;
+    el.querySelector('[data-pdf]').addEventListener('click', () => creditNotePdf(n));
+    const rb = el.querySelector('[data-rmb]'); if (rb) rb.addEventListener('click', () => { if (!confirm('Marquer cette note de crédit comme remboursée (virement) ? Elle sera figée.')) return; n.rembourse = true; n.rembourseAt = todayStr(); saveSettings(); renderComptaNC(); });
+    return el;
+  };
+  enAtt.forEach((n) => pend.appendChild(row(n, false)));
+  fait.forEach((n) => done.appendChild(row(n, true)));
+}
+// PDF d'une note de crédit (à imprimer/envoyer au client).
+function creditNotePdf(n) {
+  const r = rate(); const ht = n.montantTTC / (1 + r);
+  printHtml('Note de crédit — ' + n.clientNom, `<h1>Note de crédit</h1>
+    <h2>${esc(n.clientNom)} — émise le ${esc(fmtDateFr(n.date))}</h2>
+    <p>Annulation du RDV du <b>${esc(fmtDateFr(n.tourDate))}</b> — cheval <b>${esc(n.chevalNom)}</b>.</p>
+    <table><thead><tr><th>Libellé</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead>
+    <tbody><tr><td>Avoir (annulation de prestation)</td><td>${eur(ht)}</td><td>${eur(n.montantTTC - ht)}</td><td>${eur(n.montantTTC)}</td></tr></tbody></table>
+    <h2 style="margin-top:12px">Montant à rembourser par virement : ${eur(n.montantTTC)} TTC</h2>`);
+}
 // HTML des 3 sections d'UN mois. archived (ym < mois courant) = démarches disponibles.
 function comptaSectionsHtml(ym) {
   const archived = ym < todayStr().slice(0, 7);
@@ -3393,10 +3438,12 @@ function comptaSectionsHtml(ym) {
   const liqDem = archived && statusOfKind('liquide') === 'encode';
   const liquideStatus = archived ? `<label>Démarche comptable (caisse du mois)<select data-status="liquide" data-ym="${ym}"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>` : '';
   const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><button class="btn small" data-print="liquide" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
+  const ncSec = d.notesCredit.length ? `<section class="card"><div class="card-head"><h3 style="margin:0">↩ Notes de crédit (réduction du CA)</h3></div><p class="hint">${tot(d.notesCreditTotal)}</p><div class="table-wrap"><table><thead><tr><th>Client</th><th>Cheval</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table></div></section>` : '';
   return liquideSec
     + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients)
     + section('🧾 Facture pro — liquide', 'facliq', d.factureLiqTotal, clientTbl(d.factureLiqClients), d.factureLiqClients)
-    + section('🧾 Facture pro — virement', 'facvir', d.factureVirTotal, clientTbl(d.factureVirClients), d.factureVirClients);
+    + section('🧾 Facture pro — virement', 'facvir', d.factureVirTotal, clientTbl(d.factureVirClients), d.factureVirClients)
+    + ncSec;
 }
 // Sous-onglet « Tournée à venir » : clients de toute tournée calculée sans mode de paiement choisi (à classer), toutes périodes.
 function renderComptaAvenir() {
@@ -3467,8 +3514,8 @@ function renderComptaDecl() {
   const withData = comptaMonths();
   const months = monthsOfRange(type, declPeriod).filter((m) => withData.includes(m));
   if ($('comptaDeclEmpty')) $('comptaDeclEmpty').style.display = months.length ? 'none' : 'block';
-  const rt = months.reduce((a, m) => { const d = comptaData(m); a.liq += d.liquideTotal.ttc; a.vir += d.virementTotal.ttc; a.fac += d.factureLiqTotal.ttc + d.factureVirTotal.ttc; return a; }, { liq: 0, vir: 0, fac: 0 });
-  box.innerHTML = (months.length ? `<p class="banner">Total plage — Liquide <b>${eur(rt.liq)}</b> · Virements <b>${eur(rt.vir)}</b> · Factures pro <b>${eur(rt.fac)}</b> (TTC)</p>` : '')
+  const rt = months.reduce((a, m) => { const d = comptaData(m); a.liq += d.liquideTotal.ttc; a.vir += d.virementTotal.ttc; a.fac += d.factureLiqTotal.ttc + d.factureVirTotal.ttc; a.nc += d.notesCreditTotal.ttc; return a; }, { liq: 0, vir: 0, fac: 0, nc: 0 });
+  box.innerHTML = (months.length ? `<p class="banner">Total plage — Liquide <b>${eur(rt.liq)}</b> · Virements <b>${eur(rt.vir)}</b> · Factures pro <b>${eur(rt.fac)}</b>${rt.nc ? ' · Notes de crédit <b>' + eur(rt.nc) + '</b>' : ''} · <b>Net ${eur(rt.liq + rt.vir + rt.fac + rt.nc)}</b> (TTC)</p>` : '')
     + months.sort().reverse().map((m) => `<h2 class="rsub" style="margin-top:16px">${monthLabel(m)}${m < todayStr().slice(0, 7) ? '' : ' (en cours — pas de démarche)'}</h2>` + comptaSectionsHtml(m)).join('');
   comptaWire(box, renderComptaDecl);
 }
@@ -4109,10 +4156,29 @@ function modalVisitePick(nom, currentId, visArts, onPick) {
   $('mX').addEventListener('click', () => { closeModal(); onPick(undefined); });
   document.querySelectorAll('[data-vid]').forEach((b) => b.addEventListener('click', () => { closeModal(); onPick(b.dataset.vid); }));
 }
-// Annuler / reporter le RDV d'un cheval (annule les actes de ce cheval sans toucher la géométrie ni les autres clients).
-// opts : { cv, paid, onDone }. Si le RDV est déjà PAYÉ → orienté vers la note de crédit (à venir, bloc suivant).
+// Verrou compta : annulation impossible si la démarche du couple tour-client est validée, ou le liquide du mois encodé.
+function comptaLocked(tour, clientId) {
+  if (!tour) return false;
+  if (S.comptaDemarche && S.comptaDemarche[tour.id + ':' + clientId]) return true;
+  const ym = (tour.date || '').slice(0, 7); const st = S.comptaStatus && S.comptaStatus[ym];
+  return !!(st && st.liquide === 'encode');
+}
+// Crée une note de crédit (RDV payé annulé) : montant = ce que le cheval aurait été facturé.
+function createCreditNote(clientId, tour, cv, motif, note) {
+  S.notesCredit.push({ id: uid(), clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: chevalWouldBeTTC(cv), motif: motif || 'client', note: note || '', date: todayStr(), rembourse: false, rembourseAt: null });
+  saveSettings();
+}
+// Annuler / reporter le RDV d'un cheval. opts : { cv, clientId, tour, paid, locked, onDone }.
+// RDV payé → une note de crédit (à rembourser par virement) est créée en plus. Période compta validée → bloqué.
 function modalCancelRdv(nom, opts) {
   const cv = opts.cv;
+  if (opts.locked) {
+    openModal(`<div class="modal-head"><b>Période verrouillée — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">La démarche comptable de cette période est déjà validée : l'annulation n'est plus possible (règle immuable). Corrigez avant la clôture de la démarche du mois/trimestre.</p>
+      <div class="actions"><button class="btn block" id="cxClose">Fermer</button></div>`);
+    $('mX').addEventListener('click', closeModal); $('cxClose').addEventListener('click', closeModal);
+    return;
+  }
   if (chevalCancelled(cv)) {
     const lbl = cv.cancel.status === 'reporte' ? 'reporté' : 'annulé';
     openModal(`<div class="modal-head"><b>RDV ${lbl} — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
@@ -4122,16 +4188,9 @@ function modalCancelRdv(nom, opts) {
     $('cxRestore').addEventListener('click', () => { cv.cancel = null; closeModal(); opts.onDone(); });
     return;
   }
-  if (opts.paid) {
-    openModal(`<div class="modal-head"><b>RDV payé — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">Ce RDV a déjà été <b>payé</b> : on ne modifie pas une facture encaissée. L'annulation passera par une <b>note de crédit</b> (à rembourser par virement) — fonction ajoutée dans le prochain bloc de cette mise à jour.</p>
-      <div class="actions"><button class="btn block" id="cxClose">Fermer</button></div>`);
-    $('mX').addEventListener('click', closeModal); $('cxClose').addEventListener('click', closeModal);
-    return;
-  }
   let status = 'annule', reason = 'client';
   openModal(`<div class="modal-head"><b>Annuler / reporter — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Le RDV de ce cheval est retiré de la facture et des stats normales. Les autres clients et le calcul de la tournée ne changent pas.</p>
+    <p class="hint">Le RDV de ce cheval est retiré de la facture et des stats. Les autres clients et le calcul de la tournée ne changent pas.${opts.paid ? ' <b>Ce RDV a été payé → une note de crédit (à rembourser par virement) sera créée.</b>' : ''}</p>
     <label>Type</label><div class="seg" id="cxStatus"><button type="button" class="seg-btn on" data-st="annule">Annulé</button><button type="button" class="seg-btn" data-st="reporte">Reporté</button></div>
     <label>Motif</label><div class="seg" id="cxReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
     <label>Note (facultatif)<input type="text" id="cxNote" placeholder="ex. absent, cheval malade…" /></label>
@@ -4139,7 +4198,12 @@ function modalCancelRdv(nom, opts) {
   $('mX').addEventListener('click', closeModal);
   document.querySelectorAll('#cxStatus .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxStatus .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); status = b.dataset.st; }));
   document.querySelectorAll('#cxReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
-  $('cxOk').addEventListener('click', () => { cv.cancel = { status, reason, note: $('cxNote').value.trim(), at: new Date().toISOString(), replacedTourId: null }; closeModal(); opts.onDone(); });
+  $('cxOk').addEventListener('click', () => {
+    const note = $('cxNote').value.trim();
+    cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null };
+    if (opts.paid) createCreditNote(opts.clientId, opts.tour, cv, reason, note); // note de crédit pour RDV payé
+    closeModal(); opts.onDone();
+  });
 }
 // Paiement d'un arrêt (par client) : liquide / virement + facture ? + (si liquide) montant réel payé (arrondi caisse).
 // onCommit (optionnel) : appelé UNIQUEMENT quand le paiement est enregistré et valide (sert à clôturer l'arrêt).

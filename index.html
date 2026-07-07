@@ -217,6 +217,7 @@
         <button class="subtab" data-csub="avenir">Tournée à venir</button>
         <button class="subtab active" data-csub="mois">Mois en cours</button>
         <button class="subtab" data-csub="impayes">Impayés</button>
+        <button class="subtab" data-csub="nc">Notes de crédit</button>
         <button class="subtab" data-csub="decl">Déclaration compta</button>
       </div>
     </nav>
@@ -265,6 +266,20 @@
         <p class="hint">Impayés repris et encaissés lors d'une visite ultérieure.</p>
         <div id="impayesRegul" class="list"></div>
         <p class="empty" id="impayesRegulEmpty">Aucun impayé régularisé.</p>
+      </section>
+    </div>
+
+    <div id="csub-nc" class="subpanel">
+      <section class="card">
+        <h2>Notes de crédit</h2>
+        <p class="hint">Créées automatiquement quand on annule un RDV <b>déjà payé</b>. À rembourser au client <b>par virement</b> (jamais en liquide). Cochez « Remboursée » une fois le virement fait — la note est alors figée. Elles réduisent le chiffre d'affaires de leur période.</p>
+        <p class="hint" id="ncTot"></p>
+        <h3 class="rsub">À rembourser</h3>
+        <div id="ncPending" class="list"></div>
+        <p class="empty" id="ncPendingEmpty">Aucune note de crédit à rembourser.</p>
+        <h3 class="rsub">Remboursées</h3>
+        <div id="ncDone" class="list"></div>
+        <p class="empty" id="ncDoneEmpty">Aucune.</p>
       </section>
     </div>
   </main>
