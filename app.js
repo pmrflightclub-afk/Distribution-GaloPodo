@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.51';
+const APP_VERSION = '1.1.52';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.52', date: '2026-07-07',
+    ajouts: [
+      'Onglet Tournée réorganisé en sous-onglets : Tournées · Replacer un RDV · Annulations.',
+      'Nouvelle page « Annulations » : la liste de tous les RDV annulés / reportés (cheval, client, date, motif, montant « manque à gagner »), avec filtre Mois / Trimestre / Semestre / Année et un bouton pour supprimer définitivement une ligne (elle disparaît alors des listes et des stats).',
+    ],
+  },
   {
     version: '1.1.51', date: '2026-07-07',
     ajouts: [
@@ -1296,7 +1303,7 @@ function showTab(name) {
   if (cur && $('navCurrentLabel')) $('navCurrentLabel').textContent = cur.textContent;
   if ($('mainTabs')) $('mainTabs').classList.remove('open'); // referme le menu déroulant (mobile)
   if (name === 'accueil') renderHome();
-  if (name === 'tournees') renderTours();
+  if (name === 'tournees') showTournees(currentTsub);
   if (name === 'agenda') { showAgenda(currentAsub); agendaAutoSync(); } // affiche le cache puis rafraîchit silencieusement
   if (name === 'compta') showCompta(currentCsub);
   if (name === 'gestion') showGestion(currentGsub);
@@ -1708,6 +1715,79 @@ function renderTours() {
   fill('trArchive', 'trArchiveEmpty', closed.filter((x) => (x.date || '') < fourWeeksAgo).sort(desc));
 }
 function newTour() { currentTour = { id: uid(), date: todayStr(), nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, result: null, createdAt: Date.now() }; openEditor(); }
+// ---------- Onglet Tournée : sous-onglets [Tournées] [Replacer un RDV] [Annulations] ----------
+let currentTsub = 'liste';
+function showTournees(sub) {
+  currentTsub = sub || 'liste';
+  document.querySelectorAll('#tournSub .subtab').forEach((b) => b.classList.toggle('active', b.dataset.tsub === currentTsub));
+  document.querySelectorAll('#tab-tournees .subpanel').forEach((p) => p.classList.toggle('active', p.id === 'tsub-' + currentTsub));
+  const cb = document.querySelector('#tournSub .subtab[data-tsub="' + currentTsub + '"]'), cl = document.querySelector('#tournSub .subnav-label');
+  if (cb && cl) cl.textContent = cb.textContent;
+  if ($('tournSub')) $('tournSub').classList.remove('open');
+  if (currentTsub === 'annul') renderAnnulations();
+  else if (currentTsub === 'replacer') { if (typeof renderReplacer === 'function') renderReplacer(); }
+  else renderTours();
+  window.scrollTo(0, 0);
+}
+// Somme des lignes qu'un cheval AURAIT été facturé (manque à gagner d'une annulation), au tarif courant.
+function chevalWouldBeLines(cv) {
+  const lines = []; const r = rate();
+  if (cv.parage && S.parage && S.parage.prixHT > 0) lines.push({ libelle: 'Parage et équilibrage', ttc: S.parage.prixHT * (1 + (S.parage.tvaPct || 0) / 100) });
+  const baseMat = baseMateriel(); if (cv.parage && baseMat > 0) lines.push({ libelle: 'Matériel', ttc: baseMat * (1 + r) });
+  [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([k, l, p]) => { if (cv[k] && p > 0) lines.push({ libelle: l, ttc: p * (1 + r) }); });
+  if (cv.visite && cv.visiteArtId) { const av = (S.articlesCatalogue || []).find((x) => x.id === cv.visiteArtId); if (av) lines.push({ libelle: av.libelle, ttc: (av.prixHT || 0) * (1 + (av.tvaPct || 0) / 100) }); }
+  return lines;
+}
+const chevalWouldBeTTC = (cv) => chevalWouldBeLines(cv).reduce((s, l) => s + l.ttc, 0);
+// Toutes les annulations/reports (scan des tournées).
+function allCancellations() {
+  const out = [];
+  allTours().forEach((t) => (t.arrets || []).forEach((a, ai) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => {
+    if (!chevalCancelled(cv)) return;
+    out.push({ tour: t, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', at: cv.cancel.at, date: t.date, replaced: !!cv.cancel.replacedTourId, ttc: chevalWouldBeTTC(cv) });
+  }))));
+  return out.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+}
+// Options de période (Mois/Trim/Sem/Année) à partir d'une liste de mois 'YYYY-MM'.
+function periodOptionsFrom(type, months) {
+  if (type === 'mois') return months.map((m) => ({ key: m, label: monthLabel(m) }));
+  const ys = [...new Set(months.map((m) => m.slice(0, 4)))].sort().reverse();
+  if (type === 'annee') return ys.map((y) => ({ key: y, label: 'Année ' + y }));
+  if (type === 'semestre') return ys.flatMap((y) => [{ key: y + '-S1', label: '1ᵉʳ semestre ' + y }, { key: y + '-S2', label: '2ᵉ semestre ' + y }]);
+  return ys.flatMap((y) => [1, 2, 3, 4].map((q) => ({ key: y + '-T' + q, label: 'Trimestre ' + q + ' ' + y })));
+}
+// Suppression définitive d'un cheval annulé : le retire de la tournée (déjà hors facture) sans toucher aux autres.
+function deleteCancelledCheval(c) {
+  const t = c.tour; const a = (t.arrets || [])[c.arretIdx]; if (!a) return;
+  const cl = (a.clients || []).find((x) => x.clientId === c.clientId); if (!cl) return;
+  cl.chevaux = (cl.chevaux || []).filter((cv) => !(norm(cv.nom) === norm(c.cheval) && chevalCancelled(cv)));
+  const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
+}
+let annulType = 'mois', annulPeriodKey = null;
+function renderAnnulations() {
+  const seg = $('annulTypeSeg'), perSel = $('annulPeriod'), box = $('annulList'); if (!seg || !perSel || !box) return;
+  seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._aw) { b._aw = true; b.addEventListener('click', () => { annulType = b.dataset.atype; annulPeriodKey = null; renderAnnulations(); }); } b.classList.toggle('on', b.dataset.atype === annulType); });
+  const all = allCancellations();
+  const months = [...new Set(all.map((c) => (c.date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+  const opts = periodOptionsFrom(annulType, months);
+  if (!opts.length) { perSel.innerHTML = ''; box.innerHTML = ''; if ($('annulEmpty')) $('annulEmpty').style.display = 'block'; if ($('annulTot')) $('annulTot').textContent = ''; return; }
+  if (!opts.some((o) => o.key === annulPeriodKey)) annulPeriodKey = opts[0].key;
+  perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === annulPeriodKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+  perSel.onchange = () => { annulPeriodKey = perSel.value; renderAnnulations(); };
+  const range = new Set(monthsOfRange(annulType, annulPeriodKey));
+  const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));
+  if ($('annulEmpty')) $('annulEmpty').style.display = list.length ? 'none' : 'block';
+  const totA = list.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), totR = list.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0);
+  if ($('annulTot')) $('annulTot').innerHTML = list.length ? `Annulés : <b>${eur(totA)}</b> · Reportés : <b>${eur(totR)}</b> (manque à gagner)` : '';
+  box.innerHTML = '';
+  list.forEach((c) => {
+    const el = document.createElement('div'); el.className = 'list-item';
+    const stLbl = c.status === 'reporte' ? '↩ reporté' : '🚫 annulé';
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b><span class="li-sub">${esc(fmtDateFr(c.date))} · ${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · <b>replacé</b>' : ''} · ${eur(c.ttc)}</span></div><div class="li-act"><button class="btn small danger" data-del title="Supprimer définitivement">🗑</button></div>`;
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer définitivement cet arrêt annulé (' + c.cheval + ') ? Il disparaît des listes et des stats.')) return; deleteCancelledCheval(c); renderAnnulations(); });
+    box.appendChild(el);
+  });
+}
 // D2 — archivage : déplace les tournées clôturées > 4 semaines de `tournees` vers `archive` (simple déplacement, union inchangée).
 function archiveOldTours() {
   const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
@@ -4491,6 +4571,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
   document.querySelectorAll('#comptaSub .subtab').forEach((b) => b.addEventListener('click', () => showCompta(b.dataset.csub)));
   document.querySelectorAll('#statsSub .subtab').forEach((b) => b.addEventListener('click', () => showStats(b.dataset.ssub)));
+  document.querySelectorAll('#tournSub .subtab').forEach((b) => b.addEventListener('click', () => showTournees(b.dataset.tsub)));
   document.querySelectorAll('#agendaSub .subtab').forEach((b) => b.addEventListener('click', () => showAgenda(b.dataset.asub)));
   const agendaRefresh = async (statusEl) => { try { if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Chargement du calendrier…'; } _agendaEvents = await fetchCalendarEvents(true); renderAgendaItems(); renderAgendaCalendrier(); if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = _agendaEvents.length + ' événement(s) chargé(s).'; } } catch (e) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Erreur : ' + e.message; } else alert('Erreur : ' + e.message); } };
   if ($('agendaRefresh')) $('agendaRefresh').addEventListener('click', () => agendaRefresh($('agendaStatus')));

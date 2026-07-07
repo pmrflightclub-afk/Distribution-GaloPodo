@@ -73,10 +73,38 @@
 
   <!-- ============ TOURNÉES ============ -->
   <main id="tab-tournees" class="tab-panel">
-    <div class="actions"><button class="btn primary block" id="btnNewTour2">➕ Créer une tournée</button></div>
-    <section class="card"><h2>À venir</h2><div id="trUpcoming" class="list"></div><p class="empty" id="trUpcomingEmpty">Aucune tournée à venir.</p></section>
-    <section class="card"><h2>Clôturées (4 dernières semaines)</h2><div id="trClosed" class="list"></div><p class="empty" id="trClosedEmpty">Aucune.</p></section>
-    <section class="card"><h2>Archives (plus de 4 semaines)</h2><div id="trArchive" class="list"></div><p class="empty" id="trArchiveEmpty">Aucune.</p></section>
+    <nav class="subtabs" id="tournSub">
+      <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Tournées</span><span class="nav-caret">▾</span></button>
+      <div class="subtabs-list">
+        <button class="subtab active" data-tsub="liste">Tournées</button>
+        <button class="subtab" data-tsub="replacer">Replacer un RDV</button>
+        <button class="subtab" data-tsub="annul">Annulations</button>
+      </div>
+    </nav>
+    <div id="tsub-liste" class="subpanel active">
+      <div class="actions"><button class="btn primary block" id="btnNewTour2">➕ Créer une tournée</button></div>
+      <section class="card"><h2>À venir</h2><div id="trUpcoming" class="list"></div><p class="empty" id="trUpcomingEmpty">Aucune tournée à venir.</p></section>
+      <section class="card"><h2>Clôturées (4 dernières semaines)</h2><div id="trClosed" class="list"></div><p class="empty" id="trClosedEmpty">Aucune.</p></section>
+      <section class="card"><h2>Archives (plus de 4 semaines)</h2><div id="trArchive" class="list"></div><p class="empty" id="trArchiveEmpty">Aucune.</p></section>
+    </div>
+    <div id="tsub-replacer" class="subpanel">
+      <section class="card">
+        <h2>Replacer un RDV</h2>
+        <p class="hint">Chevaux dont le RDV a été <b>reporté</b>, regroupés par client. Fixez une date de remplacement : tous les chevaux reportés du client y sont ajoutés automatiquement.</p>
+        <div id="replacerList" class="list"></div>
+        <p class="empty" id="replacerEmpty">Aucun RDV reporté à replacer.</p>
+      </section>
+    </div>
+    <div id="tsub-annul" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>RDV annulés / reportés</h2></div>
+        <div class="seg" id="annulTypeSeg"><button class="seg-btn on" data-atype="mois">Mois</button><button class="seg-btn" data-atype="trimestre">Trimestre</button><button class="seg-btn" data-atype="semestre">Semestre</button><button class="seg-btn" data-atype="annee">Année</button></div>
+        <label>Période<select id="annulPeriod"></select></label>
+        <p class="hint" id="annulTot"></p>
+        <div id="annulList" class="list"></div>
+        <p class="empty" id="annulEmpty">Aucune annulation sur cette période.</p>
+      </section>
+    </div>
   </main>
 
   <!-- ============ TOURNÉE (page unique) ============ -->
