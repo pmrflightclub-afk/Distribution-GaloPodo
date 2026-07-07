@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.42';
+const APP_VERSION = '1.1.43';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.43', date: '2026-07-07',
+    ajouts: [
+      'Bouton « 💶 Paiement » d\'un arrêt : une fois le paiement complètement renseigné (mode choisi, et montant liquide si liquide) pour tous les clients de l\'arrêt, il s\'affiche grisé avec ✓ — comme Route et RDV. Il reste cliquable pour corriger.',
+    ],
+  },
   {
     version: '1.1.42', date: '2026-07-07',
     ajouts: [
@@ -1736,6 +1742,18 @@ function reconcileActiveTours() {
 }
 
 // Sécurité de clôture : chaque client doit avoir un mode de paiement (virement/liquide) ; en liquide, le montant encaissé est requis.
+// Le paiement d'un client est-il complètement renseigné ? (même règle que la clôture : mode choisi + montant liquide si liquide)
+function clientPaiementDone(t, cid) {
+  const p = (t.payments || {})[cid]; const method = p ? p.method : null;
+  if (method === 'virement') return true;
+  if (method === 'liquide') return !!(p && (p.rectifie != null || p.montantPaye != null));
+  return false;
+}
+// Le paiement de l'arrêt est « fait » si TOUS ses clients ont un paiement complet.
+function arretPaiementDone(t, a) {
+  const cls = (a.clients || []); if (!cls.length) return false;
+  return cls.every((cl) => clientPaiementDone(t, cl.clientId));
+}
 function tourCloseBlock(t) {
   const out = []; const seen = new Set();
   (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => {
@@ -1898,9 +1916,9 @@ function renderEditorArrets(locked) {
     const nav = document.createElement('div'); nav.className = 'a-nav';
     const estMin = legMins[i] != null ? Math.round(legMins[i]) : null;
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
-    const routeDone = realMin != null; const hhv = arretHeure(a);
+    const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
     // Heure de RDV de l'arrêt (1 par arrêt), Waze, Route (grisé ✓ si temps réel encodé), RDV (grisé ✓ si suivant programmé), Paiement.
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small" data-pay>💶 Paiement</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button></span>`}`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small${payDone ? ' done' : ''}" data-pay>💶 Paiement${payDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button></span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
