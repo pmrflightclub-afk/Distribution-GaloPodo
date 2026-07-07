@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.72';
+const APP_VERSION = '1.1.73';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.73', date: '2026-07-08',
+    ajouts: [
+      'Statut véhicule : le relevé du compteur a maintenant un champ Date. Vous pouvez saisir une date passée pour ajouter un relevé antérieur (rétroactif) — pratique au démarrage. Les écarts (usage privé) sont recalculés automatiquement, y compris entre relevés.',
+    ],
+  },
   {
     version: '1.1.72', date: '2026-07-08',
     ajouts: [
@@ -1246,16 +1252,24 @@ const fuelPerKmHT = () => (S.consoL100 / 100) * S.prixPleinL / (1 + rate());
 // Sans aucun relevé : repli sur Σ de toutes les tournées (comportement d'origine, base 0). On ne confond jamais réel et estimé.
 function lastOdoReleve() { const r = (S.odoReleves || []).filter((x) => x && x.date); return r.length ? r.reduce((a, b) => ((a.date || '') >= (b.date || '') ? a : b)) : null; }
 const tourKmAfter = (dateStr) => allTours().reduce((s, t) => s + ((t.result && (t.date || '') > dateStr) ? t.result.totalKm : 0), 0);
+const tourKmBetween = (from, to) => allTours().reduce((s, t) => s + ((t.result && (t.date || '') > from && (t.date || '') <= to) ? t.result.totalKm : 0), 0);
 const odometer = () => { const last = lastOdoReleve(); return last ? (last.km + tourKmAfter(last.date)) : allTours().reduce((s, t) => s + (t.result ? t.result.totalKm : 0), 0); };
 const usagePriveTotal = () => (S.odoReleves || []).reduce((s, r) => s + (typeof r.ecart === 'number' ? r.ecart : 0), 0); // km hors tournées (privé), cumulé sur les relevés
-// Enregistre un relevé compteur réel (1 par mois : remplace celui du mois courant). Calcule l'écart = usage privé depuis le relevé du mois précédent.
-function declareOdo(km) {
-  const today = todayStr(), ym = today.slice(0, 7);
-  const prev = (S.odoReleves || []).filter((r) => r && (r.ym || '') < ym).sort((a, b) => (a.date || '').localeCompare(b.date || '')).pop() || null;
-  let ecart = null;
-  if (prev) ecart = km - (prev.km + tourKmAfter(prev.date)); // réel − estimé sur la période = km privés (hors tournées)
-  S.odoReleves = (S.odoReleves || []).filter((r) => (r.ym || (r.date || '').slice(0, 7)) !== ym); // une déclaration par mois
-  S.odoReleves.push({ ym, date: today, km, ecart });
+// Estimé du compteur À une date = dernier relevé réel AVANT cette date + tournées jusqu'à la date (sinon Σ tournées jusqu'à la date).
+function estOdoAt(date) { const prev = (S.odoReleves || []).filter((r) => r && (r.date || '') < date).sort((a, b) => (a.date || '').localeCompare(b.date || '')).pop(); return prev ? (prev.km + tourKmBetween(prev.date, date)) : allTours().reduce((s, t) => s + ((t.result && (t.date || '') <= date) ? t.result.totalKm : 0), 0); }
+// Recalcule l'écart (usage privé) de chaque relevé = réel − estimé depuis le relevé précédent (à refaire après tout ajout, y compris rétroactif).
+function recomputeOdoEcarts() {
+  const list = (S.odoReleves || []).slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  let prev = null;
+  list.forEach((r) => { r.ecart = prev ? (r.km - (prev.km + tourKmBetween(prev.date, r.date))) : null; prev = r; });
+  S.odoReleves = list;
+}
+// Enregistre un relevé compteur réel à une DATE (défaut aujourd'hui ; une date passée = ajout rétroactif). 1 relevé par mois. Recalcule tous les écarts.
+function declareOdo(km, date) {
+  date = date || todayStr(); const ym = date.slice(0, 7);
+  S.odoReleves = (S.odoReleves || []).filter((r) => (r.ym || (r.date || '').slice(0, 7)) !== ym); // un relevé par mois
+  S.odoReleves.push({ ym, date, km, ecart: null });
+  recomputeOdoEcarts();
   saveSettings();
 }
 const odoDeclarationDue = () => { const last = lastOdoReleve(); return !last || (last.ym || (last.date || '').slice(0, 7)) < todayStr().slice(0, 7); };
@@ -4938,18 +4952,22 @@ function fraisEchus() {
 }
 // Relevé du compteur RÉEL (statut véhicule) : compare à l'estimé, enregistre, calcule l'usage privé.
 function modalStatutVehicule() {
-  const est = odometer(); const last = lastOdoReleve();
+  const today = todayStr(); const last = lastOdoReleve();
   openModal(`<div class="modal-head"><b>🚗 Statut véhicule — relevé compteur</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Saisissez le <b>kilométrage réel</b> affiché au compteur aujourd'hui. ${last ? 'Dernier relevé : <b>' + km(last.km) + '</b> le ' + esc(fmtDateFr(last.date)) + '. ' : ''}Estimé actuel par l'app : <b>${km(est)}</b>${last ? '' : ' (cumul des tournées)'}.</p>
-    <label>Kilométrage réel (compteur)<input type="number" id="svKm" step="1" min="0" inputmode="numeric" placeholder="${est || 0}"/></label>
+    <p class="hint">Saisissez le <b>kilométrage réel</b> affiché au compteur, et la <b>date</b> du relevé. ${last ? 'Dernier relevé : <b>' + km(last.km) + '</b> le ' + esc(fmtDateFr(last.date)) + '.' : ''}</p>
+    <label>Date du relevé<input type="date" id="svDate" value="${today}" max="${today}"/></label>
+    <label>Kilométrage réel (compteur)<input type="number" id="svKm" step="1" min="0" inputmode="numeric"/></label>
     <p class="hint" id="svEcart"></p>
+    <p class="hint">Astuce : choisissez une <b>date passée</b> pour ajouter un relevé <b>antérieur</b> (rétroactif) — utile au démarrage pour renseigner un km/date d'avant.</p>
     <div class="actions"><button class="btn primary block" id="svOk">Enregistrer le relevé</button></div>`);
   $('mX').addEventListener('click', closeModal);
-  const upd = () => { const v = parseNum($('svKm').value); const e = $('svEcart'); if (!e) return; if (!(v > 0)) { e.textContent = ''; return; }
-    if (!last) { e.innerHTML = 'Premier relevé : ce sera le <b>km de départ</b> du véhicule dans l\'app.'; return; }
-    const d = v - est; e.innerHTML = `Écart avec l'estimé : <b>${d >= 0 ? '+' : '−'}${km(Math.abs(d))}</b>${Math.abs(d) >= 1 ? ' → usage privé (hors tournées) depuis le dernier relevé' : ''}.`; };
-  $('svKm').addEventListener('input', upd);
-  $('svOk').addEventListener('click', () => { const v = Math.round(parseNum($('svKm').value)); if (!(v > 0)) { alert('Saisissez le kilométrage réel du compteur.'); return; } declareOdo(v); closeModal(); renderHome(); });
+  const upd = () => { const v = parseNum($('svKm').value); const date = $('svDate').value || today; const e = $('svEcart'); if (!e) return; if (!(v > 0)) { e.textContent = ''; return; }
+    const hasPrev = (S.odoReleves || []).some((r) => r && (r.date || '') < date);
+    if (!hasPrev) { e.innerHTML = 'Aucun relevé antérieur : ce sera le <b>point de départ</b> du véhicule à cette date.'; return; }
+    const est = estOdoAt(date); const d = v - est;
+    e.innerHTML = `Estimé à cette date : <b>${km(est)}</b> · écart <b>${d >= 0 ? '+' : '−'}${km(Math.abs(d))}</b>${Math.abs(d) >= 1 ? ' → usage privé (hors tournées) depuis le relevé précédent' : ''}.`; };
+  $('svKm').addEventListener('input', upd); $('svDate').addEventListener('change', upd);
+  $('svOk').addEventListener('click', () => { const v = Math.round(parseNum($('svKm').value)); const date = $('svDate').value || today; if (!(v > 0)) { alert('Saisissez le kilométrage réel du compteur.'); return; } if (date > today) { alert('La date ne peut pas être dans le futur.'); return; } declareOdo(v, date); closeModal(); renderHome(); });
 }
 function modalVehicule() {
   openModal(`<div class="modal-head"><b>📋 Déclarer un événement</b><button class="x" id="mX">✕</button></div>
