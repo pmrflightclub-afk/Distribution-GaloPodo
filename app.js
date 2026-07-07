@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.31';
+const APP_VERSION = '1.1.32';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.32', date: '2026-07-07',
+    ajouts: [
+      'Correction « cheval fantôme » dans les statistiques : un cheval non pris en charge à un arrêt (aucun parage, aucune pathologie, aucune visite cochés) n\'est plus compté dans les temps de travail, les temps de trajet, l\'utilisation du véhicule ni les analyses financières par cheval et par client. Seuls les chevaux réellement faits sont désormais imputés.',
+      'Les tournées déjà enregistrées sont nettoyées automatiquement au lancement (les montants facturés restent identiques — seule la répartition par cheval est corrigée).',
+    ],
+  },
   {
     version: '1.1.31', date: '2026-07-07',
     ajouts: [
@@ -1501,6 +1508,32 @@ function archiveOldTours() {
   LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive); // pas de tombstone : déplacement, pas suppression
   return move.length;
 }
+// Migration ponctuelle (montant INCHANGÉ) : retire les chevaux non faits des résultats DÉJÀ calculés
+// (clôturées/archivées gardent leur `result` figé) pour que les stats/analyses n'imputent plus de « cheval fantôme ».
+// On ne touche qu'aux LISTES de chevaux (rows + déplacement), jamais aux montants/matériel/articles.
+function sanitizeTourStats(t) {
+  const R = t.result; if (!R || !R.rows) return false;
+  let changed = false; const faitByClient = {};
+  (R.rows || []).forEach((r) => (r.clients || []).forEach((cl) => {
+    const set = faitByClient[cl.clientId] || (faitByClient[cl.clientId] = new Set());
+    const kept = (cl.chevaux || []).filter(chevalFait);
+    if (kept.length !== (cl.chevaux || []).length) changed = true;
+    cl.chevaux = kept; kept.forEach((c) => set.add(c.nom));
+  }));
+  (R.parClient || []).forEach((m) => (m.deplacement || []).forEach((l) => {
+    const set = faitByClient[m.clientId]; if (!set) return;
+    const kept = (l.chevaux || []).filter((n) => set.has(n));
+    if (kept.length !== (l.chevaux || []).length) changed = true;
+    l.chevaux = kept;
+  }));
+  return changed;
+}
+function sanitizeAllTourStats() {
+  let a = false, b = false;
+  (tournees || []).forEach((t) => { if (sanitizeTourStats(t)) a = true; });
+  (archive || []).forEach((t) => { if (sanitizeTourStats(t)) b = true; });
+  if (a) saveTournees(); if (b) saveArchive();
+}
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
 
 // Synchronise une tournée non clôturée avec les données client actuelles (chevaux ajoutés/supprimés/renommés
@@ -1888,6 +1921,10 @@ function enableRowDrag(listEl, arr, save) {
 }
 
 // ----- Calcul : ARGENT (pur, instantané, sans API) à partir de la géométrie -----
+// Un cheval « fait » = réellement pris en charge à l'arrêt (parage OU une pathologie OU une visite cochée).
+// Seuls les chevaux faits comptent dans les stats (temps, km, analyses cheval/client) et la répartition déplacement.
+// Un cheval décoché reste dans l'arrêt mais n'est PAS imputé (corrige le « cheval fantôme » des statistiques).
+function chevalFait(c) { return !!(c && (c.parage || c.fourbure || c.npas || c.infection || c.visite)); }
 function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
@@ -1998,7 +2035,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: (cl.chevaux || []).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage })) })),
+    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: (cl.chevaux || []).filter(chevalFait).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage })) })),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
@@ -2504,8 +2541,9 @@ function travailStats() {
       (a.clients || []).forEach((cl) => {
         const c = cmap[cl.clientId] = cmap[cl.clientId] || { clientId: cl.clientId, nom: clientName(cl.clientId), travelMs: 0, visitMs: 0, chevaux: {} };
         c.travelMs += travelPer; c.visitMs += visitPer;
-        const chn = (cl.chevaux || []).length || 1;
-        (cl.chevaux || []).forEach((cv) => { const ch = c.chevaux[cv.nom] = c.chevaux[cv.nom] || { nom: cv.nom, ms: 0 }; ch.ms += (travelPer + visitPer) / chn; });
+        const faits = (cl.chevaux || []).filter(chevalFait); // seuls les chevaux réellement pris en charge portent le temps
+        const chn = faits.length || 1;
+        faits.forEach((cv) => { const ch = c.chevaux[cv.nom] = c.chevaux[cv.nom] || { nom: cv.nom, ms: 0 }; ch.ms += (travelPer + visitPer) / chn; });
       });
     });
     const clientsArr = Object.values(cmap).map((c) => {
@@ -3833,6 +3871,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
+  sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
   bindSettings(); refreshEverywhere(); renderHome();
 
   if ($('btnRefreshTours')) $('btnRefreshTours').addEventListener('click', refreshActiveTours);
