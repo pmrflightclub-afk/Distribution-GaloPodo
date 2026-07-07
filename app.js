@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.59';
+const APP_VERSION = '1.1.60';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.60', date: '2026-07-07',
+    ajouts: [
+      'Règle comptable clarifiée : un RDV DÉJÀ PAYÉ puis annulé ne peut plus être « rétabli » (on ne modifie jamais une facture encaissée ni sa note de crédit). Si vous devez refacturer ce cheval, ajoutez-le manuellement à un arrêt d\'une tournée — la comptabilité repart alors proprement.',
+      'Rétablir reste possible normalement pour un RDV annulé NON payé.',
+    ],
+  },
   {
     version: '1.1.59', date: '2026-07-07',
     ajouts: [
@@ -4242,18 +4249,19 @@ function modalCancelRdv(nom, opts) {
   }
   if (chevalCancelled(cv)) {
     const lbl = cv.cancel.status === 'reporte' ? 'reporté' : 'annulé';
+    if (cv.cancel.credited) { // RDV PAYÉ annulé (note de crédit émise) : rétablissement IMPOSSIBLE — on ne touche jamais à une NC. Refacturation éventuelle = à la main.
+      openModal(`<div class="modal-head"><b>RDV payé ${lbl} — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+        <p class="hint">Motif : <b>${cv.cancel.reason === 'pro' ? 'professionnel' : 'client'}</b>${cv.cancel.note ? ' · ' + esc(cv.cancel.note) : ''}. Une <b>note de crédit</b> a été émise pour ce RDV (Compta → Notes de crédit).</p>
+        <p class="hint">Ce RDV ne peut pas être rétabli automatiquement : on ne modifie jamais une facture encaissée ni sa note de crédit. Si vous devez refacturer ce cheval, <b>ajoutez-le manuellement à un arrêt d'une tournée</b> — la comptabilité repart alors proprement.</p>
+        <div class="actions"><button class="btn block" id="cxClose">Fermer</button></div>`);
+      $('mX').addEventListener('click', closeModal); $('cxClose').addEventListener('click', closeModal);
+      return;
+    }
     openModal(`<div class="modal-head"><b>RDV ${lbl} — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
       <p class="hint">Motif : <b>${cv.cancel.reason === 'pro' ? 'professionnel' : 'client'}</b>${cv.cancel.note ? ' · ' + esc(cv.cancel.note) : ''}.</p>
       <div class="actions"><button class="btn primary block" id="cxRestore">↩ Rétablir ce RDV</button></div>`);
     $('mX').addEventListener('click', closeModal);
-    $('cxRestore').addEventListener('click', () => {
-      if (cv.cancel.credited) { // RDV payé annulé : nettoyer la note de crédit liée avant de rétablir
-        const nc = (S.notesCredit || []).find((n) => n.id === cv.cancel.creditNoteId);
-        if (nc && nc.rembourse) { alert('La note de crédit de ce cheval a déjà été remboursée. Annulez d\'abord le remboursement en Compta avant de rétablir le RDV.'); return; }
-        if (nc) { S.notesCredit = S.notesCredit.filter((n) => n.id !== nc.id); saveSettings(); }
-      }
-      cv.cancel = null; closeModal(); opts.onDone();
-    });
+    $('cxRestore').addEventListener('click', () => { cv.cancel = null; closeModal(); opts.onDone(); });
     return;
   }
   let status = 'annule', reason = 'client';
