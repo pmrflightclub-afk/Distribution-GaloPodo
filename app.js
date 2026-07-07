@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.57';
+const APP_VERSION = '1.1.58';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.58', date: '2026-07-07',
+    ajouts: [
+      'Statistiques plus justes : un RDV payé puis annulé (remboursé par note de crédit) n\'est plus compté dans les analyses de vente (Analyse par client, Analyse par cheval) — il n\'y fausse plus le chiffre réel.',
+      'Nouvelle section dans Stats → Annulations : « ↩ Factures payées annulées (note de crédit) » qui liste ces RDV à part (montant réellement facturé, remboursé ou non), séparément du « manque à gagner » (annulations non payées).',
+    ],
+  },
   {
     version: '1.1.57', date: '2026-07-07',
     ajouts: [
@@ -3128,28 +3135,44 @@ function renderStatsAnnul() {
   perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === saPeriodKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
   perSel.onchange = () => { saPeriodKey = perSel.value; renderStatsAnnul(); };
   const range = new Set(monthsOfRange(saType, saPeriodKey));
-  const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));
-  if ($('saEmpty')) $('saEmpty').style.display = list.length ? 'none' : 'block';
-  if (!list.length) { body.innerHTML = ''; return; }
-  const nA = list.filter((c) => c.status === 'annule').length, nR = list.filter((c) => c.status === 'reporte').length;
-  const nCl = list.filter((c) => c.reason === 'client').length, nPr = list.filter((c) => c.reason === 'pro').length;
-  const totTtc = list.reduce((s, c) => s + c.ttc, 0);
-  let html = `<div class="tiles tiles-3" style="margin:8px 0">
-    <div class="tile"><span class="t-label">Annulés</span><span class="t-val">${nA}</span></div>
-    <div class="tile"><span class="t-label">Reportés</span><span class="t-val">${nR}</span></div>
-    <div class="tile strong"><span class="t-label">Manque à gagner</span><span class="t-val">${eur(totTtc)}</span></div>
-    <div class="tile"><span class="t-label">Motif client</span><span class="t-val">${nCl}</span></div>
-    <div class="tile"><span class="t-label">Motif pro</span><span class="t-val">${nPr}</span></div></div>`;
-  const byClient = {}; list.forEach((c) => { const k = c.clientId; (byClient[k] = byClient[k] || { nom: c.clientNom, ttc: 0, items: [] }).ttc += c.ttc; byClient[k].items.push(c); });
-  html += '<h3 class="rsub">Manque à gagner par client</h3>';
-  Object.values(byClient).sort((a, b) => b.ttc - a.ttc).forEach((cl) => { html += `<div class="inv-client"><div class="inv-head"><span>${esc(cl.nom)}</span><span class="inv-amt">${eur(cl.ttc)}</span></div>` + cl.items.map((c) => `<div class="fin-cheval"><span>🐴 ${esc(c.cheval)} · ${esc(fmtDateFr(c.date))} · ${c.status === 'reporte' ? 'reporté' : 'annulé'} (${c.reason === 'pro' ? 'pro' : 'client'})</span><span>${eur(c.ttc)}</span></div>`).join('') + '</div>'; });
-  const byCheval = {}; list.forEach((c) => { const k = c.clientId + '|' + norm(c.cheval); (byCheval[k] = byCheval[k] || { nom: c.cheval, client: c.clientNom, ttc: 0, items: [] }).ttc += c.ttc; byCheval[k].items.push(c); });
-  html += '<h3 class="rsub">Manque à gagner par cheval (détail)</h3>';
-  Object.values(byCheval).sort((a, b) => b.ttc - a.ttc).forEach((cv) => { html += `<div class="inv-client"><div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.ttc)}</span></div>` + cv.items.map((c) => chevalWouldBeLines(c.cv).map((l) => `<div class="fin-detail"><span>${esc(fmtDateFr(c.date))} · ${esc(l.libelle)}</span><span>${eur(l.ttc)}</span></div>`).join('')).join('') + '</div>'; });
-  const gMonths = [...new Set(list.map((c) => (c.date || '').slice(0, 7)))].sort();
-  const barItems = gMonths.map((m) => ({ label: shortMonthLabel(m), v: list.filter((c) => (c.date || '').slice(0, 7) === m).reduce((s, c) => s + c.ttc, 0) }));
-  html += gBlock('Manque à gagner par mois', gBars(barItems, (d) => d.v, (v) => eur(v), '#e0912f', barItems.length <= 6));
-  html += gBlock('Répartition annulés / reportés', gDonut([{ label: 'Annulés', value: list.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), color: '#c0453b' }, { label: 'Reportés', value: list.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0), color: '#3b82c4' }]));
+  const listAll = all.filter((c) => range.has((c.date || '').slice(0, 7)));
+  const list = listAll.filter((c) => !chevalCredited(c.cv));    // manque à gagner = annulations NON payées
+  const credited = listAll.filter((c) => chevalCredited(c.cv)); // RDV payés annulés = note de crédit (facture figée)
+  if ($('saEmpty')) $('saEmpty').style.display = listAll.length ? 'none' : 'block';
+  if (!listAll.length) { body.innerHTML = ''; return; }
+  let html = '';
+  if (list.length) {
+    const nA = list.filter((c) => c.status === 'annule').length, nR = list.filter((c) => c.status === 'reporte').length;
+    const nCl = list.filter((c) => c.reason === 'client').length, nPr = list.filter((c) => c.reason === 'pro').length;
+    const totTtc = list.reduce((s, c) => s + c.ttc, 0);
+    html += `<div class="tiles tiles-3" style="margin:8px 0">
+      <div class="tile"><span class="t-label">Annulés</span><span class="t-val">${nA}</span></div>
+      <div class="tile"><span class="t-label">Reportés</span><span class="t-val">${nR}</span></div>
+      <div class="tile strong"><span class="t-label">Manque à gagner</span><span class="t-val">${eur(totTtc)}</span></div>
+      <div class="tile"><span class="t-label">Motif client</span><span class="t-val">${nCl}</span></div>
+      <div class="tile"><span class="t-label">Motif pro</span><span class="t-val">${nPr}</span></div></div>`;
+    const byClient = {}; list.forEach((c) => { const k = c.clientId; (byClient[k] = byClient[k] || { nom: c.clientNom, ttc: 0, items: [] }).ttc += c.ttc; byClient[k].items.push(c); });
+    html += '<h3 class="rsub">Manque à gagner par client</h3>';
+    Object.values(byClient).sort((a, b) => b.ttc - a.ttc).forEach((cl) => { html += `<div class="inv-client"><div class="inv-head"><span>${esc(cl.nom)}</span><span class="inv-amt">${eur(cl.ttc)}</span></div>` + cl.items.map((c) => `<div class="fin-cheval"><span>🐴 ${esc(c.cheval)} · ${esc(fmtDateFr(c.date))} · ${c.status === 'reporte' ? 'reporté' : 'annulé'} (${c.reason === 'pro' ? 'pro' : 'client'})</span><span>${eur(c.ttc)}</span></div>`).join('') + '</div>'; });
+    const byCheval = {}; list.forEach((c) => { const k = c.clientId + '|' + norm(c.cheval); (byCheval[k] = byCheval[k] || { nom: c.cheval, client: c.clientNom, ttc: 0, items: [] }).ttc += c.ttc; byCheval[k].items.push(c); });
+    html += '<h3 class="rsub">Manque à gagner par cheval (détail)</h3>';
+    Object.values(byCheval).sort((a, b) => b.ttc - a.ttc).forEach((cv) => { html += `<div class="inv-client"><div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.ttc)}</span></div>` + cv.items.map((c) => chevalWouldBeLines(c.cv).map((l) => `<div class="fin-detail"><span>${esc(fmtDateFr(c.date))} · ${esc(l.libelle)}</span><span>${eur(l.ttc)}</span></div>`).join('')).join('') + '</div>'; });
+    const gMonths = [...new Set(list.map((c) => (c.date || '').slice(0, 7)))].sort();
+    const barItems = gMonths.map((m) => ({ label: shortMonthLabel(m), v: list.filter((c) => (c.date || '').slice(0, 7) === m).reduce((s, c) => s + c.ttc, 0) }));
+    html += gBlock('Manque à gagner par mois', gBars(barItems, (d) => d.v, (v) => eur(v), '#e0912f', barItems.length <= 6));
+    html += gBlock('Répartition annulés / reportés', gDonut([{ label: 'Annulés', value: list.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), color: '#c0453b' }, { label: 'Reportés', value: list.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0), color: '#3b82c4' }]));
+  }
+  // Section dédiée : RDV payés puis annulés (facture figée + note de crédit), retirés des analyses de vente.
+  if (credited.length) {
+    const ncOf = (c) => (S.notesCredit || []).find((n) => n.id === (c.cv.cancel && c.cv.cancel.creditNoteId)) || null;
+    const rows = credited.map((c) => ({ c, nc: ncOf(c) }));
+    const tot = rows.reduce((s, r) => s + (r.nc ? r.nc.montantTTC : 0), 0);
+    const nRemb = rows.filter((r) => r.nc && r.nc.rembourse).length;
+    html += '<h3 class="rsub">↩ Factures payées annulées (note de crédit)</h3>';
+    html += `<p class="hint">Ces RDV avaient été payés : la facture encaissée reste figée et une note de crédit (<b>${eur(tot)}</b> TTC, ${nRemb}/${rows.length} remboursée${nRemb > 1 ? 's' : ''}) neutralise le chiffre d'affaires. Ils sont retirés des analyses de vente ; le détail des remboursements est en Compta → Notes de crédit.</p>`;
+    const byC = {}; rows.forEach((r) => { const k = r.c.clientId; (byC[k] = byC[k] || { nom: r.c.clientNom, ttc: 0, items: [] }); byC[k].ttc += r.nc ? r.nc.montantTTC : 0; byC[k].items.push(r); });
+    Object.values(byC).sort((a, b) => b.ttc - a.ttc).forEach((cl) => { html += `<div class="inv-client"><div class="inv-head"><span>${esc(cl.nom)}</span><span class="inv-amt">−${eur(cl.ttc)}</span></div>` + cl.items.map((r) => `<div class="fin-cheval"><span>🐴 ${esc(r.c.cheval)} · ${esc(fmtDateFr(r.c.date))} · ${r.nc && r.nc.rembourse ? '✔ remboursée' : 'à rembourser'}</span><span>−${eur(r.nc ? r.nc.montantTTC : 0)}</span></div>`).join('') + '</div>'; });
+  }
   body.innerHTML = html;
 }
 // Stats : temps de trajet estimé (tournée) vs réel encodé (par arrêt), avec arrêts manquants signalés.
@@ -3274,23 +3297,35 @@ function artPerCheval(a) {
   const tot = q ? noms.reduce((s, n) => s + (q[n] || 1), 0) : noms.length;
   return (n) => tot ? a.ttc * (q ? (q[n] || 1) : 1) / tot : 0;
 }
+// Chevaux payés-annulés (note de crédit) d'une tournée → EXCLUS des analyses de vente (mais restent dans la facture figée + neutralisés par la NC en Compta). Clé « clientId|normNom ».
+function creditedKeySet(t) {
+  const s = new Set();
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalCredited(cv)) s.add(cl.clientId + '|' + norm(cv.nom)); })));
+  return s;
+}
 function financeStats() {
   const cmap = {};
   allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return;
+    const cred = creditedKeySet(t);
     t.result.parClient.forEach((m) => {
+      const isCred = (n) => cred.has(m.clientId + '|' + norm(n));
       const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, impaye: 0, chevaux: {} };
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
       const art = (m.articles || []).reduce((s, a) => s + a.ttc, 0); // remise déjà appliquée ligne par ligne
-      c.dep += dep; c.mat += mat; c.art += art;
+      // Part des chevaux payés-annulés à retirer des analyses (comptée via la note de crédit en Compta) :
+      const depCred = (m.deplacement || []).reduce((s, l) => { const nn = l.chevaux || []; return nn.length ? s + (l.partTTC / nn.length) * nn.filter(isCred).length : s; }, 0);
+      const matCred = (m.materiel || []).reduce((s, x) => s + (isCred(x.nom) ? x.ttc : 0), 0);
+      const artCred = (m.articles || []).reduce((s, a) => { const share = artPerCheval(a); return s + (a.chevaux || []).filter(isCred).reduce((ss, n) => ss + share(n), 0); }, 0);
+      c.dep += dep - depCred; c.mat += mat - matCred; c.art += art - artCred;
       // Arrondi caisse (liquide) : le total facturé = total rectifié. Impayé (partiel) suivi à part (créance, ne change pas le CA).
       const pay = (t.payments || {})[m.clientId];
       c.arrondi += payArrondi(m, pay);
       c.impaye += payImpaye(m, pay);
-      (m.materiel || []).forEach((x) => { const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0 }; ch.mat += x.ttc; });
-      (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.dep += per; }); });
-      (m.articles || []).forEach((a) => { const share = artPerCheval(a); a.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.art += share(n); }); });
+      (m.materiel || []).forEach((x) => { if (isCred(x.nom)) return; const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0 }; ch.mat += x.ttc; });
+      (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { if (isCred(n)) return; const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.dep += per; }); });
+      (m.articles || []).forEach((a) => { const share = artPerCheval(a); a.chevaux.forEach((n) => { if (isCred(n)) return; const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.art += share(n); }); });
     });
   });
   return Object.values(cmap).map((c) => ({ ...c, total: c.dep + c.mat + c.art + (c.arrondi || 0), recu: c.dep + c.mat + c.art + (c.arrondi || 0) - (c.impaye || 0), chevaux: Object.values(c.chevaux) })).sort((a, b) => b.total - a.total);
@@ -3560,10 +3595,12 @@ function chevalFinanceDetail() {
   const get = (cid, nom, cnom) => { const k = cid + '|' + nom; return map[k] || (map[k] = { clientId: cid, nom, client: cnom, art: [], mat: [], dep: [], total: 0 }); };
   allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return; const date = t.date;
+    const cred = creditedKeySet(t); // chevaux payés-annulés (NC) → hors analyse cheval
     t.result.parClient.forEach((m) => {
-      (m.articles || []).forEach((a) => { const share = artPerCheval(a); (a.chevaux || []).forEach((n) => { const per = share(n); const g = get(m.clientId, n, m.nom); g.art.push({ date, libelle: a.libelle + (a.qtesByNom && a.qtesByNom[n] > 1 ? ' ×' + a.qtesByNom[n] : '') + (a.remisePct ? ' (−' + a.remisePct + '%)' : ''), ttc: per }); g.total += per; }); });
-      (m.materiel || []).forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : '', x.infection ? 'Infection' : ''].filter(Boolean).join('+'); const g = get(m.clientId, x.nom, m.nom); g.mat.push({ date, libelle: 'Matériel' + (tags ? ' (' + tags + ')' : ''), ttc: x.ttc }); g.total += x.ttc; });
-      (m.deplacement || []).forEach((l) => { const per = (l.chevaux && l.chevaux.length) ? l.partTTC / l.chevaux.length : 0; (l.chevaux || []).forEach((n) => { const g = get(m.clientId, n, m.nom); g.dep.push({ date, libelle: (l.adresse || 'Déplacement') + ' ' + (TYPES[l.type] || ''), ttc: per }); g.total += per; }); });
+      const isCred = (n) => cred.has(m.clientId + '|' + norm(n));
+      (m.articles || []).forEach((a) => { const share = artPerCheval(a); (a.chevaux || []).forEach((n) => { if (isCred(n)) return; const per = share(n); const g = get(m.clientId, n, m.nom); g.art.push({ date, libelle: a.libelle + (a.qtesByNom && a.qtesByNom[n] > 1 ? ' ×' + a.qtesByNom[n] : '') + (a.remisePct ? ' (−' + a.remisePct + '%)' : ''), ttc: per }); g.total += per; }); });
+      (m.materiel || []).forEach((x) => { if (isCred(x.nom)) return; const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : '', x.infection ? 'Infection' : ''].filter(Boolean).join('+'); const g = get(m.clientId, x.nom, m.nom); g.mat.push({ date, libelle: 'Matériel' + (tags ? ' (' + tags + ')' : ''), ttc: x.ttc }); g.total += x.ttc; });
+      (m.deplacement || []).forEach((l) => { const per = (l.chevaux && l.chevaux.length) ? l.partTTC / l.chevaux.length : 0; (l.chevaux || []).forEach((n) => { if (isCred(n)) return; const g = get(m.clientId, n, m.nom); g.dep.push({ date, libelle: (l.adresse || 'Déplacement') + ' ' + (TYPES[l.type] || ''), ttc: per }); g.total += per; }); });
     });
   });
   return Object.values(map).sort((a, b) => b.total - a.total);
