@@ -71,6 +71,13 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .actions { margin: 4px 0 10px; }
 .actions.two { display: flex; gap: 10px; } .actions.two .btn { flex: 1; }
 .actions-col { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+/* Statut d'avancement d'un arrêt (Trajet du jour) */
+.ar-state { display: inline-block; font-size: .68rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--muted); vertical-align: middle; }
+.ar-state.now { background: color-mix(in srgb, var(--accent) 16%, var(--card)); color: var(--accent); border-color: var(--accent); }
+.ar-state.ok { background: color-mix(in srgb, var(--ok, #2e9e5b) 16%, var(--card)); color: var(--ok, #2e9e5b); border-color: var(--ok, #2e9e5b); }
+.ar-state.warn { background: #fde68a22; color: var(--warn); border-color: var(--warn); }
+.ar-state.wait { opacity: .7; }
+.list-item.arret-now { border-left: 3px solid var(--accent); }
 .blocking-card { border: 1px solid var(--warn); background: #fde68a14; }
 .blocking-card h2 { color: var(--warn); }
 .blocking-card.hidden { display: none; }

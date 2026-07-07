@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.48';
+const APP_VERSION = '1.1.49';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.49', date: '2026-07-07',
+    ajouts: [
+      'Section « Tournées dépassées » (au-dessus du Trajet du jour) : elle n\'apparaît plus pendant une tournée normale du jour — uniquement pour les tournées dont le jour est passé sans clôture.',
+      'Tournée dépassée démarrée → bouton « Finaliser » (les arrêts restants). Tournée dépassée jamais démarrée → « Reporter » (replacer chaque client à une nouvelle date : inséré dans la tournée de cette date, ou nouvelle tournée) ou « Supprimer ».',
+      'Trajet du jour : chaque arrêt affiche son statut d\'avancement (à finaliser / en attente / à cocher un cheval / clôturé) et l\'arrêt en cours est mis en évidence, pour voir d\'un coup d\'œil ce qu\'il reste à faire.',
+    ],
+  },
   {
     version: '1.1.48', date: '2026-07-07',
     ajouts: [
@@ -3651,31 +3659,81 @@ const hm = (ts) => ts ? new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digi
 // Durée à partir de MINUTES : < 1h → « 45 min » ; ≥ 1h → « 1h30 » / « 2h ». Format unique partout.
 function durMin(min) { if (min == null || isNaN(min) || min < 0) return '—'; min = Math.round(min); const h = Math.floor(min / 60), m = min % 60; if (!h) return m + ' min'; return m ? `${h}h${m < 10 ? '0' + m : m}` : `${h}h`; }
 function durHm(ms) { return (ms == null || ms < 0) ? '—' : durMin(ms / 60000); }
-// Tournées EN COURS / dépassées (démarrées, non clôturées) qui ont des arrêts non finalisés. Jamais les tournées à venir (non démarrées).
+// Une tournée est « dépassée » = son JOUR est passé sans qu'elle soit clôturée (débordée d'un jour). Les tournées du jour restent gérées dans Trajet du jour.
+function isOverdue(t) { return !!(t && !t.closed && !t.endedAt && (t.date || '') && t.date < todayStr()); }
+// Tournées DÉPASSÉES non clôturées (démarrées inachevées OU jamais démarrées). PAS les tournées du jour en cours (gérées dans Trajet du jour).
 function blockingTours() {
-  return (tournees || []).filter((t) => t.startedAt && !t.endedAt && !t.closed && tourFinalizeBlock(t).length > 0);
+  return (tournees || []).filter((t) => isOverdue(t) && tourFinalizeBlock(t).length > 0);
 }
-// Section « Arrêts à finaliser » (au-dessus du Trajet du jour) : rend visibles les tournées bloquées + accès rapide au 1ᵉʳ arrêt à finaliser.
+function deleteTourById(id) { purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); }
+// Section dédiée (au-dessus du Trajet du jour) : tournées dépassées non clôturées.
+// Démarrée inachevée → « Finaliser » (arrêts restants) ; jamais démarrée → « Reporter » (client par client) ou « Supprimer ».
 function renderBlockingArrets() {
   const card = $('homeBlocking'), list = $('homeBlockingList'); if (!card || !list) return;
   const stuck = blockingTours();
   card.classList.toggle('hidden', !stuck.length);
   list.innerHTML = '';
   stuck.forEach((t) => {
+    const started = !!t.startedAt;
     const blk = tourFinalizeBlock(t);
     const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>🚩 ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}</b><span class="li-sub">${blk.map(esc).join('<br>')}</span></div><div class="li-act"><button class="btn small primary" data-fin>💶 Finaliser</button></div>`;
-    el.querySelector('[data-fin]').addEventListener('click', () => {
+    const acts = started
+      ? '<button class="btn small primary" data-fin>💶 Finaliser</button>'
+      : '<button class="btn small" data-report>📅 Reporter</button> <button class="btn small danger" data-del>🗑 Supprimer</button>';
+    const sub = started ? blk.map(esc).join('<br>') : 'Tournée jamais démarrée — à reporter (client par client) ou à supprimer.';
+    el.innerHTML = `<div class="li-main"><b>🚩 ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}${started ? '' : ' · <span class="badge">non démarrée</span>'}</b><span class="li-sub">${sub}</span></div><div class="li-act">${acts}</div>`;
+    if (started) el.querySelector('[data-fin]').addEventListener('click', () => {
       const a = (t.arrets || [])[firstOpenArret(t)]; if (!a) { renderHome(); return; }
       if (!arretActeOK(a)) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); return; } // aucun cheval coché → ouvrir la tournée pour cocher Parage/Visite
       modalPayment(t, a, renderHome, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } });
     });
+    else {
+      el.querySelector('[data-report]').addEventListener('click', () => modalReporterTour(t));
+      el.querySelector('[data-del]').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée non démarrée du ' + fmtDateFr(t.date) + ' ?')) { deleteTourById(t.id); renderHome(); } });
+    }
     list.appendChild(el);
+  });
+}
+// Reporter une tournée jamais démarrée : chaque client coché est replacé à une nouvelle date (inséré dans la tournée de cette date sinon nouvelle) ; la tournée d'origine est retirée des clients reportés (supprimée si vide).
+function modalReporterTour(t) {
+  const entries = [];
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { let e = entries.find((x) => x.cid === cl.clientId); if (!e) { e = { cid: cl.clientId, ids: new Set() }; entries.push(e); } (cl.chevaux || []).forEach((cv) => { if (cv.id != null) e.ids.add(cv.id); }); }));
+  if (!entries.length) { if (confirm('Cette tournée n\'a aucun client. La supprimer ?')) { deleteTourById(t.id); renderHome(); } return; }
+  const proposed = proposedRdvDate(todayStr());
+  const state = {}; entries.forEach((e) => state[e.cid] = { date: proposed, on: true });
+  openModal(`<div class="modal-head"><b>📅 Reporter — ${esc(fmtDateFr(t.date))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Reportez chaque client à une nouvelle date : il est inséré dans la tournée de cette date si elle existe, sinon une nouvelle tournée est créée. Les clients non cochés restent sur la tournée d'origine.</p>
+    <div id="repList" class="list"></div>
+    <div class="actions two"><button class="btn danger" id="repDel">🗑 Supprimer</button><button class="btn primary" id="repOk">Reporter les cochés</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  const box = $('repList');
+  entries.forEach((e) => {
+    const row = document.createElement('div'); row.className = 'list-item';
+    row.innerHTML = `<div class="li-main"><label class="chk2"><input type="checkbox" data-on ${state[e.cid].on ? 'checked' : ''}/> <b>${esc(clientName(e.cid))}</b></label></div><div class="li-act"><input type="date" data-date value="${state[e.cid].date}"/></div>`;
+    row.querySelector('[data-on]').addEventListener('change', (ev) => state[e.cid].on = ev.target.checked);
+    row.querySelector('[data-date]').addEventListener('change', (ev) => state[e.cid].date = ev.target.value);
+    box.appendChild(row);
+  });
+  $('repDel').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée non démarrée ?')) { deleteTourById(t.id); closeModal(); renderHome(); } });
+  $('repOk').addEventListener('click', () => {
+    const movedCids = new Set();
+    entries.forEach((e) => {
+      const st = state[e.cid]; if (!st.on || !st.date) return;
+      const client = clients.find((x) => x.id === e.cid); if (!client) return;
+      const chevalObjs = (client.chevaux || []).filter((h) => e.ids.has(h.id));
+      scheduleClientOnDate(st.date, client, chevalObjs.length ? chevalObjs : activeChevaux(client));
+      movedCids.add(e.cid);
+    });
+    if (movedCids.size) {
+      t.arrets = (t.arrets || []).map((a) => Object.assign({}, a, { clients: (a.clients || []).filter((cl) => !movedCids.has(cl.clientId)) })).filter((a) => (a.clients || []).length);
+      if (!t.arrets.length) deleteTourById(t.id); else { t.result = null; const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; saveTournees(); }
+    }
+    closeModal(); renderHome();
   });
 }
 function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
-  const todays = [...tournees].filter((t) => statusOf(t) === 'active').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const todays = [...tournees].filter((t) => statusOf(t) === 'active' && !isOverdue(t)).sort((a, b) => (a.date || '').localeCompare(b.date || '')); // du jour ; les dépassées (jour passé) vont dans la section dédiée
   // Agenda privé du jour (événements perso récupérés du calendrier) — en tête du Trajet du jour.
   const priv = privateEventsForDay(todayStr());
   if (priv.length) {
@@ -3724,7 +3782,11 @@ function renderHomeTrajet() {
       const clotTitle = !t.startedAt ? 'Démarrez d\'abord la tournée' : (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : (!acteOK ? 'Cochez au moins un cheval (Parage ou Visite) — ouvrez la tournée' : (validated ? 'Arrêt clôturé (corrections via la tournée ou la Compta)' : 'Encaisser le paiement puis clôturer cet arrêt')));
       const clotBtn = `<button class="btn small${clotDis ? (validated ? ' done' : '') : ' primary'}" data-valid${clotDis ? ' disabled' : ''} title="${clotTitle}">${validated ? '✓ clôturé ' + hm(a.validatedAt) : '💶 Paiement & clôture'}</button>`;
       const validLbl = validated ? ' · ✅ ' + hm(a.validatedAt) : '';
-      el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
+      // Statut d'avancement de l'arrêt (visuel) : à faire / à finaliser / en attente (ordre) / à compléter / clôturé.
+      let arState = 'à faire', arCls = '';
+      if (t.startedAt) { if (validated) { arState = '✅ clôturé'; arCls = 'ok'; } else if (seqLocked) { arState = '⏳ en attente'; arCls = 'wait'; } else if (!acteOK) { arState = '⚠ cocher un cheval'; arCls = 'warn'; } else { arState = '➡ à finaliser'; arCls = 'now'; } }
+      if (arCls === 'now') el.classList.add('arret-now');
+      el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b> <span class="ar-state ${arCls}">${arState}</span><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
         <div class="li-act"><button class="btn small" data-agir${seqLocked ? ' disabled title="Finalisez d\'abord l\'arrêt précédent"' : ''}>⚡ Agir</button> ${clotBtn}</div>`;
       // « Agir » : regroupe Waze / Route / SMS / Ticket dans une modale (évite la surcharge de boutons).
       const smsAction = async (btn) => { const msg = fillSms(smsTemplateFor(c0), smsDataFor(c0, { cheval: chNames, trajet, adresse })); try { await navigator.clipboard.writeText(msg); btn.textContent = 'SMS copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); } catch { alert(msg); } };
