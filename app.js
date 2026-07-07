@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.24';
+const APP_VERSION = '1.1.25';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.25', date: '2026-07-07',
+    ajouts: [
+      'Suppression d\'une tournée : ses impayés liés sont maintenant correctement retirés — la créance née de cette tournée disparaît, et un impayé qu\'elle avait encaissé redevient « à percevoir ». (La facture et les stats disparaissaient déjà.) Le suivi Compta et l\'événement d\'agenda récupéré sont aussi nettoyés.',
+    ],
+  },
   {
     version: '1.1.24', date: '2026-07-07',
     ajouts: [
@@ -3264,6 +3270,20 @@ function uncollectImpaye(impayeId) {
   clients.forEach((c) => (c.impayes || []).forEach((im) => { if (im.id === impayeId) { im.collected = false; im.collectedTourId = null; } }));
   saveClients();
 }
+// Nettoyage à la SUPPRESSION d'une tournée : impayés + suivi Compta liés. (Facture/stats/compta se recalculent seuls car ils lisent allTours().)
+function purgeTourData(id) {
+  clients.forEach((c) => {
+    if (!Array.isArray(c.impayes)) return;
+    c.impayes = c.impayes.filter((im) => im.sourceTourId !== id);                    // créance NÉE de cette tournée → disparaît avec elle
+    c.impayes.forEach((im) => { if (im.collectedTourId === id) { im.collected = false; im.collectedTourId = null; } }); // impayé PERÇU par cette tournée → redevient « à percevoir »
+  });
+  saveClients();
+  // Clés de suivi Compta orphelines (« tourId:clientId » et « …:reste »).
+  [S.comptaRecu, S.comptaDemarche].forEach((map) => { if (map) Object.keys(map).forEach((k) => { if (k.split(':')[0] === id) delete map[k]; }); });
+  // Événement d'agenda récupéré vers cette tournée → il redevient disponible dans « Items ».
+  Object.keys(S.agendaImported || {}).forEach((eid) => { if (S.agendaImported[eid] && S.agendaImported[eid].tourId === id) delete S.agendaImported[eid]; });
+  saveSettings();
+}
 // ---------- Programmation de suivi (RDV) ----------
 // Ajout de jours en UTC (cohérent avec todayStr = UTC) → pas de décalage de date selon le fuseau.
 function addDaysStr(ymd, days) {
@@ -3733,7 +3753,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('edDate').addEventListener('change', (e) => { currentTour.date = e.target.value; });
   $('edDate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } });
   $('edCalc').addEventListener('click', calcTour);
-  $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ?')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
+  $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats et ses impayés liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(recapText(currentTour.result)); $('edStatus').className = 'status ok'; $('edStatus').textContent = 'Récap copié.'; } catch { $('edStatus').textContent = 'Copie impossible.'; } });
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
