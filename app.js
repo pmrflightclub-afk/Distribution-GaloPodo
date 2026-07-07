@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.66';
+const APP_VERSION = '1.1.67';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.67', date: '2026-07-08',
+    ajouts: [
+      'Manque à gagner plus juste : un cheval reporté puis replacé (servi à une autre date) n\'est plus compté comme une perte dans les Annulations et les Statistiques. Il reste visible, marqué « replacé ».',
+      'Accueil → Tournées dépassées : les boutons « Récupérer / Reporter / Supprimer » sont désormais empilés l\'un au-dessus de l\'autre, alignés à droite, pour ne plus écraser le titre de chaque ligne.',
+    ],
+  },
   {
     version: '1.1.66', date: '2026-07-07',
     ajouts: [
@@ -1877,8 +1884,9 @@ function renderAnnulations() {
   const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));       // section 1 : période sélectionnée
   const others = all.filter((c) => !range.has((c.date || '').slice(0, 7)));     // section 2 : toutes les autres (non supprimées)
   if ($('annulEmpty')) $('annulEmpty').style.display = all.length ? 'none' : 'block';
-  const totA = list.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), totR = list.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0);
-  if ($('annulTot')) $('annulTot').innerHTML = list.length ? `Période : annulés <b>${eur(totA)}</b> · reportés <b>${eur(totR)}</b> (manque à gagner)` : (all.length ? 'Aucune annulation dans cette période — voir « Autres annulations » ci-dessous.' : '');
+  const perte = list.filter((c) => !c.replaced); // un cheval replacé a été servi ailleurs → hors « manque à gagner »
+  const totA = perte.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), totR = perte.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0);
+  if ($('annulTot')) $('annulTot').innerHTML = list.length ? `Période : annulés <b>${eur(totA)}</b> · reportés <b>${eur(totR)}</b> (manque à gagner, replacés exclus)` : (all.length ? 'Aucune annulation dans cette période — voir « Autres annulations » ci-dessous.' : '');
   box.innerHTML = '';
   const mkItem = (c) => {
     const el = document.createElement('div'); el.className = 'list-item';
@@ -3219,7 +3227,7 @@ function renderStatsAnnul() {
   perSel.onchange = () => { saPeriodKey = perSel.value; renderStatsAnnul(); };
   const range = new Set(monthsOfRange(saType, saPeriodKey));
   const listAll = all.filter((c) => range.has((c.date || '').slice(0, 7)));
-  const list = listAll.filter((c) => !chevalCredited(c.cv));    // manque à gagner = annulations NON payées
+  const list = listAll.filter((c) => !chevalCredited(c.cv) && !c.replaced); // manque à gagner = annulations NON payées ET NON replacées (un cheval replacé a été servi ailleurs → pas une perte)
   const credited = listAll.filter((c) => chevalCredited(c.cv)); // RDV payés annulés = note de crédit (facture figée)
   if ($('saEmpty')) $('saEmpty').style.display = listAll.length ? 'none' : 'block';
   if (!listAll.length) { body.innerHTML = ''; return; }
@@ -4190,12 +4198,12 @@ function renderBlockingArrets() {
   stuck.forEach((t) => {
     const started = !!t.startedAt;
     const blk = tourFinalizeBlock(t);
-    const el = document.createElement('div'); el.className = 'list-item';
+    const el = document.createElement('div'); el.className = 'list-item stack-act';
     const acts = started
       ? '<button class="btn small primary" data-fin>💶 Finaliser</button>'
-      : '<button class="btn small primary" data-recover>♻ Récupérer</button> <button class="btn small" data-report>📅 Reporter</button> <button class="btn small danger" data-del>🗑 Supprimer</button>';
+      : '<button class="btn small primary" data-recover>♻ Récupérer</button><button class="btn small" data-report>📅 Reporter</button><button class="btn small danger" data-del>🗑 Supprimer</button>';
     const sub = started ? blk.map(esc).join('<br>') : 'Jamais démarrée — <b>Récupérer</b> (ancienne tournée : la figer en l\'état et compléter ses stats), ou reporter / supprimer.';
-    el.innerHTML = `<div class="li-main"><b>🚩 ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}${started ? '' : ' · <span class="badge">non démarrée</span>'}</b><span class="li-sub">${sub}</span></div><div class="li-act">${acts}</div>`;
+    el.innerHTML = `<div class="li-main"><b>🚩 ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}${started ? '' : ' · <span class="badge">non démarrée</span>'}</b><span class="li-sub">${sub}</span></div><div class="li-act li-act-col">${acts}</div>`;
     if (started) el.querySelector('[data-fin]').addEventListener('click', () => {
       const a = (t.arrets || [])[firstOpenArret(t)]; if (!a) { renderHome(); return; }
       if (!arretActeOK(a)) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); return; } // aucun cheval coché → ouvrir la tournée pour cocher Parage/Visite
