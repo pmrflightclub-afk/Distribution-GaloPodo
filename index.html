@@ -53,6 +53,11 @@
     </div>
     <div class="actions"><button class="btn primary block big" id="btnNewTour">➕ Créer une tournée</button></div>
     <div class="card changelog-card hidden" id="homeChangelog"></div>
+    <section class="card blocking-card hidden" id="homeBlocking">
+      <h2>⚠ Arrêts à finaliser</h2>
+      <p class="hint">Ces tournées ne peuvent pas être clôturées : des arrêts n'ont pas été finalisés (paiement à valider). Finalisez-les dans l'ordre pour débloquer la clôture.</p>
+      <div id="homeBlockingList" class="list"></div>
+    </section>
     <section class="card">
       <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
       <p class="hint">La tournée du jour puis chaque arrêt, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>

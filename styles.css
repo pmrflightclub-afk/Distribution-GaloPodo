@@ -71,6 +71,9 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .actions { margin: 4px 0 10px; }
 .actions.two { display: flex; gap: 10px; } .actions.two .btn { flex: 1; }
 .actions-col { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.blocking-card { border: 1px solid var(--warn); background: #fde68a14; }
+.blocking-card h2 { color: var(--warn); }
+.blocking-card.hidden { display: none; }
 
 /* Listes (clients, tournées) */
 .list { display: flex; flex-direction: column; gap: 8px; }

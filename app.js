@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.45';
+const APP_VERSION = '1.1.46';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.46', date: '2026-07-07',
+    ajouts: [
+      'Ordre de tournée imposé : dans « Trajet du jour », tant qu\'un arrêt n\'est pas finalisé (💶 Paiement & clôture), les boutons de l\'arrêt SUIVANT (Agir, Paiement) restent désactivés. On valide chaque arrêt avant de passer au suivant.',
+      'Clôture de tournée verrouillée : une tournée ne peut être clôturée — ni manuellement, ni automatiquement (+3 h) — que si TOUS ses arrêts sont finalisés. Sinon elle reste ouverte jusqu\'à ce que vous régliez les arrêts manquants.',
+      'Nouvelle section « ⚠ Arrêts à finaliser » au-dessus du Trajet du jour : elle apparaît quand une tournée dépassée est bloquée par des arrêts non finalisés, et propose un bouton pour finaliser directement le prochain arrêt.',
+    ],
+  },
   {
     version: '1.1.45', date: '2026-07-07',
     ajouts: [
@@ -1783,6 +1791,20 @@ function tourCloseBlock(t) {
   }));
   return out;
 }
+// Un arrêt est « finalisé » = clôturé (validatedAt posé via Paiement & clôture) ET paiement complet de tous ses clients.
+function arretFinalise(t, a) { return typeof a.validatedAt === 'number' && arretPaiementDone(t, a); }
+// Ce qui empêche de finaliser/figer une tournée : arrêts non clôturés ou paiement incomplet (dans l'ordre des arrêts).
+function tourFinalizeBlock(t) {
+  const out = [];
+  (t.arrets || []).forEach((a, i) => {
+    const lbl = (i + 1) + '. ' + (labelFor(a) || 'arrêt');
+    if (typeof a.validatedAt !== 'number') { out.push(lbl + ' : arrêt non clôturé (💶 Paiement & clôture à valider)'); return; }
+    (a.clients || []).forEach((cl) => { const iss = clientPaiementIssue(t, cl.clientId); if (iss) out.push(lbl + ' — ' + clientName(cl.clientId) + ' : ' + iss); });
+  });
+  return out;
+}
+// Index du 1ᵉʳ arrêt non finalisé (pour imposer l'ordre) ; = nb d'arrêts si tous finalisés.
+function firstOpenArret(t) { const A = t.arrets || []; for (let i = 0; i < A.length; i++) { if (!arretFinalise(t, A[i])) return i; } return A.length; }
 function openEditor() {
   const st = statusOf(currentTour); const locked = st === 'cloturee';
   reconcileTour(currentTour); // resync chevaux/clients (non clôturée)
@@ -1802,7 +1824,7 @@ function openEditor() {
   if ($('edChangeHome')) $('edChangeHome').style.display = locked ? 'none' : '';
   if ($('edChangeArrivee')) $('edChangeArrivee').style.display = locked ? 'none' : '';
   if ($('edCloseWrap')) $('edCloseWrap').style.display = locked ? 'none' : '';
-  if ($('edCloseWarn')) { const blk = locked ? [] : tourCloseBlock(currentTour); $('edCloseWarn').innerHTML = blk.length ? '🔒 Clôture bloquée — paiement à renseigner :<br>• ' + blk.map(esc).join('<br>• ') + '<br>Ouvrez l\'arrêt concerné → <b>💶 Paiement</b>.' : ''; $('edCloseWarn').classList.toggle('hidden', !blk.length); }
+  if ($('edCloseWarn')) { const blk = locked ? [] : tourFinalizeBlock(currentTour); $('edCloseWarn').innerHTML = blk.length ? '🔒 Clôture bloquée — finalisez chaque arrêt dans « Trajet du jour » (💶 Paiement & clôture) :<br>• ' + blk.map(esc).join('<br>• ') : ''; $('edCloseWarn').classList.toggle('hidden', !blk.length); }
   $('edLockBanner').classList.toggle('hidden', !locked);
   if (locked && $('edLockBanner')) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.';
   $('edAddArret').style.display = locked ? 'none' : '';
@@ -2931,7 +2953,10 @@ function autoCloseOverdueTours() {
     if (!t.startedAt || t.endedAt || t.closed) return;
     const arr = estimatedArrivalTs(t); if (arr == null) return;
     const deadline = arr + 3 * 3600 * 1000;
-    if (Date.now() > deadline) { t.endedAt = deadline; t.closed = true; t.autoClosedAt = deadline; changed = true; }
+    if (Date.now() > deadline) {
+      if (tourFinalizeBlock(t).length) return; // arrêts non finalisés → NE PAS clôturer automatiquement (l'utilisateur doit finaliser ; alerte « Arrêts à finaliser »)
+      t.endedAt = deadline; t.closed = true; t.autoClosedAt = deadline; changed = true;
+    }
   });
   if (changed) saveTournees();
 }
@@ -3583,6 +3608,31 @@ const hm = (ts) => ts ? new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digi
 // Durée à partir de MINUTES : < 1h → « 45 min » ; ≥ 1h → « 1h30 » / « 2h ». Format unique partout.
 function durMin(min) { if (min == null || isNaN(min) || min < 0) return '—'; min = Math.round(min); const h = Math.floor(min / 60), m = min % 60; if (!h) return m + ' min'; return m ? `${h}h${m < 10 ? '0' + m : m}` : `${h}h`; }
 function durHm(ms) { return (ms == null || ms < 0) ? '—' : durMin(ms / 60000); }
+// Tournées démarrées, dépassées (retour + 3 h) mais NON clôturables car des arrêts ne sont pas finalisés.
+function overdueBlockedTours() {
+  return (tournees || []).filter((t) => {
+    if (!t.startedAt || t.endedAt || t.closed) return false;
+    const arr = estimatedArrivalTs(t); if (arr == null) return false;
+    return Date.now() > arr + 3 * 3600 * 1000 && tourFinalizeBlock(t).length > 0;
+  });
+}
+// Section « Arrêts à finaliser » (au-dessus du Trajet du jour) : rend visibles les tournées bloquées + accès rapide au 1ᵉʳ arrêt à finaliser.
+function renderBlockingArrets() {
+  const card = $('homeBlocking'), list = $('homeBlockingList'); if (!card || !list) return;
+  const stuck = overdueBlockedTours();
+  card.classList.toggle('hidden', !stuck.length);
+  list.innerHTML = '';
+  stuck.forEach((t) => {
+    const blk = tourFinalizeBlock(t);
+    const el = document.createElement('div'); el.className = 'list-item';
+    el.innerHTML = `<div class="li-main"><b>🚩 ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}</b><span class="li-sub">${blk.map(esc).join('<br>')}</span></div><div class="li-act"><button class="btn small primary" data-fin>💶 Finaliser</button></div>`;
+    el.querySelector('[data-fin]').addEventListener('click', () => {
+      const a = (t.arrets || [])[firstOpenArret(t)]; if (!a) { renderHome(); return; }
+      modalPayment(t, a, renderHome, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } });
+    });
+    list.appendChild(el);
+  });
+}
 function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
   const todays = [...tournees].filter((t) => statusOf(t) === 'active').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -3615,7 +3665,9 @@ function renderHomeTrajet() {
     box.appendChild(ctrl);
     const sb = ctrl.querySelector('[data-start]'); if (sb) sb.addEventListener('click', () => { t.startedAt = Date.now(); persistTour(); renderHomeTrajet(); });
     const mins = legMinutesFor(t);
+    const firstOpen = firstOpenArret(t); // ordre imposé : on n'agit sur un arrêt que si tous les précédents sont finalisés
     (t.arrets || []).forEach((a, i) => {
+      const seqLocked = !!t.startedAt && i > firstOpen; // arrêt suivant verrouillé tant que l'arrêt courant n'est pas finalisé
       const adresse = addrStr(a.addr);
       const chNames = (a.clients || []).flatMap((cl) => (cl.chevaux || []).filter(chevalPresent).map((c) => c.nom)).filter(Boolean).join(', ');
       const hhArr = arretHeure(a); // heure de RDV de l'arrêt (1 par arrêt)
@@ -3625,12 +3677,14 @@ function renderHomeTrajet() {
       const trajet = real != null ? durMin(real) : (est != null ? durMin(est) : '—'); // SMS : réel si encodé, sinon estimé
       const trajetLbl = (est != null ? durMin(est) + ' est.' : '—') + (real != null ? ' · <b>' + durMin(real) + ' réel</b>' : '');
       const el = document.createElement('div'); el.className = 'list-item';
-      // « Paiement & clôture » : ouvre le paiement ; l'enregistrement (valide) clôture l'arrêt. Inactif tant que la tournée n'est pas démarrée.
+      // « Paiement & clôture » : ouvre le paiement ; l'enregistrement (valide) clôture l'arrêt. Inactif si tournée non démarrée OU arrêt précédent non finalisé.
       const validated = typeof a.validatedAt === 'number';
-      const clotBtn = `<button class="btn small${!t.startedAt ? '' : (validated ? ' done' : ' primary')}" data-valid${t.startedAt ? '' : ' disabled'} title="${t.startedAt ? 'Encaisser le paiement puis clôturer cet arrêt' : 'Démarrez d\'abord la tournée'}">${validated ? '✓ clôturé ' + hm(a.validatedAt) : '💶 Paiement & clôture'}</button>`;
+      const clotDis = !t.startedAt || seqLocked;
+      const clotTitle = !t.startedAt ? 'Démarrez d\'abord la tournée' : (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : 'Encaisser le paiement puis clôturer cet arrêt');
+      const clotBtn = `<button class="btn small${clotDis ? '' : (validated ? ' done' : ' primary')}" data-valid${clotDis ? ' disabled' : ''} title="${clotTitle}">${validated ? '✓ clôturé ' + hm(a.validatedAt) : '💶 Paiement & clôture'}</button>`;
       const validLbl = validated ? ' · ✅ ' + hm(a.validatedAt) : '';
       el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
-        <div class="li-act"><button class="btn small" data-agir>⚡ Agir</button> ${clotBtn}</div>`;
+        <div class="li-act"><button class="btn small" data-agir${seqLocked ? ' disabled title="Finalisez d\'abord l\'arrêt précédent"' : ''}>⚡ Agir</button> ${clotBtn}</div>`;
       // « Agir » : regroupe Waze / Route / SMS / Ticket dans une modale (évite la surcharge de boutons).
       const smsAction = async (btn) => { const msg = fillSms(smsTemplateFor(c0), smsDataFor(c0, { cheval: chNames, trajet, adresse })); try { await navigator.clipboard.writeText(msg); btn.textContent = 'SMS copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); } catch { alert(msg); } };
       const ticketAction = async (btn) => {
@@ -3640,13 +3694,13 @@ function renderHomeTrajet() {
         txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m, (t.payments || {})[cl0.clientId]) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
         try { await navigator.clipboard.writeText(txt); btn.textContent = 'Ticket copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); } catch { alert(txt); }
       };
-      el.querySelector('[data-agir]').addEventListener('click', () => modalActions('Actions — ' + (labelFor(a) || 'arrêt'), [
+      const agirBtn = el.querySelector('[data-agir]'); if (agirBtn && !seqLocked) agirBtn.addEventListener('click', () => modalActions('Actions — ' + (labelFor(a) || 'arrêt'), [
         { label: navLabel(), onClick: () => openNav(a.addr) },
         { label: 'Route (temps réel)', onClick: () => modalRouteTime(t, a, est) },
         { label: 'SMS', keepOpen: true, onClick: smsAction },
         { label: 'Ticket', keepOpen: true, onClick: ticketAction },
       ]));
-      const vb = el.querySelector('[data-valid]'); if (vb && t.startedAt) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); })); // paiement enregistré (valide) → clôture l'arrêt (heure = 1re validation)
+      const vb = el.querySelector('[data-valid]'); if (vb && t.startedAt && !seqLocked) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); })); // paiement enregistré (valide) → clôture l'arrêt (heure = 1re validation)
       box.appendChild(el);
     });
     // ----- Retour → domicile/arrivée : « Agir » (Waze + Route retour) + « Clôturer tournée » (inactif tant que non démarrée) -----
@@ -3665,7 +3719,7 @@ function renderHomeTrajet() {
         { label: navLabel(), onClick: () => openNav(retAddr) },
         { label: 'Route (temps réel du retour)', onClick: () => modalReturnTime(t, estRet, renderHomeTrajet) },
       ]));
-      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourCloseBlock(t); if (blk.length) { alert('🔒 Clôture bloquée — paiement à renseigner :\n\n• ' + blk.join('\n• ') + '\n\nOuvrez la tournée, puis 💶 Paiement sur l\'arrêt concerné.'); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); renderHome(); });
+      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourFinalizeBlock(t); if (blk.length) { alert('🔒 Clôture impossible — chaque arrêt doit être finalisé (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); renderHome(); });
       box.appendChild(rr);
     }
   });
@@ -3949,6 +4003,7 @@ function renderHome() {
   const upcoming = [...tournees].filter((t) => statusOf(t) === 'avenir').sort(byDate); // du plus proche au plus lointain
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((t) => box.appendChild(tourListItem(t, true))); };
   renderHomeChangelog();
+  renderBlockingArrets();
   renderHomeTrajet();
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
 }
@@ -4322,8 +4377,8 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('edNom')) $('edNom').addEventListener('input', (e) => { if (currentTour) { currentTour.nom = e.target.value; saveTournees(); } });
   if ($('edClose')) $('edClose').addEventListener('click', () => {
     if (!currentTour || currentTour.closed) return;
-    const blk = tourCloseBlock(currentTour);
-    if (blk.length) { alert('🔒 Clôture bloquée — paiement à renseigner :\n\n• ' + blk.join('\n• ') + '\n\nOuvrez l\'arrêt concerné (bouton 💶 Paiement), choisissez virement/liquide (+ montant si liquide).'); return; }
+    const blk = tourFinalizeBlock(currentTour);
+    if (blk.length) { alert('🔒 Clôture bloquée — finalisez chaque arrêt dans « Trajet du jour » (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; }
     if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
     currentTour.closed = true;
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
