@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.69';
+const APP_VERSION = '1.1.70';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.70', date: '2026-07-08',
+    ajouts: [
+      'Réglages → Configuration : suivi de l\'amortissement du véhicule. Nouveaux champs date d\'achat et mise en circulation, et un récap : progression (odomètre estimé ÷ durée de vie), montant amorti / reste à amortir, âge du véhicule, km/an, et usage privé cumulé.',
+    ],
+  },
   {
     version: '1.1.69', date: '2026-07-08',
     ajouts: [
@@ -1473,6 +1479,7 @@ function showReglages(sub) {
   const rb = document.querySelector('#reglagesSub .subtab[data-rsub="' + currentRsub + '"]'), rl = document.querySelector('#reglagesSub .subnav-label');
   if (rb && rl) rl.textContent = rb.textContent;
   if ($('reglagesSub')) $('reglagesSub').classList.remove('open');
+  if (currentRsub === 'config') renderAmortStats();
   if (currentRsub === 'calcul') renderCalcul();
   if (currentRsub === 'analyse') renderAnalyse();
   if (currentRsub === 'changelog') renderChangelog();
@@ -4749,6 +4756,26 @@ function renderVehiculeStatut() {
       box.appendChild(el);
     });
   }
+}
+// Stats d'amortissement (Réglages → Configuration) : progression km, montant amorti, âge, km/an, usage privé.
+function renderAmortStats() {
+  if ($('setVehAchat')) { $('setVehAchat').value = S.vehicule.dateAchat || ''; $('setVehAchat').onchange = (e) => { S.vehicule.dateAchat = e.target.value || ''; saveSettings(); renderAmortStats(); }; }
+  if ($('setVehCirc')) { $('setVehCirc').value = S.vehicule.dateMiseEnCirculation || ''; $('setVehCirc').onchange = (e) => { S.vehicule.dateMiseEnCirculation = e.target.value || ''; saveSettings(); renderAmortStats(); }; }
+  const box = $('amortStats'); if (!box) return;
+  const dv = S.amortissement.dureeVieKm || 0, achat = S.amortissement.achatHT || 0, odo = odometer();
+  if (!(dv > 0) || !(achat > 0)) { box.innerHTML = '<p class="hint">Renseignez le prix d\'achat et la durée de vie (km) ci-dessus pour voir l\'amortissement.</p>'; return; }
+  const ratio = Math.min(1, odo / dv), pct = ratio * 100;
+  const amorti = achat * ratio, reste = Math.max(0, achat - amorti);
+  const ageM = S.vehicule.dateMiseEnCirculation ? monthsBetween(S.vehicule.dateMiseEnCirculation) : (S.vehicule.dateAchat ? monthsBetween(S.vehicule.dateAchat) : null);
+  const kmAn = (ageM && ageM >= 1) ? Math.round(odo / (ageM / 12)) : null;
+  const priv = usagePriveTotal();
+  let h = `<div class="inv-line"><span>Odomètre estimé</span><span><b>${km(odo)}</b> / ${km(dv)} (${pct.toFixed(0)} %)</span></div>`;
+  h += `<div class="inv-line"><span>Amorti</span><span>${eur(amorti)} sur ${eur(achat)}</span></div>`;
+  h += `<div class="inv-line"><span>Reste à amortir</span><span><b>${eur(reste)}</b></span></div>`;
+  if (ageM != null) h += `<div class="inv-line"><span>Âge du véhicule</span><span>${durMonthsLabel(ageM)}</span></div>`;
+  if (kmAn != null) h += `<div class="inv-line"><span>Km/an (estimé)</span><span>${km(kmAn)}</span></div>`;
+  if (Math.abs(priv) >= 1) h += `<div class="inv-line"><span>Usage privé cumulé (hors tournées)</span><span>${priv < 0 ? '−' : ''}${km(Math.abs(priv))}</span></div>`;
+  box.innerHTML = h;
 }
 // Page Gestion « Statut véhicule » : historique mensuel des relevés réels + usage privé.
 function renderStatutVehiculePage() {
