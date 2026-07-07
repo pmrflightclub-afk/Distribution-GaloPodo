@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.50';
+const APP_VERSION = '1.1.51';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.51', date: '2026-07-07',
+    ajouts: [
+      'Annulation / report (2ᵉ étape) : un RDV annulé retire aussi les éventuels articles/produits liés à ce cheval de la facture. L\'annulation se répercute désormais partout — facture, stats, compta, graphiques, ticket — sans toucher aux autres clients ni au calcul de la tournée.',
+    ],
+  },
   {
     version: '1.1.50', date: '2026-07-07',
     ajouts: [
@@ -2269,12 +2275,18 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
       });
     });
   });
+  // Chevaux annulés par client (pour retirer aussi leurs articles manuels — produit non livré).
+  const cancelByClient = {};
+  rows.forEach((r) => r.clients.forEach((cl) => { if (cl.cancelledNoms && cl.cancelledNoms.length) { (cancelByClient[cl.clientId] = cancelByClient[cl.clientId] || new Set()); cl.cancelledNoms.forEach((n) => cancelByClient[cl.clientId].add(n)); } }));
   // Articles (lignes manuelles) — TVA par ligne
   (articles || []).forEach((a) => {
-    const noms = a.chevalNoms || [];
-    if (!a.impaye && !noms.length) return; // article normal : lié à ≥1 cheval ; impayé : sans cheval, quantité 1
+    const orig = a.chevalNoms || [];
+    if (!a.impaye && !orig.length) return; // article normal : lié à ≥1 cheval ; impayé : sans cheval, quantité 1
     // Quantité PAR cheval (chevalQtes id→qté) ; à défaut 1/cheval. Carte nom→qté pour la répartition dans les stats.
-    const qByNom = {}; if (!a.impaye) noms.forEach((n, idx) => { const id = (a.chevalIds || [])[idx]; qByNom[n] = Math.max(1, (a.chevalQtes && id != null && a.chevalQtes[id]) || 1); });
+    const qByNom = {}; if (!a.impaye) orig.forEach((n, idx) => { const id = (a.chevalIds || [])[idx]; qByNom[n] = Math.max(1, (a.chevalQtes && id != null && a.chevalQtes[id]) || 1); });
+    const cancelSet = cancelByClient[a.clientId];
+    const noms = (cancelSet && !a.impaye) ? orig.filter((n) => !cancelSet.has(norm(n))) : orig; // retire les chevaux annulés
+    if (!a.impaye && !noms.length) return; // toutes les cibles annulées → ligne retirée
     const qte = a.impaye ? 1 : noms.reduce((s, n) => s + (qByNom[n] || 1), 0);
     const lineHT = (a.prixHT || 0) * qte, rr = (a.tvaPct || 0) / 100;
     const m = getC(a.clientId, clientName(a.clientId));
@@ -2333,7 +2345,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), chevaux: (cl.chevaux || []).filter(chevalFait).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null })) })),
+    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter(chevalCancelled).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalFait).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null })) })),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
