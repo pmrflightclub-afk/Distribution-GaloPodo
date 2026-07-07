@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.37';
+const APP_VERSION = '1.1.38';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.38', date: '2026-07-07',
+    ajouts: [
+      'Trajet du jour : les boutons Waze / Route / SMS / Ticket de chaque arrêt sont regroupés sous un seul bouton « ⚡ Agir » (modale) — l\'écran est plus lisible.',
+      'Le bouton « Valider » est renommé « Clôture arrêt » et reste toujours visible (grisé/inactif tant que la tournée n\'est pas démarrée).',
+      'La ligne « Retour » suit le même principe : bouton « ⚡ Agir » (Waze + Route du retour) + bouton « Clôturer tournée » (inactif tant que la tournée n\'est pas démarrée).',
+    ],
+  },
   {
     version: '1.1.37', date: '2026-07-07',
     ajouts: [
@@ -3510,49 +3518,57 @@ function renderHomeTrajet() {
       const trajet = real != null ? durMin(real) : (est != null ? durMin(est) : '—'); // SMS : réel si encodé, sinon estimé
       const trajetLbl = (est != null ? durMin(est) + ' est.' : '—') + (real != null ? ' · <b>' + durMin(real) + ' réel</b>' : '');
       const el = document.createElement('div'); el.className = 'list-item';
-      // Nom du client d'abord, adresse en dessous.
-      // Bouton « Valider » (marque la fin de visite / départ) — visible seulement après « Démarrer ».
-      const validBtn = t.startedAt ? (typeof a.validatedAt === 'number' ? ` <button class="btn small" data-valid title="Re-valider">✓ ${hm(a.validatedAt)}</button>` : ' <button class="btn small primary" data-valid>Valider</button>') : '';
-      const validLbl = (typeof a.validatedAt === 'number') ? ' · ✅ ' + hm(a.validatedAt) : '';
+      // « Clôture arrêt » (ex-« Valider ») : TOUJOURS visible, inactif tant que la tournée n'est pas démarrée.
+      const validated = typeof a.validatedAt === 'number';
+      const clotBtn = `<button class="btn small${!t.startedAt ? '' : (validated ? ' done' : ' primary')}" data-valid${t.startedAt ? '' : ' disabled'} title="${t.startedAt ? 'Marque la fin de visite / départ' : 'Démarrez d\'abord la tournée'}">${validated ? '✓ ' + hm(a.validatedAt) : 'Clôture arrêt'}</button>`;
+      const validLbl = validated ? ' · ✅ ' + hm(a.validatedAt) : '';
       el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
-        <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button>${validBtn} <button class="btn small" data-sms>SMS</button> <button class="btn small" data-ticket>Ticket</button></div>`;
-      el.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
-      el.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(t, a, est));
-      const vb = el.querySelector('[data-valid]'); if (vb) vb.addEventListener('click', () => { a.validatedAt = Date.now(); persistTour(); renderHomeTrajet(); modalPayment(t, a, renderHomeTrajet); });
-      el.querySelector('[data-sms]').addEventListener('click', async () => {
-        const msg = fillSms(smsTemplateFor(c0), smsDataFor(c0, { cheval: chNames, trajet, adresse }));
-        const btn = el.querySelector('[data-sms]');
-        try { await navigator.clipboard.writeText(msg); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); }
-        catch { alert(msg); }
-      });
-      // Ticket = temps trajet (estimé + réel) + récap de la tournée + détail complet de la facture de CE client.
-      el.querySelector('[data-ticket]').addEventListener('click', async () => {
-        const btn = el.querySelector('[data-ticket]');
+        <div class="li-act"><button class="btn small" data-agir>⚡ Agir</button> ${clotBtn}</div>`;
+      // « Agir » : regroupe Waze / Route / SMS / Ticket dans une modale (évite la surcharge de boutons).
+      const smsAction = async (btn) => { const msg = fillSms(smsTemplateFor(c0), smsDataFor(c0, { cheval: chNames, trajet, adresse })); try { await navigator.clipboard.writeText(msg); btn.textContent = 'SMS copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); } catch { alert(msg); } };
+      const ticketAction = async (btn) => {
         const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
         let txt = `Trajet vers ${adresse}\n  Estimé : ${est != null ? durMin(est) : '—'} · Réel : ${real != null ? durMin(real) : 'non renseigné'}\n\n`;
         txt += recapText(t.result, t);
         txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m, (t.payments || {})[cl0.clientId]) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
-        try { await navigator.clipboard.writeText(txt); btn.textContent = 'Copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); }
-        catch { alert(txt); }
-      });
+        try { await navigator.clipboard.writeText(txt); btn.textContent = 'Ticket copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); } catch { alert(txt); }
+      };
+      el.querySelector('[data-agir]').addEventListener('click', () => modalActions('Actions — ' + (labelFor(a) || 'arrêt'), [
+        { label: navLabel(), onClick: () => openNav(a.addr) },
+        { label: 'Route (temps réel)', onClick: () => modalRouteTime(t, a, est) },
+        { label: 'SMS', keepOpen: true, onClick: smsAction },
+        { label: 'Ticket', keepOpen: true, onClick: ticketAction },
+      ]));
+      const vb = el.querySelector('[data-valid]'); if (vb && t.startedAt) vb.addEventListener('click', () => { a.validatedAt = Date.now(); persistTour(); renderHomeTrajet(); modalPayment(t, a, renderHomeTrajet); });
       box.appendChild(el);
     });
-    // ----- Retour → domicile/arrivée : Waze + Route (temps réel) + Clôturer (après « Démarrer ») -----
-    if (t.startedAt) {
+    // ----- Retour → domicile/arrivée : « Agir » (Waze + Route retour) + « Clôturer tournée » (inactif tant que non démarrée) -----
+    {
+      const started = !!t.startedAt;
       const retAddr = returnAddrOf(t);
       const R = t.result; const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
       const estRet = (R && R.kmLastHome != null) ? Math.round(R.kmLastHome * mpk) : null;
       const realRet = (typeof t.returnRealMin === 'number') ? t.returnRealMin : null;
       const retLbl = (estRet != null ? durMin(estRet) + ' est.' : '—') + (realRet != null ? ' · <b>' + durMin(realRet) + ' réel</b>' : '') + (t.endedAt ? ' · ✅ ' + hm(t.endedAt) : '');
       const rr = document.createElement('div'); rr.className = 'list-item';
+      const closeBtn = t.endedAt ? '<button class="btn small done" disabled>✅ Clôturée</button>' : ` <button class="btn small${started ? ' primary' : ''}" data-close${started ? '' : ' disabled'} title="${started ? 'Clôture la tournée (figée)' : 'Démarrez d\'abord la tournée'}">Clôturer tournée</button>`;
       rr.innerHTML = `<div class="li-main"><b>🏁 Retour</b><span class="li-sub">📍 ${esc(addrStr(retAddr)) || 'domicile'} · 🕒 ${retLbl}</span></div>
-        <div class="li-act"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small" data-route>Route</button>${t.endedAt ? '' : ' <button class="btn small primary" data-close>Clôturer</button>'}</div>`;
-      rr.querySelector('[data-waze]').addEventListener('click', () => openNav(retAddr));
-      rr.querySelector('[data-route]').addEventListener('click', () => modalReturnTime(t, estRet, renderHomeTrajet));
-      const cb = rr.querySelector('[data-close]'); if (cb) cb.addEventListener('click', () => { const blk = tourCloseBlock(t); if (blk.length) { alert('🔒 Clôture bloquée — paiement à renseigner :\n\n• ' + blk.join('\n• ') + '\n\nOuvrez la tournée, puis 💶 Paiement sur l\'arrêt concerné.'); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); renderHome(); });
+        <div class="li-act"><button class="btn small" data-agir>⚡ Agir</button>${closeBtn}</div>`;
+      rr.querySelector('[data-agir]').addEventListener('click', () => modalActions('Retour', [
+        { label: navLabel(), onClick: () => openNav(retAddr) },
+        { label: 'Route (temps réel du retour)', onClick: () => modalReturnTime(t, estRet, renderHomeTrajet) },
+      ]));
+      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourCloseBlock(t); if (blk.length) { alert('🔒 Clôture bloquée — paiement à renseigner :\n\n• ' + blk.join('\n• ') + '\n\nOuvrez la tournée, puis 💶 Paiement sur l\'arrêt concerné.'); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); renderHome(); });
       box.appendChild(rr);
     }
   });
+}
+// Modale d'actions génériques (« Agir ») : liste de boutons. keepOpen = ne ferme pas la modale (feedback copie).
+function modalActions(title, actions) {
+  openModal(`<div class="modal-head"><b>${esc(title)}</b><button class="x" id="mX">✕</button></div>
+    <div class="actions-col">${actions.map((a, idx) => `<button class="btn block" data-ai="${idx}">${a.label}</button>`).join('')}</div>`);
+  $('mX').addEventListener('click', closeModal);
+  actions.forEach((a, idx) => { const b = document.querySelector(`[data-ai="${idx}"]`); if (b) b.addEventListener('click', () => { if (a.keepOpen) a.onClick(b); else { closeModal(); a.onClick(b); } }); });
 }
 // Encodage du temps de trajet RÉEL d'un arrêt (relevé sur Waze) — repris dans SMS / récap / ticket / stats.
 // `tour` peut être l'objet stocké (Trajet du jour) ou un clone en édition (éditeur) → on réécrit dans `tournees` par id.
