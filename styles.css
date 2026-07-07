@@ -345,7 +345,9 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 /* Barre Waze / Route (temps réel) par arrêt */
 .a-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .a-nav-t { font-size: .78rem; color: var(--muted); }
-.a-nav-b { flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* Boutons de l'arrêt : occupent toute la largeur disponible et RETOURNENT À LA LIGNE (jamais de débordement hors du cadre). */
+.a-nav-b { flex: 1 1 100%; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.a-nav-b > .btn { flex: 0 1 auto; min-width: 0; }
 .a-heure { display: inline-flex; align-items: center; gap: 3px; font-size: .82rem; border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
 .a-heure input[type=time] { width: 80px; border: 0; padding: 2px; background: transparent; }
 .a-heure.done { border-color: var(--ok, #2e9e5b); background: color-mix(in srgb, var(--ok, #2e9e5b) 12%, transparent); }

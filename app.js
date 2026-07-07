@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.39';
+const APP_VERSION = '1.1.40';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.40', date: '2026-07-07',
+    ajouts: [
+      'Correction : la répartition de la facture se met à jour immédiatement quand on modifie ou supprime une réduction (champ « Réduction articles » du client, ou case « Remise » d\'un article). Si la géométrie de la tournée n\'était pas encore prête, un recalcul complet est déclenché automatiquement.',
+      'Correction d\'affichage : dans un arrêt, les boutons (heure, Waze, Route, RDV, Paiement) reviennent proprement à la ligne et ne débordent plus à droite, hors du cadre de la section.',
+    ],
+  },
   {
     version: '1.1.39', date: '2026-07-07',
     ajouts: [
@@ -2183,7 +2190,7 @@ function persistCurrentTour() {
 // Recalcul ARGENT uniquement (types/tarifs/TVA/seuil/répartition) — instantané, réutilise la géométrie.
 function recomputeMoney() {
   const R = currentTour && currentTour.result;
-  if (!R || !R.rows || R.rows.length !== currentTour.arrets.length) return; // géométrie absente/périmée
+  if (!R || !R.rows || R.rows.length !== currentTour.arrets.length) { if (currentTour && currentTour.arrets && currentTour.arrets.length) scheduleGeoRecalc(); return; } // géométrie absente/périmée → recalcul complet différé (la réduction/l'article sera alors reflété)
   const rows = currentTour.arrets.map((a, i) => rowFromArret(a, R.rows[i]));
   const prov = (R.providerMin != null ? R.providerMin : R.totalMin); // durée brute du service de carte
   const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 50));
