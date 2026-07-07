@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.67';
+const APP_VERSION = '1.1.68';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.68', date: '2026-07-08',
+    ajouts: [
+      'Frais véhicule : chaque frais a maintenant un champ « Date » (achat / installation), en plus du « Km à l\'achat ».',
+      'Un frais exceptionnel épuisé devient inactif (grisé) et sort automatiquement de la base véhicule au km — le prix unitaire HT/TTC en haut de page se met à jour. Bouton « ♻ Renouveler » pour repartir sur un nouveau cycle (nouvelle date + km actuel), ou créez-en un nouveau.',
+    ],
+  },
   {
     version: '1.1.67', date: '2026-07-08',
     ajouts: [
@@ -3767,21 +3774,24 @@ function renderFraisVehicule() {
   $('fraisEmpty').style.display = S.frais.length ? 'none' : 'block';
   S.frais.forEach((f, i) => {
     const parcouru = odo - (f.kmDebut || 0);
+    const epuise = f.nature === 'exceptionnel' && !fraisActif(f); // épuisé → inactif : ne contribue plus à la base véhicule
     const jauge = f.nature === 'recurrent'
       ? `récurrent · ${km(Math.max(0, parcouru))} roulés / ${km(f.kmPrevus)} avant échéance`
-      : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, f.kmPrevus - parcouru))}` : 'exceptionnel · épuisé ✔');
-    const el = document.createElement('div'); el.className = 'edit-row'; el.dataset.idx = i;
+      : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, f.kmPrevus - parcouru))}` : 'exceptionnel · épuisé ✔ — inactif (retiré de la base véhicule)');
+    const el = document.createElement('div'); el.className = 'edit-row' + (epuise ? ' frais-off' : ''); el.dataset.idx = i;
     el.innerHTML = `<div class="er-top"><span class="drag-h">⠿</span>
         <input class="grow er-title" data-k="poste" value="${esc(f.poste)}" placeholder="Poste (entretien, assurance…)"/>
         <button class="a-del" data-del title="Supprimer">✕</button></div>
       <div class="er-grid">
         <label>Nature<select data-k="nature"><option value="recurrent">Récurrent</option><option value="exceptionnel">Exceptionnel</option></select></label>
+        <label>Date<input data-k="date" type="date" value="${f.date || ''}"/></label>
         <label>Montant<input data-k="montantHT" type="number" step="1" min="0" value="${f.montantHT || ''}"/></label>
         <label>Km prévus<input data-k="kmPrevus" type="number" step="1000" min="0" value="${f.kmPrevus || ''}"/></label>
         <label>Km à l'achat<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>
         <label>Contribution<input data-ro="contrib" readonly/></label>
       </div>
-      <p class="hint er-jauge">${jauge}</p>`;
+      <p class="hint er-jauge">${jauge}</p>
+      ${epuise ? '<div class="er-renew"><button class="btn small" data-renew>♻ Renouveler (nouvelle date + km actuel)</button></div>' : ''}`;
     el.querySelector('[data-k="nature"]').value = f.nature;
     const ro = el.querySelector('[data-ro="contrib"]');
     const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]'), kmDebEl = el.querySelector('[data-k="kmDebut"]');
@@ -3791,6 +3801,8 @@ function renderFraisVehicule() {
     wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; }, after: () => { saveSettings(); const p = el.querySelector('.er-jauge'); const par = odometer() - (f.kmDebut || 0); if (p) p.textContent = f.nature === 'recurrent' ? `récurrent · ${km(Math.max(0, par))} roulés / ${km(f.kmPrevus)} avant échéance` : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, f.kmPrevus - par))}` : 'exceptionnel · épuisé ✔'); } });
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
+    el.querySelector('[data-k="date"]').addEventListener('change', (e) => { f.date = e.target.value || ''; saveSettings(); });
+    const rnw = el.querySelector('[data-renew]'); if (rnw) rnw.addEventListener('click', () => { f.date = todayStr(); f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); }); // réactive le frais : nouveau cycle à partir du km actuel
     el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; if (f.nature === 'exceptionnel' && !f.kmDebut) f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); });
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== f.id); saveSettings(); renderFraisVehicule(); });
     box.appendChild(el);
@@ -3804,9 +3816,10 @@ function renderArticlesPage() {
   renderArticlesCat();
 }
 function modalFrais(existing) {
-  const w = existing ? Object.assign({}, existing) : { id: uid(), poste: '', nature: 'recurrent', montantHT: 0, kmPrevus: 0, kmDebut: odometer() };
+  const w = existing ? Object.assign({}, existing) : { id: uid(), poste: '', nature: 'recurrent', montantHT: 0, kmPrevus: 0, kmDebut: odometer(), date: todayStr() };
   openModal(`<div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} frais véhicule</b><button class="x" id="mX">✕</button></div>
     <label>Poste<input type="text" id="fPoste" value="${esc(w.poste)}" placeholder="Entretien annuel, assurance, réparation…" /></label>
+    <label>Date (achat / installation)<input type="date" id="fDate" value="${w.date || ''}" /></label>
     <label>Nature<select id="fNature">
       <option value="recurrent">Récurrent (facture annuelle : entretien, assurance…)</option>
       <option value="exceptionnel">Exceptionnel (réparation ponctuelle…)</option>
@@ -3821,7 +3834,7 @@ function modalFrais(existing) {
   $('mX').addEventListener('click', closeModal);
   if (existing) $('fDel').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderFraisVehicule(); });
   $('fOk').addEventListener('click', () => {
-    w.poste = $('fPoste').value.trim() || 'Frais'; w.nature = $('fNature').value;
+    w.poste = $('fPoste').value.trim() || 'Frais'; w.nature = $('fNature').value; w.date = $('fDate').value || '';
     w.montantHT = parseFloat($('fMontant').value) || 0; w.kmPrevus = parseFloat($('fKm').value) || 0;
     const i = S.frais.findIndex((x) => x.id === w.id); if (i >= 0) S.frais[i] = w; else S.frais.push(w);
     saveSettings(); closeModal(); renderFraisVehicule();
@@ -5058,7 +5071,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   if ($('btnRefreshTours')) $('btnRefreshTours').addEventListener('click', refreshActiveTours);
   $('btnVehicule').addEventListener('click', modalVehicule);
-  $('btnAddFrais').addEventListener('click', () => { S.frais.push({ id: uid(), poste: '', nature: 'recurrent', montantHT: 0, kmPrevus: 0, kmDebut: odometer() }); saveSettings(); renderFraisVehicule(); });
+  $('btnAddFrais').addEventListener('click', () => { S.frais.push({ id: uid(), poste: '', nature: 'recurrent', montantHT: 0, kmPrevus: 0, kmDebut: odometer(), date: todayStr() }); saveSettings(); renderFraisVehicule(); });
   $('btnAddMateriel').addEventListener('click', () => { S.materiel.push({ id: uid(), libelle: '', montantHT: 0, nbChevaux: 1 }); saveSettings(); renderMateriel(); });
   $('btnNewArticleCat').addEventListener('click', () => { S.articlesCatalogue.push({ id: uid(), libelle: '', prixHT: 0, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std }); saveSettings(); renderArticlesCat(); });
   if ($('analyticDragBtn')) $('analyticDragBtn').addEventListener('click', () => toggleTileDrag('analyticOrder', $('analyticTiles'), $('analyticDragBtn')));
