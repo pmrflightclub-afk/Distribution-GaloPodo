@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.52';
+const APP_VERSION = '1.1.53';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.53', date: '2026-07-07',
+    ajouts: [
+      'Statistiques : nouveau sous-onglet « Annulations » — manque à gagner par client et par cheval (détaillé), comptage annulés / reportés et par motif (client / pro), graphiques par mois et répartition, avec le filtre Mois / Trimestre / Semestre / Année.',
+    ],
+  },
   {
     version: '1.1.52', date: '2026-07-07',
     ajouts: [
@@ -2886,6 +2892,7 @@ function renderStatsSub(sub) {
   else if (sub === 'cheval') renderFinanceCheval();
   else if (sub === 'client') renderFinance();
   else if (sub === 'graph') renderGraphiques();
+  else if (sub === 'annul') renderStatsAnnul();
   else renderVehiculePanel();
 }
 // Point d'entrée depuis l'onglet Stats : affiche le sous-onglet courant.
@@ -3017,6 +3024,43 @@ function renderGraphiques() {
     + gBlock('Nombre de tournées', gBars(data, (d) => d.tours, (v) => String(Math.round(v)), '#8a63c4', showVals))
     + gBlock('Encaissements par mode', gStacked(data, GRAPH_ENC) + gLegend(GRAPH_ENC))
     + gBlock('Répartition des encaissements (période)', gDonut(GRAPH_ENC.map((s) => ({ label: s.label, value: encTot[s.key], color: s.color }))));
+}
+// Sous-onglet Stats « Annulations » : manque à gagner par client/cheval, comptage par statut/motif, graphiques — filtré par période.
+let saType = 'mois', saPeriodKey = null;
+function renderStatsAnnul() {
+  const seg = $('saTypeSeg'), perSel = $('saPeriod'), body = $('saBody'); if (!seg || !perSel || !body) return;
+  seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._saw) { b._saw = true; b.addEventListener('click', () => { saType = b.dataset.satype; saPeriodKey = null; renderStatsAnnul(); }); } b.classList.toggle('on', b.dataset.satype === saType); });
+  const all = allCancellations();
+  const months = [...new Set(all.map((c) => (c.date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+  const opts = periodOptionsFrom(saType, months);
+  if (!opts.length) { perSel.innerHTML = ''; body.innerHTML = ''; if ($('saEmpty')) $('saEmpty').style.display = 'block'; return; }
+  if (!opts.some((o) => o.key === saPeriodKey)) saPeriodKey = opts[0].key;
+  perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === saPeriodKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+  perSel.onchange = () => { saPeriodKey = perSel.value; renderStatsAnnul(); };
+  const range = new Set(monthsOfRange(saType, saPeriodKey));
+  const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));
+  if ($('saEmpty')) $('saEmpty').style.display = list.length ? 'none' : 'block';
+  if (!list.length) { body.innerHTML = ''; return; }
+  const nA = list.filter((c) => c.status === 'annule').length, nR = list.filter((c) => c.status === 'reporte').length;
+  const nCl = list.filter((c) => c.reason === 'client').length, nPr = list.filter((c) => c.reason === 'pro').length;
+  const totTtc = list.reduce((s, c) => s + c.ttc, 0);
+  let html = `<div class="tiles tiles-3" style="margin:8px 0">
+    <div class="tile"><span class="t-label">Annulés</span><span class="t-val">${nA}</span></div>
+    <div class="tile"><span class="t-label">Reportés</span><span class="t-val">${nR}</span></div>
+    <div class="tile strong"><span class="t-label">Manque à gagner</span><span class="t-val">${eur(totTtc)}</span></div>
+    <div class="tile"><span class="t-label">Motif client</span><span class="t-val">${nCl}</span></div>
+    <div class="tile"><span class="t-label">Motif pro</span><span class="t-val">${nPr}</span></div></div>`;
+  const byClient = {}; list.forEach((c) => { const k = c.clientId; (byClient[k] = byClient[k] || { nom: c.clientNom, ttc: 0, items: [] }).ttc += c.ttc; byClient[k].items.push(c); });
+  html += '<h3 class="rsub">Manque à gagner par client</h3>';
+  Object.values(byClient).sort((a, b) => b.ttc - a.ttc).forEach((cl) => { html += `<div class="inv-client"><div class="inv-head"><span>${esc(cl.nom)}</span><span class="inv-amt">${eur(cl.ttc)}</span></div>` + cl.items.map((c) => `<div class="fin-cheval"><span>🐴 ${esc(c.cheval)} · ${esc(fmtDateFr(c.date))} · ${c.status === 'reporte' ? 'reporté' : 'annulé'} (${c.reason === 'pro' ? 'pro' : 'client'})</span><span>${eur(c.ttc)}</span></div>`).join('') + '</div>'; });
+  const byCheval = {}; list.forEach((c) => { const k = c.clientId + '|' + norm(c.cheval); (byCheval[k] = byCheval[k] || { nom: c.cheval, client: c.clientNom, ttc: 0, items: [] }).ttc += c.ttc; byCheval[k].items.push(c); });
+  html += '<h3 class="rsub">Manque à gagner par cheval (détail)</h3>';
+  Object.values(byCheval).sort((a, b) => b.ttc - a.ttc).forEach((cv) => { html += `<div class="inv-client"><div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.ttc)}</span></div>` + cv.items.map((c) => chevalWouldBeLines(c.cv).map((l) => `<div class="fin-detail"><span>${esc(fmtDateFr(c.date))} · ${esc(l.libelle)}</span><span>${eur(l.ttc)}</span></div>`).join('')).join('') + '</div>'; });
+  const gMonths = [...new Set(list.map((c) => (c.date || '').slice(0, 7)))].sort();
+  const barItems = gMonths.map((m) => ({ label: shortMonthLabel(m), v: list.filter((c) => (c.date || '').slice(0, 7) === m).reduce((s, c) => s + c.ttc, 0) }));
+  html += gBlock('Manque à gagner par mois', gBars(barItems, (d) => d.v, (v) => eur(v), '#e0912f', barItems.length <= 6));
+  html += gBlock('Répartition annulés / reportés', gDonut([{ label: 'Annulés', value: list.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), color: '#c0453b' }, { label: 'Reportés', value: list.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0), color: '#3b82c4' }]));
+  body.innerHTML = html;
 }
 // Stats : temps de trajet estimé (tournée) vs réel encodé (par arrêt), avec arrêts manquants signalés.
 function renderTrajetTemps() {

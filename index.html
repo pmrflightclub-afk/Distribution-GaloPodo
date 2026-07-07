@@ -425,6 +425,7 @@
         <button class="subtab" data-ssub="cheval">Analyse cheval</button>
         <button class="subtab" data-ssub="client">Analyse client</button>
         <button class="subtab" data-ssub="graph">Graphiques</button>
+        <button class="subtab" data-ssub="annul">Annulations</button>
       </div>
     </nav>
 
@@ -498,6 +499,21 @@
         <label>Période<select id="graphPeriod"></select></label>
         <div id="graphBody"></div>
         <p class="empty" id="graphEmpty">Aucune tournée calculée sur cette période.</p>
+      </section>
+    </div>
+
+    <div id="ssub-annul" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Statistiques d'annulation</h2></div>
+        <div class="seg" id="saTypeSeg">
+          <button class="seg-btn on" data-satype="mois">Mois</button>
+          <button class="seg-btn" data-satype="trimestre">Trimestre</button>
+          <button class="seg-btn" data-satype="semestre">Semestre</button>
+          <button class="seg-btn" data-satype="annee">Année</button>
+        </div>
+        <label>Période<select id="saPeriod"></select></label>
+        <div id="saBody"></div>
+        <p class="empty" id="saEmpty">Aucune annulation sur cette période.</p>
       </section>
     </div>
   </main>
