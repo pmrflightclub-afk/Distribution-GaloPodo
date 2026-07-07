@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.55';
+const APP_VERSION = '1.1.56';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.56', date: '2026-07-07',
+    ajouts: [
+      'Sauvegarde / transfert enrichi : bouton « ⬇️ Télécharger » (fichier daté), « 🏭 Retour réglages d\'usine » (repart à zéro après export), et import « 📥 Données seules » (récupère tournées + clients + annulations + notes de crédit en gardant vos réglages actuels — idéal pour repartir sur une base saine).',
+      'Les tournées importées sont « à revalider » : ouvrez-les une par une (même clôturées) pour vérifier chaque arrêt, puis « ✓ Valider » pour recalculer et figer. Vous contrôlez chaque encodage.',
+    ],
+  },
   {
     version: '1.1.55', date: '2026-07-07',
     ajouts: [
@@ -1997,7 +2004,7 @@ function tourFinalizeBlock(t) {
 // Index du 1ᵉʳ arrêt non finalisé (pour imposer l'ordre) ; = nb d'arrêts si tous finalisés.
 function firstOpenArret(t) { const A = t.arrets || []; for (let i = 0; i < A.length; i++) { if (!arretFinalise(t, A[i])) return i; } return A.length; }
 function openEditor() {
-  const st = statusOf(currentTour); const locked = st === 'cloturee';
+  const st = statusOf(currentTour); const locked = st === 'cloturee' && !currentTour._review; // tournée importée « à revalider » → éditable même clôturée
   reconcileTour(currentTour); // resync chevaux/clients (non clôturée)
   const dateLbl = currentTour.date ? fmtDateFr(currentTour.date) : '';
   $('edTitle').textContent = currentTour.result ? ('Tournée — ' + dateLbl + (currentTour.nom ? ' : ' + currentTour.nom : '')) : 'Nouvelle tournée';
@@ -2016,8 +2023,10 @@ function openEditor() {
   if ($('edChangeArrivee')) $('edChangeArrivee').style.display = locked ? 'none' : '';
   if ($('edCloseWrap')) $('edCloseWrap').style.display = locked ? 'none' : '';
   if ($('edCloseWarn')) { const blk = locked ? [] : tourFinalizeBlock(currentTour); $('edCloseWarn').innerHTML = blk.length ? '🔒 Clôture bloquée — finalisez chaque arrêt dans « Trajet du jour » (💶 Paiement & clôture) :<br>• ' + blk.map(esc).join('<br>• ') : ''; $('edCloseWarn').classList.toggle('hidden', !blk.length); }
-  $('edLockBanner').classList.toggle('hidden', !locked);
-  if (locked && $('edLockBanner')) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.';
+  const review = !!currentTour._review;
+  $('edLockBanner').classList.toggle('hidden', !locked && !review);
+  if ($('edLockBanner')) { if (review) $('edLockBanner').textContent = '📥 Tournée importée « à revalider » — vérifiez chaque arrêt puis « ✓ Valider » ci-dessous pour recalculer et figer.'; else if (locked) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.'; }
+  if ($('edRevalider')) $('edRevalider').style.display = review ? '' : 'none';
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
   $('edDelete').style.display = '';
@@ -4622,16 +4631,47 @@ function bindSettings() {
 }
 function toggleKeyRow() { $('keyRow').style.display = S.provider === 'geoapify' ? 'block' : 'none'; }
 // Sauvegarde / restauration : exporte réglages + articles + frais + données, ou importe une sauvegarde.
+// Marque les tournées importées « à revalider » (_review) → éditables même clôturées jusqu'à re-validation.
+function markToursReview(tours) { (tours || []).forEach((t) => { t._review = true; }); return tours; }
+function factoryReset() {
+  if (!confirm('RETOUR RÉGLAGES D\'USINE : efface TOUTES vos données et réglages de cet appareil et repart à zéro. Faites d\'abord un export/sauvegarde ! Continuer ?')) return;
+  if (!confirm('Êtes-vous vraiment sûr ? Cette action est irréversible.')) return;
+  try { localStorage.clear(); } catch { /* ignore */ }
+  location.reload();
+}
 function modalBackup() {
   const dump = JSON.stringify(exportSnapshot(), null, 2);
   openModal(`<div class="modal-head"><b>💾 Sauvegarde / transfert</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Copiez ce texte pour sauvegarder. Pour transférer sur un autre appareil : collez la sauvegarde de l'autre appareil, puis <b>« Importer (fusion) »</b> — les données sont <b>fusionnées</b> (le plus récent gagne, les suppressions sont respectées), <b>sans écraser</b>.</p>
+    <p class="hint">Sauvegardez (fichier ou copie), transférez, ou repartez sur une base saine. La sauvegarde contient <b>tout</b> : réglages, Gestion, clients, tournées, annulations et notes de crédit.</p>
     <textarea id="bkText" class="bk-area" spellcheck="false">${esc(dump)}</textarea>
-    <div class="actions two"><button class="btn" id="bkCopy">📋 Copier</button><button class="btn primary" id="bkMerge">🔀 Importer (fusion)</button></div>
-    <div class="actions"><button class="btn danger block" id="bkImport">⚠ Importer (remplace tout)</button></div>
-    <p class="hint">« Fusion » = recommandé pour synchroniser deux appareils. « Remplace tout » = restauration complète (écrase les données locales).</p>
+    <div class="actions two"><button class="btn" id="bkDl">⬇️ Télécharger</button><button class="btn" id="bkCopy">📋 Copier</button></div>
+    <h3 class="rsub">Importer</h3>
+    <div class="actions two"><button class="btn primary" id="bkMerge">🔀 Fusion</button><button class="btn" id="bkDataOnly">📥 Données seules</button></div>
+    <div class="actions"><button class="btn danger block" id="bkImport">⚠ Remplace tout</button></div>
+    <p class="hint">« Fusion » = synchroniser 2 appareils (le plus récent gagne, sans écraser). « Données seules » = importe tournées + clients + annulations + notes de crédit en <b>gardant vos réglages actuels</b> (idéal après un retour usine). « Remplace tout » = restauration complète. Les tournées importées sont <b>« à revalider »</b> (ouvrez-les une par une pour vérifier chaque arrêt, même clôturées).</p>
+    <h3 class="rsub">Base saine</h3>
+    <div class="actions"><button class="btn danger block" id="bkFactory">🏭 Retour réglages d'usine</button></div>
+    <p class="hint">Efface tout et repart des réglages d'usine. Faites un export avant !</p>
     <p class="status" id="bkStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
+  $('bkDl').addEventListener('click', () => downloadSnapshot());
+  $('bkFactory').addEventListener('click', factoryReset);
+  $('bkDataOnly').addEventListener('click', () => {
+    if (!confirm('Importer les tournées + clients + annulations + notes de crédit, en GARDANT vos réglages actuels ? Les tournées seront « à revalider ».')) return;
+    try {
+      const o = JSON.parse($('bkText').value);
+      if (!o.tours && Array.isArray(o.tournees)) o.tours = o.tournees;
+      if (!Array.isArray(o.clients) || !Array.isArray(o.tours)) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'Format non reconnu (clients/tours attendus).'; return; }
+      LS.set('ftr.clients', o.clients);
+      if (o.settings && Array.isArray(o.settings.notesCredit)) { S.notesCredit = o.settings.notesCredit; LS.set('ftr.settings', S); } // récupère les notes de crédit (financier), garde le reste des réglages
+      const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
+      const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
+      const tours = markToursReview(o.tours);
+      LS.set('ftr.tournees', tours.filter((t) => !isArch(t))); LS.set('ftr.archive', tours.filter(isArch));
+      $('bkStatus').className = 'status ok'; $('bkStatus').textContent = 'Données importées ✔ (réglages conservés) — Rechargement…';
+      setTimeout(() => location.reload(), 800);
+    } catch (e) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'JSON invalide : ' + e.message; }
+  });
   $('bkCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('bkText').value); $('bkStatus').className = 'status ok'; $('bkStatus').textContent = 'Copié dans le presse-papier.'; } catch { $('bkText').select(); document.execCommand && document.execCommand('copy'); $('bkStatus').textContent = 'Sélectionné — Ctrl+C pour copier.'; } });
   $('bkMerge').addEventListener('click', () => {
     try {
@@ -4650,8 +4690,9 @@ function modalBackup() {
       const o = JSON.parse($('bkText').value);
       if (o.settings && typeof o.settings === 'object') LS.set('ftr.settings', o.settings);
       if (Array.isArray(o.clients)) LS.set('ftr.clients', o.clients);
-      const tours = Array.isArray(o.tours) ? o.tours : (Array.isArray(o.tournees) ? o.tournees : null);
-      if (tours) {
+      const tours0 = Array.isArray(o.tours) ? o.tours : (Array.isArray(o.tournees) ? o.tournees : null);
+      if (tours0) {
+        const tours = markToursReview(tours0);
         const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
         const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
         LS.set('ftr.tournees', tours.filter((t) => !isArch(t)));
@@ -4806,6 +4847,13 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
   if ($('edNom')) $('edNom').addEventListener('input', (e) => { if (currentTour) { currentTour.nom = e.target.value; saveTournees(); } });
+  if ($('edRevalider')) $('edRevalider').addEventListener('click', () => {
+    if (!currentTour || !currentTour._review) return;
+    delete currentTour._review; // fin de la révision : la tournée reprend son statut normal (figée si clôturée)
+    persistCurrentTour();
+    if (currentTour.arrets && currentTour.arrets.length) calcTour(true); // recalcul complet avec les réglages actuels
+    openEditor();
+  });
   if ($('edClose')) $('edClose').addEventListener('click', () => {
     if (!currentTour || currentTour.closed) return;
     const blk = tourFinalizeBlock(currentTour);
