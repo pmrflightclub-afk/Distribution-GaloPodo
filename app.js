@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.40';
+const APP_VERSION = '1.1.41';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.41', date: '2026-07-07',
+    ajouts: [
+      'Nouveau bouton « ⬇️ Mettre à jour l\'application » dans « Déclarer un événement » (en dernier) : il cherche une version plus récente publiée et met l\'app à jour à la demande. Si vous avez déjà la dernière, un « Forcer le rechargement » est proposé. Vos données sont conservées (seul le cache de l\'app est rafraîchi).',
+      'Dans un arrêt de tournée, le bouton « 📅 RDV » est déplacé après le bouton « 💶 Paiement ».',
+    ],
+  },
   {
     version: '1.1.40', date: '2026-07-07',
     ajouts: [
@@ -310,21 +317,50 @@ function isNewerVersion(a, b) {
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const x = pa[i] || 0, y = pb[i] || 0; if (x > y) return true; if (x < y) return false; }
   return false;
 }
+// Purge le cache applicatif (Service Worker + Cache Storage) puis recharge → récupère les fichiers à jour.
+// N'EFFACE PAS localStorage : toutes les données (clients, tournées, réglages, agenda) sont conservées.
+async function purgeAndReload() {
+  try {
+    if ('serviceWorker' in navigator) { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map((x) => x.unregister())); }
+    if (window.caches) { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); }
+  } catch { /* ignore */ }
+  location.reload();
+}
+// Récupère le numéro de la dernière release publiée (sans « v »), ou null si indisponible.
+async function fetchLatestRelease() {
+  if (!UPDATE_REPO) return null;
+  const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, { cache: 'no-store' });
+  if (!r.ok) return null;
+  const j = await r.json();
+  return String(j.tag_name || '').replace(/^v/i, '') || null;
+}
 // Au lancement : vérifie la dernière release GitHub. Si plus récente → purge + recharge (MAJ). Sinon → ouverture normale.
 async function checkForUpdate() {
   if (!UPDATE_REPO) return;
   try {
-    const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, { cache: 'no-store' });
-    if (!r.ok) return;
-    const j = await r.json();
-    const latest = String(j.tag_name || '').replace(/^v/i, '');
+    const latest = await fetchLatestRelease();
     if (latest && isNewerVersion(latest, APP_VERSION) && sessionStorage.getItem('ftr.updated') !== latest) {
       sessionStorage.setItem('ftr.updated', latest); // anti-boucle
-      if ('serviceWorker' in navigator) { const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map((x) => x.unregister())); }
-      if (window.caches) { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); }
-      location.reload();
+      await purgeAndReload();
     }
   } catch { /* hors-ligne / API indisponible → ouverture normale */ }
+}
+// Vérification MANUELLE (bouton « Mettre à jour ») avec retour visible. Ignore le garde-fou anti-boucle du lancement.
+async function manualCheckForUpdate(statusEl) {
+  const set = (cls, txt) => { if (statusEl) { statusEl.className = 'status ' + cls; statusEl.innerHTML = txt; } };
+  if (!UPDATE_REPO) { set('err', 'Mise à jour non configurée.'); return; }
+  set('', 'Recherche d\'une nouvelle version…');
+  let latest;
+  try { latest = await fetchLatestRelease(); }
+  catch { set('err', 'Impossible de vérifier (hors-ligne ou GitHub indisponible).'); return; }
+  if (latest && isNewerVersion(latest, APP_VERSION)) {
+    set('ok', `Nouvelle version v${esc(latest)} trouvée — téléchargement et mise à jour…`);
+    setTimeout(purgeAndReload, 600);
+    return;
+  }
+  // À jour selon la dernière release publiée → proposer quand même un rechargement forcé (le site peut être en avance sur la release).
+  set('ok', `Vous avez déjà la dernière version publiée (v${esc(APP_VERSION)}).<br><button class="btn small" id="forceReload" style="margin-top:6px">Forcer le rechargement</button>`);
+  const fr = document.getElementById('forceReload'); if (fr) fr.addEventListener('click', () => { set('', 'Rechargement…'); purgeAndReload(); });
 }
 
 // ---------- Persistance ----------
@@ -1858,7 +1894,7 @@ function renderEditorArrets(locked) {
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
     const routeDone = realMin != null; const hhv = arretHeure(a);
     // Heure de RDV de l'arrêt (1 par arrêt), Waze, Route (grisé ✓ si temps réel encodé), RDV (grisé ✓ si suivant programmé), Paiement.
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small" data-pay>💶 Paiement</button></span>`}`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small" data-pay>💶 Paiement</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button></span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
@@ -3901,7 +3937,10 @@ function modalVehicule() {
     <div class="actions"><button class="btn block" id="vFrais">🧾 Frais véhicule (entretien, achat…)</button></div>
     <div class="actions"><button class="btn block" id="vMat">🧰 Frais de matériel</button></div>
     <div class="actions"><button class="btn block" id="vSync">🔄 Synchroniser (Google Drive)</button></div>
-    <p class="status" id="vSyncStatus"></p>`);
+    <p class="status" id="vSyncStatus"></p>
+    <div class="actions"><button class="btn block" id="vUpdate">⬇️ Mettre à jour l'application (v${APP_VERSION})</button></div>
+    <p class="hint">Cherche une version plus récente publiée et met l'app à jour. Vos données sont conservées.</p>
+    <p class="status" id="vUpdateStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
   $('vClient').addEventListener('click', () => { closeModal(); editClient(null); });
   $('vPlein').addEventListener('click', modalPlein);
@@ -3910,6 +3949,7 @@ function modalVehicule() {
   $('vMat').addEventListener('click', () => { closeModal(); showTab('gestion'); showGestion('materiel'); });
   // Synchro manuelle immédiate (interactive : peut demander la connexion Google si besoin), puis recharge l'app à jour.
   $('vSync').addEventListener('click', () => { const s = $('vSyncStatus'); if (S.syncMode !== 'drive') { s.className = 'status err'; s.textContent = 'Activez « Synchro Drive » dans Réglages → Synchro (le mode fichier est actif).'; return; } if (!S.googleClientId) { s.className = 'status err'; s.textContent = 'Renseignez d\'abord votre ID client Google dans Réglages → Synchro.'; return; } googleSync(true, s, true); });
+  $('vUpdate').addEventListener('click', () => manualCheckForUpdate($('vUpdateStatus')));
 }
 function modalPlein() {
   openModal(`<div class="modal-head"><b>⛽ Valider un plein</b><button class="x" id="mX">✕</button></div>
