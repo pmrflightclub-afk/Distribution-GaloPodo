@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.29';
+const APP_VERSION = '1.1.30';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.30', date: '2026-07-07',
+    ajouts: [
+      'Heure de départ estimée : calculée à partir de l\'heure de RDV la plus tôt du 1ᵉʳ arrêt moins le temps de trajet (réel ou estimé) pour y arriver. Affichée dans « Trajet du jour » (avant de démarrer) et dans l\'éditeur de tournée.',
+    ],
+  },
   {
     version: '1.1.29', date: '2026-07-07',
     ajouts: [
@@ -1571,7 +1577,8 @@ function openEditor() {
   if ($('edNom')) { $('edNom').value = currentTour.nom || ''; $('edNom').disabled = locked; }
   const H = tourHome();
   const hasHome = addrStr(H).trim();
-  $('edHome').textContent = hasHome ? ('Départ : ' + addrStr(H) + (currentTour.home && addrStr(currentTour.home).trim() ? ' (propre à cette tournée)' : ' (domicile)')) : '⚠️ Départ non défini — cliquez « Changer le départ », ou renseignez-le dans Gestion → Mes adresses → Point de départ.';
+  const depEst = estimatedDepartureHM(currentTour);
+  $('edHome').textContent = hasHome ? ('Départ : ' + addrStr(H) + (currentTour.home && addrStr(currentTour.home).trim() ? ' (propre à cette tournée)' : ' (domicile)') + (depEst ? ' · 🚕 départ estimé ' + depEst : '')) : '⚠️ Départ non défini — cliquez « Changer le départ », ou renseignez-le dans Gestion → Mes adresses → Point de départ.';
   if ($('edHome')) $('edHome').classList.toggle('err', !hasHome);
   // Arrivée : distincte si définie, sinon retour au départ.
   const hasArr = currentTour.arrivee && addrStr(currentTour.arrivee).trim();
@@ -3130,6 +3137,18 @@ function legMinutesFor(t) {
   (t.arrets || []).forEach((a, i) => { const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; cum += seg * mpk; out.push(R && R.rows ? cum : null); });
   return out;
 }
+// Heure de départ estimée de la tournée = heure de RDV la plus tôt du 1er arrêt − temps de trajet (réel si encodé, sinon estimé) jusqu'à lui.
+function estimatedDepartureHM(t) {
+  const a0 = (t.arrets || [])[0]; if (!a0) return '';
+  const heures = []; (a0.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (cv.heure) heures.push(cv.heure); }));
+  if (!heures.length) return ''; heures.sort();
+  const [h, mn] = heures[0].split(':').map(Number); if (isNaN(h)) return '';
+  const R = t.result; let travel = 0;
+  if (typeof a0.realMin === 'number') travel = a0.realMin;
+  else if (R && R.rows && R.rows[0]) { const mpk = (R.totalKm > 0 && R.totalMin) ? R.totalMin / R.totalKm : 60 / (S.vitesseKmh || 50); travel = (R.rows[0].segKm || 0) * mpk; }
+  let dep = h * 60 + mn - Math.round(travel); if (dep < 0) dep = 0;
+  return String(Math.floor(dep / 60)).padStart(2, '0') + ':' + String(dep % 60).padStart(2, '0');
+}
 // Heure locale HH:MM et durée « X h Y min » (temps de travail).
 const hm = (ts) => ts ? new Date(ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—';
 // Durée à partir de MINUTES : < 1h → « 45 min » ; ≥ 1h → « 1h30 » / « 2h ». Format unique partout.
@@ -3160,7 +3179,8 @@ function renderHomeTrajet() {
     const persistTour = () => { const idx = tournees.findIndex((x) => x.id === t.id); if (idx >= 0) tournees[idx] = t; saveTournees(); };
     // Barre de suivi du temps de travail : Démarrer → (valider chaque arrêt) → Terminer.
     const ctrl = document.createElement('div'); ctrl.className = 'tour-timer';
-    if (!t.startedAt) ctrl.innerHTML = '<button class="btn small primary" data-start>▶ Démarrer la tournée</button>';
+    const depEst = estimatedDepartureHM(t);
+    if (!t.startedAt) ctrl.innerHTML = '<button class="btn small primary" data-start>▶ Démarrer la tournée</button>' + (depEst ? `<span class="tt-info">🚕 Départ estimé : <b>${depEst}</b></span>` : '');
     else if (!t.endedAt) ctrl.innerHTML = `<span class="tt-info">⏱ Démarrée à ${hm(t.startedAt)}</span><span class="li-sub">Validez chaque arrêt, puis « Clôturer » au retour.</span>`;
     else ctrl.innerHTML = `<span class="tt-info">✅ ${hm(t.startedAt)} → ${hm(t.endedAt)} · ${durHm(t.endedAt - t.startedAt)}</span>`;
     box.appendChild(ctrl);
