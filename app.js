@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.68';
+const APP_VERSION = '1.1.69';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.69', date: '2026-07-08',
+    ajouts: [
+      'Statut véhicule (km réel) : nouveau bouton dans « Déclarer » et section en tête d\'Accueil pour saisir le kilométrage réel du compteur. L\'app affiche un odomètre ESTIMÉ (dernier relevé réel + km des tournées depuis) et se recale à chaque relevé — le réel et l\'estimé ne sont jamais confondus.',
+      'Rappel mensuel : la section Accueil « Statut véhicule » réapparaît chaque mois tant que le relevé du mois n\'est pas saisi, et affiche aussi les frais à renouveler (bouton par frais). Elle disparaît une fois tout traité.',
+      'Nouvelle page Gestion → « Statut véhicule » (après Frais véhicule) : historique mensuel des relevés (km + date) et « usage privé » (écart estimé/réel = km hors tournées).',
+    ],
+  },
   {
     version: '1.1.68', date: '2026-07-08',
     ajouts: [
@@ -619,6 +627,8 @@ S.frais = Array.isArray(S.frais) ? S.frais : [];
 S.materiel = Array.isArray(S.materiel) ? S.materiel : [];
 S.articlesCatalogue = Array.isArray(S.articlesCatalogue) ? S.articlesCatalogue : [];
 S.amortissement = Object.assign({ achatHT: 0, dureeVieKm: 0 }, S.amortissement || {});
+S.vehicule = Object.assign({ dateAchat: '', dateMiseEnCirculation: '' }, S.vehicule || {}); // dates véhicule (amortissement / âge)
+if (!Array.isArray(S.odoReleves)) S.odoReleves = []; // relevés RÉELS du compteur : { ym:'YYYY-MM', date:'YYYY-MM-DD', km, ecart } ; ecart = usage privé (réel − estimé depuis le relevé précédent)
 if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
@@ -911,6 +921,8 @@ function mergeSettings(localS, remoteS) {
   if (!hasAddr(merged.home)) { if (localS && hasAddr(localS.home)) merged.home = localS.home; else if (remoteS && hasAddr(remoteS.home)) merged.home = remoteS.home; }
   // Carnet « Mes adresses » de départ : union par id (ne pas perdre celles saisies sur l'autre appareil).
   { const byId = {}; ((localS && localS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); ((remoteS && remoteS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); merged.adresses = Object.values(byId); }
+  // Relevés compteur (statut véhicule) : union par mois (ne jamais perdre un relevé fait sur l'autre appareil ; le plus récent gagne pour un même mois).
+  { const byYm = {}; const add = (r) => { if (r && r.ym) { const ex = byYm[r.ym]; if (!ex || (r.date || '') >= (ex.date || '')) byYm[r.ym] = r; } }; ((localS && localS.odoReleves) || []).forEach(add); ((remoteS && remoteS.odoReleves) || []).forEach(add); merged.odoReleves = Object.values(byYm).sort((a, b) => (a.date || '').localeCompare(b.date || '')); }
   return merged;
 }
 // Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
@@ -1204,7 +1216,24 @@ function haversineKm(a, b) {
 const rate = () => (S.tvaRate || 0) / 100;
 const fuelPerKmHT = () => (S.consoL100 / 100) * S.prixPleinL / (1 + rate());
 // Odomètre = somme des km de toutes les tournées calculées (chaque tournée compte une fois).
-const odometer = () => allTours().reduce((s, t) => s + (t.result ? t.result.totalKm : 0), 0);
+// ---- Odomètre RÉEL / ESTIMÉ ----
+// Réel = relevés compteur saisis par l'utilisateur (Statut véhicule). Estimé = dernier relevé réel + Σ km des tournées faites APRÈS ce relevé.
+// Sans aucun relevé : repli sur Σ de toutes les tournées (comportement d'origine, base 0). On ne confond jamais réel et estimé.
+function lastOdoReleve() { const r = (S.odoReleves || []).filter((x) => x && x.date); return r.length ? r.reduce((a, b) => ((a.date || '') >= (b.date || '') ? a : b)) : null; }
+const tourKmAfter = (dateStr) => allTours().reduce((s, t) => s + ((t.result && (t.date || '') > dateStr) ? t.result.totalKm : 0), 0);
+const odometer = () => { const last = lastOdoReleve(); return last ? (last.km + tourKmAfter(last.date)) : allTours().reduce((s, t) => s + (t.result ? t.result.totalKm : 0), 0); };
+const usagePriveTotal = () => (S.odoReleves || []).reduce((s, r) => s + (typeof r.ecart === 'number' ? r.ecart : 0), 0); // km hors tournées (privé), cumulé sur les relevés
+// Enregistre un relevé compteur réel (1 par mois : remplace celui du mois courant). Calcule l'écart = usage privé depuis le relevé du mois précédent.
+function declareOdo(km) {
+  const today = todayStr(), ym = today.slice(0, 7);
+  const prev = (S.odoReleves || []).filter((r) => r && (r.ym || '') < ym).sort((a, b) => (a.date || '').localeCompare(b.date || '')).pop() || null;
+  let ecart = null;
+  if (prev) ecart = km - (prev.km + tourKmAfter(prev.date)); // réel − estimé sur la période = km privés (hors tournées)
+  S.odoReleves = (S.odoReleves || []).filter((r) => (r.ym || (r.date || '').slice(0, 7)) !== ym); // une déclaration par mois
+  S.odoReleves.push({ ym, date: today, km, ecart });
+  saveSettings();
+}
+const odoDeclarationDue = () => { const last = lastOdoReleve(); return !last || (last.ym || (last.date || '').slice(0, 7)) < todayStr().slice(0, 7); };
 const fraisActif = (f) => f.nature === 'recurrent' ? true : (odometer() - (f.kmDebut || 0)) < (f.kmPrevus || 0);
 const fraisContribHT = (f) => (f.kmPrevus > 0 && fraisActif(f)) ? (f.montantHT || 0) / f.kmPrevus : 0;
 const amortContribHT = () => (S.amortissement.achatHT > 0 && S.amortissement.dureeVieKm > 0) ? S.amortissement.achatHT / S.amortissement.dureeVieKm : 0;
@@ -1465,6 +1494,7 @@ function showGestion(sub) {
   if (currentGsub === 'articles') renderArticlesPage();
   if (currentGsub === 'materiel') renderMateriel();
   if (currentGsub === 'vehicule') renderFraisVehicule();
+  if (currentGsub === 'statut') renderStatutVehiculePage();
   if (currentGsub === 'sms') renderSMS();
 }
 
@@ -4692,10 +4722,49 @@ function renderHome() {
   const upcoming = [...tournees].filter((t) => statusOf(t) === 'avenir').sort(byDate); // du plus proche au plus lointain
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((t) => box.appendChild(tourListItem(t, true))); };
   renderHomeChangelog();
+  renderVehiculeStatut();
   renderBlockingArrets();
   renderHomeTrajet();
   renderReplacerHome();
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
+}
+function renewFrais(f) { f.date = todayStr(); f.kmDebut = odometer(); saveSettings(); } // nouveau cycle : repart du km actuel
+// Section Accueil « Statut véhicule » : visible si relevé du mois dû (rappel mensuel) OU frais à renouveler.
+function renderVehiculeStatut() {
+  const card = $('homeVehicule'); if (!card) return;
+  const due = odoDeclarationDue(), echus = fraisEchus();
+  card.classList.toggle('hidden', !due && !echus.length);
+  const hint = $('homeVehiculeHint');
+  if (hint) { const last = lastOdoReleve();
+    if (due) hint.innerHTML = last ? `Nouveau mois : relevez le km réel au compteur (dernier relevé ${km(last.km)} le ${esc(fmtDateFr(last.date))}).` : 'Premier lancement : déclarez le km actuel du compteur pour démarrer le suivi du véhicule.';
+    else hint.innerHTML = echus.length ? `${echus.length} frais véhicule à renouveler ci-dessous.` : `Relevé du mois enregistré ✔ — estimé actuel ${km(odometer())}.`;
+  }
+  const btn = $('homeVehiculeBtn'); if (btn) { btn.style.display = due ? '' : 'none'; btn.onclick = () => modalStatutVehicule(); }
+  const box = $('homeFraisEchus'); if (box) { box.innerHTML = '';
+    echus.forEach((f) => {
+      const el = document.createElement('div'); el.className = 'list-item';
+      const parcouru = odometer() - (f.kmDebut || 0);
+      el.innerHTML = `<div class="li-main"><b>🧾 ${esc(f.poste || 'Frais')}</b><span class="li-sub">${f.nature === 'exceptionnel' ? 'exceptionnel épuisé' : 'récurrent à renouveler'} · ${km(Math.max(0, parcouru))} / ${km(f.kmPrevus)}</span></div><div class="li-act"><button class="btn small" data-renew>♻ Renouveler</button></div>`;
+      el.querySelector('[data-renew]').addEventListener('click', () => { renewFrais(f); renderHome(); });
+      box.appendChild(el);
+    });
+  }
+}
+// Page Gestion « Statut véhicule » : historique mensuel des relevés réels + usage privé.
+function renderStatutVehiculePage() {
+  const resume = $('statutResume');
+  if (resume) { const last = lastOdoReleve(), priv = usagePriveTotal(); resume.innerHTML = `Odomètre estimé : <b>${km(odometer())}</b>${last ? ' · dernier relevé réel ' + km(last.km) + ' le ' + esc(fmtDateFr(last.date)) : ' (aucun relevé)'}${Math.abs(priv) >= 1 ? ' · usage privé cumulé ' + (priv < 0 ? '−' : '') + km(Math.abs(priv)) : ''}.`; }
+  const btn = $('btnStatutDeclare'); if (btn) btn.onclick = () => modalStatutVehicule();
+  const box = $('statutList'); if (!box) return; box.innerHTML = '';
+  const list = (S.odoReleves || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  if ($('statutEmpty')) $('statutEmpty').style.display = list.length ? 'none' : 'block';
+  list.forEach((r) => {
+    const el = document.createElement('div'); el.className = 'inv-client';
+    let h = `<div class="inv-head"><span>${esc(monthLabel(r.ym || (r.date || '').slice(0, 7)))}</span><span>${km(r.km)}</span></div>`;
+    h += `<div class="inv-line"><span>Relevé le</span><span>${esc(fmtDateFr(r.date))}</span></div>`;
+    if (typeof r.ecart === 'number') h += `<div class="inv-line"><span>Usage privé (hors tournées)</span><span>${r.ecart < 0 ? '−' : ''}${km(Math.abs(r.ecart))}</span></div>`;
+    el.innerHTML = h; box.appendChild(el);
+  });
 }
 // ================= CHANGELOG / message de passage de version =================
 const changelogUnread = () => CHANGELOG.filter((e) => !(S.changelogRead || []).includes(e.version));
@@ -4735,9 +4804,30 @@ function renderChangelog() {
     box.appendChild(el);
   });
 }
+// Frais « échus » (à renouveler) : exceptionnel épuisé, ou récurrent dont le cycle km est atteint.
+function fraisEchus() {
+  const odo = odometer();
+  return (S.frais || []).filter((f) => { if (!(f.kmPrevus > 0)) return false; const parcouru = odo - (f.kmDebut || 0); return f.nature === 'exceptionnel' ? !fraisActif(f) : (parcouru >= f.kmPrevus); });
+}
+// Relevé du compteur RÉEL (statut véhicule) : compare à l'estimé, enregistre, calcule l'usage privé.
+function modalStatutVehicule() {
+  const est = odometer(); const last = lastOdoReleve();
+  openModal(`<div class="modal-head"><b>🚗 Statut véhicule — relevé compteur</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Saisissez le <b>kilométrage réel</b> affiché au compteur aujourd'hui. ${last ? 'Dernier relevé : <b>' + km(last.km) + '</b> le ' + esc(fmtDateFr(last.date)) + '. ' : ''}Estimé actuel par l'app : <b>${km(est)}</b>${last ? '' : ' (cumul des tournées)'}.</p>
+    <label>Kilométrage réel (compteur)<input type="number" id="svKm" step="1" min="0" inputmode="numeric" placeholder="${est || 0}"/></label>
+    <p class="hint" id="svEcart"></p>
+    <div class="actions"><button class="btn primary block" id="svOk">Enregistrer le relevé</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  const upd = () => { const v = parseNum($('svKm').value); const e = $('svEcart'); if (!e) return; if (!(v > 0)) { e.textContent = ''; return; }
+    if (!last) { e.innerHTML = 'Premier relevé : ce sera le <b>km de départ</b> du véhicule dans l\'app.'; return; }
+    const d = v - est; e.innerHTML = `Écart avec l'estimé : <b>${d >= 0 ? '+' : '−'}${km(Math.abs(d))}</b>${Math.abs(d) >= 1 ? ' → usage privé (hors tournées) depuis le dernier relevé' : ''}.`; };
+  $('svKm').addEventListener('input', upd);
+  $('svOk').addEventListener('click', () => { const v = Math.round(parseNum($('svKm').value)); if (!(v > 0)) { alert('Saisissez le kilométrage réel du compteur.'); return; } declareOdo(v); closeModal(); renderHome(); });
+}
 function modalVehicule() {
   openModal(`<div class="modal-head"><b>📋 Déclarer un événement</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Que voulez-vous faire ?</p>
+    <div class="actions"><button class="btn block" id="vStatut">🚗 Statut véhicule (relevé compteur)</button></div>
     <div class="actions"><button class="btn primary block" id="vClient">👤 Créer un client</button></div>
     <div class="actions"><button class="btn block" id="vPlein">⛽ Valider un plein (prix du carburant)</button></div>
     <div class="actions"><button class="btn block" id="vConso">🚗 Corriger la consommation</button></div>
@@ -4749,6 +4839,7 @@ function modalVehicule() {
     <p class="hint">Cherche une version plus récente publiée et met l'app à jour. Vos données sont conservées.</p>
     <p class="status" id="vUpdateStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
+  $('vStatut').addEventListener('click', () => { closeModal(); modalStatutVehicule(); });
   $('vClient').addEventListener('click', () => { closeModal(); editClient(null); });
   $('vPlein').addEventListener('click', modalPlein);
   $('vConso').addEventListener('click', modalConso);

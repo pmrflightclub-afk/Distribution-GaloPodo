@@ -53,6 +53,12 @@
     </div>
     <div class="actions"><button class="btn primary block big" id="btnNewTour">➕ Créer une tournée</button></div>
     <div class="card changelog-card hidden" id="homeChangelog"></div>
+    <section class="card blocking-card hidden" id="homeVehicule">
+      <h2>🚗 Statut véhicule</h2>
+      <p class="hint" id="homeVehiculeHint"></p>
+      <div class="actions"><button class="btn primary block" id="homeVehiculeBtn">🚗 Déclarer le statut véhicule (km compteur)</button></div>
+      <div id="homeFraisEchus" class="list"></div>
+    </section>
     <section class="card blocking-card hidden" id="homeBlocking">
       <h2>⚠ Tournées dépassées</h2>
       <p class="hint">Tournées dont le jour est passé sans clôture. <b>Démarrée</b> → finalisez les arrêts restants. <b>Jamais démarrée</b> → reportez chaque client à une nouvelle date, ou supprimez la tournée.</p>
@@ -295,6 +301,7 @@
         <button class="subtab" data-gsub="articles">Articles</button>
         <button class="subtab" data-gsub="materiel">Frais matériel</button>
         <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
+        <button class="subtab" data-gsub="statut">Statut véhicule</button>
         <button class="subtab" data-gsub="sms">SMS</button>
       </div>
     </nav>
@@ -414,6 +421,16 @@
         <p class="hint">Amortissement + chaque poste ci-dessous forment la base véhicule au km. Modifiez les champs directement dans la ligne.</p>
         <div id="fraisList" class="edit-list"></div>
         <p class="empty" id="fraisEmpty">Aucun frais. Ajoutez entretien, assurance, réparations…</p>
+      </section>
+    </div>
+
+    <div id="gsub-statut" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Statut véhicule</h2><button class="btn small" id="btnStatutDeclare">＋ Relevé</button></div>
+        <p class="hint" id="statutResume"></p>
+        <h3 class="rsub">Relevés mensuels (km réel)</h3>
+        <div id="statutList" class="list"></div>
+        <p class="empty" id="statutEmpty">Aucun relevé. Déclarez le km réel du compteur.</p>
       </section>
     </div>
 
