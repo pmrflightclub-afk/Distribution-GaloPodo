@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.71';
+const APP_VERSION = '1.1.72';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.72', date: '2026-07-08',
+    ajouts: [
+      'Gestion → Statut véhicule : les frais à renouveler (épuisés) sont aussi listés ici, avec leur bouton « ♻ Renouveler » — ils restent traçables même après avoir été traités depuis l\'Accueil.',
+    ],
+  },
   {
     version: '1.1.71', date: '2026-07-08',
     ajouts: [
@@ -4874,6 +4880,18 @@ function renderStatutVehiculePage() {
     if (typeof r.ecart === 'number') h += `<div class="inv-line"><span>Usage privé (hors tournées)</span><span>${r.ecart < 0 ? '−' : ''}${km(Math.abs(r.ecart))}</span></div>`;
     el.innerHTML = h; box.appendChild(el);
   });
+  // Frais à renouveler (échus) : listés ici aussi, même après avoir quitté l'Accueil.
+  const fbox = $('statutFraisEchus'); if (fbox) {
+    fbox.innerHTML = ''; const echus = fraisEchus();
+    if ($('statutFraisEchusEmpty')) $('statutFraisEchusEmpty').style.display = echus.length ? 'none' : 'block';
+    echus.forEach((f) => {
+      const parcouru = odometer() - (f.kmDebut || 0);
+      const el = document.createElement('div'); el.className = 'list-item';
+      el.innerHTML = `<div class="li-main"><b>🧾 ${esc(f.poste || 'Frais')}</b><span class="li-sub">${f.nature === 'exceptionnel' ? 'exceptionnel épuisé' : 'récurrent à renouveler'} · ${km(Math.max(0, parcouru))} / ${km(f.kmPrevus)}${f.date ? ' · depuis le ' + esc(fmtDateFr(f.date)) : ''}</span></div><div class="li-act"><button class="btn small" data-renew>♻ Renouveler</button></div>`;
+      el.querySelector('[data-renew]').addEventListener('click', () => { renewFrais(f); renderStatutVehiculePage(); renderHome(); });
+      fbox.appendChild(el);
+    });
+  }
 }
 // ================= CHANGELOG / message de passage de version =================
 const changelogUnread = () => CHANGELOG.filter((e) => !(S.changelogRead || []).includes(e.version));
