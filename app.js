@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.63';
+const APP_VERSION = '1.1.64';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.64', date: '2026-07-07',
+    ajouts: [
+      'Tournées dépassées : nouveau bouton « ♻ Récupérer » pour une ancienne tournée (encodée & clôturée avant le suivi de tournée) qui apparaissait à tort comme « non démarrée ». Elle est figée à sa date (arrêts non modifiables) et sort de la liste des dépassées.',
+      'Compléter les stats d\'une tournée récupérée : un panneau permet de saisir, par arrêt, l\'heure de RDV et le temps de route réel, et par cheval la durée de consultation, plus le temps de retour. Ces données alimentent le Temps de travail et le Temps de trajet (rouvrable via « 📊 Compléter les stats » dans la tournée).',
+    ],
+  },
   {
     version: '1.1.63', date: '2026-07-07',
     ajouts: [
@@ -2094,6 +2101,7 @@ function openEditor() {
   $('edLockBanner').classList.toggle('hidden', !locked && !review);
   if ($('edLockBanner')) { if (review) $('edLockBanner').textContent = '📥 Tournée importée « à revalider » — vérifiez chaque arrêt puis « ✓ Valider » ci-dessous pour recalculer et figer.'; else if (locked) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.'; }
   if ($('edRevalider')) $('edRevalider').style.display = review ? '' : 'none';
+  if ($('edRecoverWrap')) $('edRecoverWrap').style.display = currentTour.recovered ? '' : 'none'; // tournée récupérée : compléter les données manquantes pour les stats
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
   $('edDelete').style.display = '';
@@ -3239,8 +3247,31 @@ function renderTrajetTemps() {
 }
 // ---------- Temps de travail (suivi réel : « Démarrer » + « Valider l'arrêt ») ----------
 // Trajet = réel (Route) sinon estimé ; visite = mesurée entre l'arrivée (calculée) et la validation ; retour = mesuré (Terminer) sinon estimé.
+// Tournée « récupérée » (ancienne, figée sans suivi temps réel) : temps reconstruit à partir des données
+// saisies manuellement — Route réel par arrêt (a.realMin) + durée de consultation par cheval (cv.consultMin).
+function travailForRecovered(t) {
+  const R = t.result;
+  const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
+  const per = []; let complete = true;
+  (t.arrets || []).forEach((a, i) => {
+    const hasRoute = typeof a.realMin === 'number';
+    if (!hasRoute) complete = false;
+    const travelMin = hasRoute ? a.realMin : ((R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) * mpk : 0);
+    let consult = 0;
+    (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (!chevalFait(cv)) return; if (typeof cv.consultMin === 'number') consult += cv.consultMin; else complete = false; }));
+    per.push({ travelMs: travelMin * 60000, visitMs: consult * 60000, arrival: null, dep: null });
+  });
+  const returnMinEst = (R && R.kmLastHome != null) ? R.kmLastHome * mpk : 0;
+  const hasRet = typeof t.returnRealMin === 'number';
+  if (!hasRet) complete = false;
+  const returnMs = hasRet ? t.returnRealMin * 60000 : returnMinEst * 60000;
+  const totalMs = per.reduce((s, p) => s + p.travelMs + p.visitMs, 0) + returnMs;
+  return { per, returnMs, complete, totalMs, endTs: null };
+}
 function travailForTour(t) {
-  if (!t.startedAt || !(t.arrets || []).length) return null;
+  if (!(t.arrets || []).length) return null;
+  if (t.recovered) return travailForRecovered(t);
+  if (!t.startedAt) return null;
   const R = t.result;
   const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
   const travelMin = (i) => { const a = t.arrets[i]; if (typeof a.realMin === 'number') return a.realMin; const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; return seg * mpk; };
@@ -4046,6 +4077,51 @@ function tourAllCancelled(t) {
 function blockingTours() {
   return (tournees || []).filter((t) => isOverdue(t) && tourFinalizeBlock(t).length > 0 && !tourAllCancelled(t));
 }
+// Persiste une tournée dans le bon store (actif/archive) sans doublon.
+function persistTourAnywhere(t) {
+  const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); return; }
+  const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); return; }
+  tournees.push(t); saveTournees();
+}
+// « Récupérer » une ancienne tournée (encodée + clôturée AVANT le suivi démarrage/finalisation) : elle apparaît en
+// « dépassée non démarrée » faute de finalisation au sens neuf. On la fige à sa date (closed + recovered) → elle sort
+// des dépassées et devient une tournée clôturée normale ; l'utilisateur complète ensuite ses données manquantes (stats).
+function recoverTour(t) {
+  if (!confirm('Récupérer l\'ancienne tournée du ' + fmtDateFr(t.date) + ' ? Elle est figée à sa date (arrêts non modifiables). Vous pourrez compléter ses données manquantes (heures de RDV, temps de route, durées de consultation) pour des statistiques complètes.')) return;
+  t.recovered = true; t.closed = true;
+  persistTourAnywhere(t);
+  renderHome();
+  modalRecoverStats(t);
+}
+// Panneau de complétion d'une tournée récupérée : heure de RDV + temps de route réel par arrêt,
+// durée de consultation par cheval, temps de retour. Ces données alimentent le Temps de travail et le Temps de trajet.
+function modalRecoverStats(t) {
+  openModal(`<div class="modal-head"><b>📊 Compléter — ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Renseignez les données manquantes de cette ancienne tournée pour des statistiques complètes : l'heure de RDV et le temps de route réel de chaque arrêt, la durée de consultation de chaque cheval/visite, et le temps de retour. Le départ se calcule depuis le 1ᵉʳ RDV moins la route.</p>
+    <div id="recBody"></div>
+    <label>Temps de retour réel (min)<input type="number" min="0" step="1" id="recReturn" value="${typeof t.returnRealMin === 'number' ? t.returnRealMin : ''}" placeholder="retour → domicile"/></label>
+    <div class="actions"><button class="btn primary block" id="recSave">Enregistrer</button></div>`);
+  const body = $('recBody');
+  (t.arrets || []).forEach((a, i) => {
+    const wrap = document.createElement('div'); wrap.className = 'inv-client';
+    let h = `<div class="inv-head"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}</span></div>
+      <label>Heure de RDV<input type="time" data-heure="${i}" value="${a.heure || ''}"/></label>
+      <label>Temps de route réel (min)<input type="number" min="0" step="1" data-route="${i}" value="${typeof a.realMin === 'number' ? a.realMin : ''}" placeholder="depuis l'arrêt précédent (ou le domicile)"/></label>`;
+    (a.clients || []).forEach((cl, j) => (cl.chevaux || []).forEach((cv, k) => { if (!chevalFait(cv)) return; h += `<label>🐴 ${esc(cv.nom)} — consultation (min)<input type="number" min="0" step="1" data-consult="${i}.${j}.${k}" value="${typeof cv.consultMin === 'number' ? cv.consultMin : ''}"/></label>`; }));
+    wrap.innerHTML = h; body.appendChild(wrap);
+  });
+  $('mX').addEventListener('click', closeModal);
+  $('recSave').addEventListener('click', () => {
+    const numOrNull = (v) => { v = (v || '').toString().trim(); return v === '' ? null : Math.max(0, Math.round(parseNum(v))); };
+    body.querySelectorAll('[data-heure]').forEach((inp) => { t.arrets[+inp.dataset.heure].heure = inp.value || ''; });
+    body.querySelectorAll('[data-route]').forEach((inp) => { const a = t.arrets[+inp.dataset.route]; const v = numOrNull(inp.value); if (v == null) delete a.realMin; else a.realMin = v; });
+    body.querySelectorAll('[data-consult]').forEach((inp) => { const [i, j, k] = inp.dataset.consult.split('.').map(Number); const cv = t.arrets[i] && t.arrets[i].clients[j] && t.arrets[i].clients[j].chevaux[k]; if (!cv) return; const v = numOrNull(inp.value); if (v == null) delete cv.consultMin; else cv.consultMin = v; });
+    const rr = numOrNull($('recReturn').value); if (rr == null) delete t.returnRealMin; else t.returnRealMin = rr;
+    persistTourAnywhere(t);
+    closeModal(); renderHome();
+    if (currentTour && currentTour.id === t.id) { currentTour = JSON.parse(JSON.stringify(t)); }
+  });
+}
 // Reporte TOUS les chevaux (non déjà annulés) d'une tournée → ils rejoignent « Replacer un RDV ».
 function reportAllTour(t) {
   (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) cv.cancel = { status: 'reporte', reason: 'pro', note: '', at: new Date().toISOString(), replacedTourId: null }; })));
@@ -4078,8 +4154,8 @@ function renderBlockingArrets() {
     const el = document.createElement('div'); el.className = 'list-item';
     const acts = started
       ? '<button class="btn small primary" data-fin>💶 Finaliser</button>'
-      : '<button class="btn small" data-report>📅 Reporter</button> <button class="btn small danger" data-del>🗑 Supprimer</button>';
-    const sub = started ? blk.map(esc).join('<br>') : 'Tournée jamais démarrée — à reporter (client par client) ou à supprimer.';
+      : '<button class="btn small primary" data-recover>♻ Récupérer</button> <button class="btn small" data-report>📅 Reporter</button> <button class="btn small danger" data-del>🗑 Supprimer</button>';
+    const sub = started ? blk.map(esc).join('<br>') : 'Jamais démarrée — <b>Récupérer</b> (ancienne tournée : la figer en l\'état et compléter ses stats), ou reporter / supprimer.';
     el.innerHTML = `<div class="li-main"><b>🚩 ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}${started ? '' : ' · <span class="badge">non démarrée</span>'}</b><span class="li-sub">${sub}</span></div><div class="li-act">${acts}</div>`;
     if (started) el.querySelector('[data-fin]').addEventListener('click', () => {
       const a = (t.arrets || [])[firstOpenArret(t)]; if (!a) { renderHome(); return; }
@@ -4087,6 +4163,7 @@ function renderBlockingArrets() {
       modalPayment(t, a, renderHome, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } });
     });
     else {
+      el.querySelector('[data-recover]').addEventListener('click', () => recoverTour(t));
       el.querySelector('[data-report]').addEventListener('click', () => { if (confirm('Reporter tous les RDV de cette tournée ? Les clients rejoindront « Replacer un RDV » pour fixer une nouvelle date.')) reportAllTour(t); });
       el.querySelector('[data-del]').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée non démarrée du ' + fmtDateFr(t.date) + ' ?')) { deleteTourById(t.id); renderHome(); } });
     }
@@ -4992,6 +5069,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('edDate').addEventListener('change', (e) => { currentTour.date = e.target.value; });
   $('edDate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } });
   $('edCalc').addEventListener('click', calcTour);
+  if ($('edRecover')) $('edRecover').addEventListener('click', () => { if (currentTour) modalRecoverStats(currentTour); });
   $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats et ses impayés liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(recapText(currentTour.result)); $('edStatus').className = 'status ok'; $('edStatus').textContent = 'Récap copié.'; } catch { $('edStatus').textContent = 'Copie impossible.'; } });
 
