@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.27';
+const APP_VERSION = '1.1.28';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.28', date: '2026-07-07',
+    ajouts: [
+      'Facture : les forfaits Fourbure / NPAS / Infection apparaissent maintenant dans la section « Articles » (une ligne par cheval) au lieu d\'être fondus dans le « Matériel ». Les totaux sont identiques ; le Matériel ne contient plus que la base consommable.',
+    ],
+  },
   {
     version: '1.1.27', date: '2026-07-07',
     ajouts: [
@@ -1898,9 +1904,13 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
       m.deplacement.push({ adresse: r.adresse, type: r.type, partHT, partTTC, km: kmClient, tarifHT: r.tarifHT || 0, proche: !!r.proche, chevaux: cl.chevaux.map((c) => c.nom) });
       m.htDep += partHT;
       cl.chevaux.forEach((c) => {
-        if (!c.parage) return; // pas de parage → pas de matériel facturé pour ce cheval
-        const mat = baseMat + (c.fourbure ? S.fourbureHT : 0) + (c.npas ? S.npasHT : 0) + (c.infection ? S.infectionHT : 0);
-        if (mat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, ht: mat, ttc: mat * (1 + stdRate) }); m.htMat += mat; }
+        if (!c.parage) return; // pas de parage → ni matériel ni forfait pathologie facturés pour ce cheval
+        // Matériel = base seule (le matériel consommable). Les forfaits pathologie passent en ARTICLES (voir ci-dessous).
+        if (baseMat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: false, npas: false, infection: false, ht: baseMat, ttc: baseMat * (1 + stdRate) }); m.htMat += baseMat; }
+        // Fourbure / NPAS / Infection → lignes d'ARTICLE (par cheval), non remisées (forfaits de soin fixes).
+        [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([key, lbl, prix]) => {
+          if (c[key] && prix > 0) { const rr = stdRate; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), patho: true, remiseOff: true }); m.htArt += prix; m.tvaArt += prix * rr; }
+        });
       });
     });
   });
