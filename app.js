@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.61';
+const APP_VERSION = '1.1.62';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.62', date: '2026-07-07',
+    ajouts: [
+      'SMS (Trajet du jour → ⚡ Agir → SMS) : une petite fenêtre s\'ouvre avant la copie pour choisir la formule « Politesse » (Mr/Mme + nom) ou « Standard » (prénom), avec aperçu. Le choix est pré-coché selon la fiche du client (par défaut : politesse) et il est mémorisé dans la fiche pour les prochaines fois.',
+    ],
+  },
   {
     version: '1.1.61', date: '2026-07-07',
     ajouts: [
@@ -3940,10 +3946,29 @@ const SMS_FIELDS = [
 ];
 // Remplace {champ} par les valeurs fournies (jeton connu mais vide → supprimé ; jeton inconnu → laissé tel quel) puis nettoie les espaces.
 function fillSms(tpl, data) { return String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (k in data ? (data[k] == null ? '' : String(data[k])) : m)).replace(/ {2,}/g, ' ').replace(/ ([,.!?])/g, '$1').trim(); }
-// Modèle SMS à utiliser pour un client : « politesse » (Mr/Mme + nom) si activé, sinon le modèle standard (prénom).
-function smsTemplateFor(c) { return (c && c.politesse !== false) ? (S.smsTemplatePolitesse || S.smsTemplate) : S.smsTemplate; }
 // Données de fusion SMS pour un client (toutes les clés, pour que les 2 modèles marchent).
 function smsDataFor(c, extra) { return Object.assign({ civilite: (c && c.civilite) || '', prenom: (c && c.prenom) || '', nom: (c && c.nom) || '', client: fullName(c || {}), societe: (c && c.societe) || '' }, extra || {}); }
+// Choix du modèle SMS (politesse / standard) AVANT copie. Pré-sélectionne le réglage du client (défaut : politesse),
+// fige le choix dans la fiche client (pour les prochaines fois), puis copie le message avec le bon modèle.
+function modalSmsChoice(c, data) {
+  let politesse = !c || c.politesse !== false; // défaut : politesse
+  const build = () => fillSms(politesse ? (S.smsTemplatePolitesse || S.smsTemplate) : S.smsTemplate, data);
+  openModal(`<div class="modal-head"><b>✉️ SMS — ${esc(fullName(c || {}) || 'client')}</b><button class="x" id="mX">✕</button></div>
+    <label>Formule du message</label>
+    <div class="seg" id="smsSeg"><button type="button" class="seg-btn${politesse ? ' on' : ''}" data-p="1">Politesse (Mr/Mme + nom)</button><button type="button" class="seg-btn${politesse ? '' : ' on'}" data-p="0">Standard (prénom)</button></div>
+    <p class="hint" id="smsPrev"></p>
+    <div class="actions"><button class="btn primary block" id="smsGo">📋 Copier &amp; envoyer</button></div>`);
+  const prev = $('smsPrev'); const refresh = () => { if (prev) prev.innerHTML = '<b>Aperçu :</b> ' + esc(build()); };
+  refresh();
+  $('mX').addEventListener('click', closeModal);
+  document.querySelectorAll('#smsSeg .seg-btn').forEach((b) => b.addEventListener('click', () => { politesse = b.dataset.p === '1'; document.querySelectorAll('#smsSeg .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); refresh(); }));
+  $('smsGo').addEventListener('click', async () => {
+    if (c && c.id != null) { c.politesse = politesse; saveClients(); } // fige le choix pour la prochaine fois
+    const msg = build();
+    try { await navigator.clipboard.writeText(msg); const btn = $('smsGo'); if (btn) { btn.textContent = 'Copié ✔'; setTimeout(closeModal, 700); } else closeModal(); }
+    catch { closeModal(); alert(msg); }
+  });
+}
 function insertAtCursor(ta, text) {
   const s = ta.selectionStart != null ? ta.selectionStart : ta.value.length, e = ta.selectionEnd != null ? ta.selectionEnd : ta.value.length;
   ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
@@ -4114,7 +4139,7 @@ function renderHomeTrajet() {
       el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b> <span class="ar-state ${arCls}">${arState}</span><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
         <div class="li-act"><button class="btn small" data-agir${seqLocked ? ' disabled title="Finalisez d\'abord l\'arrêt précédent"' : ''}>⚡ Agir</button> ${clotBtn}</div>`;
       // « Agir » : regroupe Waze / Route / SMS / Ticket dans une modale (évite la surcharge de boutons).
-      const smsAction = async (btn) => { const msg = fillSms(smsTemplateFor(c0), smsDataFor(c0, { cheval: chNames, trajet, adresse })); try { await navigator.clipboard.writeText(msg); btn.textContent = 'SMS copié ✔'; setTimeout(() => { btn.textContent = 'SMS'; }, 1500); } catch { alert(msg); } };
+      const smsAction = () => modalSmsChoice(c0, smsDataFor(c0, { cheval: chNames, trajet, adresse }));
       const ticketAction = async (btn) => {
         const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
         let txt = `Trajet vers ${adresse}\n  Estimé : ${est != null ? durMin(est) : '—'} · Réel : ${real != null ? durMin(real) : 'non renseigné'}\n\n`;
