@@ -344,7 +344,11 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 /* Barre Waze / Route (temps réel) par arrêt */
 .a-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .a-nav-t { font-size: .78rem; color: var(--muted); }
-.a-nav-b { flex: none; }
+.a-nav-b { flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.a-heure { display: inline-flex; align-items: center; gap: 3px; font-size: .82rem; border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
+.a-heure input[type=time] { width: 80px; border: 0; padding: 2px; background: transparent; }
+.a-heure.done { border-color: var(--ok, #2e9e5b); background: color-mix(in srgb, var(--ok, #2e9e5b) 12%, transparent); }
+.btn.small.done { opacity: .55; background: color-mix(in srgb, var(--ok, #2e9e5b) 16%, var(--card)); }
 
 /* Articles d'un arrêt (dans l'éditeur de tournée) */
 .a-articles { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
