@@ -254,12 +254,13 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .inv-brut-row td { color: var(--muted); font-size: .72rem; border-bottom: 0; }
 .a-chevaux { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .chevrow { display: flex; align-items: center; gap: 8px; font-size: .82rem; flex-wrap: wrap; }
-.a-patho { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; }
+.a-patho { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .patho-client { font-weight: 600; font-size: .82rem; margin-bottom: 4px; }
 .patho-tbl { width: 100%; font-size: .82rem; border-collapse: collapse; }
 .patho-tbl th, .patho-tbl td { text-align: center; padding: 3px 4px; border-bottom: 1px solid var(--line); }
 .patho-tbl th:first-child, .patho-tbl td:first-child { text-align: left; }
 .patho-tbl input { width: auto; margin: 0; }
+.patho-tbl input.heure-in { width: 78px; max-width: 78px; padding: 2px 4px; box-sizing: border-box; }
 .reduc-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: .85rem; }
 .reduc-row input { margin: 0; }
 .a-reduc-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: .8rem; color: var(--muted); }

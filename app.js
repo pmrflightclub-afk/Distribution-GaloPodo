@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.22';
+const APP_VERSION = '1.1.23';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.23', date: '2026-07-07',
+    ajouts: [
+      'Connexion Google : une seule fenêtre de validation (Drive + Agenda partagent la même demande — fini la double sélection de compte).',
+      'Navigation : quand Waze est choisi, Google Maps ne s\'ouvre plus en même temps (repli seulement si Waze est absent).',
+      'Éditeur : la case Heure ne déborde plus de l\'arrêt.',
+      'Compta : l\'onglet « Impayés » est désormais en 2ᵉ position (entre « Mois en cours » et « Déclaration compta »).',
+      'Agenda : les « Journées récupérées » ont leur propre sous-onglet « Récupération ».',
+    ],
+  },
   {
     version: '1.1.22', date: '2026-07-05',
     ajouts: [
@@ -634,19 +644,25 @@ function loadGis() {
   });
 }
 // Jeton d'accès (par scope) : silencieux si déjà consenti, sinon écran de connexion (interactive).
+let _gTokenInflight = {}; // scope → Promise en cours (évite 2 fenêtres de connexion au boot : Drive + Agenda partagent la MÊME requête)
 async function googleToken(interactive, scope) {
   scope = scope || GSCOPE_DRIVE;
   const c = _gTokens[scope]; if (c && Date.now() < c.exp - 60000) return c.token;
+  if (_gTokenInflight[scope]) return _gTokenInflight[scope]; // une demande est déjà en cours pour ce scope → on la partage
   if (!S.googleClientId) throw new Error('Renseignez d\'abord votre ID client Google.');
-  await loadGis();
-  return new Promise((resolve, reject) => {
-    const tc = google.accounts.oauth2.initTokenClient({
-      client_id: S.googleClientId, scope,
-      callback: (resp) => { if (resp && resp.error) return reject(new Error(resp.error)); _gTokens[scope] = { token: resp.access_token, exp: Date.now() + ((resp.expires_in || 3600) * 1000) }; persistGTokens(); resolve(resp.access_token); },
-      error_callback: (err) => reject(new Error((err && err.type) || 'connexion refusée')),
+  const pr = (async () => {
+    await loadGis();
+    return new Promise((resolve, reject) => {
+      const tc = google.accounts.oauth2.initTokenClient({
+        client_id: S.googleClientId, scope,
+        callback: (resp) => { if (resp && resp.error) return reject(new Error(resp.error)); _gTokens[scope] = { token: resp.access_token, exp: Date.now() + ((resp.expires_in || 3600) * 1000) }; persistGTokens(); resolve(resp.access_token); },
+        error_callback: (err) => reject(new Error((err && err.type) || 'connexion refusée')),
+      });
+      tc.requestAccessToken({ prompt: interactive ? 'consent' : '' });
     });
-    tc.requestAccessToken({ prompt: interactive ? 'consent' : '' });
-  });
+  })();
+  _gTokenInflight[scope] = pr;
+  try { return await pr; } finally { delete _gTokenInflight[scope]; }
 }
 async function driveFindFile(token) {
   const r = await fetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent("name='" + GDRIVE_FILE + "'")}&fields=files(id,name)`, { headers: { Authorization: 'Bearer ' + token } });
@@ -979,8 +995,12 @@ function openNav(addr) {
   try { if (navigator.clipboard) navigator.clipboard.writeText(adresse).catch(() => {}); } catch { /* ignore */ }
   if (S.navApp === 'gmaps') { window.location.href = gmaps; return; }
   const wazeApp = ll ? `waze://?ll=${ll}&navigate=yes` : `waze://?q=${encodeURIComponent(adresse)}&navigate=yes`;
-  const timer = setTimeout(() => { if (!document.hidden) window.location.href = gmaps; }, 1500); // app absente → repli Maps
-  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); }, { once: true });
+  // Repli Maps SEULEMENT si Waze n'a pas pris la main (app absente). On annule dès que la page perd le focus / se cache / se décharge (= Waze s'est ouvert), sinon les DEUX s'ouvraient.
+  let done = false; const cancel = () => { done = true; clearTimeout(timer); };
+  const timer = setTimeout(() => { if (!done && !document.hidden) window.location.href = gmaps; }, 2500);
+  window.addEventListener('blur', cancel, { once: true });
+  window.addEventListener('pagehide', cancel, { once: true });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); }, { once: true });
   window.location.href = wazeApp;
 }
 
@@ -1022,7 +1042,8 @@ function showAgenda(sub) {
   if (ab && al) al.textContent = ab.textContent;
   if ($('agendaSub')) $('agendaSub').classList.remove('open');
   if (currentAsub === 'planning') renderPlanning();
-  if (currentAsub === 'items') { renderAgendaItems(); renderAgendaCalendrier(); }
+  if (currentAsub === 'items') renderAgendaItems();
+  if (currentAsub === 'recuperation') renderAgendaCalendrier();
 }
 
 // Sous-navigation Réglages : Configuration / Calcul / Thème

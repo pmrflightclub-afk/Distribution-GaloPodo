@@ -136,6 +136,7 @@
       <div class="subtabs-list">
         <button class="subtab active" data-asub="planning">Planning</button>
         <button class="subtab" data-asub="items">Items</button>
+        <button class="subtab" data-asub="recuperation">Récupération</button>
       </div>
     </nav>
 
@@ -147,13 +148,16 @@
       </section>
     </div>
 
-    <div id="asub-items" class="subpanel">
+    <div id="asub-recuperation" class="subpanel">
       <section class="card">
         <h2>Journées récupérées</h2>
         <p class="hint">Événements <b>récupérés</b> regroupés par jour : créez la tournée d'un jour en un clic (clients pré-remplis), ou ouvrez-la si elle existe déjà.</p>
         <div id="agendaDays"></div>
-        <p class="empty" id="agendaDaysEmpty">Aucune journée récupérée. Récupérez un événement ci-dessous.</p>
+        <p class="empty" id="agendaDaysEmpty">Aucune journée récupérée. Récupérez un événement dans l'onglet « Items ».</p>
       </section>
+    </div>
+
+    <div id="asub-items" class="subpanel">
       <section class="card">
         <div class="card-head"><h2>Items du calendrier</h2><button class="btn small" id="agendaRefresh2">↻ Google</button></div>
         <p class="hint">Récupérez un événement (client connu ou nouveau), envoyez-le en agenda privé, ou passez-le inactif. La création de tournée se fait dans Réglages → Calendrier.</p>
@@ -172,8 +176,8 @@
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Mois en cours</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
         <button class="subtab active" data-csub="mois">Mois en cours</button>
-        <button class="subtab" data-csub="decl">Déclaration compta</button>
         <button class="subtab" data-csub="impayes">Impayés</button>
+        <button class="subtab" data-csub="decl">Déclaration compta</button>
       </div>
     </nav>
 
