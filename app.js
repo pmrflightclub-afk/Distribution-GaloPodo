@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.47';
+const APP_VERSION = '1.1.48';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.48', date: '2026-07-07',
+    ajouts: [
+      'Une tournée démarrée mais non finalisée reste modifiable (elle n\'est plus figée automatiquement le lendemain), pour que vous puissiez toujours finaliser ses arrêts restants. Elle reste visible dans « Trajet du jour » jusqu\'à sa clôture.',
+      'Dans une telle tournée, seuls les arrêts déjà clôturés sont verrouillés (🔒 clôturé, lecture seule) ; les arrêts encore ouverts restent modifiables.',
+    ],
+  },
   {
     version: '1.1.47', date: '2026-07-07',
     ajouts: [
@@ -1043,7 +1050,9 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 function tourStatus(date) { const t = todayStr(); if (!date) return 'avenir'; if (date < t) return 'cloturee'; if (date === t) return 'active'; return 'avenir'; }
 // Statut d'une tournée : clôturée si fermée manuellement OU date passée ; sinon selon la date.
-function statusOf(tour) { return (tour && tour.closed) ? 'cloturee' : tourStatus(tour ? tour.date : null); }
+// Une tournée DÉMARRÉE et non clôturée reste « active » (modifiable) même si sa date est passée — pour pouvoir finaliser ses arrêts ouverts.
+// (Le gel par date ne s'applique qu'aux tournées jamais démarrées : simples RDV passés non honorés.)
+function statusOf(tour) { if (!tour) return 'avenir'; if (tour.closed) return 'cloturee'; if (tour.startedAt && !tour.endedAt) return 'active'; return tourStatus(tour.date); }
 const STATUS_LBL = { cloturee: 'Clôturée', active: "Aujourd'hui", avenir: 'À venir' };
 // Date en toutes lettres (ex. « jeudi 6 novembre »).
 function fmtDateFr(d) { if (!d) return 'Sans date'; const dt = new Date(d + 'T00:00:00'); if (isNaN(dt.getTime())) return d; return dt.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }); }
@@ -1961,12 +1970,13 @@ function renderEditorArrets(locked) {
   currentTour.arrets.forEach((a, i) => {
     const nb = arretNbClients(a);
     const single = a.clients.length === 1 ? a.clients[0] : null; // réduction dans l'en-tête si 1 seul client
-    const el = document.createElement('div'); el.className = 'arret'; el.dataset.idx = i;
+    const aFinal = !locked && arretFinalise(currentTour, a); // arrêt finalisé dans une tournée encore ouverte → figé (lecture seule), les autres restent modifiables
+    const el = document.createElement('div'); el.className = 'arret' + (aFinal ? ' arret-locked' : ''); el.dataset.idx = i;
     el.innerHTML = `
       <div class="a-top">
         ${locked ? '' : '<div class="a-drag" title="Glisser pour réordonner">⠿</div>'}
         ${locked ? `<span class="a-num">${i + 1}</span>` : `<input class="a-num-in" data-order type="number" min="1" max="${N}" value="${i + 1}" title="N° d'ordre de passage (modifiable)"/>`}
-        <div class="grow"><b>${esc(labelFor(a))}</b><div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
+        <div class="grow"><b>${esc(labelFor(a))}</b>${aFinal ? ' <span class="badge badge-lock">🔒 clôturé</span>' : ''}<div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
         ${locked ? '' : '<button class="a-del" data-del title="Retirer">✕</button>'}
       </div>
       ${(!locked && single) ? `<label class="a-reduc-row"><span>Réduction articles</span><span class="fu"><input type="number" data-reduc-h min="0" max="100" step="1" value="${currentTour.reductions && currentTour.reductions[single.clientId] || ''}" placeholder="0"/><span class="fu-unit">%</span></span></label>` : ''}
