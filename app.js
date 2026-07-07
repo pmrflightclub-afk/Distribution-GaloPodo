@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.62';
+const APP_VERSION = '1.1.63';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.63', date: '2026-07-07',
+    ajouts: [
+      'Tournée → Annulations : la page s\'ouvre par défaut sur le trimestre en cours, classée par mois. Une 2ᵉ section « Autres annulations (hors période) » liste, toujours classées par mois/année, toutes les annulations encore présentes (non supprimées) en dehors de la période choisie — plus rien n\'est caché.',
+    ],
+  },
   {
     version: '1.1.62', date: '2026-07-07',
     ajouts: [
@@ -1833,7 +1839,7 @@ function deleteCancelledCheval(c) {
   cl.chevaux = (cl.chevaux || []).filter((cv) => !(norm(cv.nom) === norm(c.cheval) && chevalCancelled(cv)));
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
 }
-let annulType = 'mois', annulPeriodKey = null;
+let annulType = 'trimestre', annulPeriodKey = null;
 function renderAnnulations() {
   const seg = $('annulTypeSeg'), perSel = $('annulPeriod'), box = $('annulList'); if (!seg || !perSel || !box) return;
   seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._aw) { b._aw = true; b.addEventListener('click', () => { annulType = b.dataset.atype; annulPeriodKey = null; renderAnnulations(); }); } b.classList.toggle('on', b.dataset.atype === annulType); });
@@ -1841,22 +1847,28 @@ function renderAnnulations() {
   const months = [...new Set(all.map((c) => (c.date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
   const opts = periodOptionsFrom(annulType, months);
   if (!opts.length) { perSel.innerHTML = ''; box.innerHTML = ''; if ($('annulEmpty')) $('annulEmpty').style.display = 'block'; if ($('annulTot')) $('annulTot').textContent = ''; return; }
+  if (annulPeriodKey == null && annulType === 'trimestre') { const ts = todayStr(); const cur = ts.slice(0, 4) + '-T' + Math.ceil(parseInt(ts.slice(5, 7), 10) / 3); if (opts.some((o) => o.key === cur)) annulPeriodKey = cur; } // défaut : trimestre en cours (s'il contient des annulations)
   if (!opts.some((o) => o.key === annulPeriodKey)) annulPeriodKey = opts[0].key;
   perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === annulPeriodKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
   perSel.onchange = () => { annulPeriodKey = perSel.value; renderAnnulations(); };
   const range = new Set(monthsOfRange(annulType, annulPeriodKey));
-  const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));
-  if ($('annulEmpty')) $('annulEmpty').style.display = list.length ? 'none' : 'block';
+  const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));       // section 1 : période sélectionnée
+  const others = all.filter((c) => !range.has((c.date || '').slice(0, 7)));     // section 2 : toutes les autres (non supprimées)
+  if ($('annulEmpty')) $('annulEmpty').style.display = all.length ? 'none' : 'block';
   const totA = list.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), totR = list.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0);
-  if ($('annulTot')) $('annulTot').innerHTML = list.length ? `Annulés : <b>${eur(totA)}</b> · Reportés : <b>${eur(totR)}</b> (manque à gagner)` : '';
+  if ($('annulTot')) $('annulTot').innerHTML = list.length ? `Période : annulés <b>${eur(totA)}</b> · reportés <b>${eur(totR)}</b> (manque à gagner)` : (all.length ? 'Aucune annulation dans cette période — voir « Autres annulations » ci-dessous.' : '');
   box.innerHTML = '';
-  list.forEach((c) => {
+  const mkItem = (c) => {
     const el = document.createElement('div'); el.className = 'list-item';
     const stLbl = c.status === 'reporte' ? '↩ reporté' : '🚫 annulé';
-    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b><span class="li-sub">${esc(fmtDateFr(c.date))} · ${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · <b>replacé</b>' : ''} · ${eur(c.ttc)}</span></div><div class="li-act"><button class="btn small danger" data-del title="Supprimer définitivement">🗑</button></div>`;
+    const paid = chevalCredited(c.cv);
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b><span class="li-sub">${esc(fmtDateFr(c.date))} · ${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · <b>replacé</b>' : ''}${paid ? ' · <b>payé (note de crédit)</b>' : ''} · ${eur(c.ttc)}</span></div><div class="li-act"><button class="btn small danger" data-del title="Supprimer définitivement">🗑</button></div>`;
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer définitivement cet arrêt annulé (' + c.cheval + ') ? Il disparaît des listes et des stats.')) return; deleteCancelledCheval(c); renderAnnulations(); });
-    box.appendChild(el);
-  });
+    return el;
+  };
+  const addGroups = (items) => { const g = {}; items.forEach((c) => { const k = (c.date || '').slice(0, 7); (g[k] = g[k] || []).push(c); }); Object.keys(g).sort().reverse().forEach((k) => { const h = document.createElement('h3'); h.className = 'rsub'; h.textContent = monthLabel(k); box.appendChild(h); g[k].forEach((c) => box.appendChild(mkItem(c))); }); }; // classé par mois/année
+  if (list.length) addGroups(list);
+  if (others.length) { const sep = document.createElement('div'); sep.innerHTML = '<h2 class="rsub" style="margin-top:18px;border-top:1px solid var(--line);padding-top:12px">Autres annulations (hors période)</h2><p class="hint">Toutes les annulations encore présentes (non supprimées définitivement), en dehors de la période sélectionnée.</p>'; box.appendChild(sep); addGroups(others); }
 }
 // ---------- Replacer un RDV (chevaux reportés, non encore replacés), groupés par client ----------
 function reportedByClient() {
