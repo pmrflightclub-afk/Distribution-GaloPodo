@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.38';
+const APP_VERSION = '1.1.39';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.39', date: '2026-07-07',
+    ajouts: [
+      'Saisie d\'adresse corrigée : une proposition choisie depuis n\'importe quel champ (Rue, Code postal ou Localité) remplit désormais la rue, le N°, le code postal ET la localité. Le filtre par type (qui empêchait la rue de remonter) est retiré.',
+      'Le numéro tapé dans le champ Rue (ex. « Rue de la Loi 16 ») est extrait automatiquement vers le champ N°. Fonctionne avec OpenStreetMap (par défaut) et Geoapify.',
+    ],
+  },
   {
     version: '1.1.38', date: '2026-07-07',
     ajouts: [
@@ -981,11 +988,18 @@ const arrivalXY = () => { const a = tourArrivee(); return { lat: a.lat, lon: a.l
 
 // ---------- Cartographie ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function suggestAddress(text, kind) {
+// Extrait un numéro de maison d'un texte tapé (« Rue de la Loi 16 » → { street:'Rue de la Loi', numero:'16' }).
+function splitHouseNumber(text) {
+  const m = String(text || '').match(/^\s*(.+?)[\s,]+(\d+\s?[a-zA-Z]?)\s*$/);
+  if (m) return { street: m[1].trim(), numero: m[2].replace(/\s/g, '') };
+  return { street: String(text || '').trim(), numero: '' };
+}
+// Suggestions d'adresse (autocomplete). Aucun filtre `type` : chaque proposition renvoie l'adresse COMPLÈTE (rue + CP + localité),
+// pour qu'un choix depuis n'importe quel champ remplisse les 4 champs (le filtre par type masquait la rue).
+async function suggestAddress(text) {
   if (S.provider === 'geoapify') {
     if (!S.geoapifyKey) throw new Error('Clé Geoapify manquante');
-    const typeParam = kind ? `&type=${kind}` : '';
-    const r = await fetch(`https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(text)}&limit=6&lang=fr&filter=countrycode:be,fr,lu${typeParam}&apiKey=${S.geoapifyKey}`);
+    const r = await fetch(`https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(text)}&limit=6&lang=fr&filter=countrycode:be,fr,lu&apiKey=${S.geoapifyKey}`);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     return (j.features || []).map((f) => { const p = f.properties; return { rue: p.street || p.name || '', numero: p.housenumber || '', cp: p.postcode || '', localite: p.city || p.town || p.village || '', lat: p.lat, lon: p.lon, label: p.formatted }; });
@@ -1033,18 +1047,25 @@ async function route(points) {
   return { totalKm: rt.distance / 1000, totalMin: rt.duration / 60, legsKm: (rt.legs || []).map((l) => l.distance / 1000), geo };
 }
 
-// ---------- Widget d'adresse (suggestion PAR champ) ----------
+// ---------- Widget d'adresse (suggestion depuis n'importe quel champ → remplit les 4 champs) ----------
 function attachAuto(input, kind, addr, onPick, onEdit) {
   let deb, box;
   const close = () => { if (box) { box.remove(); box = null; } };
   const run = async () => {
-    const v = input.value.trim(); if (v.length < 2) { close(); return; }
-    const text = kind === 'street' ? [v, addr.cp, addr.localite].filter(Boolean).join(' ') : kind === 'postcode' ? [v, addr.localite].filter(Boolean).join(' ') : v;
+    const raw = input.value.trim(); if (raw.length < 2) { close(); return; }
+    // Dans le champ Rue, on extrait le N° tapé (« Rue X 16 » → cherche « Rue X », N°=16) pour le réappliquer au choix.
+    let searchBase = raw, extractedNum = '';
+    if (kind === 'street') { const sp = splitHouseNumber(raw); searchBase = sp.street; extractedNum = sp.numero; }
+    // Contexte pour affiner (CP/localité connus), sans filtrer par type → la proposition reste une adresse complète.
+    const parts = [searchBase];
+    if (kind !== 'postcode' && addr.cp) parts.push(addr.cp);
+    if (kind !== 'city' && addr.localite) parts.push(addr.localite);
+    const text = parts.filter(Boolean).join(' ');
     close(); box = document.createElement('div'); box.className = 'aw-sugg'; input.parentElement.appendChild(box); box.innerHTML = '<div class="aw-item">Recherche…</div>';
     try {
-      const res = await suggestAddress(text, kind); if (!box) return; box.innerHTML = '';
+      const res = await suggestAddress(text); if (!box) return; box.innerHTML = '';
       if (!res.length) { box.innerHTML = '<div class="aw-item">Aucun résultat</div>'; return; }
-      res.forEach((s) => { const d = document.createElement('div'); d.className = 'aw-item'; d.textContent = s.label; d.addEventListener('mousedown', (e) => { e.preventDefault(); onPick(s); close(); }); box.appendChild(d); });
+      res.forEach((s) => { const d = document.createElement('div'); d.className = 'aw-item'; d.textContent = s.label; d.addEventListener('mousedown', (e) => { e.preventDefault(); onPick(Object.assign({}, s, (extractedNum && !s.numero) ? { numero: extractedNum } : {})); close(); }); box.appendChild(d); });
     } catch (e) { if (box) box.innerHTML = '<div class="aw-item">Erreur : ' + e.message + '</div>'; }
   };
   input.addEventListener('input', () => { addr.lat = null; addr.lon = null; onEdit && onEdit(); clearTimeout(deb); deb = setTimeout(run, S.provider === 'geoapify' ? 350 : 1100); });
@@ -1058,7 +1079,16 @@ function mountAddress(container, addr, onChange) {
     <div class="row"><label class="af" style="flex:1">Code postal<input class="aw-cp" value="${esc(addr.cp)}" autocomplete="off"/></label><label class="grow af" style="flex:2">Localité<input class="aw-loc" value="${esc(addr.localite)}" autocomplete="off"/></label></div>`;
   const el = { rue: container.querySelector('.aw-rue'), numero: container.querySelector('.aw-num'), cp: container.querySelector('.aw-cp'), localite: container.querySelector('.aw-loc') };
   const emit = () => { addr.rue = el.rue.value; addr.numero = el.numero.value; addr.cp = el.cp.value; addr.localite = el.localite.value; onChange && onChange(addr); };
-  const fill = (s) => { if (s.rue) addr.rue = s.rue; if (s.numero) addr.numero = s.numero; if (s.cp) addr.cp = s.cp; if (s.localite) addr.localite = s.localite; addr.lat = s.lat; addr.lon = s.lon; el.rue.value = addr.rue; el.numero.value = addr.numero; el.cp.value = addr.cp; el.localite.value = addr.localite; onChange && onChange(addr); };
+  // Choix d'une proposition (depuis n'importe quel champ) : remplit rue + N° + CP + localité (garde l'ancien si la proposition ne fournit pas le champ).
+  const fill = (s) => {
+    addr.rue = s.rue || addr.rue;
+    addr.numero = s.numero || addr.numero; // N° = celui de la proposition, sinon N° extrait du texte tapé, sinon inchangé
+    addr.cp = s.cp || addr.cp;
+    addr.localite = s.localite || addr.localite;
+    addr.lat = s.lat; addr.lon = s.lon;
+    el.rue.value = addr.rue; el.numero.value = addr.numero; el.cp.value = addr.cp; el.localite.value = addr.localite;
+    onChange && onChange(addr);
+  };
   el.numero.addEventListener('input', () => { addr.lat = null; addr.lon = null; emit(); });
   attachAuto(el.rue, 'street', addr, fill, emit); attachAuto(el.cp, 'postcode', addr, fill, emit); attachAuto(el.localite, 'city', addr, fill, emit);
   return addr;
