@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.53';
+const APP_VERSION = '1.1.54';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.54', date: '2026-07-07',
+    ajouts: [
+      'Replacer un RDV : les chevaux dont le RDV a été reporté sont regroupés par client, dans un nouveau sous-onglet « Replacer un RDV » (onglet Tournée) et dans une section « 📅 Replacer un RDV » sur l\'Accueil (entre Trajet du jour et À venir). Un bouton « Fixer une date » place tous les chevaux reportés du client sur une tournée (existante ou nouvelle) ; le client quitte alors la liste.',
+      'Une tournée dépassée jamais démarrée : le bouton « Reporter » bascule désormais tous ses RDV en « reporté » → ils rejoignent « Replacer un RDV ».',
+    ],
+  },
   {
     version: '1.1.53', date: '2026-07-07',
     ajouts: [
@@ -1792,6 +1799,45 @@ function renderAnnulations() {
     el.innerHTML = `<div class="li-main"><b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b><span class="li-sub">${esc(fmtDateFr(c.date))} · ${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · <b>replacé</b>' : ''} · ${eur(c.ttc)}</span></div><div class="li-act"><button class="btn small danger" data-del title="Supprimer définitivement">🗑</button></div>`;
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer définitivement cet arrêt annulé (' + c.cheval + ') ? Il disparaît des listes et des stats.')) return; deleteCancelledCheval(c); renderAnnulations(); });
     box.appendChild(el);
+  });
+}
+// ---------- Replacer un RDV (chevaux reportés, non encore replacés), groupés par client ----------
+function reportedByClient() {
+  const map = {};
+  allCancellations().forEach((c) => { if (c.status === 'reporte' && !c.replaced) { (map[c.clientId] = map[c.clientId] || { clientId: c.clientId, nom: c.clientNom, items: [] }).items.push(c); } });
+  return Object.values(map).sort((a, b) => a.nom.localeCompare(b.nom));
+}
+function renderReplacer() {
+  const box = $('replacerList'); if (!box) return; box.innerHTML = '';
+  const groups = reportedByClient();
+  if ($('replacerEmpty')) $('replacerEmpty').style.display = groups.length ? 'none' : 'block';
+  groups.forEach((g) => {
+    const el = document.createElement('div'); el.className = 'list-item';
+    el.innerHTML = `<div class="li-main"><b>${esc(g.nom)}</b><span class="li-sub">🐴 ${esc(g.items.map((c) => c.cheval).join(', '))} · ${g.items.length} RDV reporté(s)</span></div><div class="li-act"><button class="btn small primary" data-fix>📅 Fixer une date</button></div>`;
+    el.querySelector('[data-fix]').addEventListener('click', () => modalReplacerDate(g));
+    box.appendChild(el);
+  });
+}
+// Fixe une date de remplacement pour tous les chevaux reportés d'un client (insérés dans la tournée de cette date ou nouvelle tournée).
+function modalReplacerDate(g) {
+  const client = clients.find((x) => x.id === g.clientId); if (!client) { renderReplacer(); return; }
+  const proposed = proposedRdvDate(todayStr());
+  const chn = g.items.map((c) => c.cheval).join(', ');
+  openModal(`<div class="modal-head"><b>📅 Replacer — ${esc(g.nom)}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Chevaux reportés : <b>🐴 ${esc(chn)}</b>. Ils seront ajoutés à la tournée de la date choisie (ou une nouvelle tournée est créée).</p>
+    <label>Date de remplacement<input type="date" id="rpDate" value="${proposed}"/></label>
+    <p class="hint" id="rpPrev"></p>
+    <div class="actions"><button class="btn primary block" id="rpOk">Fixer le RDV</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  const prev = () => { const d = $('rpDate').value; const pv = rdvDayPreview(d); $('rpPrev').innerHTML = d ? `<b>${fmtDateFr(d)}</b> — arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}` : ''; };
+  $('rpDate').addEventListener('change', prev); prev();
+  $('rpOk').addEventListener('click', () => {
+    const date = $('rpDate').value; if (!date) { closeModal(); return; }
+    const ids = new Set(); g.items.forEach((c) => { const h = (client.chevaux || []).find((x) => norm(x.nom) === norm(c.cheval)); if (h) ids.add(h.id); });
+    const chevalObjs = (client.chevaux || []).filter((h) => ids.has(h.id));
+    const res = scheduleClientOnDate(date, client, chevalObjs.length ? chevalObjs : activeChevaux(client));
+    g.items.forEach((c) => { if (c.cv.cancel) c.cv.cancel.replacedTourId = res.tour.id; }); // marque comme replacé (sort de la liste, reste dans Annulations)
+    saveTournees(); saveArchive(); closeModal(); renderHome();
   });
 }
 // D2 — archivage : déplace les tournées clôturées > 4 semaines de `tournees` vers `archive` (simple déplacement, union inchangée).
@@ -3811,9 +3857,32 @@ function durMin(min) { if (min == null || isNaN(min) || min < 0) return '—'; m
 function durHm(ms) { return (ms == null || ms < 0) ? '—' : durMin(ms / 60000); }
 // Une tournée est « dépassée » = son JOUR est passé sans qu'elle soit clôturée (débordée d'un jour). Les tournées du jour restent gérées dans Trajet du jour.
 function isOverdue(t) { return !!(t && !t.closed && !t.endedAt && (t.date || '') && t.date < todayStr()); }
-// Tournées DÉPASSÉES non clôturées (démarrées inachevées OU jamais démarrées). PAS les tournées du jour en cours (gérées dans Trajet du jour).
+// Tournée entièrement annulée/reportée : chaque client a des chevaux et tous sont annulés → plus rien à finaliser (gérée via Annulations/Replacer).
+function tourAllCancelled(t) {
+  const cls = []; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => cls.push(cl)));
+  return cls.length > 0 && cls.every((cl) => { const ch = cl.chevaux || []; return ch.length > 0 && ch.every(chevalCancelled); });
+}
+// Tournées DÉPASSÉES non clôturées (démarrées inachevées OU jamais démarrées). Exclut celles entièrement reportées/annulées.
 function blockingTours() {
-  return (tournees || []).filter((t) => isOverdue(t) && tourFinalizeBlock(t).length > 0);
+  return (tournees || []).filter((t) => isOverdue(t) && tourFinalizeBlock(t).length > 0 && !tourAllCancelled(t));
+}
+// Reporte TOUS les chevaux (non déjà annulés) d'une tournée → ils rejoignent « Replacer un RDV ».
+function reportAllTour(t) {
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) cv.cancel = { status: 'reporte', reason: 'pro', note: '', at: new Date().toISOString(), replacedTourId: null }; })));
+  const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
+  renderHome();
+}
+function renderReplacerHome() {
+  const card = $('homeReplacer'), list = $('homeReplacerList'); if (!card || !list) return;
+  const groups = reportedByClient();
+  card.classList.toggle('hidden', !groups.length);
+  list.innerHTML = '';
+  groups.forEach((g) => {
+    const el = document.createElement('div'); el.className = 'list-item';
+    el.innerHTML = `<div class="li-main"><b>${esc(g.nom)}</b><span class="li-sub">🐴 ${esc(g.items.map((c) => c.cheval).join(', '))} · ${g.items.length} reporté(s)</span></div><div class="li-act"><button class="btn small primary" data-fix>📅 Date</button></div>`;
+    el.querySelector('[data-fix]').addEventListener('click', () => modalReplacerDate(g));
+    list.appendChild(el);
+  });
 }
 function deleteTourById(id) { purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); }
 // Section dédiée (au-dessus du Trajet du jour) : tournées dépassées non clôturées.
@@ -3838,7 +3907,7 @@ function renderBlockingArrets() {
       modalPayment(t, a, renderHome, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } });
     });
     else {
-      el.querySelector('[data-report]').addEventListener('click', () => modalReporterTour(t));
+      el.querySelector('[data-report]').addEventListener('click', () => { if (confirm('Reporter tous les RDV de cette tournée ? Les clients rejoindront « Replacer un RDV » pour fixer une nouvelle date.')) reportAllTour(t); });
       el.querySelector('[data-del]').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée non démarrée du ' + fmtDateFr(t.date) + ' ?')) { deleteTourById(t.id); renderHome(); } });
     }
     list.appendChild(el);
@@ -4301,6 +4370,7 @@ function renderHome() {
   renderHomeChangelog();
   renderBlockingArrets();
   renderHomeTrajet();
+  renderReplacerHome();
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
 }
 // ================= CHANGELOG / message de passage de version =================
