@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.65';
+const APP_VERSION = '1.1.66';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.66', date: '2026-07-07',
+    ajouts: [
+      'Fiche cheval : nouveau champ « Date de naissance » (Gestion → client).',
+      'Statistiques : nouveau sous-onglet « Suivi chevaux » (en 1ʳᵉ position) qui liste chaque cheval avec son âge (depuis la date de naissance) et sa durée de prise en charge, en mois ou en années et mois.',
+    ],
+  },
   {
     version: '1.1.65', date: '2026-07-07',
     ajouts: [
@@ -1662,6 +1669,7 @@ function editClient(existing, onSaved, prefillNom) {
       h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = 'specifique';
       const row = document.createElement('div'); row.className = 'cheval';
       row.innerHTML = `<div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><label class="chk2"><input type="checkbox" data-actif ${h.actif !== false ? 'checked' : ''}/> Actif</label><button class="a-del" data-del>✕</button></div>
+        <label>Date de naissance<input type="date" data-naiss value="${h.dateNaissance || ''}"/></label>
         <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
         <label>Adresse du cheval<select data-src>
           <option value="client">Même adresse que le client</option>
@@ -1672,6 +1680,7 @@ function editClient(existing, onSaved, prefillNom) {
       row.querySelector('[data-src]').value = h.addrSource;
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
       row.querySelector('[data-actif]').addEventListener('change', (e) => { h.actif = e.target.checked; saveDraft(); });
+      row.querySelector('[data-naiss]').addEventListener('change', (e) => { h.dateNaissance = e.target.value || ''; saveDraft(); });
       row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
@@ -3036,7 +3045,8 @@ function showStats(sub) {
   window.scrollTo(0, 0);
 }
 function renderStatsSub(sub) {
-  if (sub === 'vehcheval') renderVehiculeCheval();
+  if (sub === 'chevaux') renderChevauxSuivi();
+  else if (sub === 'vehcheval') renderVehiculeCheval();
   else if (sub === 'trajet') renderTrajetTemps();
   else if (sub === 'travail') renderTravail();
   else if (sub === 'cheval') renderFinanceCheval();
@@ -3058,6 +3068,23 @@ function renderVehiculePanel() {
   if ($('tCarb')) $('tCarb').textContent = eurkm(fuelPerKmHT()) + ' HT';
   if ($('tTournee')) $('tTournee').textContent = eurkm(tarifHT('tournee')) + ' HT';
   renderVehiculePieces();
+}
+// Sous-onglet « Suivi chevaux » : âge (date de naissance) et durée de prise en charge de chaque cheval.
+function renderChevauxSuivi() {
+  const box = $('chevauxSuiviList'); if (!box) return; box.innerHTML = '';
+  const rows = [];
+  clients.forEach((c) => (c.chevaux || []).forEach((h) => rows.push({ h, c })));
+  if ($('chevauxSuiviEmpty')) $('chevauxSuiviEmpty').style.display = rows.length ? 'none' : 'block';
+  rows.sort((a, b) => norm(a.h.nom).localeCompare(norm(b.h.nom)));
+  rows.forEach(({ h, c }) => {
+    const age = h.dateNaissance ? durMonthsLabel(monthsBetween(h.dateNaissance)) : '<i>date de naissance non renseignée</i>';
+    const pec = h.datePriseEnCharge ? durMonthsLabel(monthsBetween(h.datePriseEnCharge)) : '<i>non renseignée</i>';
+    const el = document.createElement('div'); el.className = 'inv-client';
+    let hh = `<div class="inv-head"><span>🐴 ${esc(h.nom)} <span class="li-sub">— ${esc(fullName(c))}</span></span>${h.actif === false ? '<span class="li-sub">inactif</span>' : ''}</div>`;
+    hh += `<div class="inv-line"><span>Âge</span><span>${age}${h.dateNaissance ? ' <span class="li-sub">(né le ' + esc(fmtDateFr(h.dateNaissance)) + ')</span>' : ''}</span></div>`;
+    hh += `<div class="inv-line"><span>Prise en charge</span><span>${pec}${h.datePriseEnCharge ? ' <span class="li-sub">(depuis le ' + esc(fmtDateFr(h.datePriseEnCharge)) + ')</span>' : ''}</span></div>`;
+    el.innerHTML = hh; box.appendChild(el);
+  });
 }
 // Sous-onglet « Véhicule par cheval » : km & durée attribués par client, détaillés par cheval.
 function renderVehiculeCheval() {
