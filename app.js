@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.64';
+const APP_VERSION = '1.1.65';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.65', date: '2026-07-07',
+    ajouts: [
+      'Temps de travail (tournées récupérées) : la durée de consultation saisie pour chaque cheval est désormais attribuée exactement à ce cheval (plus de moyenne entre clients d\'un même arrêt). Le temps de trajet, lui, reste réparti par arrêt.',
+    ],
+  },
   {
     version: '1.1.64', date: '2026-07-07',
     ajouts: [
@@ -3304,14 +3310,20 @@ function travailStats() {
     const cmap = {};
     t.arrets.forEach((a, i) => {
       const nc = (a.clients || []).length || 1;
-      const travelPer = w.per[i].travelMs / nc;
-      const visitPer = (w.per[i].visitMs != null ? w.per[i].visitMs : 0) / nc;
+      const travelPer = w.per[i].travelMs / nc;                                    // trajet = commun à l'arrêt → réparti par client
+      const visitPerEqual = (w.per[i].visitMs != null ? w.per[i].visitMs : 0) / nc; // tournées normales : visite mesurée (arrêt) répartie
       (a.clients || []).forEach((cl) => {
         const c = cmap[cl.clientId] = cmap[cl.clientId] || { clientId: cl.clientId, nom: clientName(cl.clientId), travelMs: 0, visitMs: 0, chevaux: {} };
-        c.travelMs += travelPer; c.visitMs += visitPer;
+        c.travelMs += travelPer;
         const faits = (cl.chevaux || []).filter(chevalFait); // seuls les chevaux réellement pris en charge portent le temps
         const chn = faits.length || 1;
-        faits.forEach((cv) => { const ch = c.chevaux[cv.nom] = c.chevaux[cv.nom] || { nom: cv.nom, ms: 0 }; ch.ms += (travelPer + visitPer) / chn; });
+        if (t.recovered) {
+          // Tournée récupérée : la consultation est saisie PAR CHEVAL (cv.consultMin) → attribuée exactement à chaque cheval, pas de moyenne.
+          faits.forEach((cv) => { const v = (typeof cv.consultMin === 'number' ? cv.consultMin : 0) * 60000; c.visitMs += v; const ch = c.chevaux[cv.nom] = c.chevaux[cv.nom] || { nom: cv.nom, ms: 0 }; ch.ms += travelPer / chn + v; });
+        } else {
+          c.visitMs += visitPerEqual;
+          faits.forEach((cv) => { const ch = c.chevaux[cv.nom] = c.chevaux[cv.nom] || { nom: cv.nom, ms: 0 }; ch.ms += (travelPer + visitPerEqual) / chn; });
+        }
       });
     });
     const clientsArr = Object.values(cmap).map((c) => {
