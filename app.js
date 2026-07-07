@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.49';
+const APP_VERSION = '1.1.50';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.50', date: '2026-07-07',
+    ajouts: [
+      'Annulation / report d\'un RDV (1ʳᵉ étape) : dans un arrêt, un bouton ⊘ par cheval permet d\'ANNULER ou de REPORTER son rendez-vous, avec le motif (client / professionnel) et une note. Le cheval reste listé (barré, badge « annulé » / « reporté ») mais sa part est retirée de la facture et des stats — sans changer les autres clients ni le calcul de la tournée. « ↩ Rétablir » possible.',
+      'Si le RDV a déjà été payé, l\'annulation renverra vers une note de crédit (fonction ajoutée dans la prochaine mise à jour).',
+    ],
+  },
   {
     version: '1.1.49', date: '2026-07-07',
     ajouts: [
@@ -1760,7 +1767,7 @@ function reconcileTour(tour) {
         if (!h) return; // cheval supprimé → retiré
         const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
         let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [] }; arr.clients.push(ncl); }
-        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null });
+        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null });
       });
     });
   });
@@ -2047,10 +2054,11 @@ function renderEditorArrets(locked) {
         const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
         h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Parage</th><th>Visite</th>${pathoCols.map((c) => '<th>' + c.label + '</th>').join('')}</tr></thead><tbody>`;
         pool.forEach((ph, pi) => {
-          const cv = cvOf(ph); const acte = !!(cv && (cv.parage || cv.visite)); // parage OU visite = cheval pris en charge
-          h += `<tr><td>🐴 ${esc(ph.nom)}</td>`;
-          h += `<td><input type="checkbox" data-key="parage" data-pi="${pi}" ${cv && cv.parage ? 'checked' : ''}/></td>`;
-          h += `<td><input type="checkbox" data-vis data-pi="${pi}" ${cv && cv.visite ? 'checked' : ''}${visArts.length ? '' : ' disabled'}/></td>`;
+          const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite)); // parage OU visite = cheval pris en charge
+          const tag = cancelled ? ` <span class="badge badge-cancel">${cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé'}</span>` : '';
+          h += `<tr${cancelled ? ' class="ch-cancel"' : ''}><td>🐴 ${esc(ph.nom)}${tag} <button type="button" class="mini-x" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter ce RDV'}">${cancelled ? '✎' : '⊘'}</button></td>`;
+          h += `<td><input type="checkbox" data-key="parage" data-pi="${pi}" ${cv && cv.parage ? 'checked' : ''}${cancelled ? ' disabled' : ''}/></td>`;
+          h += `<td><input type="checkbox" data-vis data-pi="${pi}" ${cv && cv.visite ? 'checked' : ''}${(cancelled || !visArts.length) ? ' disabled' : ''}/></td>`;
           h += pathoCols.map((c) => `<td><input type="checkbox" data-key="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${acte ? '' : ' disabled'}/></td>`).join('');
           h += '</tr>';
         });
@@ -2077,6 +2085,7 @@ function renderEditorArrets(locked) {
           modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // ouvre la modale de choix
         }));
         wrap.querySelectorAll('[data-vispick]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.vispick], cv = ensureCv(ph); modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); }));
+        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); modalCancelRdv(ph.nom, { cv, paid: clientPaiementDone(currentTour, cl.clientId), onDone: () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); } }); }));
         el.appendChild(wrap);
       });
     }
@@ -2202,7 +2211,11 @@ function enableRowDrag(listEl, arr, save) {
 // Présence IMPLICITE : un cheval est « pris en charge » dès qu'il a un acte (parage OU visite OU pathologie).
 // Plus de case « Présent » : un cheval sans acte reste listé mais n'est ni compté (stats) ni facturé (corrige le « cheval fantôme »).
 function chevalPresent(c) { return !!c; } // conservé pour compat : la présence ne dépend plus d'un drapeau
-function chevalFait(c) { return !!(c && (c.parage || c.fourbure || c.npas || c.infection || c.visite)); }
+// RDV annulé/reporté : le cheval reste dans l'arrêt (traçabilité) mais est EXCLU du calcul (facture/stats/compta). Cf. cv.cancel = { status:'annule'|'reporte', reason, note, at, replacedTourId }.
+function chevalCancelled(c) { return !!(c && c.cancel && c.cancel.status); }
+function chevalFait(c) { return !chevalCancelled(c) && !!(c && (c.parage || c.fourbure || c.npas || c.infection || c.visite)); }
+// Client entièrement annulé à un arrêt = avait des chevaux, tous annulés (→ pas de déplacement facturé, mais compte toujours dans la géométrie figée).
+function clientAllCancelled(cl) { const ch = (cl && cl.chevaux) || []; return ch.length > 0 && ch.every(chevalCancelled); }
 function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
@@ -2235,6 +2248,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     const partHT = r.montantHT / r.nbClients, partTTC = r.montantTTC / r.nbClients;
     const kmClient = (r.kmAttribue || 0) / r.nbClients;
     r.clients.forEach((cl) => {
+      if (cl.cancelled) return; // client entièrement annulé : compté dans nbClients (géométrie figée) mais NI déplacement NI acte facturés (manque à gagner)
       const m = getC(cl.clientId, cl.nom);
       m.deplacement.push({ adresse: r.adresse, type: r.type, partHT, partTTC, km: kmClient, tarifHT: r.tarifHT || 0, proche: !!r.proche, chevaux: cl.chevaux.map((c) => c.nom) });
       m.htDep += partHT;
@@ -2319,7 +2333,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: (cl.chevaux || []).filter(chevalFait).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null })) })),
+    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), chevaux: (cl.chevaux || []).filter(chevalFait).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null })) })),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
@@ -3889,6 +3903,38 @@ function modalVisitePick(nom, currentId, visArts, onPick) {
     <div class="actions-col">${visArts.map((x) => `<button class="btn block${x.id === currentId ? ' primary' : ''}" data-vid="${x.id}">${esc(x.libelle)} · ${eur(x.prixHT)}</button>`).join('')}</div>`);
   $('mX').addEventListener('click', () => { closeModal(); onPick(undefined); });
   document.querySelectorAll('[data-vid]').forEach((b) => b.addEventListener('click', () => { closeModal(); onPick(b.dataset.vid); }));
+}
+// Annuler / reporter le RDV d'un cheval (annule les actes de ce cheval sans toucher la géométrie ni les autres clients).
+// opts : { cv, paid, onDone }. Si le RDV est déjà PAYÉ → orienté vers la note de crédit (à venir, bloc suivant).
+function modalCancelRdv(nom, opts) {
+  const cv = opts.cv;
+  if (chevalCancelled(cv)) {
+    const lbl = cv.cancel.status === 'reporte' ? 'reporté' : 'annulé';
+    openModal(`<div class="modal-head"><b>RDV ${lbl} — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Motif : <b>${cv.cancel.reason === 'pro' ? 'professionnel' : 'client'}</b>${cv.cancel.note ? ' · ' + esc(cv.cancel.note) : ''}.</p>
+      <div class="actions"><button class="btn primary block" id="cxRestore">↩ Rétablir ce RDV</button></div>`);
+    $('mX').addEventListener('click', closeModal);
+    $('cxRestore').addEventListener('click', () => { cv.cancel = null; closeModal(); opts.onDone(); });
+    return;
+  }
+  if (opts.paid) {
+    openModal(`<div class="modal-head"><b>RDV payé — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Ce RDV a déjà été <b>payé</b> : on ne modifie pas une facture encaissée. L'annulation passera par une <b>note de crédit</b> (à rembourser par virement) — fonction ajoutée dans le prochain bloc de cette mise à jour.</p>
+      <div class="actions"><button class="btn block" id="cxClose">Fermer</button></div>`);
+    $('mX').addEventListener('click', closeModal); $('cxClose').addEventListener('click', closeModal);
+    return;
+  }
+  let status = 'annule', reason = 'client';
+  openModal(`<div class="modal-head"><b>Annuler / reporter — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Le RDV de ce cheval est retiré de la facture et des stats normales. Les autres clients et le calcul de la tournée ne changent pas.</p>
+    <label>Type</label><div class="seg" id="cxStatus"><button type="button" class="seg-btn on" data-st="annule">Annulé</button><button type="button" class="seg-btn" data-st="reporte">Reporté</button></div>
+    <label>Motif</label><div class="seg" id="cxReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
+    <label>Note (facultatif)<input type="text" id="cxNote" placeholder="ex. absent, cheval malade…" /></label>
+    <div class="actions"><button class="btn primary block" id="cxOk">Confirmer</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  document.querySelectorAll('#cxStatus .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxStatus .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); status = b.dataset.st; }));
+  document.querySelectorAll('#cxReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
+  $('cxOk').addEventListener('click', () => { cv.cancel = { status, reason, note: $('cxNote').value.trim(), at: new Date().toISOString(), replacedTourId: null }; closeModal(); opts.onDone(); });
 }
 // Paiement d'un arrêt (par client) : liquide / virement + facture ? + (si liquide) montant réel payé (arrondi caisse).
 // onCommit (optionnel) : appelé UNIQUEMENT quand le paiement est enregistré et valide (sert à clôturer l'arrêt).
