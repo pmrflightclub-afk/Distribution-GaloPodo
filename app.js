@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.35';
+const APP_VERSION = '1.1.36';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.36', date: '2026-07-07',
+    ajouts: [
+      'Éditeur de tournée : la répartition de la facture de chaque client s\'affiche maintenant directement SOUS son arrêt (paramétrage de l\'arrêt puis facture du client, ensemble). Plus besoin de descendre jusqu\'au panneau global. Le bas de page ne garde que le total général de la tournée.',
+    ],
+  },
   {
     version: '1.1.35', date: '2026-07-07',
     ajouts: [
@@ -1926,9 +1932,12 @@ function renderEditorArrets(locked) {
     artWrap.appendChild(alist);
     if (!locked) { const ab = artWrap.querySelector('[data-add-art]'); if (ab) ab.addEventListener('click', () => modalTourArticle(null, { arret: a, clientId: a.clients.length === 1 ? a.clients[0].clientId : undefined })); }
     el.appendChild(artWrap);
+    // Répartition facture par client, fusionnée sous l'arrêt (remplie par renderArretInvoices).
+    const invBox = document.createElement('div'); invBox.className = 'a-invoices'; invBox.dataset.aidx = i; el.appendChild(invBox);
     box.appendChild(el);
   });
   if (!locked) enableDrag(box);
+  renderArretInvoices();
 }
 
 function enableDrag(listEl) {
@@ -2221,7 +2230,27 @@ async function calcTour(silent) {
   } catch (e) { st.className = 'status err'; st.textContent = 'Erreur : ' + e.message; }
 }
 
-// Rendu unique : tuiles (haut) + facture (répartition par client > cheval + HT/TVA/TTC).
+// Répartition facture FUSIONNÉE dans l'éditeur : le bloc de chaque client s'affiche juste sous son arrêt.
+// Un client présent à plusieurs arrêts (adresses différentes) : sa facture (agrégée) n'apparaît qu'une fois, sous son 1ᵉʳ arrêt.
+function renderArretInvoices() {
+  if (!currentTour) return;
+  const R = currentTour.result;
+  const pays = currentTour.payments || {};
+  const shown = new Set();
+  document.querySelectorAll('#edArrets .a-invoices').forEach((box) => {
+    box.innerHTML = '';
+    const i = +box.dataset.aidx; const a = currentTour.arrets[i]; if (!a) return;
+    if (!R || !R.parClient) return;
+    (a.clients || []).forEach((cl) => {
+      if (shown.has(cl.clientId)) return;
+      const m = R.parClient.find((x) => x.clientId === cl.clientId); if (!m) return;
+      shown.add(cl.clientId);
+      const div = document.createElement('div'); div.className = 'inv-client'; div.innerHTML = clientInvoiceHtml(m, pays[m.clientId]);
+      box.appendChild(div);
+    });
+  });
+}
+// Rendu : tuiles (haut) + factures fusionnées sous chaque arrêt + total général (bloc bas).
 function renderResultUI(R) {
   if (R) {
     $('rKm').textContent = km(R.totalKm);
@@ -2230,12 +2259,13 @@ function renderResultUI(R) {
     $('rTTC').textContent = eur(R.totalTTC) + ' TTC';
   } else { ['rKm', 'rMin', 'rHT', 'rTVA', 'rTTC'].forEach((id) => { if ($(id)) $(id).textContent = '—'; }); }
   renderAnalytique(R);
-  const box = $('edInvoice'); box.innerHTML = '';
-  if (!R || !R.parClient || !R.parClient.length) { $('edInvoiceEmpty').style.display = 'block'; box.style.display = 'none'; return; }
-  $('edInvoiceEmpty').style.display = 'none'; box.style.display = '';
+  renderArretInvoices();
+  const box = $('edInvoice'); if (!box) return; box.innerHTML = '';
+  if (!R || !R.parClient || !R.parClient.length) { if ($('edInvoiceEmpty')) $('edInvoiceEmpty').style.display = 'block'; box.style.display = 'none'; return; }
+  if ($('edInvoiceEmpty')) $('edInvoiceEmpty').style.display = 'none'; box.style.display = '';
   const pays = (currentTour && currentTour.payments) || {};
   let arHT = 0, arTVA = 0, arTTC = 0;
-  R.parClient.forEach((m) => { const ar = cashRounding(m, pays[m.clientId]); arHT += ar.ht; arTVA += ar.tva; arTTC += ar.ttc; box.appendChild(clientInvoiceEl(m, pays[m.clientId])); });
+  R.parClient.forEach((m) => { const ar = cashRounding(m, pays[m.clientId]); arHT += ar.ht; arTVA += ar.tva; arTTC += ar.ttc; });
   const f = document.createElement('div'); f.className = 'inv-footer';
   f.innerHTML = `<div class="inv-line"><span>Total HT</span><span>${eur(R.totalHT + arHT)}</span></div>
     <div class="inv-line"><span>TVA</span><span>${eur(R.totalTVA + arTVA)}</span></div>

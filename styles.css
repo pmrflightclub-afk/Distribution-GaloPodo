@@ -266,6 +266,9 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .patho-tbl input { width: auto; margin: 0; }
 .patho-tbl input.heure-in { width: 78px; max-width: 78px; padding: 2px 4px; box-sizing: border-box; }
 .patho-tbl tr.ch-absent td:first-child { opacity: .45; text-decoration: line-through; }
+.a-invoices { margin-top: 10px; }
+.a-invoices .inv-client { border-top: 2px solid var(--accent); }
+.a-invoices:empty { display: none; }
 .reduc-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: .85rem; }
 .reduc-row input { margin: 0; }
 .a-reduc-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: .8rem; color: var(--muted); }
