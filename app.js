@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.33';
+const APP_VERSION = '1.1.34';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.34', date: '2026-07-07',
+    ajouts: [
+      'Présence par cheval : dans un arrêt, tous les chevaux actifs du client à cette adresse sont listés avec une case « Présent ». Décochez un cheval absent : il n\'est plus compté ni facturé (ni dans les stats). Cocher/décocher met à jour la facture en direct.',
+    ],
+  },
   {
     version: '1.1.33', date: '2026-07-07',
     ajouts: [
@@ -1570,7 +1576,7 @@ function reconcileTour(tour) {
         if (!h) return; // cheval supprimé → retiré
         const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
         let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [] }; arr.clients.push(ncl); }
-        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '' });
+        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null });
       });
     });
   });
@@ -1793,7 +1799,14 @@ function renderEditorArrets(locked) {
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       a.clients.forEach((cl) => {
-        if (!cl.chevaux.length) return;
+        const cObj = clients.find((x) => x.id === cl.clientId);
+        const arretAddrN = norm(addrStr(a.addr));
+        // Présence : TOUS les chevaux ACTIFS du client à l'adresse de cet arrêt (repli sur les chevaux déjà enregistrés).
+        let pool = cObj ? activeChevaux(cObj).filter((hh) => norm(addrStr(chevalAddr(cObj, hh))) === arretAddrN) : [];
+        if (!pool.length) pool = (cl.chevaux || []).map((cv) => ({ id: cv.id, nom: cv.nom }));
+        if (!pool.length) return;
+        const cvOf = (ph) => (cl.chevaux || []).find((x) => (x.id != null && ph.id != null && x.id === ph.id) || norm(x.nom) === norm(ph.nom));
+        const ensureCv = (ph) => { let cv = cvOf(ph); if (!cv) { cv = { id: ph.id, nom: ph.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '', present: true }; cl.chevaux.push(cv); } return cv; };
         const wrap = document.createElement('div'); wrap.className = 'a-patho';
         // Nom + réduction affichés ici SEULEMENT si plusieurs clients (sinon c'est dans l'en-tête de l'arrêt).
         let h = single ? '' : `<div class="patho-client">${esc(clientName(cl.clientId))}</div>`;
@@ -1803,26 +1816,36 @@ function renderEditorArrets(locked) {
         if (S.fourbureHT > 0) cols.push({ key: 'fourbure', label: 'Fourbure' });
         if (S.npasHT > 0) cols.push({ key: 'npas', label: 'NPAS' });
         if (S.infectionHT > 0) cols.push({ key: 'infection', label: 'Infection' });
-        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th>${cols.map((c) => '<th>' + c.label + '</th>').join('')}<th>Heure RDV</th></tr></thead><tbody>`;
-        cl.chevaux.forEach((cv, ci) => {
-          h += `<tr><td>🐴 ${esc(cv.nom)}</td>${cols.map((c) => {
-            const dis = c.key !== 'parage' && !cv.parage ? ' disabled' : '';
-            return `<td><input type="checkbox" data-key="${c.key}" data-ci="${ci}" ${cv[c.key] ? 'checked' : ''}${dis}/></td>`;
-          }).join('')}<td><input type="time" class="heure-in" data-heure data-ci="${ci}" value="${cv.heure || ''}"/></td></tr>`;
+        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Présent</th>${cols.map((c) => '<th>' + c.label + '</th>').join('')}<th>Heure RDV</th></tr></thead><tbody>`;
+        pool.forEach((ph, pi) => {
+          const cv = cvOf(ph); const present = chevalPresent(cv);
+          h += `<tr${present ? '' : ' class="ch-absent"'}><td>🐴 ${esc(ph.nom)}</td>`;
+          h += `<td><input type="checkbox" data-present data-pi="${pi}" ${present ? 'checked' : ''}/></td>`;
+          h += cols.map((c) => {
+            const dis = (!present || (c.key !== 'parage' && !(cv && cv.parage))) ? ' disabled' : '';
+            return `<td><input type="checkbox" data-key="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${dis}/></td>`;
+          }).join('');
+          h += `<td><input type="time" class="heure-in" data-heure data-pi="${pi}" value="${(cv && cv.heure) || ''}"${present ? '' : ' disabled'}/></td></tr>`;
         });
         h += '</tbody></table>';
-        h += `<p class="hint" style="margin-top:2px">Fourbure / NPAS / Infection ne s'activent que si « Parage/Équil. » est coché (le matériel n'est facturé qu'avec un parage).</p>`;
+        h += `<p class="hint" style="margin-top:2px">Décochez « Présent » pour un cheval absent (non compté ni facturé). Fourbure / NPAS / Infection ne s'activent que si « Parage/Équil. » est coché.</p>`;
         wrap.innerHTML = h;
         const rin = wrap.querySelector('[data-reduc]');
         if (rin) rin.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
+        wrap.querySelectorAll('[data-present]').forEach((inp) => inp.addEventListener('change', (e) => {
+          const ph = pool[+inp.dataset.pi];
+          if (e.target.checked) ensureCv(ph).present = true;
+          else { const cv = cvOf(ph); if (cv) { cv.present = false; cv.parage = false; cv.fourbure = false; cv.npas = false; cv.infection = false; cv.visite = false; } } // absent = aucun acte
+          saveTournees(); recomputeMoney(); renderEditorArrets(locked);
+        }));
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
-          const cv = cl.chevaux[+inp.dataset.ci], key = inp.dataset.key;
+          const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.key;
           cv[key] = e.target.checked;
           // Parage (dé)verrouille Fourbure/NPAS → il faut re-render pour mettre à jour l'état "disabled" des cases.
           if (key === 'parage') { if (!e.target.checked) { cv.fourbure = false; cv.npas = false; cv.infection = false; } recomputeMoney(); renderEditorArrets(locked); return; }
           recomputeMoney();
         }));
-        wrap.querySelectorAll('[data-heure]').forEach((inp) => inp.addEventListener('change', (e) => { cl.chevaux[+inp.dataset.ci].heure = e.target.value || ''; saveTournees(); })); // heure de RDV par cheval (n'affecte pas les montants)
+        wrap.querySelectorAll('[data-heure]').forEach((inp) => inp.addEventListener('change', (e) => { ensureCv(pool[+inp.dataset.pi]).heure = e.target.value || ''; saveTournees(); })); // heure de RDV par cheval (n'affecte pas les montants)
         el.appendChild(wrap);
       });
     }
@@ -1837,7 +1860,7 @@ function renderEditorArrets(locked) {
     if (S.parage && S.parage.prixHT > 0) {
       if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {};
       a.clients.forEach((cl) => {
-        const pc = (cl.chevaux || []).filter((c) => c.parage); if (!pc.length) return;
+        const pc = (cl.chevaux || []).filter((c) => chevalPresent(c) && c.parage); if (!pc.length) return;
         const qte = pc.length, ttcv = S.parage.prixHT * qte * (1 + (S.parage.tvaPct || 0) / 100);
         const off = !!currentTour.parageRemiseOff[cl.clientId];
         const row = document.createElement('div'); row.className = 'list-item';
@@ -1929,10 +1952,12 @@ function enableRowDrag(listEl, arr, save) {
 }
 
 // ----- Calcul : ARGENT (pur, instantané, sans API) à partir de la géométrie -----
-// Un cheval « fait » = réellement pris en charge à l'arrêt (parage OU une pathologie OU une visite cochée).
+// Présence : un cheval décoché « Présent » (present === false) est absent de l'arrêt → jamais compté ni facturé.
+function chevalPresent(c) { return !!c && c.present !== false; }
+// Un cheval « fait » = PRÉSENT et réellement pris en charge à l'arrêt (parage OU pathologie OU visite cochée).
 // Seuls les chevaux faits comptent dans les stats (temps, km, analyses cheval/client) et la répartition déplacement.
-// Un cheval décoché reste dans l'arrêt mais n'est PAS imputé (corrige le « cheval fantôme » des statistiques).
-function chevalFait(c) { return !!(c && (c.parage || c.fourbure || c.npas || c.infection || c.visite)); }
+// Un cheval présent mais sans acte reste dans l'arrêt mais n'est PAS imputé (corrige le « cheval fantôme »).
+function chevalFait(c) { return chevalPresent(c) && !!(c.parage || c.fourbure || c.npas || c.infection || c.visite); }
 function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
