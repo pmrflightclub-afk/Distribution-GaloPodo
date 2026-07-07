@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.23';
+const APP_VERSION = '1.1.24';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.24', date: '2026-07-07',
+    ajouts: [
+      'Compta réorganisée en 4 sections d\'encaissement : Liquide (globalisé) · Virements · Facture pro (liquide) · Facture pro (virement). Une facture peut donc être payée en liquide OU en virement.',
+      'Nouveau sous-onglet Compta « Tournée à venir » (1ʳᵉ position) : liste les clients dont le paiement n\'est pas encore renseigné ; ils en sortent automatiquement une fois classés.',
+    ],
+  },
   {
     version: '1.1.23', date: '2026-07-07',
     ajouts: [
@@ -2508,47 +2515,51 @@ function setComptaPayment(tourId, clientId, method) {
   const t = tourById(tourId); if (!t) return;
   if (!t.payments) t.payments = {};
   const prev = t.payments[clientId] || {};
-  if (method === 'liquide') t.payments[clientId] = { method: 'liquide', facture: false, rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null };
+  const keepLiq = { rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null };
+  if (method === 'liquide') t.payments[clientId] = Object.assign({ method: 'liquide', facture: false }, keepLiq);
+  else if (method === 'facliq') t.payments[clientId] = Object.assign({ method: 'liquide', facture: true }, keepLiq); // facture pro payée en liquide
   else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null };
-  else if (method === 'facture') t.payments[clientId] = { method: null, facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null }; // « facture nécessaire »
-  else t.payments[clientId] = { method: null, facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null }; // « à classer »
+  else if (method === 'facvir') t.payments[clientId] = { method: 'virement', facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null }; // facture pro payée par virement
+  else t.payments[clientId] = { method: null, facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null }; // « à classer » (tournée à venir)
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
 }
 // Agrégats du mois : liquide (postes globalisés, sans nom) + virements + factures (par client).
+// 4 sections d'encaissement : Liquide (globalisé) · Virement · Facture pro liquide · Facture pro virement.
+// « Facture » = case « Facture nécessaire » COMBINÉE au mode de paiement (une facture peut être payée en liquide OU virement).
+// Aucun mode choisi → « aclasser » (sous-onglet « Tournée à venir », hors mois en cours).
 function comptaData(ym) {
   const r = rate();
-  const liquideClients = [], virementClients = [], factureClients = [], aclasserClients = [];
+  const liquideClients = [], virementClients = [], factureLiqClients = [], factureVirClients = [], aclasserClients = [];
   const posts = {}; const addPost = (lib, ht, tva, ttc) => { const p = posts[lib] = posts[lib] || { libelle: lib, ht: 0, tva: 0, ttc: 0 }; p.ht += ht; p.tva += tva; p.ttc += ttc; };
   allTours().forEach((t) => {
     if (!(t.date || '').startsWith(ym) || !t.result || !t.result.parClient) return;
     t.result.parClient.forEach((m) => {
       const p = (t.payments || {})[m.clientId];
-      const method = p ? p.method : null;
-      // liquide | virement | facture (case « Facture nécessaire » cochée) | À CLASSER (rien de choisi → n'est PAS une facture).
-      const mode = method === 'liquide' ? 'liquide' : (method === 'virement' ? 'virement' : (p && p.facture) ? 'facture' : 'aclasser');
+      const method = p ? p.method : null; const fac = !!(p && p.facture);
+      const mode = method === 'liquide' ? (fac ? 'facliq' : 'liquide') : method === 'virement' ? (fac ? 'facvir' : 'virement') : 'aclasser';
       const entry = { tourId: t.id, tourDate: t.date, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode, m, payment: p };
-      if (mode === 'liquide') {
-        const cash = payRecu(m, p); // caisse = liquide réellement reçu (rectifié − impayé)
-        const cHT = cash / (1 + r); liquideClients.push({ nom: m.nom, ht: cHT, tva: cash - cHT, ttc: cash });
-        if (p && p.partiel) {
-          // Paiement partiel : la caisse reçoit un acompte ; le reste virement est suivi en Virements (ci-dessous).
-          addPost('Acompte liquide (partiel)', cHT, cash - cHT, cash);
-          const reste = payImpaye(m, p);
-          if (reste > 0.005 && p.resteMode === 'virement') virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: reste / (1 + r), tva: reste - reste / (1 + r), ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' });
-        } else {
-          // Globalisation par poste (sans nom de client) : articles par libellé + Matériel + Déplacement + Arrondi.
-          (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
-          if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
-          const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
-          const diff = payArrondi(m, p); if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); }
-        }
-      } else if (mode === 'virement') virementClients.push(entry);
-      else if (mode === 'facture') factureClients.push(entry);
-      else aclasserClients.push(entry);
+      if (mode === 'aclasser') { aclasserClients.push(entry); return; }
+      if (mode === 'virement') { virementClients.push(entry); return; }
+      if (mode === 'facvir') { factureVirClients.push(entry); return; }
+      if (mode === 'facliq') { const cash = payRecu(m, p); factureLiqClients.push(Object.assign({}, entry, { ht: cash / (1 + r), tva: cash - cash / (1 + r), ttc: cash })); return; }
+      // mode === 'liquide' (globalisé, sans facture)
+      const cash = payRecu(m, p); const cHT = cash / (1 + r); liquideClients.push({ nom: m.nom, ht: cHT, tva: cash - cHT, ttc: cash });
+      if (p && p.partiel) {
+        addPost('Acompte liquide (partiel)', cHT, cash - cHT, cash);
+        const reste = payImpaye(m, p);
+        if (reste > 0.005 && p.resteMode === 'virement') virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: reste / (1 + r), tva: reste - reste / (1 + r), ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' });
+      } else {
+        (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
+        if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
+        const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
+        const diff = payArrondi(m, p); if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); }
+      }
     });
   });
   const sum = (arr) => arr.reduce((a, x) => ({ ht: a.ht + x.ht, tva: a.tva + x.tva, ttc: a.ttc + x.ttc }), { ht: 0, tva: 0, ttc: 0 });
-  return { liquideClients, virementClients, factureClients, aclasserClients, liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients), factureTotal: sum(factureClients), aclasserTotal: sum(aclasserClients) };
+  return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
+    liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
+    factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients) };
 }
 // Génère le PDF via l'impression du navigateur, dans le document courant (compatible PWA installée,
 // contrairement à window.open('_blank') qui est bloqué / ferme l'app sur mobile).
@@ -2572,7 +2583,7 @@ function showCompta(sub) {
   const cb = document.querySelector('#comptaSub .subtab[data-csub="' + currentCsub + '"]'), cl = document.querySelector('#comptaSub .subnav-label');
   if (cb && cl) cl.textContent = cb.textContent;
   if ($('comptaSub')) $('comptaSub').classList.remove('open');
-  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else renderComptaMois();
+  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else if (currentCsub === 'avenir') renderComptaAvenir(); else renderComptaMois();
   window.scrollTo(0, 0);
 }
 // Sous-onglet Compta « Impayés » : tous les impayés clients, séparés « en attente » / « régularisés » (paiement reçu).
@@ -2608,17 +2619,34 @@ function comptaSectionsHtml(ym) {
   const recuKeyOf = (e) => e.recuKey || (e.tourId + ':' + e.clientId);
   const isRecu = (e) => !!(S.comptaRecu && S.comptaRecu[recuKeyOf(e)]);
   const isDem = (e) => !!(S.comptaDemarche && S.comptaDemarche[recuKeyOf(e)]);
-  const modeLbl = { aclasser: 'À classer', facture: 'Facture', virement: 'Virement', liquide: 'Liquide' };
-  const modeOpts = (m) => ['aclasser', 'facture', 'virement', 'liquide'].map((v) => `<option value="${v}"${v === m ? ' selected' : ''}>${modeLbl[v]}</option>`).join('');
-  const clientTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th>${archived ? '<th>Démarche</th>' : ''}</tr></thead><tbody>${arr.map((e) => { const rk = recuKeyOf(e), dem = isDem(e); return `<tr${dem ? ' style="opacity:.45"' : ''}><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${(e.derived || dem) ? (e.derived ? 'Reste (virement)' : (e.mode === 'virement' ? 'Virement' : 'Facture')) : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center"><input type="checkbox" data-recu data-key="${rk}" ${isRecu(e) ? 'checked' : ''}${dem ? ' disabled' : ''}/></td>${archived ? `<td style="text-align:center"><input type="checkbox" data-dem data-key="${rk}" ${dem ? 'checked' : ''}/></td>` : ''}</tr>`; }).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
+  const modeLbl = { aclasser: 'À classer', liquide: 'Liquide', virement: 'Virement', facliq: 'Facture pro (liquide)', facvir: 'Facture pro (virement)' };
+  const modeOpts = (m) => ['aclasser', 'liquide', 'facliq', 'virement', 'facvir'].map((v) => `<option value="${v}"${v === m ? ' selected' : ''}>${modeLbl[v]}</option>`).join('');
+  const clientTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th><th>Mode</th><th>Reçu</th>${archived ? '<th>Démarche</th>' : ''}</tr></thead><tbody>${arr.map((e) => { const rk = recuKeyOf(e), dem = isDem(e); return `<tr${dem ? ' style="opacity:.45"' : ''}><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td><td>${(e.derived || dem) ? (e.derived ? 'Reste (virement)' : (modeLbl[e.mode] || '')) : `<select data-mode data-tour="${e.tourId}" data-cid="${e.clientId}">${modeOpts(e.mode)}</select>`}</td><td style="text-align:center"><input type="checkbox" data-recu data-key="${rk}" ${isRecu(e) ? 'checked' : ''}${dem ? ' disabled' : ''}/></td>${archived ? `<td style="text-align:center"><input type="checkbox" data-dem data-key="${rk}" ${dem ? 'checked' : ''}/></td>` : ''}</tr>`; }).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const postTbl = (arr) => arr.length ? `<div class="table-wrap"><table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucun.</p>';
   const recuRow = (arr) => { if (!arr.length) return ''; const n = arr.filter(isRecu).length; const imp = arr.length - n; return `<p class="hint"${imp ? ' style="color:var(--warn);font-weight:700"' : ''}>Paiements reçus : ${n}/${arr.length}${imp ? ` · ⚠ ${imp} impayé(s)` : ' ✅'}</p>`; };
   const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(arr) : ''}${detail}</section>`;
   const liqDem = archived && statusOfKind('liquide') === 'encode';
   const liquideStatus = archived ? `<label>Démarche comptable (caisse du mois)<select data-status="liquide" data-ym="${ym}"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>` : '';
   const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><button class="btn small" data-print="liquide" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
-  const aclasserSec = d.aclasserClients.length ? `<section class="card"><div class="card-head"><h3 style="margin:0;color:var(--warn)">🕓 À classer (paiement non renseigné)</h3></div><p class="hint">${tot(d.aclasserTotal)}</p><p class="hint">Ces clients n'ont pas de mode de paiement choisi — classez-les (💶 Paiement de l'arrêt, ou le menu « Mode » ci-dessous). Ils ne sont <b>pas</b> comptés comme factures.</p>${clientTbl(d.aclasserClients)}</section>` : '';
-  return liquideSec + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients) + section('🧾 Factures pro', 'facture', d.factureTotal, clientTbl(d.factureClients), d.factureClients) + aclasserSec;
+  return liquideSec
+    + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients)
+    + section('🧾 Facture pro — liquide', 'facliq', d.factureLiqTotal, clientTbl(d.factureLiqClients), d.factureLiqClients)
+    + section('🧾 Facture pro — virement', 'facvir', d.factureVirTotal, clientTbl(d.factureVirClients), d.factureVirClients);
+}
+// Sous-onglet « Tournée à venir » : clients de toute tournée calculée sans mode de paiement choisi (à classer), toutes périodes.
+function renderComptaAvenir() {
+  const box = $('comptaAvenirBody'); if (!box) return; box.innerHTML = '';
+  const rows = [];
+  allTours().forEach((t) => { if (!t.result || !t.result.parClient) return; t.result.parClient.forEach((m) => { const p = (t.payments || {})[m.clientId]; const method = p ? p.method : null; if (method !== 'liquide' && method !== 'virement') rows.push({ t, m }); }); });
+  rows.sort((a, b) => (a.t.date || '').localeCompare(b.t.date || ''));
+  if ($('comptaAvenirEmpty')) $('comptaAvenirEmpty').style.display = rows.length ? 'none' : 'block';
+  const total = rows.reduce((s, x) => s + (x.m.totalTTC || 0), 0);
+  if ($('comptaAvenirTot')) $('comptaAvenirTot').textContent = rows.length ? 'Total non classé : ' + eur(total) + ' TTC' : '';
+  rows.forEach(({ t, m }) => {
+    const el = document.createElement('div'); el.className = 'list-item';
+    el.innerHTML = `<div class="li-main"><b>${esc(m.nom)}</b><span class="li-sub">${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' · ' + esc(t.nom.trim()) : ''} · ${statusOf(t) === 'cloturee' ? 'clôturée' : (statusOf(t) === 'active' ? "aujourd'hui" : 'à venir')} · <span class="badge">à classer</span></span></div><div class="li-act"><b>${eur(m.totalTTC)}</b></div>`;
+    box.appendChild(el);
+  });
 }
 function comptaWire(container, rerender) {
   container.querySelectorAll('[data-status]').forEach((el) => el.addEventListener('change', (e) => { const ym = el.dataset.ym; S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][el.dataset.status] = e.target.value; saveSettings(); rerender(); }));
@@ -2636,7 +2664,8 @@ function comptaPrint(ym, k) {
     : `<h1>${titre}</h1><h2>${sousTitre}</h2><p>${vide}</p>`;
   if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>` + (d.liquidePosts.length ? postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal)) : '<p>Aucun paiement liquide ce mois.</p>'));
   else if (k === 'virement') printHtml('Virements — ' + ml, detailPdf(d.virementClients, d.virementTotal, 'Virements bancaires — détail', ml + ' — par client et par cheval', 'Aucun virement ce mois.'));
-  else printHtml('Factures — ' + ml, detailPdf(d.factureClients, d.factureTotal, 'Factures pro — détail', ml + ' — par client et par cheval', 'Aucune facture ce mois.'));
+  else if (k === 'facliq') printHtml('Factures pro liquide — ' + ml, detailPdf(d.factureLiqClients, d.factureLiqTotal, 'Factures pro payées en liquide', ml + ' — par client et par cheval', 'Aucune facture liquide ce mois.'));
+  else printHtml('Factures pro virement — ' + ml, detailPdf(d.factureVirClients, d.factureVirTotal, 'Factures pro payées par virement', ml + ' — par client et par cheval', 'Aucune facture virement ce mois.'));
 }
 function renderComptaMois() {
   const box = $('comptaMoisBody'); if (!box) return;
@@ -2673,8 +2702,8 @@ function renderComptaDecl() {
   const withData = comptaMonths();
   const months = monthsOfRange(type, declPeriod).filter((m) => withData.includes(m));
   if ($('comptaDeclEmpty')) $('comptaDeclEmpty').style.display = months.length ? 'none' : 'block';
-  const rt = months.reduce((a, m) => { const d = comptaData(m); a.liq += d.liquideTotal.ttc; a.vir += d.virementTotal.ttc; a.fac += d.factureTotal.ttc; return a; }, { liq: 0, vir: 0, fac: 0 });
-  box.innerHTML = (months.length ? `<p class="banner">Total plage — Liquide <b>${eur(rt.liq)}</b> · Virements <b>${eur(rt.vir)}</b> · Factures <b>${eur(rt.fac)}</b> (TTC)</p>` : '')
+  const rt = months.reduce((a, m) => { const d = comptaData(m); a.liq += d.liquideTotal.ttc; a.vir += d.virementTotal.ttc; a.fac += d.factureLiqTotal.ttc + d.factureVirTotal.ttc; return a; }, { liq: 0, vir: 0, fac: 0 });
+  box.innerHTML = (months.length ? `<p class="banner">Total plage — Liquide <b>${eur(rt.liq)}</b> · Virements <b>${eur(rt.vir)}</b> · Factures pro <b>${eur(rt.fac)}</b> (TTC)</p>` : '')
     + months.sort().reverse().map((m) => `<h2 class="rsub" style="margin-top:16px">${monthLabel(m)}${m < todayStr().slice(0, 7) ? '' : ' (en cours — pas de démarche)'}</h2>` + comptaSectionsHtml(m)).join('');
   comptaWire(box, renderComptaDecl);
 }

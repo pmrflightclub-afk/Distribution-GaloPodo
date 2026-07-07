@@ -175,11 +175,22 @@
     <nav class="subtabs" id="comptaSub">
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Mois en cours</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
+        <button class="subtab" data-csub="avenir">Tournée à venir</button>
         <button class="subtab active" data-csub="mois">Mois en cours</button>
         <button class="subtab" data-csub="impayes">Impayés</button>
         <button class="subtab" data-csub="decl">Déclaration compta</button>
       </div>
     </nav>
+
+    <div id="csub-avenir" class="subpanel">
+      <section class="card">
+        <h2>Tournée à venir — à classer</h2>
+        <p class="hint">Clients de toute tournée calculée dont le <b>mode de paiement n'est pas encore renseigné</b> (l'encaissement se fait le jour J). Ils quittent cette liste dès qu'ils sont classés (💶 Paiement de l'arrêt) et rejoignent la bonne section de « Mois en cours ».</p>
+        <p class="hint" id="comptaAvenirTot"></p>
+        <div id="comptaAvenirBody" class="list"></div>
+        <p class="empty" id="comptaAvenirEmpty">Aucune tournée à classer.</p>
+      </section>
+    </div>
 
     <div id="csub-mois" class="subpanel active">
       <section class="card">
