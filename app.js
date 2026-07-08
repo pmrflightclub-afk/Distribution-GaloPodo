@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.96';
+const APP_VERSION = '1.1.97';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.97', date: '2026-07-08',
+    ajouts: [
+      'Contact mail : la récupération remonte encore plus loin (jusqu\'à 10 000 mails) pour couvrir toutes vos années d\'activité.',
+      'Contact mail : les formulaires VIERGES (le modèle que vous envoyez au client, sans réponse) sont maintenant masqués — même s\'ils ont été envoyés depuis une autre adresse. Seuls les formulaires remplis reçus restent affichés.',
+    ],
+  },
   {
     version: '1.1.96', date: '2026-07-08',
     ajouts: [
@@ -4582,7 +4589,7 @@ async function gmailFetch(statusEl, after) {
       (list.messages || []).forEach((mm) => ids.push(mm.id));
       pageToken = list.nextPageToken || ''; pages++;
       if (statusEl) statusEl.textContent = 'Recherche des mails… (' + ids.length + ' trouvés)';
-    } while (pageToken && pages < 30); // garde-fou : 30 pages = 3000 mails max
+    } while (pageToken && pages < 100); // garde-fou : 100 pages = 10 000 mails max (couvre plusieurs années)
     const seen = new Set((S.contactMails || []).map((x) => x.id)); // déjà récupérés OU ignorés → jamais ré-importés (pas de doublon)
     const toFetch = ids.filter((id) => !seen.has(id));
     let added = 0;
@@ -4623,6 +4630,15 @@ function modalMailView(m) {
 // Gestion → Contact mail : liste des mails récupérés (nouveaux) + section « Ignorés ».
 // Mail envoyé PAR l'utilisateur (à masquer) : from = adresse du compte connecté.
 function mailIsSelf(m) { return !!(S.mailExcludeSelf !== false && S.mailSelf && m && m.from && norm(m.from) === norm(S.mailSelf)); }
+// Formulaire VIERGE (le modèle que VOUS envoyez au client) : les étiquettes du formulaire sont présentes mais SANS valeur remplie.
+// Catch fiable même si le mail a été envoyé depuis une autre adresse/alias (contrairement à mailIsSelf).
+function mailIsBlankForm(m) {
+  if (S.mailExcludeSelf === false) return false;
+  const f = (m && m.fields) || {};
+  const hasLabel = ('nom du cheval' in f) || ("adresse de l'écurie" in f) || ('race' in f && 'age' in f);
+  if (!hasLabel) return false;
+  return !(mailField(f, 'Nom du cheval') || mailField(f, 'Nom') || mailField(f, 'Prénom') || mailField(f, 'Numéro de téléphone'));
+}
 // Clients existants correspondant à un mail (par e-mail expéditeur, ou nom + prénom). Sert au bouton « connu/nouveau » et à la mise à jour.
 function findClientForMail(m) {
   const f = (m && m.fields) || {};
@@ -4633,8 +4649,9 @@ function renderContactMail() {
   const c = $('cmConnect'); if (c) c.onclick = () => gmailConnect($('cmStatus'));
   const f = $('cmFetch'); if (f) f.onclick = () => gmailFetch($('cmStatus'), renderContactMail);
   const box = $('cmList'); if (!box) return;
-  const nouveaux = (S.contactMails || []).filter((m) => m.status === 'nouveau' && !mailIsSelf(m));
-  const ignores = (S.contactMails || []).filter((m) => m.status === 'ignore' && !mailIsSelf(m));
+  const hidden = (m) => mailIsSelf(m) || mailIsBlankForm(m);
+  const nouveaux = (S.contactMails || []).filter((m) => m.status === 'nouveau' && !hidden(m));
+  const ignores = (S.contactMails || []).filter((m) => m.status === 'ignore' && !hidden(m));
   const traites = (S.contactMails || []).filter((m) => m.status === 'client').length;
   if ($('cmTraites')) $('cmTraites').textContent = traites ? (traites + ' mail(s) déjà transformé(s) en client.') : '';
   box.innerHTML = ''; if ($('cmEmpty')) $('cmEmpty').style.display = nouveaux.length ? 'none' : 'block';
