@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.91';
+const APP_VERSION = '1.1.92';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.92', date: '2026-07-08',
+    ajouts: [
+      'Push RDV → Google Agenda : activez « Créer/mettre à jour mes RDV dans Google Agenda » (Réglages → Synchro). Chaque RDV pris ou modifié dans l\'app crée/met à jour automatiquement un évènement par client (heure, lieu, chevaux) ; un RDV retiré ou une tournée supprimée retire l\'évènement. L\'import agenda→app et le push app→agenda partagent la même connexion Google.',
+      'Heure de RDV obligatoire : quand le push agenda est activé, une tournée ne peut être clôturée que si chaque client a une heure de RDV (l\'app vous indique lesquels il manque).',
+      'Bouton « Pousser tous mes RDV à venir maintenant » pour synchroniser d\'un coup les tournées existantes. (Après cette mise à jour, une reconnexion Google unique est demandée pour ajouter le droit d\'écriture à l\'agenda.)',
+    ],
+  },
   {
     version: '1.1.91', date: '2026-07-08',
     ajouts: [
@@ -823,6 +831,9 @@ if (!S.pays) S.pays = 'be';
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (typeof S.googleClientId !== 'string') S.googleClientId = '';
 if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
+if (typeof S.calPush !== 'boolean') S.calPush = false;                 // pousser automatiquement les RDV de l'app vers Google Agenda (écriture)
+if (!S.calPushed || typeof S.calPushed !== 'object') S.calPushed = {}; // { 'tourId:clientId' : googleEventId } → mise à jour / suppression du bon évènement
+if (typeof S.calDureeMin !== 'number' || S.calDureeMin < 5) S.calDureeMin = 60; // durée par défaut d'un RDV poussé (minutes)
 if (S.syncMode !== 'drive') S.syncMode = 'file'; // défaut = mode fichier (section 1)
 if (typeof S.rdvDelaiSemaines !== 'number' || S.rdvDelaiSemaines < 1) S.rdvDelaiSemaines = 5;
 if (typeof S.rdvJourSemaine !== 'string') S.rdvJourSemaine = (S.rdvJourSemaine == null ? '' : String(S.rdvJourSemaine));
@@ -1095,6 +1106,7 @@ function mergeSettings(localS, remoteS) {
   merged.agendaImported = Object.assign({}, (localS && localS.agendaImported) || {}, (remoteS && remoteS.agendaImported) || {});
   merged.agendaInactive = Object.assign({}, (localS && localS.agendaInactive) || {}, (remoteS && remoteS.agendaInactive) || {});
   merged.agendaPrive = Object.assign({}, (localS && localS.agendaPrive) || {}, (remoteS && remoteS.agendaPrive) || {});
+  merged.calPushed = Object.assign({}, (localS && localS.calPushed) || {}, (remoteS && remoteS.calPushed) || {}); // évènements Google poussés : union des mappings (pas de doublon entre appareils)
   // Adresse de départ (domicile) : ne jamais la perdre si l'appareil « gagnant » l'avait vide → reprendre celle qui est renseignée.
   const hasAddr = (a) => { try { return !!addrStr(a).trim(); } catch { return false; } };
   if (!hasAddr(merged.home)) { if (localS && hasAddr(localS.home)) merged.home = localS.home; else if (remoteS && hasAddr(remoteS.home)) merged.home = remoteS.home; }
@@ -1154,6 +1166,54 @@ async function agendaAutoSync(allowAcquire) {
     if (typeof renderAgendaCalendrier === 'function') renderAgendaCalendrier();
   } catch { /* jeton non consenti / hors-ligne : rafraîchissement manuel disponible */ }
 }
+// ======= Push RDV app → Google Agenda (écriture) : 1 évènement par client par tournée, heure obligatoire. =======
+let _calTimer = null;
+function scheduleCalPush(t) { if (!S.calPush || !S.googleClientId || !t) return; clearTimeout(_calTimer); const id = t.id; _calTimer = setTimeout(() => { const tt = allTours().find((x) => x.id === id); if (tt) pushTourToCalendar(tt, { interactive: false }); }, 1500); } // débattu : évite de spammer l'API à chaque frappe
+// Heure de RDV d'un client sur une tournée = la plus tôt de ses arrêts.
+function clientRdvHeure(t, clientId) { let best = ''; (t.arrets || []).forEach((a) => { if ((a.clients || []).some((cl) => cl.clientId === clientId)) { const h = arretHeure(a); if (h && (!best || h < best)) best = h; } }); return best; }
+// Lieu d'un client sur une tournée : 1er arrêt où il figure.
+function clientTourAddr(t, clientId) { for (const a of (t.arrets || [])) { if ((a.clients || []).some((cl) => cl.clientId === clientId)) return addrStr(a.addr); } return ''; }
+// Clients « facturables » d'une tournée (≥1 cheval fait), dédupliqués.
+function tourBillableClients(t) { const seen = new Set(), out = []; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (seen.has(cl.clientId)) return; if (!(cl.chevaux || []).some(chevalBilled)) return; seen.add(cl.clientId); out.push(cl.clientId); })); return out; }
+// Clients facturables sans heure de RDV (bloque la clôture quand la synchro Agenda est active).
+function calMissingHeure(t) { return tourBillableClients(t).filter((cid) => !clientRdvHeure(t, cid)).map((cid) => clientName(cid)); }
+// Crée / met à jour 1 évènement Google par client (heure obligatoire), et supprime ceux qui n'ont plus lieu.
+async function pushTourToCalendar(t, opts) {
+  opts = opts || {};
+  if (!S.calPush || !S.googleClientId || !t) return;
+  if (!opts.interactive && !gTokenValid(GSCOPE_CAL)) return; // navigation : jamais d'écran d'auth
+  const st = opts.statusEl; const setSt = (cls, txt) => { if (st) { st.className = 'status ' + cls; st.textContent = txt; } };
+  let token; try { token = await googleToken(!!opts.interactive, GSCOPE_CAL); } catch (e) { setSt('err', 'Connexion Agenda impossible : ' + (e && e.message || e)); return; }
+  const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Brussels'; } catch { return 'Europe/Brussels'; } })();
+  const times = (heure) => { const [Y, M, D] = (t.date || '').split('-').map(Number); const [h, mi] = heure.split(':').map(Number); const s = new Date(Y, (M || 1) - 1, D || 1, h || 0, mi || 0, 0); const e = new Date(s.getTime() + (S.calDureeMin || 60) * 60000); return { start: { dateTime: s.toISOString(), timeZone: tz }, end: { dateTime: e.toISOString(), timeZone: tz } }; };
+  const req = (method, path, body) => fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const wanted = tourBillableClients(t).map((cid) => ({ cid, heure: clientRdvHeure(t, cid) })).filter((x) => x.heure);
+  const wantedIds = new Set(wanted.map((x) => x.cid));
+  let nOk = 0, nDel = 0;
+  for (const w of wanted) {
+    const key = t.id + ':' + w.cid; const chevaux = [];
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId === w.cid) (cl.chevaux || []).filter(chevalBilled).forEach((cv) => chevaux.push(cv.nom)); }));
+    const ev = Object.assign({ summary: '🐴 ' + clientName(w.cid) + (chevaux.length ? ' — ' + chevaux.join(', ') : ''), location: clientTourAddr(t, w.cid), description: 'Rendez-vous GaloPodo' + (t.nom ? ' · ' + t.nom : ''), extendedProperties: { private: { galopodo: '1', tourId: t.id, clientId: w.cid } } }, times(w.heure));
+    const evId = S.calPushed[key];
+    try { let r = evId ? await req('PATCH', '/' + encodeURIComponent(evId), ev) : await req('POST', '', ev); if (evId && r.status === 404) r = await req('POST', '', ev); if (r.ok) { const j = await r.json(); S.calPushed[key] = j.id; nOk++; } } catch { /* réseau : réessai au prochain push */ }
+  }
+  for (const key of Object.keys(S.calPushed)) {
+    if (!key.startsWith(t.id + ':')) continue;
+    if (wantedIds.has(key.slice(t.id.length + 1))) continue;
+    try { const r = await req('DELETE', '/' + encodeURIComponent(S.calPushed[key])); if (r.ok || r.status === 404 || r.status === 410) { delete S.calPushed[key]; nDel++; } } catch { /* réessai plus tard */ }
+  }
+  saveSettings();
+  setSt('ok', `Agenda Google à jour : ${nOk} RDV${nDel ? ', ' + nDel + ' retiré(s)' : ''}.`);
+}
+// Supprime tous les évènements Google d'une tournée (à sa suppression).
+async function deleteTourCalendar(tourId) {
+  const keys = Object.keys(S.calPushed || {}).filter((k) => k.startsWith(tourId + ':'));
+  if (!keys.length) return;
+  if (!S.googleClientId || !gTokenValid(GSCOPE_CAL)) { keys.forEach((k) => delete S.calPushed[k]); saveSettings(); return; }
+  let token; try { token = await googleToken(false, GSCOPE_CAL); } catch { return; }
+  for (const k of keys) { try { await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events/' + encodeURIComponent(S.calPushed[k]), { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } }); } catch { /* ignore */ } delete S.calPushed[k]; }
+  saveSettings();
+}
 // Croise un événement (titre + lieu + description) avec la base clients : nom, prénom, société ET noms de chevaux.
 // Renvoie TOUS les clients connus qui correspondent (pour proposer la liaison).
 function matchClientsForEvent(ev) {
@@ -1187,7 +1247,7 @@ const GDRIVE_FILE = 'galopodo-sync.json';
 // UN SEUL jeton combiné (Drive appData + Calendar lecture) → une seule connexion couvre Drive ET Agenda,
 // persistée une fois. Les deux constantes sont volontairement identiques : même clé de cache, même jeton partagé.
 // UN SEUL jeton mutualisé Drive + Calendar + Gmail : les 3 constantes sont volontairement IDENTIQUES → même clé de cache, une seule connexion couvre tout.
-const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/gmail.readonly';
+const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.readonly';
 const GSCOPE_CAL = GSCOPE_DRIVE;
 // Lecture Gmail (scope RESTREINT) — connexion séparée, à activer dans la console Google Cloud de l'utilisateur.
 const GSCOPE_MAIL = GSCOPE_DRIVE; // Gmail mutualisé avec Drive/Calendar (même jeton, une seule connexion)
@@ -2524,7 +2584,7 @@ function renderEditorArrets(locked) {
       nav.querySelector('[data-pay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets())); // classer le paiement pour la Compta
       const rdvB = nav.querySelector('[data-rdv]'); if (rdvB) rdvB.addEventListener('click', () => { const cid = (a.clients && a.clients[0]) ? a.clients[0].clientId : null; if (cid) modalRDV(currentTour, a, cid, () => renderEditorArrets()); });
       const prB = nav.querySelector('[data-add-pret]'); if (prB) prB.addEventListener('click', () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, currentTour); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, currentTour) }))); });
-      const ah = nav.querySelector('[data-aheure]'); if (ah) ah.addEventListener('change', (e) => { a.heure = e.target.value || ''; saveTournees(); const lab = ah.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!a.heure); if (i === 0 && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } });
+      const ah = nav.querySelector('[data-aheure]'); if (ah) ah.addEventListener('change', (e) => { a.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = ah.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!a.heure); if (i === 0 && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } });
     }
     el.appendChild(nav);
     if (!locked) {
@@ -2997,6 +3057,7 @@ async function calcTour(silent) {
     renderResultUI(currentTour.result);
     renderMap(rows.map((r) => ({ lat: r.lat, lon: r.lon, label: r.label })), home, currentTour.result.routeGeo, arrXY);
     st.className = 'status ok'; st.textContent = silent ? 'À jour ✔' : 'Frais calculés et enregistrés.';
+    scheduleCalPush(currentTour); // miroir RDV → Google Agenda (si activé)
   } catch (e) { st.className = 'status err'; st.textContent = 'Erreur : ' + e.message; }
 }
 
@@ -5207,7 +5268,7 @@ function modalHeureRdv(t, a) {
   $('hrOk').addEventListener('click', () => {
     box.querySelectorAll('[data-h]').forEach((inp) => { chs[+inp.dataset.h].cv.heure = inp.value || ''; });
     const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
-    closeModal(); renderHomeTrajet();
+    scheduleCalPush(t); closeModal(); renderHomeTrajet();
   });
 }
 // Encodage du temps de trajet RÉEL d'un arrêt (relevé sur Waze) — repris dans SMS / récap / ticket / stats.
@@ -5608,6 +5669,7 @@ function purgeTourData(id) {
   [S.comptaRecu, S.comptaDemarche].forEach((map) => { if (map) Object.keys(map).forEach((k) => { if (k.split(':')[0] === id) delete map[k]; }); });
   // Événement d'agenda récupéré vers cette tournée → il redevient disponible dans « Items ».
   Object.keys(S.agendaImported || {}).forEach((eid) => { if (S.agendaImported[eid] && S.agendaImported[eid].tourId === id) delete S.agendaImported[eid]; });
+  deleteTourCalendar(id); // retire de Google Agenda les RDV poussés pour cette tournée (best-effort)
   saveSettings();
 }
 // ---------- Programmation de suivi (RDV) ----------
@@ -5977,6 +6039,21 @@ function bindSettings() {
   if ($('setNavApp')) { $('setNavApp').value = S.navApp; $('setNavApp').addEventListener('change', (e) => { S.navApp = e.target.value === 'gmaps' ? 'gmaps' : 'waze'; saveSettings(); if ($('tab-accueil').classList.contains('active')) renderHome(); }); }
   if ($('setGoogleClientId')) { $('setGoogleClientId').value = S.googleClientId || ''; $('setGoogleClientId').addEventListener('input', (e) => { S.googleClientId = e.target.value.trim(); saveSettings(); }); }
   if ($('setGoogleAuto')) { $('setGoogleAuto').checked = !!S.googleAutoSync; $('setGoogleAuto').addEventListener('change', (e) => { S.googleAutoSync = e.target.checked; saveSettings(); }); }
+  if ($('setCalPush')) {
+    $('setCalPush').checked = !!S.calPush;
+    if ($('calPushWrap')) $('calPushWrap').style.display = S.calPush ? '' : 'none';
+    $('setCalPush').addEventListener('change', (e) => { S.calPush = e.target.checked; saveSettings(); if ($('calPushWrap')) $('calPushWrap').style.display = S.calPush ? '' : 'none'; });
+  }
+  if ($('calPushNow')) $('calPushNow').addEventListener('click', async () => {
+    const h = $('calPushStatus');
+    if (!S.calPush) { if (h) { h.className = 'status err'; h.textContent = 'Activez d\'abord l\'option ci-dessus.'; } return; }
+    if (!S.googleClientId) { if (h) { h.className = 'status err'; h.textContent = 'Renseignez d\'abord votre ID client Google.'; } return; }
+    if (h) { h.className = 'status'; h.textContent = 'Envoi vers Google Agenda…'; }
+    const ts = allTours().filter((t) => { const s = statusOf(t); return s === 'active' || s === 'avenir' || s === 'cloturee'; }); // RDV du jour + à venir + clôturées récentes (pas les archives)
+    let n = 0;
+    for (const t of ts) { await pushTourToCalendar(t, { interactive: true, statusEl: h }); n++; }
+    if (h) { h.className = 'status ok'; h.textContent = n + ' tournée(s) synchronisée(s) avec Google Agenda.'; }
+  });
   if ($('setRdvDelai')) { $('setRdvDelai').value = S.rdvDelaiSemaines || 5; $('setRdvDelai').addEventListener('input', (e) => { const v = parseInt(e.target.value, 10); S.rdvDelaiSemaines = (!isNaN(v) && v >= 1) ? v : 5; saveSettings(); }); }
   if ($('setRdvJour')) { $('setRdvJour').value = S.rdvJourSemaine || ''; $('setRdvJour').addEventListener('change', (e) => { S.rdvJourSemaine = e.target.value; saveSettings(); }); }
   if ($('syncSecFile')) $('syncSecFile').addEventListener('change', () => { applySyncMode('file'); saveSettings(); });
@@ -6228,10 +6305,11 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!currentTour || currentTour.closed) return;
     const blk = tourFinalizeBlock(currentTour);
     if (blk.length) { alert('🔒 Clôture bloquée — finalisez chaque arrêt dans « Trajet du jour » (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; }
+    if (S.calPush) { const miss = calMissingHeure(currentTour); if (miss.length) { alert('🕘 Synchro Agenda Google active : l\'heure de RDV est obligatoire.\n\nRenseignez l\'heure de : ' + miss.join(', ') + '\n(dans l\'arrêt « Heure de RDV », ou Trajet du jour → ⚡ Agir → Heure RDV.)'); return; } }
     if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
     currentTour.closed = true;
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
-    saveTournees(); openEditor();
+    saveTournees(); scheduleCalPush(currentTour); openEditor();
   });
   $('edBack').addEventListener('click', () => showTab('tournees'));
   $('edAddArret').addEventListener('click', pickClientForArret);

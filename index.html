@@ -827,6 +827,11 @@
       <label class="chk2"><input type="checkbox" id="setGoogleAuto"/> Synchroniser Drive automatiquement à l'ouverture</label>
       <div class="actions two"><button class="btn" id="googleConnect">🔗 Connecter Drive</button><button class="btn primary" id="googleSyncBtn">🔄 Synchroniser</button></div>
       <p class="status" id="googleStatus"></p>
+      <h3 class="rsub">Agenda — pousser mes RDV vers Google</h3>
+      <label class="chk2"><input type="checkbox" id="setCalPush"/> Créer/mettre à jour automatiquement mes RDV dans Google Agenda (1 évènement par client). <b>L'heure de RDV devient obligatoire pour clôturer une tournée.</b></label>
+      <div class="actions" id="calPushWrap" style="display:none"><button class="btn" id="calPushNow">📅 Pousser tous mes RDV à venir maintenant</button></div>
+      <p class="hint">Nécessite l'accès <b>écriture</b> à l'Agenda : dans votre console Google Cloud, l'API <b>Google Calendar</b> doit être activée (déjà fait pour l'import). Après cette mise à jour, une <b>reconnexion unique</b> est demandée (le droit d'écriture s'ajoute au jeton). Import agenda→app et push app→agenda partagent la même connexion.</p>
+      <p class="status" id="calPushStatus"></p>
       <details class="assistant"><summary>❓ Aide détaillée : créer mon ID Google (gratuit, une seule fois)</summary>
         <p class="hint"><b>Google Cloud Console</b> = l'espace développeur <b>gratuit</b> de Google. On y crée un « identifiant » qui autorise <b>cette</b> app à accéder à <b>votre</b> Drive/Agenda (personne d'autre).</p>
         <p class="hint">💡 <b>Astuce clé</b> : n'utilisez PAS les menus (ils changent). Utilisez la <b>barre de recherche tout en haut</b> de la console et tapez le nom de l'écran (ex. « Google Drive API », « Écran de consentement OAuth », « Identifiants ») pour y aller directement.</p>
