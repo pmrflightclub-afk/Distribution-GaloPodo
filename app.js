@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.79';
+const APP_VERSION = '1.1.80';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.80', date: '2026-07-08',
+    ajouts: [
+      'Menu « Déclarer » réorganisé : Créer un client · Planche de contact · Valider un plein · Corriger la consommation · Frais de matériel · Frais véhicule · Statut véhicule · Synchroniser.',
+      'Planche contact (paramétrage) : Avant/après passe en colonnes (angles) avec modèle 3/4/5 comme la planche contact. Gestion multi-pages : chaque type a des pages (page 1 = les pieds, page 2 = le cheval par défaut), avec bouton « Ajouter une page » ; lignes et colonnes toujours renommables, réordonnables, ajoutables.',
+    ],
+  },
   {
     version: '1.1.79', date: '2026-07-08',
     ajouts: [
@@ -702,9 +709,17 @@ const DEF_TRANCHES_SUIVI = [{ label: '< 6 mois', max: 6 }, { label: '6–12 mois
 S.statTranchesAge = (Array.isArray(S.statTranchesAge) && S.statTranchesAge.length) ? S.statTranchesAge : DEF_TRANCHES_AGE.map((x) => Object.assign({}, x));
 S.statTranchesSuivi = (Array.isArray(S.statTranchesSuivi) && S.statTranchesSuivi.length) ? S.statTranchesSuivi : DEF_TRANCHES_SUIVI.map((x) => Object.assign({}, x));
 // Paramétrage des planches contact / avant-après (JSON persisté ; les images et PDF ne sont JAMAIS stockés dans l'app).
+// Structure : { orientation, logo, modeles:{3,4,5:[angles]} (=colonnes), pages:[{membres:[…]}] (=lignes, réparties en pages) }.
 if (!S.planche || typeof S.planche !== 'object') S.planche = {};
-S.planche.contact = Object.assign({ orientation: 'paysage', logo: false, membres: ['Cheval', 'Antérieur gauche', 'Antérieur droit', 'Postérieur gauche', 'Postérieur droit'], modeles: { '3': ['Latéral', 'Dorsal', 'Solaire'], '4': ['Latéral', 'Dorsal', 'Solaire', 'Médial'], '5': ['Latéral', 'Dorsal', 'Solaire', 'Médial', 'Caudal'] } }, S.planche.contact || {});
-S.planche.avantapres = Object.assign({ orientation: 'paysage', logo: false, angles: ['Latéral', 'Dorsal', 'Solaire', 'Médial', 'Caudal'], photosParLigne: 4 }, S.planche.avantapres || {});
+const _plModeles = () => ({ '3': ['Latéral', 'Dorsal', 'Solaire'], '4': ['Latéral', 'Dorsal', 'Solaire', 'Médial'], '5': ['Latéral', 'Dorsal', 'Solaire', 'Médial', 'Caudal'] });
+S.planche.contact = Object.assign({ orientation: 'paysage', logo: false, modeles: _plModeles(), pages: [{ membres: ['Antérieur gauche', 'Antérieur droit', 'Postérieur gauche', 'Postérieur droit'] }, { membres: ['Cheval'] }] }, S.planche.contact || {});
+if (!Array.isArray(S.planche.contact.pages)) S.planche.contact.pages = [{ membres: ['Antérieur gauche', 'Antérieur droit', 'Postérieur gauche', 'Postérieur droit'] }, { membres: ['Cheval'] }];
+if (!S.planche.contact.modeles) S.planche.contact.modeles = _plModeles();
+delete S.planche.contact.membres;
+S.planche.avantapres = Object.assign({ orientation: 'paysage', logo: false, modeles: _plModeles(), pages: [{ membres: [] }, { membres: ['Cheval'] }] }, S.planche.avantapres || {});
+if (!Array.isArray(S.planche.avantapres.pages)) S.planche.avantapres.pages = [{ membres: [] }, { membres: ['Cheval'] }];
+if (!S.planche.avantapres.modeles) S.planche.avantapres.modeles = _plModeles();
+delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
 if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
@@ -4287,7 +4302,7 @@ function modalTourArticle(existing, opts) {
 let plancheType = 'contact', plancheModele = '3';
 const moveInArr = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; const t = arr[i]; arr[i] = arr[j]; arr[j] = t; };
 // Éditeur d'une liste de libellés : renommer · réordonner (▲▼) · supprimer · ajouter.
-function plancheList(box, arr, onChange, addLabel) {
+function plancheList(box, arr, onChange, addLabel, allowEmpty) {
   box.innerHTML = '';
   arr.forEach((val, i) => {
     const row = document.createElement('div'); row.className = 'edit-row';
@@ -4295,7 +4310,7 @@ function plancheList(box, arr, onChange, addLabel) {
     row.querySelector('.er-title').addEventListener('input', (e) => { arr[i] = e.target.value; saveSettings(); });
     row.querySelector('[data-up]').addEventListener('click', () => { moveInArr(arr, i, -1); onChange(); });
     row.querySelector('[data-down]').addEventListener('click', () => { moveInArr(arr, i, 1); onChange(); });
-    row.querySelector('[data-del]').addEventListener('click', () => { if (arr.length <= 1) { alert('Au moins un élément est requis.'); return; } arr.splice(i, 1); onChange(); });
+    row.querySelector('[data-del]').addEventListener('click', () => { if (!allowEmpty && arr.length <= 1) { alert('Au moins un élément est requis.'); return; } arr.splice(i, 1); onChange(); });
     box.appendChild(row);
   });
   const add = document.createElement('button'); add.className = 'btn small'; add.style.marginTop = '6px'; add.textContent = addLabel || '+ Ajouter';
@@ -4307,6 +4322,7 @@ function renderPlancheConfig() {
   const btn = $('plCreateBtn'); if (btn) btn.onclick = () => (typeof modalPlancheCreate === 'function' ? modalPlancheCreate(plancheType) : alert('La création de planche arrive à l\'étape suivante (le paramétrage est déjà en place).'));
   const body = $('plancheBody'); if (!body) return; body.innerHTML = '';
   const P = plancheType === 'contact' ? S.planche.contact : S.planche.avantapres;
+  // Orientation + logo
   const head = document.createElement('section'); head.className = 'card';
   head.innerHTML = `<label>Orientation<select id="plOri"><option value="paysage">Paysage</option><option value="portrait">Portrait</option></select></label>
     <label class="chk2"><input type="checkbox" id="plLogo" ${P.logo ? 'checked' : ''}/> Afficher le logo / l'identité du pro en en-tête</label>`;
@@ -4314,27 +4330,31 @@ function renderPlancheConfig() {
   $('plOri').value = P.orientation || 'paysage';
   $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; saveSettings(); });
   $('plLogo').addEventListener('change', (e) => { P.logo = e.target.checked; saveSettings(); });
-  if (plancheType === 'contact') {
-    const s1 = document.createElement('section'); s1.className = 'card';
-    s1.innerHTML = '<h3 class="rsub">Lignes — membres</h3><p class="hint">La 1ʳᵉ ligne (cheval) est libre (≤ 5 photos). Les autres suivent les colonnes du modèle choisi. Ordre = ordre d\'impression.</p><div id="plMembres"></div>';
-    body.appendChild(s1); plancheList($('plMembres'), P.membres, renderPlancheConfig, '+ Ajouter un membre');
-    const s2 = document.createElement('section'); s2.className = 'card';
-    s2.innerHTML = `<h3 class="rsub">Colonnes — angles de vue (par modèle)</h3>
-      <div class="seg" id="plMod"><button type="button" class="seg-btn" data-plm="3">3 incidences</button><button type="button" class="seg-btn" data-plm="4">4 incidences</button><button type="button" class="seg-btn" data-plm="5">5 incidences</button></div>
-      <div id="plAngles" style="margin-top:8px"></div>`;
-    body.appendChild(s2);
-    s2.querySelectorAll('#plMod .seg-btn').forEach((b) => { b.classList.toggle('on', b.dataset.plm === plancheModele); b.addEventListener('click', () => { plancheModele = b.dataset.plm; renderPlancheConfig(); }); });
-    if (!P.modeles[plancheModele]) P.modeles[plancheModele] = [];
-    plancheList($('plAngles'), P.modeles[plancheModele], renderPlancheConfig, '+ Ajouter un angle');
-  } else {
-    const s2 = document.createElement('section'); s2.className = 'card';
-    s2.innerHTML = `<h3 class="rsub">Photos par ligne (avant / après)</h3>
-      <div class="seg" id="plPpl"><button type="button" class="seg-btn" data-ppl="2">2</button><button type="button" class="seg-btn" data-ppl="4">4</button><button type="button" class="seg-btn" data-ppl="6">6</button></div>
-      <h3 class="rsub" style="margin-top:12px">Angles de vue disponibles</h3><div id="plAngles"></div>`;
-    body.appendChild(s2);
-    s2.querySelectorAll('#plPpl .seg-btn').forEach((b) => { b.classList.toggle('on', +b.dataset.ppl === (P.photosParLigne || 4)); b.addEventListener('click', () => { P.photosParLigne = +b.dataset.ppl; saveSettings(); renderPlancheConfig(); }); });
-    plancheList($('plAngles'), P.angles, renderPlancheConfig, '+ Ajouter un angle');
-  }
+  // Colonnes = angles de vue, par modèle 3/4/5
+  const sc = document.createElement('section'); sc.className = 'card';
+  sc.innerHTML = `<h3 class="rsub">Colonnes — angles de vue (par modèle)</h3>
+    <div class="seg" id="plMod"><button type="button" class="seg-btn" data-plm="3">3 colonnes</button><button type="button" class="seg-btn" data-plm="4">4 colonnes</button><button type="button" class="seg-btn" data-plm="5">5 colonnes</button></div>
+    <div id="plAngles" style="margin-top:8px"></div>`;
+  body.appendChild(sc);
+  sc.querySelectorAll('#plMod .seg-btn').forEach((b) => { b.classList.toggle('on', b.dataset.plm === plancheModele); b.addEventListener('click', () => { plancheModele = b.dataset.plm; renderPlancheConfig(); }); });
+  if (!P.modeles[plancheModele]) P.modeles[plancheModele] = [];
+  plancheList($('plAngles'), P.modeles[plancheModele], renderPlancheConfig, '+ Ajouter un angle');
+  // Pages & lignes (membres) + bouton « ajouter une page »
+  const sp = document.createElement('section'); sp.className = 'card';
+  sp.innerHTML = `<div class="card-head"><h3 class="rsub" style="margin:0">Pages & lignes</h3><button class="btn small" id="plAddPage">＋ Ajouter une page</button></div>`
+    + (plancheType === 'avantapres'
+      ? '<p class="hint">Avant/après : sur la 1ʳᵉ page, les <b>lignes sont les dates</b> (comparaison) ajoutées à la création. Les pages suivantes (ex. « Cheval ») ont leurs propres lignes.</p>'
+      : '<p class="hint">Chaque page a ses lignes (membres). Par défaut : page 1 = les 4 pieds, page 2 = le cheval. Réordonnez, renommez, ajoutez.</p>');
+  const pagesBox = document.createElement('div'); sp.appendChild(pagesBox); body.appendChild(sp);
+  P.pages.forEach((pg, pi) => {
+    if (!Array.isArray(pg.membres)) pg.membres = [];
+    const pd = document.createElement('div'); pd.className = 'card'; pd.style.margin = '8px 0';
+    pd.innerHTML = `<div class="card-head"><b>Page ${pi + 1}</b>${P.pages.length > 1 ? '<button class="btn small danger" data-delpage>Supprimer la page</button>' : ''}</div><div class="pgMembres"></div>`;
+    pagesBox.appendChild(pd);
+    plancheList(pd.querySelector('.pgMembres'), pg.membres, renderPlancheConfig, '+ Ajouter une ligne', true);
+    const dp = pd.querySelector('[data-delpage]'); if (dp) dp.addEventListener('click', () => { P.pages.splice(pi, 1); saveSettings(); renderPlancheConfig(); });
+  });
+  $('plAddPage').addEventListener('click', () => { P.pages.push({ membres: [] }); saveSettings(); renderPlancheConfig(); });
 }
 // ================= SMS (modèle) =================
 const SMS_FIELDS = [
@@ -5159,20 +5179,22 @@ function modalStatutVehicule() {
 function modalVehicule() {
   openModal(`<div class="modal-head"><b>📋 Déclarer un événement</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Que voulez-vous faire ?</p>
-    <div class="actions"><button class="btn block" id="vStatut">🚗 Statut véhicule (relevé compteur)</button></div>
     <div class="actions"><button class="btn primary block" id="vClient">👤 Créer un client</button></div>
+    <div class="actions"><button class="btn block" id="vPlanche">🖼 Planche de contact (photos)</button></div>
     <div class="actions"><button class="btn block" id="vPlein">⛽ Valider un plein (prix du carburant)</button></div>
     <div class="actions"><button class="btn block" id="vConso">🚗 Corriger la consommation</button></div>
-    <div class="actions"><button class="btn block" id="vFrais">🧾 Frais véhicule (entretien, achat…)</button></div>
     <div class="actions"><button class="btn block" id="vMat">🧰 Frais de matériel</button></div>
+    <div class="actions"><button class="btn block" id="vFrais">🧾 Frais véhicule (entretien, achat…)</button></div>
+    <div class="actions"><button class="btn block" id="vStatut">🚗 Statut véhicule (relevé compteur)</button></div>
     <div class="actions"><button class="btn block" id="vSync">🔄 Synchroniser (Google Drive)</button></div>
     <p class="status" id="vSyncStatus"></p>
     <div class="actions"><button class="btn block" id="vUpdate">⬇️ Mettre à jour l'application (v${APP_VERSION})</button></div>
     <p class="hint">Cherche une version plus récente publiée et met l'app à jour. Vos données sont conservées.</p>
     <p class="status" id="vUpdateStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
-  $('vStatut').addEventListener('click', () => { closeModal(); modalStatutVehicule(); });
   $('vClient').addEventListener('click', () => { closeModal(); editClient(null); });
+  $('vPlanche').addEventListener('click', () => { closeModal(); if (typeof modalPlancheCreate === 'function') modalPlancheCreate('contact'); else { showTab('gestion'); showGestion('planche'); } });
+  $('vStatut').addEventListener('click', () => { closeModal(); modalStatutVehicule(); });
   $('vPlein').addEventListener('click', modalPlein);
   $('vConso').addEventListener('click', modalConso);
   $('vFrais').addEventListener('click', () => { closeModal(); showTab('gestion'); showGestion('vehicule'); });
