@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.86';
+const APP_VERSION = '1.1.87';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.87', date: '2026-07-08',
+    ajouts: [
+      'Contact mail : la récupération ne liste plus que les réponses reçues (vos propres mails envoyés sont exclus) et détecte aussi les formulaires reçus qui n\'ont pas l\'objet « prise de contact » (scan des étiquettes dans le corps). Ces deux comportements sont réglables dans Réglages → Mail.',
+      'Contact mail : nouveau bouton « 👁 Voir » pour lire le mail (corps + infos extraites) avant de décider du statut.',
+      'Contact mail : nouveau bouton « 🔄 Mettre à jour un client » — propose les infos du mail comme modifications à cocher sur une fiche existante, SANS écraser les données déjà connues (les champs déjà remplis ne sont pas cochés par défaut).',
+      'Gestion → Contact mail : le bouton « Connecter Gmail » a été retiré (la connexion se fait dans Réglages → Mail).',
+      'Un clic sur le bandeau du haut (logo + widgets) ramène à l\'Accueil.',
+    ],
+  },
   {
     version: '1.1.86', date: '2026-07-08',
     ajouts: [
@@ -768,7 +778,9 @@ if (!S.planche.avantapres.modeles) S.planche.avantapres.modeles = _plModeles();
 delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
 if (!Array.isArray(S.mailKeywords) || !S.mailKeywords.length) S.mailKeywords = ['prise de contact'];
-if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
+if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, body, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
+if (typeof S.mailExcludeSelf !== 'boolean') S.mailExcludeSelf = true; // n'inclut pas les mails que VOUS avez envoyés (seulement les réponses reçues)
+if (typeof S.mailScanForm !== 'boolean') S.mailScanForm = true;       // détecte aussi les formulaires sans le mot-clé (étiquettes distinctives)
 if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
@@ -4436,8 +4448,11 @@ async function gmailFetch(statusEl, after) {
   try {
     if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Récupération des mails…'; }
     const token = await googleToken(true, GSCOPE_MAIL);
-    const q = (S.mailKeywords || []).filter(Boolean).map((k) => '"' + k.replace(/"/g, '') + '"').join(' OR ') || '"prise de contact"';
-    const lr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=40&q=' + encodeURIComponent(q), { headers: { Authorization: 'Bearer ' + token } });
+    const kws = (S.mailKeywords || []).filter(Boolean).map((k) => '"' + k.replace(/"/g, '') + '"');
+    if (S.mailScanForm !== false) kws.push('"Nom du cheval"', '"Adresse de l\'écurie"'); // détecte aussi les FORMULAIRES sans le mot-clé (étiquettes distinctives)
+    const orPart = kws.length ? '(' + kws.join(' OR ') + ')' : '"prise de contact"';
+    const q = orPart + (S.mailExcludeSelf !== false ? ' -from:me' : ''); // n'inclut PAS les mails que VOUS avez envoyés, seulement les réponses reçues
+    const lr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100&q=' + encodeURIComponent(q), { headers: { Authorization: 'Bearer ' + token } });
     if (!lr.ok) throw new Error('API Gmail (' + lr.status + ')');
     const list = await lr.json();
     const seen = new Set((S.contactMails || []).map((x) => x.id)); // déjà récupérés OU ignorés → jamais ré-importés (pas de doublon)
@@ -4447,8 +4462,8 @@ async function gmailFetch(statusEl, after) {
       const mr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + mm.id + '?format=full', { headers: { Authorization: 'Bearer ' + token } });
       if (!mr.ok) continue;
       const msg = await mr.json();
-      const fromRaw = gmailHeader(msg, 'From');
-      S.contactMails.push({ id: mm.id, from: mailExtractEmail(fromRaw), fromRaw, subject: gmailHeader(msg, 'Subject'), date: gmailHeader(msg, 'Date'), fields: parseContactMail(gmailPlainBody(msg.payload)), status: 'nouveau', clientId: null, chevalNom: '' });
+      const fromRaw = gmailHeader(msg, 'From'); const body = gmailPlainBody(msg.payload);
+      S.contactMails.push({ id: mm.id, from: mailExtractEmail(fromRaw), fromRaw, subject: gmailHeader(msg, 'Subject'), date: gmailHeader(msg, 'Date'), fields: parseContactMail(body), body: (body || '').slice(0, 8000), status: 'nouveau', clientId: null, chevalNom: '' });
       added++;
     }
     saveSettings();
@@ -4459,8 +4474,22 @@ async function gmailFetch(statusEl, after) {
 // Réglages → Mail : mots-clés + connexion + récupération.
 function renderMailConfig() {
   const kb = $('mailKeywords'); if (kb) plancheList(kb, S.mailKeywords, renderMailConfig, '+ Ajouter un mot-clé');
+  const es = $('mailExcludeSelf'); if (es) { es.checked = S.mailExcludeSelf !== false; es.onchange = (e) => { S.mailExcludeSelf = e.target.checked; saveSettings(); }; }
+  const sf = $('mailScanForm'); if (sf) { sf.checked = S.mailScanForm !== false; sf.onchange = (e) => { S.mailScanForm = e.target.checked; saveSettings(); }; }
   const c = $('mailConnect'); if (c) c.onclick = () => gmailConnect($('mailStatus'));
   const f = $('mailFetch'); if (f) f.onclick = () => gmailFetch($('mailStatus'));
+}
+// Visualisation d'un mail « prise de contact » (corps + champs détectés) pour décider du statut.
+function modalMailView(m) {
+  const f = m.fields || {};
+  const keys = Object.keys(f);
+  const champs = keys.length ? keys.map((k) => `<div class="inv-line"><span>${esc(k)}</span><span>${esc(f[k] || '')}</span></div>`).join('') : '<p class="hint">Aucun champ détecté.</p>';
+  openModal(`<div class="modal-head"><b>✉️ ${esc(m.from || 'Mail')}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">${esc(m.subject || '')}${m.date ? ' · ' + esc(String(m.date).slice(0, 24)) : ''}</p>
+    <h3 class="rsub">Champs détectés</h3><div>${champs}</div>
+    <h3 class="rsub">Corps du mail</h3><pre style="white-space:pre-wrap;font-size:.8rem;max-height:40vh;overflow:auto;background:var(--bg);padding:8px;border-radius:8px">${esc(m.body || '(corps non disponible)')}</pre>
+    <div class="actions"><button class="btn block" id="mvClose">Fermer</button></div>`);
+  $('mX').addEventListener('click', closeModal); $('mvClose').addEventListener('click', closeModal);
 }
 // Gestion → Contact mail : liste des mails récupérés (nouveaux) + section « Ignorés ».
 function renderContactMail() {
@@ -4480,11 +4509,17 @@ function contactMailRow(m, ignored) {
   const nom = (mailField(f, 'Prénom') + ' ' + mailField(f, 'Nom')).trim() || m.from || '(inconnu)';
   const cheval = mailField(f, 'Nom du cheval'), soc = mailField(f, "Nom de l'entreprise");
   const el = document.createElement('div'); el.className = 'list-item';
+  el.className = 'list-item stack-act';
   el.innerHTML = `<div class="li-main"><b>${esc(nom)}${cheval ? ' · 🐴 ' + esc(cheval) : ''}</b><span class="li-sub">${esc(m.from || '')}${soc ? ' · ' + esc(soc) : ''}${m.date ? ' · ' + esc(String(m.date).slice(0, 16)) : ''}</span></div>`
-    + (ignored ? '<div class="li-act"><button class="btn small" data-restore>↩ Réactiver</button></div>'
-      : '<div class="li-act"><button class="btn small primary" data-create>👤 Créer le client</button> <button class="btn small" data-ignore>Ignorer</button></div>');
+    + (ignored ? '<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small" data-restore>↩ Réactiver</button></div>'
+      : '<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small primary" data-create>👤 Créer le client</button><button class="btn small" data-update>🔄 Mettre à jour un client</button><button class="btn small" data-ignore>Ignorer</button></div>');
+  el.querySelector('[data-view]').addEventListener('click', () => modalMailView(m));
   if (ignored) el.querySelector('[data-restore]').addEventListener('click', () => { m.status = 'nouveau'; saveSettings(); renderContactMail(); });
-  else { el.querySelector('[data-create]').addEventListener('click', () => createClientFromMail(m)); el.querySelector('[data-ignore]').addEventListener('click', () => { m.status = 'ignore'; saveSettings(); renderContactMail(); }); }
+  else {
+    el.querySelector('[data-create]').addEventListener('click', () => createClientFromMail(m));
+    el.querySelector('[data-update]').addEventListener('click', () => updateClientFromMail(m));
+    el.querySelector('[data-ignore]').addEventListener('click', () => { m.status = 'ignore'; saveSettings(); renderContactMail(); });
+  }
   return el;
 }
 // Normalise une date saisie librement (« 2015-04-01 », « 01/04/2015 », « 2015 ») en 'YYYY-MM-DD' si possible.
@@ -4505,6 +4540,50 @@ function createClientFromMail(m) {
     cheval: { nom: mailField(f, 'Nom du cheval'), dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f },
   };
   editClient(null, (saved) => { m.status = 'client'; m.clientId = saved && saved.id; m.chevalNom = prefill.cheval.nom; saveSettings(); if (currentGsub === 'contactmail') renderContactMail(); }, null, prefill);
+}
+// « Mettre à jour un client » depuis un mail : trouve le client existant puis propose des modifications à valider (sans écraser).
+function updateClientFromMail(m) {
+  const f = m.fields || {};
+  const email = m.from || '', nomM = norm(mailField(f, 'Nom')), prenomM = norm(mailField(f, 'Prénom'));
+  const cand = clients.filter((c) => (email && c.email && norm(c.email) === norm(email)) || (nomM && norm(c.nom) === nomM && (!prenomM || !c.prenom || norm(c.prenom) === prenomM)));
+  if (cand.length === 1) return modalUpdateClientFields(m, cand[0]);
+  const list = (cand.length ? cand : clients).slice().sort((a, b) => fullName(a).localeCompare(fullName(b)));
+  modalActions(cand.length ? 'Quel client mettre à jour ?' : 'Aucune correspondance — choisir le client', list.map((c) => ({ label: fullName(c) + (c.societe ? ' — ' + c.societe : ''), onClick: () => modalUpdateClientFields(m, c) })));
+}
+function modalUpdateClientFields(m, c) {
+  const f = m.fields || {}; const all = [];
+  const add = (label, cur, val, apply) => { if (val && norm(val) !== norm(cur || '')) all.push({ label, cur: cur || '', val, apply, on: !(cur && String(cur).trim()) }); };
+  add('Prénom', c.prenom, mailField(f, 'Prénom'), (v) => c.prenom = v);
+  add('Nom', c.nom, mailField(f, 'Nom'), (v) => c.nom = v);
+  add('Email', c.email, m.from, (v) => c.email = v);
+  add('Téléphone', c.tel, mailField(f, 'Numéro de téléphone'), (v) => c.tel = v);
+  add('Société', c.societe, mailField(f, "Nom de l'entreprise"), (v) => { c.societe = v; c.assujettiTva = true; });
+  add('N° TVA', c.tvaNum, mailField(f, 'Numéro de TVA', 'N° de TVA'), (v) => c.tvaNum = v);
+  add('Adresse (rue)', c.addr && c.addr.rue, mailField(f, 'Votre adresse (domicile) N° et rue', 'Adresse de facturation'), (v) => { c.addr = toAddr(c.addr); c.addr.rue = v; c.addr.lat = null; c.addr.lon = null; });
+  const cpVille = mailField(f, 'Code postal et localité'); const cpm = (cpVille || '').match(/\d{4,5}/); const loc = (cpVille || '').replace(/\d{4,5}/, '').replace(/[,]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (cpm) add('Code postal', c.addr && c.addr.cp, cpm[0], (v) => { c.addr = toAddr(c.addr); c.addr.cp = v; c.addr.lat = null; c.addr.lon = null; });
+  if (loc) add('Localité', c.addr && c.addr.localite, loc, (v) => { c.addr = toAddr(c.addr); c.addr.localite = v; c.addr.lat = null; c.addr.lon = null; });
+  const chNom = mailField(f, 'Nom du cheval');
+  const chObj = chNom ? (c.chevaux || []).find((h) => norm(h.nom) === norm(chNom)) : null;
+  if (chNom && !chObj) all.push({ label: 'Ajouter le cheval « ' + chNom + ' »', cur: '', val: chNom, on: true, apply: () => { (c.chevaux = c.chevaux || []).push({ id: uid(), nom: chNom, dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f, addrSource: 'client', addr: emptyAddr() }); } });
+  else if (chObj) {
+    add('🐴 ' + chNom + ' — Naissance', chObj.dateNaissance, parseDateLoose(mailField(f, 'Date de naissance')), (v) => chObj.dateNaissance = v);
+    add('🐴 ' + chNom + ' — Race', chObj.race, mailField(f, 'Race'), (v) => chObj.race = v);
+    all.push({ label: '🐴 ' + chNom + ' — ranger le formulaire (anamnèse)', cur: '', val: 'formulaire', on: !chObj.anamnese, apply: () => chObj.anamnese = f });
+  }
+  if (!all.length) { alert('Rien de nouveau à mettre à jour pour ' + fullName(c) + '.'); return; }
+  openModal(`<div class="modal-head"><b>🔄 Mettre à jour — ${esc(fullName(c))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Cochez ce que vous voulez appliquer. Les champs déjà remplis ne sont <b>pas</b> cochés par défaut (aucun écrasement involontaire).</p>
+    <div id="upList"></div>
+    <div class="actions"><button class="btn primary block" id="upOk">Appliquer les modifications cochées</button></div>`);
+  const box = $('upList');
+  all.forEach((p, i) => { const row = document.createElement('label'); row.className = 'chk2'; row.style.display = 'block'; row.innerHTML = `<input type="checkbox" data-i="${i}" ${p.on ? 'checked' : ''}/> <b>${esc(p.label)}</b> <span class="li-sub">${p.cur ? esc(p.cur) + ' → ' : ''}${esc(p.val || '')}</span>`; box.appendChild(row); });
+  $('mX').addEventListener('click', closeModal);
+  $('upOk').addEventListener('click', () => {
+    box.querySelectorAll('[data-i]').forEach((cb) => { if (cb.checked) { const p = all[+cb.dataset.i]; p.apply(p.val); } });
+    saveClients(); reconcileActiveTours(); m.status = 'client'; m.clientId = c.id; m.chevalNom = chNom; saveSettings();
+    closeModal(); renderContactMail();
+  });
 }
 // ================= PLANCHES CONTACT / AVANT-APRÈS — paramétrage =================
 let plancheType = 'contact', plancheModele = '3';
@@ -5939,6 +6018,7 @@ window.addEventListener('DOMContentLoaded', () => {
   migrateCreditedCancellations(); // 1.1.57 : marque « credited » les chevaux annulés portant une note de crédit (évite la double réduction du CA)
   bindSettings(); refreshEverywhere(); renderHome();
 
+  if ($('appTopbar')) $('appTopbar').addEventListener('click', (e) => { if (!e.target.closest('button,a,input,select')) showTab('accueil'); });
   if ($('btnRefreshTours')) $('btnRefreshTours').addEventListener('click', refreshActiveTours);
   $('btnVehicule').addEventListener('click', modalVehicule);
   $('btnAddFrais').addEventListener('click', () => { S.frais.push({ id: uid(), poste: '', nature: 'recurrent', montantHT: 0, kmPrevus: 0, kmDebut: odometer(), date: todayStr() }); saveSettings(); renderFraisVehicule(); });

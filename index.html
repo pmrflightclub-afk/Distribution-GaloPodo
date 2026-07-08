@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
+  <header class="topbar" id="appTopbar" style="cursor:pointer" title="Retour à l'accueil">
     <div class="brand">
       <span class="brand-logo-wrap"><img class="brand-logo" src="icons/logo-mark.png" alt="GaloPodo" /><span class="app-ver" id="appVerTop" title="Version de l'application"></span></span>
       <span class="brand-name">GaloPodo</span>
@@ -454,7 +454,7 @@
       <section class="card">
         <div class="card-head"><h2>Contact mail</h2></div>
         <p class="hint">Mails « prise de contact » récupérés depuis Gmail. « Créer le client » ouvre une fiche pré-remplie (client + 1 cheval, le formulaire complet est rangé sur la fiche du cheval). « Ignorer » masque le mail. Les mails déjà traités ou ignorés ne sont jamais ré-importés.</p>
-        <div class="actions two"><button class="btn" id="cmConnect">🔗 Connecter Gmail</button><button class="btn primary" id="cmFetch">📥 Récupérer les mails</button></div>
+        <div class="actions"><button class="btn primary block" id="cmFetch">📥 Récupérer les mails</button></div>
         <p class="status" id="cmStatus"></p>
         <p class="hint" id="cmTraites"></p>
         <div id="cmList" class="list"></div>
@@ -724,6 +724,8 @@
       <p class="hint">Récupère dans <b>votre</b> Gmail les mails contenant un mot-clé et en extrait les infos client/cheval (formulaire à étiquettes). Nécessite votre ID client Google (Réglages → Synchro) avec l'accès Gmail activé dans votre console. Les mails ne sont <b>pas</b> stockés dans l'app — seules les infos extraites le sont. La liste des mails récupérés est dans <b>Gestion → Contact mail</b>.</p>
       <h3 class="rsub">Mots-clés (au moins un)</h3>
       <div id="mailKeywords" class="edit-list"></div>
+      <label class="chk2"><input type="checkbox" id="mailExcludeSelf"/> N'inclure que les réponses reçues (exclure les mails que j'ai envoyés)</label>
+      <label class="chk2"><input type="checkbox" id="mailScanForm"/> Détecter aussi les formulaires sans le mot-clé (scan des étiquettes dans le corps)</label>
       <div class="actions two" style="margin-top:8px"><button class="btn" id="mailConnect">🔗 Connecter Gmail</button><button class="btn primary" id="mailFetch">📥 Récupérer les mails</button></div>
       <p class="status" id="mailStatus"></p>
     </section>
