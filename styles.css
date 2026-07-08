@@ -297,6 +297,8 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .drag-h:active { cursor: grabbing; }
 .list-item.dragging { opacity: .55; }
 .edit-row.frais-off { opacity: .55; }
+.list-item.art-off { opacity: .72; }
+.art-offert input { accent-color: var(--warn); }
 .er-renew { margin-top: 6px; text-align: right; }
 .fin-cheval { display: flex; justify-content: space-between; gap: 10px; font-size: .78rem; color: var(--muted); padding-left: 18px; }
 

@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.74';
+const APP_VERSION = '1.1.75';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.75', date: '2026-07-08',
+    ajouts: [
+      'Facture d\'un arrêt : Parage, Visite, Fourbure, NPAS et Infection s\'affichent maintenant comme lignes d\'articles distinctes, une par cheval, dans l\'ordre des cases (avant les articles manuels).',
+      'Nouvelle case « Offrir » sur chaque ligne (à côté de « Remise »), cheval par cheval : elle met le montant de la ligne à 0. La facture, le récap et le ticket se mettent à jour automatiquement.',
+    ],
+  },
   {
     version: '1.1.74', date: '2026-07-08',
     ajouts: [
@@ -2103,7 +2110,7 @@ function reconcileTour(tour) {
         if (!h) return; // cheval supprimé → retiré
         const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
         let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [] }; arr.clients.push(ncl); }
-        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null });
+        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null, parageOffert: !!cv.parageOffert, visiteOffert: !!cv.visiteOffert, fourbureOffert: !!cv.fourbureOffert, npasOffert: !!cv.npasOffert, infectionOffert: !!cv.infectionOffert });
       });
     });
   });
@@ -2435,27 +2442,40 @@ function renderEditorArrets(locked) {
     const alist = document.createElement('div'); alist.className = 'list';
     // Case « Remise » (à cocher) = la réduction client s'applique à cette ligne. Cochée par défaut.
     const remiseChkHtml = (off, dis) => locked ? '' : `<label class="chk2 art-remise" title="${dis ? 'Remise produit désactivée (catalogue) — ligne non remisable manuellement' : 'La réduction client s\'applique à cette ligne'}"><input type="checkbox" data-remise ${off ? '' : 'checked'}${dis ? ' disabled' : ''}/> Remise</label>`;
-    // Ligne(s) Parage & équilibrage (auto, par cheval coché) : affichée avec sa case Remise (remisée par défaut).
-    if (S.parage && S.parage.prixHT > 0) {
-      if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {};
-      a.clients.forEach((cl) => {
-        const pc = (cl.chevaux || []).filter((c) => chevalPresent(c) && c.parage); if (!pc.length) return;
-        const qte = pc.length, ttcv = S.parage.prixHT * qte * (1 + (S.parage.tvaPct || 0) / 100);
-        const off = !!currentTour.parageRemiseOff[cl.clientId];
-        const row = document.createElement('div'); row.className = 'list-item';
-        row.innerHTML = `<div class="li-main"><b>Parage et équilibrage</b><span class="li-sub">${esc(clientName(cl.clientId))} · ×${qte} · 🐴 ${esc(pc.map((c) => c.nom).join(', '))} · ${eur(ttcv)} TTC · <i>auto</i></span></div><div class="li-act">${remiseChkHtml(off)}</div>`;
-        const rc = row.querySelector('[data-remise]');
-        if (rc) rc.addEventListener('change', (e) => { if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {}; if (e.target.checked) delete currentTour.parageRemiseOff[cl.clientId]; else currentTour.parageRemiseOff[cl.clientId] = true; saveTournees(); recomputeMoney(); });
-        alist.appendChild(row);
+    // Case « Offrir » = cette prestation est offerte (montant mis à 0).
+    const offrirChkHtml = (on) => locked ? '' : `<label class="chk2 art-offert" title="Offrir cette prestation (montant mis à 0)"><input type="checkbox" data-offert ${on ? 'checked' : ''}/> Offrir</label>`;
+    // Lignes d'acte PAR CHEVAL (dans l'ordre des cases : Parage · Visite · Fourbure · NPAS · Infection), avec Remise (si applicable) + Offrir (par cheval).
+    if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {};
+    const acteRate = (S.tvaRate || 0) / 100;
+    a.clients.forEach((cl) => {
+      (cl.chevaux || []).filter(chevalPresent).forEach((c) => {
+        const items = [];
+        if (c.parage && S.parage && S.parage.prixHT > 0) items.push({ key: 'parage', lbl: 'Parage et équilibrage', unit: S.parage.prixHT, tva: (S.parage.tvaPct || 0) / 100, remise: true });
+        if (c.visite && c.visiteArtId) { const av = (S.articlesCatalogue || []).find((x) => x.id === c.visiteArtId); if (av) items.push({ key: 'visite', lbl: av.libelle, unit: av.prixHT || 0, tva: (av.tvaPct || 0) / 100, remise: false }); }
+        [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([k, l, p]) => { if (c[k] && p > 0) items.push({ key: k, lbl: l, unit: p, tva: acteRate, remise: false }); });
+        items.forEach((it) => {
+          const off = !!c[it.key + 'Offert'];
+          const ttcv = it.unit * (1 + it.tva);
+          const row = document.createElement('div'); row.className = 'list-item' + (off ? ' art-off' : '');
+          const remiseHtml = it.remise ? remiseChkHtml(!!currentTour.parageRemiseOff[cl.clientId]) : '';
+          row.innerHTML = `<div class="li-main"><b>${esc(it.lbl)}</b><span class="li-sub">${esc(clientName(cl.clientId))} · 🐴 ${esc(c.nom)} · ${off ? '<b>offert</b>' : eur(ttcv) + ' TTC'} · <i>auto</i></span></div><div class="li-act">${remiseHtml}${offrirChkHtml(off)}</div>`;
+          if (it.remise) { const rc = row.querySelector('[data-remise]'); if (rc) rc.addEventListener('change', (e) => { if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {}; if (e.target.checked) delete currentTour.parageRemiseOff[cl.clientId]; else currentTour.parageRemiseOff[cl.clientId] = true; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); }
+          const oc = row.querySelector('[data-offert]'); if (oc) oc.addEventListener('change', (e) => { c[it.key + 'Offert'] = e.target.checked; saveTournees(); recomputeMoney(); renderEditorArrets(locked); });
+          alist.appendChild(row);
+        });
       });
-    }
+    });
     arts.forEach((art) => {
       const rr = (art.tvaPct || 0) / 100, qte = Math.max(1, (art.chevalNoms || []).length || 1), ttcv = (art.prixHT || 0) * qte * (1 + rr);
       const row = document.createElement('div'); row.className = 'list-item';
       const chn = (art.chevalNoms || []).join(', ');
       const remiseChk = art.impaye ? '' : remiseChkHtml(!!art.remiseOff, art.remiseProduit === false); // impayé jamais remisé ; verrouillé si « remise produit » off au catalogue
-      row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${eur(ttcv)} TTC</span></div>${locked ? '' : `<div class="li-act">${remiseChk}<button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>`}`;
+      const offrirChk = art.impaye ? '' : offrirChkHtml(!!art.offert);
+      const artOff = !art.impaye && !!art.offert;
+      row.className = 'list-item' + (artOff ? ' art-off' : '');
+      row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${artOff ? '<b>offert</b>' : eur(ttcv) + ' TTC'}</span></div>${locked ? '' : `<div class="li-act">${remiseChk}${offrirChk}<button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>`}`;
       if (!locked) {
+        const oc = row.querySelector('[data-offert]'); if (oc) oc.addEventListener('change', (e) => { art.offert = e.target.checked; saveTournees(); recomputeMoney(); renderEditorArrets(locked); });
         const rc = row.querySelector('[data-remise]'); if (rc) rc.addEventListener('change', (e) => { art.remiseOff = !e.target.checked; saveTournees(); recomputeMoney(); });
         row.querySelector('[data-e]').addEventListener('click', () => modalTourArticle(art, { arret: a }));
         row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; if (art.impaye && art.impayeId) uncollectImpaye(art.impayeId); currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
@@ -2596,17 +2616,23 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
       m.deplacement.push({ adresse: r.adresse, type: r.type, partHT, partTTC, km: kmClient, tarifHT: r.tarifHT || 0, proche: !!r.proche, chevaux: cl.chevaux.map((c) => c.nom) });
       m.htDep += partHT;
       cl.chevaux.forEach((c) => {
-        // Visite par cheval (INDÉPENDANTE du parage) : article choisi au catalogue (visite:true) → ligne à son prix.
+        // Parage & équilibrage (par cheval) → 1ʳᵉ ligne d'article (remisable). « Offrir » (c.parageOffert) → montant 0 (prixHT conservé pour les stats).
+        if (c.parage && S.parage && S.parage.prixHT > 0) {
+          const rr = (S.parage.tvaPct || 0) / 100, off = !!c.parageOffert, unit = S.parage.prixHT;
+          m.articles.push({ libelle: 'Parage et équilibrage', chevaux: [c.nom], qte: 1, prixHT: unit, tvaPct: S.parage.tvaPct || 0, ht: off ? 0 : unit, tva: off ? 0 : unit * rr, ttc: off ? 0 : unit * (1 + rr), parage: true, offert: off, remiseOff: !!parageNoRemise[cl.clientId], remiseProduit: true, remiseLiquide: true });
+          m.htArt += off ? 0 : unit; m.tvaArt += off ? 0 : unit * rr;
+        }
+        // Visite par cheval (INDÉPENDANTE du parage) : article catalogue. « Offrir » (c.visiteOffert) → 0.
         if (c.visite && c.visiteArtId) {
           const av = (S.articlesCatalogue || []).find((x) => x.id === c.visiteArtId);
-          if (av) { const rr = (av.tvaPct || 0) / 100, prix = av.prixHT || 0; m.articles.push({ libelle: av.libelle, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: av.tvaPct || 0, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), visite: true, remiseOff: false, remiseProduit: av.remiseProduit !== false, remiseLiquide: av.remiseLiquide !== false }); m.htArt += prix; m.tvaArt += prix * rr; }
+          if (av) { const rr = (av.tvaPct || 0) / 100, off = !!c.visiteOffert, unit = av.prixHT || 0; m.articles.push({ libelle: av.libelle, chevaux: [c.nom], qte: 1, prixHT: unit, tvaPct: av.tvaPct || 0, ht: off ? 0 : unit, tva: off ? 0 : unit * rr, ttc: off ? 0 : unit * (1 + rr), visite: true, offert: off, remiseOff: false, remiseProduit: av.remiseProduit !== false, remiseLiquide: av.remiseLiquide !== false }); m.htArt += off ? 0 : unit; m.tvaArt += off ? 0 : unit * rr; }
         }
         // Matériel consommable = base seule, facturé UNIQUEMENT avec un parage.
         if (c.parage && baseMat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: false, npas: false, infection: false, ht: baseMat, ttc: baseMat * (1 + stdRate) }); m.htMat += baseMat; }
-        // Fourbure / NPAS / Infection → lignes d'ARTICLE (par cheval), facturées si parage OU visite (forfaits de soin fixes, non remisés).
+        // Fourbure / NPAS / Infection → lignes d'ARTICLE (par cheval). « Offrir » (c.<key>Offert) → 0.
         if (c.parage || c.visite) {
           [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([key, lbl, prix]) => {
-            if (c[key] && prix > 0) { const rr = stdRate; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: prix, tva: prix * rr, ttc: prix * (1 + rr), patho: true, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += prix; m.tvaArt += prix * rr; }
+            if (c[key] && prix > 0) { const rr = stdRate, off = !!c[key + 'Offert']; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: off ? 0 : prix, tva: off ? 0 : prix * rr, ttc: off ? 0 : prix * (1 + rr), patho: true, offert: off, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += off ? 0 : prix; m.tvaArt += off ? 0 : prix * rr; }
           });
         }
       });
@@ -2625,22 +2651,12 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     const noms = (cancelSet && !a.impaye) ? orig.filter((n) => !cancelSet.has(norm(n))) : orig; // retire les chevaux annulés
     if (!a.impaye && !noms.length) return; // toutes les cibles annulées → ligne retirée
     const qte = a.impaye ? 1 : noms.reduce((s, n) => s + (qByNom[n] || 1), 0);
-    const lineHT = (a.prixHT || 0) * qte, rr = (a.tvaPct || 0) / 100;
+    const off = !a.impaye && !!a.offert; // « Offrir » : ligne mise à 0 (prixHT conservé pour les stats)
+    const lineHT = off ? 0 : (a.prixHT || 0) * qte, rr = (a.tvaPct || 0) / 100;
     const m = getC(a.clientId, clientName(a.clientId));
-    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, qtesByNom: a.impaye ? null : qByNom, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, remiseOff: !!(a.remiseOff || a.impaye), remiseProduit: a.impaye ? false : (a.remiseProduit !== false), remiseLiquide: a.impaye ? false : (a.remiseLiquide !== false) }); // impayé (créance) jamais remisé
+    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, qtesByNom: a.impaye ? null : qByNom, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, offert: off, remiseOff: !!(a.remiseOff || a.impaye), remiseProduit: a.impaye ? false : (a.remiseProduit !== false), remiseLiquide: a.impaye ? false : (a.remiseLiquide !== false) }); // impayé (créance) jamais remisé
     m.htArt += lineHT; m.tvaArt += lineHT * rr;
   });
-  // Parage & équilibrage auto (cheval coché) → ligne d'article
-  if (S.parage && S.parage.prixHT > 0) {
-    const pa = {};
-    rows.forEach((r) => r.clients.forEach((cl) => cl.chevaux.forEach((c) => { if (c.parage) (pa[cl.clientId] = pa[cl.clientId] || []).push(c.nom); })));
-    Object.keys(pa).forEach((cid) => {
-      const noms = pa[cid], qte = noms.length, rr = (S.parage.tvaPct || 0) / 100, lineHT = S.parage.prixHT * qte;
-      const m = getC(cid, clientName(cid));
-      m.articles.unshift({ libelle: 'Parage et équilibrage', chevaux: noms, qte, prixHT: S.parage.prixHT, tvaPct: S.parage.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), parage: true, remiseOff: !!parageNoRemise[cid], remiseProduit: true, remiseLiquide: true }); // Parage en 1ʳᵉ position ; remisable (manuel + liquide) par défaut
-      m.htArt += lineHT; m.tvaArt += lineHT * rr;
-    });
-  }
   const parClient = Object.values(cmap).map((m) => {
     // Deux réductions INDÉPENDANTES, par ligne :
     //  • MANUELLE (réduction client) : ligne éligible si case « Remise » cochée (!remiseOff) ET produit remisable (remiseProduit).
@@ -2682,7 +2698,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalBilled).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null })) })),
+    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalBilled).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert })) })),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
@@ -2876,7 +2892,7 @@ function clientInvoiceHtml(m, payment) {
   let rows = '';
   if (m.articles.length || arr.has) {
     rows += sec('Articles');
-    m.articles.forEach((a) => { const noms = a.chevaux.length ? ' — ' + a.chevaux.map(esc).join(', ') : ''; const rem = a.remisePct ? ` <span class="rem-tag">−${a.remisePct}%</span>` : ''; rows += row(`🧾 ${esc(a.libelle)} ×${a.qte}${noms} (TVA ${a.tvaPct}%)${rem}`, eur(a.prixHT), a.ht, a.tva, a.ttc); });
+    m.articles.forEach((a) => { const noms = a.chevaux.length ? ' — ' + a.chevaux.map(esc).join(', ') : ''; const rem = a.offert ? ' <span class="rem-tag">offert</span>' : (a.remisePct ? ` <span class="rem-tag">−${a.remisePct}%</span>` : ''); rows += row(`🧾 ${esc(a.libelle)} ×${a.qte}${noms} (TVA ${a.tvaPct}%)${rem}`, eur(a.prixHT), a.ht, a.tva, a.ttc); });
     // Arrondi caisse en DERNIÈRE position des articles → impacte le sous-total.
     if (arr.has) rows += row('💶 Arrondi caisse (liquide)', '', arr.ht, arr.tva, arr.ttc, 'inv-reduc');
   }
@@ -2935,7 +2951,7 @@ function invoiceTextForClient(m, payment) {
   const L = [`Client : ${m.nom}`];
   if (m.articles.length || arr.has) {
     L.push('— Articles —');
-    m.articles.forEach((a) => { const ch = a.chevaux.length ? ' (' + a.chevaux.join(', ') + ')' : ''; const rem = a.remisePct ? ` −${a.remisePct}%` : ''; L.push(`  ${a.libelle} ×${a.qte}${ch}${rem} : ${eur(a.ht)} HT · ${eur(a.tva)} TVA · ${eur(a.ttc)} TTC`); });
+    m.articles.forEach((a) => { const ch = a.chevaux.length ? ' (' + a.chevaux.join(', ') + ')' : ''; const rem = a.offert ? ' (offert)' : (a.remisePct ? ` −${a.remisePct}%` : ''); L.push(`  ${a.libelle} ×${a.qte}${ch}${rem} : ${eur(a.ht)} HT · ${eur(a.tva)} TVA · ${eur(a.ttc)} TTC`); });
     if (arr.has) L.push(`  Arrondi caisse (liquide) : ${eur(arr.ht)} HT · ${eur(arr.tva)} TVA · ${eur(arr.ttc)} TTC`);
   }
   if (m.materiel.length) {
