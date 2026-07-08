@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.78';
+const APP_VERSION = '1.1.79';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.79', date: '2026-07-08',
+    ajouts: [
+      'Nouveau module « Planche contact » (photos) — étape 1 : Gestion → sous-onglet « Planche contact » pour paramétrer les deux types (Planche contact, Avant/après). Orientation (paysage par défaut), logo optionnel, et surtout les lignes (membres) et colonnes (angles de vue) : renommables, réordonnables (▲▼) et ajoutables. Modèles 3 / 4 / 5 incidences pour la planche contact ; 2 / 4 / 6 photos par ligne pour l\'avant/après.',
+      'La création des planches (sélection de photos, grille, PDF) arrive à l\'étape suivante. Rappel : les photos et les PDF ne sont jamais stockés dans l\'app.',
+    ],
+  },
   {
     version: '1.1.78', date: '2026-07-08',
     ajouts: [
@@ -694,6 +701,10 @@ const DEF_TRANCHES_AGE = [{ label: 'Poulain (< 1 an)', max: 12 }, { label: '1–
 const DEF_TRANCHES_SUIVI = [{ label: '< 6 mois', max: 6 }, { label: '6–12 mois', max: 12 }, { label: '1–2 ans', max: 24 }, { label: '2–5 ans', max: 60 }, { label: '> 5 ans', max: null }];
 S.statTranchesAge = (Array.isArray(S.statTranchesAge) && S.statTranchesAge.length) ? S.statTranchesAge : DEF_TRANCHES_AGE.map((x) => Object.assign({}, x));
 S.statTranchesSuivi = (Array.isArray(S.statTranchesSuivi) && S.statTranchesSuivi.length) ? S.statTranchesSuivi : DEF_TRANCHES_SUIVI.map((x) => Object.assign({}, x));
+// Paramétrage des planches contact / avant-après (JSON persisté ; les images et PDF ne sont JAMAIS stockés dans l'app).
+if (!S.planche || typeof S.planche !== 'object') S.planche = {};
+S.planche.contact = Object.assign({ orientation: 'paysage', logo: false, membres: ['Cheval', 'Antérieur gauche', 'Antérieur droit', 'Postérieur gauche', 'Postérieur droit'], modeles: { '3': ['Latéral', 'Dorsal', 'Solaire'], '4': ['Latéral', 'Dorsal', 'Solaire', 'Médial'], '5': ['Latéral', 'Dorsal', 'Solaire', 'Médial', 'Caudal'] } }, S.planche.contact || {});
+S.planche.avantapres = Object.assign({ orientation: 'paysage', logo: false, angles: ['Latéral', 'Dorsal', 'Solaire', 'Médial', 'Caudal'], photosParLigne: 4 }, S.planche.avantapres || {});
 if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
@@ -1571,6 +1582,7 @@ function showGestion(sub) {
   if (currentGsub === 'materiel') renderMateriel();
   if (currentGsub === 'vehicule') renderFraisVehicule();
   if (currentGsub === 'statut') renderStatutVehiculePage();
+  if (currentGsub === 'planche') renderPlancheConfig();
   if (currentGsub === 'sms') renderSMS();
 }
 
@@ -4271,6 +4283,59 @@ function modalTourArticle(existing, opts) {
   });
 }
 
+// ================= PLANCHES CONTACT / AVANT-APRÈS — paramétrage =================
+let plancheType = 'contact', plancheModele = '3';
+const moveInArr = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; const t = arr[i]; arr[i] = arr[j]; arr[j] = t; };
+// Éditeur d'une liste de libellés : renommer · réordonner (▲▼) · supprimer · ajouter.
+function plancheList(box, arr, onChange, addLabel) {
+  box.innerHTML = '';
+  arr.forEach((val, i) => {
+    const row = document.createElement('div'); row.className = 'edit-row';
+    row.innerHTML = `<div class="er-top"><input class="grow er-title" value="${esc(val)}" placeholder="Libellé"/><button class="btn small" data-up${i === 0 ? ' disabled' : ''}>▲</button><button class="btn small" data-down${i === arr.length - 1 ? ' disabled' : ''}>▼</button><button class="a-del" data-del title="Supprimer">✕</button></div>`;
+    row.querySelector('.er-title').addEventListener('input', (e) => { arr[i] = e.target.value; saveSettings(); });
+    row.querySelector('[data-up]').addEventListener('click', () => { moveInArr(arr, i, -1); onChange(); });
+    row.querySelector('[data-down]').addEventListener('click', () => { moveInArr(arr, i, 1); onChange(); });
+    row.querySelector('[data-del]').addEventListener('click', () => { if (arr.length <= 1) { alert('Au moins un élément est requis.'); return; } arr.splice(i, 1); onChange(); });
+    box.appendChild(row);
+  });
+  const add = document.createElement('button'); add.className = 'btn small'; add.style.marginTop = '6px'; add.textContent = addLabel || '+ Ajouter';
+  add.addEventListener('click', () => { arr.push('Nouveau'); onChange(); });
+  box.appendChild(add);
+}
+function renderPlancheConfig() {
+  const seg = $('plType'); if (seg) seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._plw) { b._plw = true; b.addEventListener('click', () => { plancheType = b.dataset.plt; renderPlancheConfig(); }); } b.classList.toggle('on', b.dataset.plt === plancheType); });
+  const btn = $('plCreateBtn'); if (btn) btn.onclick = () => (typeof modalPlancheCreate === 'function' ? modalPlancheCreate(plancheType) : alert('La création de planche arrive à l\'étape suivante (le paramétrage est déjà en place).'));
+  const body = $('plancheBody'); if (!body) return; body.innerHTML = '';
+  const P = plancheType === 'contact' ? S.planche.contact : S.planche.avantapres;
+  const head = document.createElement('section'); head.className = 'card';
+  head.innerHTML = `<label>Orientation<select id="plOri"><option value="paysage">Paysage</option><option value="portrait">Portrait</option></select></label>
+    <label class="chk2"><input type="checkbox" id="plLogo" ${P.logo ? 'checked' : ''}/> Afficher le logo / l'identité du pro en en-tête</label>`;
+  body.appendChild(head);
+  $('plOri').value = P.orientation || 'paysage';
+  $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; saveSettings(); });
+  $('plLogo').addEventListener('change', (e) => { P.logo = e.target.checked; saveSettings(); });
+  if (plancheType === 'contact') {
+    const s1 = document.createElement('section'); s1.className = 'card';
+    s1.innerHTML = '<h3 class="rsub">Lignes — membres</h3><p class="hint">La 1ʳᵉ ligne (cheval) est libre (≤ 5 photos). Les autres suivent les colonnes du modèle choisi. Ordre = ordre d\'impression.</p><div id="plMembres"></div>';
+    body.appendChild(s1); plancheList($('plMembres'), P.membres, renderPlancheConfig, '+ Ajouter un membre');
+    const s2 = document.createElement('section'); s2.className = 'card';
+    s2.innerHTML = `<h3 class="rsub">Colonnes — angles de vue (par modèle)</h3>
+      <div class="seg" id="plMod"><button type="button" class="seg-btn" data-plm="3">3 incidences</button><button type="button" class="seg-btn" data-plm="4">4 incidences</button><button type="button" class="seg-btn" data-plm="5">5 incidences</button></div>
+      <div id="plAngles" style="margin-top:8px"></div>`;
+    body.appendChild(s2);
+    s2.querySelectorAll('#plMod .seg-btn').forEach((b) => { b.classList.toggle('on', b.dataset.plm === plancheModele); b.addEventListener('click', () => { plancheModele = b.dataset.plm; renderPlancheConfig(); }); });
+    if (!P.modeles[plancheModele]) P.modeles[plancheModele] = [];
+    plancheList($('plAngles'), P.modeles[plancheModele], renderPlancheConfig, '+ Ajouter un angle');
+  } else {
+    const s2 = document.createElement('section'); s2.className = 'card';
+    s2.innerHTML = `<h3 class="rsub">Photos par ligne (avant / après)</h3>
+      <div class="seg" id="plPpl"><button type="button" class="seg-btn" data-ppl="2">2</button><button type="button" class="seg-btn" data-ppl="4">4</button><button type="button" class="seg-btn" data-ppl="6">6</button></div>
+      <h3 class="rsub" style="margin-top:12px">Angles de vue disponibles</h3><div id="plAngles"></div>`;
+    body.appendChild(s2);
+    s2.querySelectorAll('#plPpl .seg-btn').forEach((b) => { b.classList.toggle('on', +b.dataset.ppl === (P.photosParLigne || 4)); b.addEventListener('click', () => { P.photosParLigne = +b.dataset.ppl; saveSettings(); renderPlancheConfig(); }); });
+    plancheList($('plAngles'), P.angles, renderPlancheConfig, '+ Ajouter un angle');
+  }
+}
 // ================= SMS (modèle) =================
 const SMS_FIELDS = [
   { k: '{civilite}', label: 'Civilité (Mr/Mme)' },

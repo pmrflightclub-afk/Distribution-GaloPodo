@@ -302,6 +302,7 @@
         <button class="subtab" data-gsub="materiel">Frais matériel</button>
         <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
         <button class="subtab" data-gsub="statut">Statut véhicule</button>
+        <button class="subtab" data-gsub="planche">Planche contact</button>
         <button class="subtab" data-gsub="sms">SMS</button>
       </div>
     </nav>
@@ -436,6 +437,15 @@
         <h2>Frais à renouveler</h2>
         <div id="statutFraisEchus" class="list"></div>
         <p class="empty" id="statutFraisEchusEmpty">Aucun frais à renouveler.</p>
+      </section>
+    </div>
+
+    <div id="gsub-planche" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Planches — paramétrage</h2><button class="btn small primary" id="plCreateBtn">＋ Créer une planche</button></div>
+        <p class="hint">Configurez la structure des planches (lignes = membres, colonnes = angles de vue). Les photos et PDF ne sont jamais stockés dans l'app : elles restent dans la bibliothèque du téléphone, le PDF est enregistré par le navigateur.</p>
+        <div class="seg" id="plType"><button type="button" class="seg-btn on" data-plt="contact">Planche contact</button><button type="button" class="seg-btn" data-plt="avantapres">Avant / après</button></div>
+        <div id="plancheBody"></div>
       </section>
     </div>
 
