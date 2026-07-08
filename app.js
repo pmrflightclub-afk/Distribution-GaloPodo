@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.82';
+const APP_VERSION = '1.1.83';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.83', date: '2026-07-08',
+    ajouts: [
+      'Réglages : le sous-onglet « Sauvegarde » est déplacé en dernière position (après « Changelog »).',
+    ],
+  },
   {
     version: '1.1.82', date: '2026-07-08',
     ajouts: [
