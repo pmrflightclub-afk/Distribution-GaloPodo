@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.90';
+const APP_VERSION = '1.1.91';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.91', date: '2026-07-08',
+    ajouts: [
+      'Correctif important (facture à 0 déplacement/matériel) : un cheval d\'une ancienne tournée sans prestation cochée (parage/visite) n\'était pas considéré comme « fait » → son déplacement et son matériel disparaissaient de la facture et ses stats étaient vides. Nouveau bouton « ✏️ Corriger les prestations » sur une tournée clôturée : cochez le parage / la visite réellement effectués (les chevaux concernés sont surlignés en orange), la facture (déplacement + matériel) et les statistiques sont aussitôt recalculées. Le trajet et les kilomètres ne changent pas.',
+    ],
+  },
   {
     version: '1.1.90', date: '2026-07-08',
     ajouts: [
@@ -2377,6 +2383,7 @@ function openEditor() {
   if ($('edRevalider')) $('edRevalider').style.display = review ? '' : 'none';
   if ($('edRecoverWrap')) $('edRecoverWrap').style.display = currentTour.recovered ? '' : 'none'; // tournée récupérée : compléter les données manquantes pour les stats
   if ($('edRepairWrap')) $('edRepairWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : réparation manuelle d'une facture abîmée (recalcul complet depuis les adresses)
+  if ($('edActesWrap')) $('edActesWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : corriger les prestations (réactiver un cheval non facturé)
   if ($('edCancelBillWrap')) $('edCancelBillWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : annuler une facturation (cheval/arrêt/client/tournée)
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
@@ -5335,6 +5342,41 @@ function modalCancelRdv(nom, opts) {
     closeModal(); opts.onDone();
   });
 }
+// Corriger les prestations d'une tournée CLÔTURÉE : réactive un cheval « présent » mais sans acte coché (ancien modèle « présent »
+// → migré vers parage/visite : ces chevaux étaient devenus INACTIFS = ni déplacement ni matériel facturés, stats vides).
+function modalEditPrestations(t) {
+  const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
+  const rows = [];
+  (t.arrets || []).forEach((a, ai) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => {
+    if (chevalCancelled(cv)) return; // les annulés se gèrent via « Annuler une facturation »
+    rows.push({ cv, nom: cv.nom, clientNom: clientName(cl.clientId), legacy: !cv.parage && !cv.visite && !cv.fourbure && !cv.npas && !cv.infection });
+  })));
+  if (!rows.length) { alert('Aucun cheval à corriger sur cette tournée.'); return; }
+  let html = `<div class="modal-head"><b>✏️ Corriger les prestations — ${esc(fmtDateFr(t.date))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Cochez les prestations réellement effectuées. Un cheval sans aucune prestation cochée n'est <b>pas facturé</b> (ni déplacement, ni matériel) et n'apparaît pas dans les statistiques. Les lignes en <b>orange</b> sont d'anciennes tournées où aucune prestation n'a jamais été cochée.</p>
+    <table class="patho-tbl"><thead><tr><th>Cheval</th><th>Parage</th>${S.fourbureHT > 0 ? '<th>Fourbure</th>' : ''}${S.npasHT > 0 ? '<th>NPAS</th>' : ''}${S.infectionHT > 0 ? '<th>Infection</th>' : ''}${visArts.length ? '<th>Visite</th>' : ''}</tr></thead><tbody>`;
+  rows.forEach((r, i) => {
+    const cv = r.cv;
+    html += `<tr${r.legacy ? ' style="background:#fff3e0"' : ''}><td>🐴 ${esc(r.nom)} <span class="li-sub">— ${esc(r.clientNom)}</span></td>`;
+    html += `<td><input type="checkbox" data-p="${i}" data-k="parage" ${cv.parage ? 'checked' : ''}/></td>`;
+    if (S.fourbureHT > 0) html += `<td><input type="checkbox" data-p="${i}" data-k="fourbure" ${cv.fourbure ? 'checked' : ''}/></td>`;
+    if (S.npasHT > 0) html += `<td><input type="checkbox" data-p="${i}" data-k="npas" ${cv.npas ? 'checked' : ''}/></td>`;
+    if (S.infectionHT > 0) html += `<td><input type="checkbox" data-p="${i}" data-k="infection" ${cv.infection ? 'checked' : ''}/></td>`;
+    if (visArts.length) html += `<td><input type="checkbox" data-p="${i}" data-k="visite" ${cv.visite ? 'checked' : ''}/></td>`;
+    html += `</tr>`;
+  });
+  html += `</tbody></table>${visArts.length ? '<p class="hint">« Visite » cochée sans prestation choisie → la 1ʳᵉ prestation « Visite » du catalogue est utilisée (modifiable en rouvrant la tournée si besoin).</p>' : ''}
+    <div class="actions"><button class="btn primary block" id="epOk">Enregistrer et recalculer</button></div>`;
+  openModal(html);
+  $('mX').addEventListener('click', closeModal);
+  $('epOk').addEventListener('click', () => {
+    $('modalBox').querySelectorAll('[data-p]').forEach((inp) => { rows[+inp.dataset.p].cv[inp.dataset.k] = inp.checked; });
+    rows.forEach((r) => { const cv = r.cv; if (cv.visite && !cv.visiteArtId && visArts.length) cv.visiteArtId = visArts[0].id; if (!cv.visite) cv.visiteArtId = null; if (!cv.parage && !cv.visite) { cv.fourbure = false; cv.npas = false; cv.infection = false; } });
+    recomputeTourLocal(t); currentTour = t; persistCurrentTour(); // réutilise la géométrie figée → km/temps inchangés
+    closeModal(); refreshEverywhere(); openEditor();
+    alert('Prestations mises à jour — facture (déplacement + matériel) et statistiques recalculées.');
+  });
+}
 // Annuler une facturation sur une tournée CLÔTURÉE (figée) : choisir tournée entière / arrêt / client / cheval.
 // Retire SEULEMENT la part de facture (géométrie, km, temps, route, autres clients : inchangés → recalcul LOCAL qui réutilise la géométrie figée) et met à jour les stats (tournée + globales).
 // Règles note de crédit : virement + facture → NC obligatoire ; liquide, liquide+facture, virement sans facture → suppression de la répartition SANS NC.
@@ -6220,6 +6262,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     openEditor(); // ré-affiche en mode figé avec le résultat réparé
   });
+  if ($('edActes')) $('edActes').addEventListener('click', () => { if (currentTour) modalEditPrestations(currentTour); });
   if ($('edCancelBill')) $('edCancelBill').addEventListener('click', () => { if (currentTour) modalCancelBilling(currentTour); });
   $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats et ses impayés liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(recapText(currentTour.result)); $('edStatus').className = 'status ok'; $('edStatus').textContent = 'Récap copié.'; } catch { $('edStatus').textContent = 'Copie impossible.'; } });
