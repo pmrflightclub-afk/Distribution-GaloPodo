@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.94';
+const APP_VERSION = '1.1.95';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.95', date: '2026-07-08',
+    ajouts: [
+      'Fenêtre « Arrondi de l\'encaissement liquide » plus claire : elle affiche désormais le TOTAL recalculé de chaque client, avec le détail (déplacement · matériel · articles) et l\'ancien montant encaissé, pour décider du montant arrondi en connaissance de cause.',
+    ],
+  },
   {
     version: '1.1.94', date: '2026-07-08',
     ajouts: [
@@ -5552,9 +5558,17 @@ function modalCancelBilling(t) {
 }
 // Après une annulation partielle, saisie du montant liquide arrondi réellement encaissé (reste) pour les clients liquide SANS facture.
 function modalAdjustArrondi(t, list, msg) {
+  const stdRate = rate();
   let html = `<div class="modal-head"><b>💶 Arrondi de l'encaissement liquide</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Le total a changé : indiquez le montant liquide réellement <b>encaissé</b> (arrondi à l'euro) pour chaque client payé en espèces. La différence avec le total facturé passe en « arrondi caisse ». Obligatoire pour le liquide (avec ou sans facture).</p><div id="ajList">`;
-  list.forEach((c, i) => { html += `<div class="pay-block"><h3 style="font-size:.9rem;margin:.3rem 0">${esc(c.nom)} <span class="li-sub">— reste facturé ${eur(c.total)}</span></h3><label>Montant liquide encaissé (arrondi)<input type="number" step="1" min="0" inputmode="numeric" data-aj="${i}" value="${Math.round(c.total)}"/></label></div>`; });
+  list.forEach((c, i) => {
+    const m = (t.result && t.result.parClient || []).find((x) => x.clientId === c.clientId);
+    const dep = m ? m.htDep * (1 + stdRate) : 0, mat = m ? m.htMat * (1 + stdRate) : 0, art = m ? Math.max(0, m.totalTTC - (m.htDep + m.htMat) * (1 + stdRate)) : 0;
+    const p = (t.payments || {})[c.clientId] || {}; const oldEnc = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : null);
+    html += `<div class="pay-block"><h3 style="font-size:.95rem;margin:.3rem 0">${esc(c.nom)}</h3>
+      <p class="hint" style="margin:.2rem 0"><b>Total recalculé : ${eur(c.total)}</b><br><span class="li-sub">déplacement ${eur(dep)} · matériel ${eur(mat)} · articles ${eur(art)}${oldEnc != null ? ' · ancien encaissé ' + eur(oldEnc) : ''}</span></p>
+      <label>Montant liquide encaissé (arrondi à l'euro)<input type="number" step="1" min="0" inputmode="numeric" data-aj="${i}" value="${Math.round(c.total)}"/></label></div>`;
+  });
   html += `</div><div class="actions"><button class="btn primary block" id="ajOk">Enregistrer</button></div>`;
   openModal(html);
   const done = () => { closeModal(); refreshEverywhere(); openEditor(); };
