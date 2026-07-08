@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.76';
+const APP_VERSION = '1.1.77';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.77', date: '2026-07-08',
+    ajouts: [
+      'Stats → Suivi chevaux : nouvelle section « Offerts & remises » (sous le filtre Mois/Trim/Sem/Année) — nombre de prestations offertes et remisées, part en % des lignes facturées, total offert et total des remises accordées, avec le détail (date, client, prestation, cheval, offert ou %).',
+    ],
+  },
   {
     version: '1.1.76', date: '2026-07-08',
     ajouts: [
@@ -3215,6 +3221,44 @@ function renderChevGenStats(range) {
     <div class="tile"><span class="t-label">NPAS</span><span class="t-val">${g.npas}</span></div>
     <div class="tile"><span class="t-label">Infection</span><span class="t-val">${g.infection}</span></div></div>`;
 }
+// Prestations OFFERTES / REMISÉES sur une période (scan des lignes d'articles figées).
+function offreRemiseStats(range) {
+  let offCount = 0, remCount = 0, lineCount = 0, offTTC = 0, remTTC = 0, grossTTC = 0; const detail = [];
+  allTours().forEach((t) => {
+    if (!t.result || !t.result.parClient || !range.has((t.date || '').slice(0, 7))) return;
+    t.result.parClient.forEach((m) => {
+      (m.articles || []).forEach((a) => {
+        if (a.impaye) return;
+        const rr = (a.tvaPct || 0) / 100, plein = (a.prixHT || 0) * (a.qte || 1) * (1 + rr); // valeur pleine TTC (prixHT conservé même si offert)
+        lineCount++; grossTTC += plein;
+        if (a.offert) { offCount++; offTTC += plein; detail.push({ date: t.date, client: m.nom, libelle: a.libelle, chevaux: a.chevaux || [], type: 'offert', pct: 100, valeur: plein }); }
+        else if (a.remisePct) { remCount++; const redTTC = (a.htBrut != null ? (a.htBrut - a.ht) : 0) * (1 + rr); remTTC += redTTC; detail.push({ date: t.date, client: m.nom, libelle: a.libelle, chevaux: a.chevaux || [], type: 'remise', pct: a.remisePct, valeur: redTTC }); }
+      });
+    });
+  });
+  return { offCount, remCount, lineCount, offTTC, remTTC, grossTTC, detail };
+}
+function renderOffreRemise(range) {
+  const box = $('offreRemise'); if (!box) return;
+  const s = offreRemiseStats(range);
+  const pctOff = s.lineCount ? (s.offCount / s.lineCount * 100) : 0, pctRem = s.lineCount ? (s.remCount / s.lineCount * 100) : 0;
+  let h = `<div class="tiles tiles-3" style="margin:8px 0">
+    <div class="tile"><span class="t-label">Prestations offertes</span><span class="t-val">${s.offCount}</span></div>
+    <div class="tile"><span class="t-label">Prestations remisées</span><span class="t-val">${s.remCount}</span></div>
+    <div class="tile"><span class="t-label">% lignes concernées</span><span class="t-val">${(pctOff + pctRem).toFixed(0)} %</span></div>
+    <div class="tile strong"><span class="t-label">Total offert</span><span class="t-val">${eur(s.offTTC)}</span></div>
+    <div class="tile strong"><span class="t-label">Total remises</span><span class="t-val">${eur(s.remTTC)}</span></div>
+    <div class="tile"><span class="t-label">Manque à gagner total</span><span class="t-val">${eur(s.offTTC + s.remTTC)}</span></div></div>`;
+  h += `<p class="hint">Offerts : ${pctOff.toFixed(0)} % des lignes · Remisés : ${pctRem.toFixed(0)} % des lignes (sur ${s.lineCount} ligne${s.lineCount > 1 ? 's' : ''} facturée${s.lineCount > 1 ? 's' : ''}).</p>`;
+  if (!s.detail.length) { h += '<p class="empty">Aucun offert ni remise sur la période.</p>'; box.innerHTML = h; return; }
+  h += '<h3 class="rsub">Détail</h3>';
+  s.detail.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach((d) => {
+    const ch = (d.chevaux && d.chevaux.length) ? ' · 🐴 ' + esc(d.chevaux.join(', ')) : '';
+    const tag = d.type === 'offert' ? '<b>offert</b>' : ('remise −' + d.pct + '%');
+    h += `<div class="inv-line"><span>${esc(fmtDateFr(d.date))} · ${esc(d.client)} · ${esc(d.libelle)}${ch} · ${tag}</span><span>−${eur(d.valeur)}</span></div>`;
+  });
+  box.innerHTML = h;
+}
 function renderChevGroupes() {
   const box = $('chevGroupes'); if (!box) return;
   const chevaux = []; clients.forEach((c) => (c.chevaux || []).forEach((h) => chevaux.push(h)));
@@ -3234,8 +3278,10 @@ function renderChevauxSuivi() {
     else { if (!opts.some((o) => o.key === chevPkey)) chevPkey = opts[0].key; perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === chevPkey ? ' selected' : ''}>${esc(o.label)}</option>`).join(''); perSel.onchange = () => { chevPkey = perSel.value; renderChevauxSuivi(); }; }
     perSel.style.display = opts.length ? '' : 'none';
   }
-  renderChevGenStats(new Set(opts.length ? monthsOfRange(chevPtype, chevPkey) : []));
+  const chevRange = new Set(opts.length ? monthsOfRange(chevPtype, chevPkey) : []);
+  renderChevGenStats(chevRange);
   renderChevGroupes();
+  renderOffreRemise(chevRange);
   const box = $('chevauxSuiviList'); if (!box) return; box.innerHTML = '';
   const rows = [];
   clients.forEach((c) => (c.chevaux || []).forEach((h) => rows.push({ h, c })));
