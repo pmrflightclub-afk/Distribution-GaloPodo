@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.80';
+const APP_VERSION = '1.1.81';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.81', date: '2026-07-08',
+    ajouts: [
+      'Nouveau bouton « 🔄 Recalculer toutes les tournées » (Réglages → Sauvegarde) : recalcule toutes les tournées (même clôturées) avec les tarifs/logique actuels et répare les impayés orphelins — pour rafraîchir factures, stats et compta après une mise à jour, sans repasser par le retour usine.',
+      'Correctif impayé fantôme : quand vous supprimez une tournée, l\'impayé de test qui avait été reporté sur une autre tournée est maintenant retiré partout (avant, une ligne « impayé » orpheline pouvait rester et continuer à facturer un montant). Le bouton « Recalculer » nettoie aussi les cas déjà présents.',
+    ],
+  },
   {
     version: '1.1.80', date: '2026-07-08',
     ajouts: [
@@ -2802,6 +2809,24 @@ function refreshActiveTours() {
   if ($('tab-tournees').classList.contains('active')) renderTours();
   return n;
 }
+// Recalcule TOUTES les tournées (y compris clôturées/archivées) avec la logique/les tarifs ACTUELS,
+// et RÉPARE les impayés orphelins (source disparue) et les articles d'impayé orphelins. Évite un retour usine après une évolution de l'app.
+function recalcAllTours() {
+  const tourIds = new Set(allTours().map((t) => t.id));
+  // 1) Impayés dont la tournée SOURCE n'existe plus → retirés ; impayé perçu par une tournée disparue → redevient « à percevoir ».
+  clients.forEach((c) => {
+    if (!Array.isArray(c.impayes)) return;
+    c.impayes = c.impayes.filter((im) => !im.sourceTourId || tourIds.has(im.sourceTourId));
+    c.impayes.forEach((im) => { if (im.collectedTourId && !tourIds.has(im.collectedTourId)) { im.collected = false; im.collectedTourId = null; } });
+  });
+  // 2) Articles d'impayé orphelins (référencent un impayé qui n'existe plus) → retirés de toutes les tournées.
+  const live = new Set(); clients.forEach((c) => (c.impayes || []).forEach((im) => live.add(im.id)));
+  allTours().forEach((t) => { if (Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !a.impaye || (a.impayeId && live.has(a.impayeId))); });
+  // 3) Recalcul argent (tarifs/logique courants) sur toutes les tournées ayant une géométrie mémorisée.
+  let n = 0, skipped = 0; allTours().forEach((t) => { if (recomputeTourLocal(t)) n++; else if (t.result) skipped++; });
+  saveClients(); saveTournees(); saveArchive(); sanitizeAllTourStats();
+  return { n, skipped };
+}
 
 // Recalcul complet GÉOMÉTRIE + argent (API). silent = ne change pas d'onglet, statut discret.
 let _geoTimer = null;
@@ -4934,11 +4959,14 @@ function uncollectImpaye(impayeId) {
 }
 // Nettoyage à la SUPPRESSION d'une tournée : impayés + suivi Compta liés. (Facture/stats/compta se recalculent seuls car ils lisent allTours().)
 function purgeTourData(id) {
+  const removed = new Set(); // ids d'impayés supprimés → retirer aussi les articles d'impayé qui les référencent dans d'AUTRES tournées
   clients.forEach((c) => {
     if (!Array.isArray(c.impayes)) return;
+    c.impayes.forEach((im) => { if (im.sourceTourId === id) removed.add(im.id); });
     c.impayes = c.impayes.filter((im) => im.sourceTourId !== id);                    // créance NÉE de cette tournée → disparaît avec elle
     c.impayes.forEach((im) => { if (im.collectedTourId === id) { im.collected = false; im.collectedTourId = null; } }); // impayé PERÇU par cette tournée → redevient « à percevoir »
   });
+  if (removed.size) { allTours().forEach((t) => { if (t.id !== id && Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !(a.impaye && a.impayeId && removed.has(a.impayeId))); }); saveTournees(); saveArchive(); } // article d'impayé orphelin (référence un impayé supprimé) → retiré
   saveClients();
   // Clés de suivi Compta orphelines (« tourId:clientId » et « …:reste »).
   [S.comptaRecu, S.comptaDemarche].forEach((map) => { if (map) Object.keys(map).forEach((k) => { if (k.split(':')[0] === id) delete map[k]; }); });
@@ -5539,6 +5567,7 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); _deferredInstall = e; });
   if ($('btnBackup')) $('btnBackup').addEventListener('click', modalBackup);
+  if ($('btnRecalcAll')) $('btnRecalcAll').addEventListener('click', () => { if (!confirm('Recalculer toutes les tournées (même clôturées) avec les tarifs/logique actuels, et réparer les impayés orphelins ?')) return; const r = recalcAllTours(); const h = $('recalcAllHint'); if (h) { h.className = 'status ok'; h.textContent = `✔ ${r.n} tournée(s) recalculée(s)${r.skipped ? ` · ${r.skipped} sans géométrie (à rouvrir pour recalcul complet)` : ''}. Impayés orphelins réparés.`; } refreshEverywhere(); });
   if ($('syncExport')) $('syncExport').addEventListener('click', downloadSnapshot);
   if ($('syncFile')) $('syncFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importSyncFile(f, $('syncStatus')); e.target.value = ''; });
   if ($('googleConnect')) $('googleConnect').addEventListener('click', async () => { const h = $('googleStatus'); try { h.className = 'status'; h.textContent = 'Connexion…'; await googleToken(true); h.className = 'status ok'; h.textContent = 'Connecté ✔ — cliquez « Synchroniser ».'; } catch (e) { h.className = 'status err'; h.textContent = 'Erreur : ' + e.message; } });
