@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.92';
+const APP_VERSION = '1.1.93';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.93', date: '2026-07-08',
+    ajouts: [
+      'Correction « Corriger les prestations » : le recalcul de la facture est désormais TOUJOURS effectué (recalcul complet depuis les adresses si nécessaire) — avant, si la géométrie figée ne correspondait plus, les montants ne bougeaient pas. Un récapitulatif (déplacement, matériel, total) s\'affiche après enregistrement pour vérifier tout de suite.',
+    ],
+  },
   {
     version: '1.1.92', date: '2026-07-08',
     ajouts: [
@@ -5430,12 +5436,16 @@ function modalEditPrestations(t) {
     <div class="actions"><button class="btn primary block" id="epOk">Enregistrer et recalculer</button></div>`;
   openModal(html);
   $('mX').addEventListener('click', closeModal);
-  $('epOk').addEventListener('click', () => {
+  $('epOk').addEventListener('click', async () => {
     $('modalBox').querySelectorAll('[data-p]').forEach((inp) => { rows[+inp.dataset.p].cv[inp.dataset.k] = inp.checked; });
     rows.forEach((r) => { const cv = r.cv; if (cv.visite && !cv.visiteArtId && visArts.length) cv.visiteArtId = visArts[0].id; if (!cv.visite) cv.visiteArtId = null; if (!cv.parage && !cv.visite) { cv.fourbure = false; cv.npas = false; cv.infection = false; } });
-    recomputeTourLocal(t); currentTour = t; persistCurrentTour(); // réutilise la géométrie figée → km/temps inchangés
-    closeModal(); refreshEverywhere(); openEditor();
-    alert('Prestations mises à jour — facture (déplacement + matériel) et statistiques recalculées.');
+    currentTour = t; closeModal();
+    // Recalcul argent : réutilise la géométrie figée si elle est cohérente ; sinon recalcul COMPLET depuis les adresses (garantit la reprise du déplacement/matériel).
+    if (recomputeTourLocal(t)) persistCurrentTour();
+    else await calcTour(false);
+    refreshEverywhere(); openEditor();
+    const R = currentTour && currentTour.result;
+    alert('Prestations mises à jour.\n\n• déplacement HT : ' + eur((R && R.htDeplacement) || 0) + '\n• matériel HT : ' + eur((R && R.materielHT) || 0) + '\n• total TTC : ' + eur((R && R.totalTTC) || 0) + (R && R.htDeplacement > 0 ? '' : '\n\n⚠ Déplacement toujours à 0 : ' + ((R && R.totalKm) ? 'tarif/km à 0 (Réglages → Véhicule).' : 'aucun km (adresses à re-géolocaliser).')));
   });
 }
 // Annuler une facturation sur une tournée CLÔTURÉE (figée) : choisir tournée entière / arrêt / client / cheval.
