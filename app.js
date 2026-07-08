@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.75';
+const APP_VERSION = '1.1.76';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.76', date: '2026-07-08',
+    ajouts: [
+      'Trajet du jour → ⚡ Agir : la modale affiche maintenant le statut ✓ vert des boutons déjà faits/encodés (Heure RDV, Route, Prêt, Paiement, RDV), comme dans la carte d\'arrêt.',
+      '⚡ Agir enrichi : nouveaux boutons Heure RDV (saisie de l\'heure de chaque cheval), Prêt, Paiement et RDV, en plus de Waze / Route / SMS / Ticket.',
+      'Éditeur de tournée : le bouton « Prêt » est remonté sur la barre de l\'arrêt, à droite de « RDV ».',
+    ],
+  },
   {
     version: '1.1.75', date: '2026-07-08',
     ajouts: [
@@ -2349,12 +2357,13 @@ function renderEditorArrets(locked) {
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
     const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
     // Heure de RDV de l'arrêt (1 par arrêt), Waze, Route (grisé ✓ si temps réel encodé), RDV (grisé ✓ si suivant programmé), Paiement.
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small${payDone ? ' done' : ''}" data-pay>💶 Paiement${payDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button></span>`}`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small${payDone ? ' done' : ''}" data-pay>💶 Paiement${payDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small" data-add-pret>＋ Prêt</button></span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
       nav.querySelector('[data-pay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets())); // classer le paiement pour la Compta
       const rdvB = nav.querySelector('[data-rdv]'); if (rdvB) rdvB.addEventListener('click', () => { const cid = (a.clients && a.clients[0]) ? a.clients[0].clientId : null; if (cid) modalRDV(currentTour, a, cid, () => renderEditorArrets()); });
+      const prB = nav.querySelector('[data-add-pret]'); if (prB) prB.addEventListener('click', () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, currentTour); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, currentTour) }))); });
       const ah = nav.querySelector('[data-aheure]'); if (ah) ah.addEventListener('change', (e) => { a.heure = e.target.value || ''; saveTournees(); const lab = ah.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!a.heure); if (i === 0 && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } });
     }
     el.appendChild(nav);
@@ -2438,7 +2447,7 @@ function renderEditorArrets(locked) {
     // ----- Articles de cet arrêt (couplés au client de l'arrêt) -----
     const artWrap = document.createElement('div'); artWrap.className = 'a-articles';
     const arts = articlesForArret(a);
-    artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<span><button class="btn small" data-add-pret>＋ Prêt</button> <button class="btn small" data-add-art>+ Article</button></span>'}</div>`;
+    artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<span><button class="btn small" data-add-art>+ Article</button></span>'}</div>`;
     const alist = document.createElement('div'); alist.className = 'list';
     // Case « Remise » (à cocher) = la réduction client s'applique à cette ligne. Cochée par défaut.
     const remiseChkHtml = (off, dis) => locked ? '' : `<label class="chk2 art-remise" title="${dis ? 'Remise produit désactivée (catalogue) — ligne non remisable manuellement' : 'La réduction client s\'applique à cette ligne'}"><input type="checkbox" data-remise ${off ? '' : 'checked'}${dis ? ' disabled' : ''}/> Remise</label>`;
@@ -2485,7 +2494,6 @@ function renderEditorArrets(locked) {
     if (!alist.children.length) alist.innerHTML = '<p class="hint">Aucun article pour cet arrêt.</p>';
     artWrap.appendChild(alist);
     if (!locked) { const ab = artWrap.querySelector('[data-add-art]'); if (ab) ab.addEventListener('click', () => modalTourArticle(null, { arret: a, clientId: a.clients.length === 1 ? a.clients[0].clientId : undefined })); }
-    if (!locked) { const pb = artWrap.querySelector('[data-add-pret]'); if (pb) pb.addEventListener('click', () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, currentTour); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, currentTour) }))); }); }
     el.appendChild(artWrap);
     // ----- Prêts en cours du/des client(s) (mémoire par client, hors facture) : affichés SOUS les articles -----
     let pretHtml = '';
@@ -4458,12 +4466,20 @@ function renderHomeTrajet() {
         txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m, (t.payments || {})[cl0.clientId]) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
         try { await navigator.clipboard.writeText(txt); btn.textContent = 'Ticket copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); } catch { alert(txt); }
       };
-      const agirBtn = el.querySelector('[data-agir]'); if (agirBtn && !seqLocked) agirBtn.addEventListener('click', () => modalActions('Actions — ' + (labelFor(a) || 'arrêt'), [
-        { label: navLabel(), onClick: () => openNav(a.addr) },
-        { label: 'Route (temps réel)', onClick: () => modalRouteTime(t, a, est) },
-        { label: 'SMS', keepOpen: true, onClick: smsAction },
-        { label: 'Ticket', keepOpen: true, onClick: ticketAction },
-      ]));
+      const agirBtn = el.querySelector('[data-agir]'); if (agirBtn && !seqLocked) agirBtn.addEventListener('click', () => {
+        const c0id = (a.clients && a.clients[0]) ? a.clients[0].clientId : null;
+        const pretDone = (a.clients || []).some((cl) => { const cc = clients.find((x) => x.id === cl.clientId); return cc && (cc.prets || []).length; });
+        modalActions('Actions — ' + (labelFor(a) || 'arrêt'), [
+          { label: '🕘 Heure RDV', done: !!arretHeure(a), keepOpen: true, onClick: () => modalHeureRdv(t, a) },
+          { label: navLabel(), onClick: () => openNav(a.addr) },
+          { label: 'Route (temps réel)', done: typeof a.realMin === 'number', onClick: () => modalRouteTime(t, a, est, renderHomeTrajet) },
+          { label: 'SMS', keepOpen: true, onClick: smsAction },
+          { label: 'Ticket', keepOpen: true, onClick: ticketAction },
+          { label: '＋ Prêt', done: pretDone, onClick: () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, t); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, t) }))); } },
+          { label: '💶 Paiement', done: arretPaiementDone(t, a), onClick: () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); }) },
+          { label: '📅 RDV', done: !!a.rdvDone, onClick: () => { if (c0id) modalRDV(t, a, c0id, renderHomeTrajet); } },
+        ]);
+      });
       const vb = el.querySelector('[data-valid]'); if (vb && !clotDis) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); })); // paiement enregistré (valide) → clôture l'arrêt (heure = 1re validation) ; verrouillé une fois clôturé
       box.appendChild(el);
     });
@@ -4489,11 +4505,29 @@ function renderHomeTrajet() {
   });
 }
 // Modale d'actions génériques (« Agir ») : liste de boutons. keepOpen = ne ferme pas la modale (feedback copie).
+// Chaque action : { label, onClick, keepOpen?, done? (✓ vert = élément déjà encodé/fait), disabled? }.
 function modalActions(title, actions) {
   openModal(`<div class="modal-head"><b>${esc(title)}</b><button class="x" id="mX">✕</button></div>
-    <div class="actions-col">${actions.map((a, idx) => `<button class="btn block" data-ai="${idx}">${a.label}</button>`).join('')}</div>`);
+    <div class="actions-col">${actions.map((a, idx) => `<button class="btn block${a.done ? ' done' : ''}" data-ai="${idx}"${a.disabled ? ' disabled' : ''}>${a.label}${a.done ? ' ✓' : ''}</button>`).join('')}</div>`);
   $('mX').addEventListener('click', closeModal);
-  actions.forEach((a, idx) => { const b = document.querySelector(`[data-ai="${idx}"]`); if (b) b.addEventListener('click', () => { if (a.keepOpen) a.onClick(b); else { closeModal(); a.onClick(b); } }); });
+  actions.forEach((a, idx) => { const b = document.querySelector(`[data-ai="${idx}"]`); if (b && !a.disabled) b.addEventListener('click', () => { if (a.keepOpen) a.onClick(b); else { closeModal(); a.onClick(b); } }); });
+}
+// Heure de RDV par cheval (depuis « Agir ») : saisie individuelle de l'heure de chaque cheval de l'arrêt.
+function modalHeureRdv(t, a) {
+  const chs = []; (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) chs.push({ cv, cid: cl.clientId }); }));
+  openModal(`<div class="modal-head"><b>🕘 Heure de RDV par cheval</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Saisissez l'heure de rendez-vous de chaque cheval de cet arrêt.</p>
+    <div id="hrList"></div>
+    <div class="actions"><button class="btn primary block" id="hrOk">Enregistrer</button></div>`);
+  const box = $('hrList');
+  chs.forEach((it, idx) => { const row = document.createElement('label'); row.innerHTML = `🐴 ${esc(it.cv.nom)} <span class="li-sub">— ${esc(clientName(it.cid))}</span><input type="time" data-h="${idx}" value="${it.cv.heure || ''}"/>`; box.appendChild(row); });
+  if (!chs.length) box.innerHTML = '<p class="hint">Aucun cheval à cet arrêt.</p>';
+  $('mX').addEventListener('click', closeModal);
+  $('hrOk').addEventListener('click', () => {
+    box.querySelectorAll('[data-h]').forEach((inp) => { chs[+inp.dataset.h].cv.heure = inp.value || ''; });
+    const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
+    closeModal(); renderHomeTrajet();
+  });
 }
 // Encodage du temps de trajet RÉEL d'un arrêt (relevé sur Waze) — repris dans SMS / récap / ticket / stats.
 // `tour` peut être l'objet stocké (Trajet du jour) ou un clone en édition (éditeur) → on réécrit dans `tournees` par id.

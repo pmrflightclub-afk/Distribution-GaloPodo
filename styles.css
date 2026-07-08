@@ -373,6 +373,7 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .a-heure input[type=time] { width: 80px; border: 0; padding: 2px; background: transparent; }
 .a-heure.done { border-color: var(--ok, #2e9e5b); background: color-mix(in srgb, var(--ok, #2e9e5b) 12%, transparent); }
 .btn.small.done { opacity: .55; background: color-mix(in srgb, var(--ok, #2e9e5b) 16%, var(--card)); }
+.btn.block.done { background: color-mix(in srgb, var(--ok, #2e9e5b) 18%, var(--card)); border-color: var(--ok, #2e9e5b); }
 
 /* Articles d'un arrêt (dans l'éditeur de tournée) */
 .a-articles { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
