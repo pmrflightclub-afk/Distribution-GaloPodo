@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.89';
+const APP_VERSION = '1.1.90';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.90', date: '2026-07-08',
+    ajouts: [
+      'Annulation — note de crédit : tout paiement par VIREMENT annulé génère désormais une note de crédit obligatoire (avec ou sans facture). Le liquide (avec ou sans facture) reste sans note de crédit.',
+      'Annulation — arrondi liquide : quand vous annulez une partie de la facture d\'un client qui a payé en liquide (sans facture), l\'app vous demande le nouveau montant liquide arrondi réellement encaissé (le reste que vous gardez après avoir rendu la différence). Pour une facture ou un virement, les montants restent exacts.',
+      'Bouton « Recalculer cette tournée » : affiche maintenant un diagnostic (km, tarif/km, déplacement, matériel, total) pour comprendre d\'où vient un montant faux. Envoyez-moi cette fenêtre si un montant reste incorrect.',
+    ],
+  },
   {
     version: '1.1.89', date: '2026-07-08',
     ajouts: [
@@ -5338,7 +5346,7 @@ function modalCancelBilling(t) {
       const chs = (cl.chevaux || []).filter((cv) => chevalFait(cv)); // annulables = acte fait, pas déjà annulé
       if (!chs.length) return;
       const p = (t.payments || {})[cl.clientId] || {};
-      clientsG.push({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: chs, method: p.method || null, fac: !!p.facture, nc: p.method === 'virement' && !!p.facture, locked: comptaLocked(t, cl.clientId) });
+      clientsG.push({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: chs, method: p.method || null, fac: !!p.facture, nc: p.method === 'virement', locked: comptaLocked(t, cl.clientId) }); // virement → NC obligatoire (avec OU sans facture)
     });
     if (clientsG.length) groups.push({ ai, label: labelFor(a) || ('Arrêt ' + (ai + 1)), clients: clientsG });
   });
@@ -5352,7 +5360,7 @@ function modalCancelBilling(t) {
     html += `<div class="cb-arret" style="margin:8px 0 2px 0"><label class="chk2"><input type="checkbox" data-arret="${g.ai}"/> <b>${esc(g.label)}</b></label>`;
     g.clients.forEach((c) => {
       const key = g.ai + ':' + c.clientId;
-      const tag = c.locked ? ' <span class="li-sub">🔒 période comptable verrouillée</span>' : (c.nc ? ' <span class="li-sub">→ note de crédit (virement + facture)</span>' : (c.method ? ' <span class="li-sub">→ suppression, pas de NC</span>' : ' <span class="li-sub">non payé → suppression</span>'));
+      const tag = c.locked ? ' <span class="li-sub">🔒 période comptable verrouillée</span>' : (c.nc ? ' <span class="li-sub">→ note de crédit (virement)</span>' : (c.method === 'liquide' ? ' <span class="li-sub">→ suppression liquide, pas de NC</span>' : ' <span class="li-sub">non payé → suppression</span>'));
       html += `<div style="padding-left:14px"><label class="chk2"><input type="checkbox" data-client="${key}"${c.locked ? ' disabled' : ''}/> <b>${esc(c.nom)}</b>${tag}</label>`;
       c.chevaux.forEach((cv) => { html += `<div style="padding-left:16px"><label class="chk2"><input type="checkbox" data-cv="${key}:${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}"${c.locked ? ' disabled' : ''}/> 🐴 ${esc(cv.nom)}</label></div>`; });
       html += `</div>`;
@@ -5382,15 +5390,44 @@ function modalCancelBilling(t) {
       const cv = (cl.chevaux || []).find((x) => (chId && x.id != null && String(x.id) === chId) || norm(x.nom) === norm(cb.dataset.nom));
       if (!cv || chevalCancelled(cv)) return;
       const p = (t.payments || {})[clientId] || {};
-      const nc = p.method === 'virement' && !!p.facture;
+      const nc = p.method === 'virement'; // virement → NC obligatoire (avec ou sans facture) ; liquide → jamais de NC
       cv.cancel = { status: 'annule', reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
       if (nc) { cv.cancel.creditNoteId = createCreditNote(clientId, t, cv, reason, note); cv.cancel.credited = true; nNC++; } // NC lit le montant dans le résultat ENCORE figé (avant recalcul)
       else nDel++;
     });
     recomputeTourLocal(t); // recalcul argent uniquement : réutilise la géométrie figée → km/temps/route/autres clients identiques
     currentTour = t; persistCurrentTour(); // conserve t.closed (reste figée)
-    closeModal(); refreshEverywhere(); openEditor();
-    alert(`Annulation effectuée : ${nDel} facturation(s) retirée(s)${nNC ? `, ${nNC} note(s) de crédit créée(s)` : ''}. Stats mises à jour.`);
+    // Arrondi caisse : pour les clients LIQUIDE SANS facture partiellement annulés, l'utilisateur rend l'espèce et ré-arrondit le reste.
+    // (Facture pro liquide/virement = montants exacts, pas d'arrondi ; virement = NC.)
+    const affected = new Set(checked.map((cb) => cb.dataset.cv.split(':')[1]));
+    const toAdjust = [];
+    affected.forEach((clientId) => {
+      const p = (t.payments || {})[clientId];
+      if (!p || p.method !== 'liquide' || p.facture) return;
+      const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === clientId);
+      if (!m || (m.totalTTC || 0) <= 0.005) { p.rectifie = null; p.montantPaye = null; return; } // entièrement annulé → plus rien à encaisser
+      toAdjust.push({ clientId, nom: clientName(clientId), total: m.totalTTC });
+    });
+    persistCurrentTour();
+    closeModal();
+    const msg = `Annulation effectuée : ${nDel} facturation(s) retirée(s)${nNC ? `, ${nNC} note(s) de crédit créée(s)` : ''}.`;
+    if (toAdjust.length) modalAdjustArrondi(t, toAdjust, msg);
+    else { refreshEverywhere(); openEditor(); alert(msg + ' Stats mises à jour.'); }
+  });
+}
+// Après une annulation partielle, saisie du montant liquide arrondi réellement encaissé (reste) pour les clients liquide SANS facture.
+function modalAdjustArrondi(t, list, msg) {
+  let html = `<div class="modal-head"><b>💶 Arrondi de l'encaissement liquide</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Après annulation, indiquez le montant liquide réellement encaissé (arrondi à l'euro) pour chaque client — c'est ce que vous gardez après avoir rendu la différence. Uniquement pour le liquide sans facture.</p><div id="ajList">`;
+  list.forEach((c, i) => { html += `<div class="pay-block"><h3 style="font-size:.9rem;margin:.3rem 0">${esc(c.nom)} <span class="li-sub">— reste facturé ${eur(c.total)}</span></h3><label>Montant liquide encaissé (arrondi)<input type="number" step="1" min="0" inputmode="numeric" data-aj="${i}" value="${Math.round(c.total)}"/></label></div>`; });
+  html += `</div><div class="actions"><button class="btn primary block" id="ajOk">Enregistrer</button></div>`;
+  openModal(html);
+  const done = () => { closeModal(); refreshEverywhere(); openEditor(); };
+  $('mX').addEventListener('click', done);
+  $('ajOk').addEventListener('click', () => {
+    $('ajList').querySelectorAll('[data-aj]').forEach((inp) => { const c = list[+inp.dataset.aj]; const p = (t.payments || {})[c.clientId]; if (p) { const v = parseFloat(inp.value); p.rectifie = isFinite(v) ? v : Math.round(c.total); p.montantPaye = null; } });
+    currentTour = t; persistCurrentTour();
+    done(); if (msg) alert(msg + ' Stats mises à jour.');
   });
 }
 // Paiement d'un arrêt (par client) : liquide / virement + facture ? + (si liquide) montant réel payé (arrondi caisse).
@@ -6167,6 +6204,20 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!currentTour.arrets || !currentTour.arrets.length) { alert('Aucun arrêt à recalculer.'); return; }
     if (!confirm('Recalculer entièrement cette tournée figée depuis les adresses (via la carte) ?\n\nÀ utiliser pour réparer une facture abîmée (déplacement/matériel manquants). La tournée reste clôturée ; seuls les montants sont recalculés.')) return;
     await calcTour(false); // recalcul complet API → restaure déplacement + matériel ; persistCurrentTour conserve t.closed
+    const R = currentTour && currentTour.result;
+    if (R) {
+      let nbParage = 0, nbActe = 0;
+      (currentTour.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv)) { nbActe++; if (cv.parage) nbParage++; } })));
+      alert('🔍 Diagnostic du recalcul (envoie-moi cette capture si le montant est faux) :\n'
+        + '• km total : ' + (R.totalKm != null ? R.totalKm.toFixed(1) : '—') + ' km\n'
+        + '• tarif tournée : ' + eurkm(tarifHT('tournee')) + '/km (base véhicule ' + eur(baseVehiculeHT()) + '/km + carburant ' + eur(fuelPerKmHT()) + '/km)\n'
+        + '• DÉPLACEMENT HT : ' + eur(R.htDeplacement || 0) + '\n'
+        + '• MATÉRIEL HT : ' + eur(R.materielHT || 0) + ' (unitaire configuré ' + eur(baseMateriel()) + '/cheval · ' + nbParage + ' cheval(x) avec parage)\n'
+        + '• services/actes HT : ' + eur(R.servicesHT || 0) + '\n'
+        + '• TOTAL TTC : ' + eur(R.totalTTC || 0) + '\n\n'
+        + (R.htDeplacement > 0 ? '' : '⚠ Déplacement à 0 : ' + ((R.totalKm || 0) === 0 ? 'aucun km calculé (adresses non géocodées ?).' : 'tarif/km à 0 (Réglages → Véhicule : base véhicule + carburant).') + '\n')
+        + (R.materielHT > 0 || nbParage === 0 ? '' : '⚠ Matériel à 0 alors qu\'il y a du parage : aucun matériel configuré (Réglages → Matériel).'));
+    }
     openEditor(); // ré-affiche en mode figé avec le résultat réparé
   });
   if ($('edCancelBill')) $('edCancelBill').addEventListener('click', () => { if (currentTour) modalCancelBilling(currentTour); });
