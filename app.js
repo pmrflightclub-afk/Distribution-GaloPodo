@@ -24,6 +24,7 @@ const CHANGELOG = [
       'La date de prise de vue est lue automatiquement dans la photo (EXIF), corrigeable à la main, avec une case « jour » (met la date du jour).',
       'En-tête (cheval, client, date), note en bas de page, logo optionnel et orientation (paysage par défaut) repris du paramétrage. Multi-pages géré (une page par groupe de lignes configuré).',
       'Génération du PDF via l\'impression du navigateur (« Enregistrer en PDF ») : l\'appareil choisit le dossier d\'enregistrement. Aucune image ni PDF n\'est conservé dans l\'app.',
+      'Correctif important : le bouton « Recalculer toutes les tournées » ne recalcule PLUS les montants (il pouvait faire sauter le déplacement/matériel d\'une facture). Il ne fait plus que rafraîchir les stats et réparer les impayés/arrondis orphelins. Pour recalculer une facture, ouvrez la tournée (recalcul complet à l\'ouverture).',
     ],
   },
   {
@@ -5956,7 +5957,7 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); _deferredInstall = e; });
   if ($('btnBackup')) $('btnBackup').addEventListener('click', modalBackup);
-  if ($('btnRecalcAll')) $('btnRecalcAll').addEventListener('click', () => { if (!confirm('Recalculer toutes les tournées (même clôturées) avec les tarifs/logique actuels, et réparer les impayés orphelins ?')) return; const r = recalcAllTours(); const h = $('recalcAllHint'); if (h) { h.className = 'status ok'; h.textContent = `✔ ${r.n} tournée(s) recalculée(s) · factures clôturées non modifiées (figées) · impayés orphelins & arrondis aberrants réparés.`; } refreshEverywhere(); });
+  if ($('btnRecalcAll')) $('btnRecalcAll').addEventListener('click', () => { if (!confirm('Recalculer toutes les tournées (même clôturées) avec les tarifs/logique actuels, et réparer les impayés orphelins ?')) return; const r = recalcAllTours(); const h = $('recalcAllHint'); if (h) { h.className = 'status ok'; h.textContent = `✔ Stats rafraîchies (${r.n} tournée(s)) · les FACTURES ne sont pas modifiées (pour recalculer une facture, ouvrez la tournée) · impayés orphelins & arrondis aberrants réparés.`; } refreshEverywhere(); });
   if ($('syncExport')) $('syncExport').addEventListener('click', downloadSnapshot);
   if ($('syncFile')) $('syncFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importSyncFile(f, $('syncStatus')); e.target.value = ''; });
   if ($('googleConnect')) $('googleConnect').addEventListener('click', async () => { const h = $('googleStatus'); try { h.className = 'status'; h.textContent = 'Connexion…'; await googleToken(true); h.className = 'status ok'; h.textContent = 'Connecté ✔ — cliquez « Synchroniser ».'; } catch (e) { h.className = 'status err'; h.textContent = 'Erreur : ' + e.message; } });
