@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.88';
+const APP_VERSION = '1.1.89';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.89', date: '2026-07-08',
+    ajouts: [
+      'Annuler une facturation (tournée clôturée) : nouveau bouton « 🚫 Annuler une facturation » sur une tournée figée. Vous choisissez précisément ce que vous retirez de la facture — un cheval, un arrêt, un client, ou toute la tournée (cases à cocher en cascade). Le trajet, les kilomètres, le temps et les autres clients ne changent PAS : seule la part facturée est retirée, et les statistiques (de la tournée et globales) sont mises à jour.',
+      'Règles note de crédit à l\'annulation : virement + facture → note de crédit obligatoire (Compta → Notes de crédit). Liquide, liquide + facture, ou virement sans facture → la répartition est simplement retirée, SANS note de crédit (on ne présume pas d\'un remboursement du liquide).',
+    ],
+  },
   {
     version: '1.1.88', date: '2026-07-08',
     ajouts: [
@@ -2362,6 +2369,7 @@ function openEditor() {
   if ($('edRevalider')) $('edRevalider').style.display = review ? '' : 'none';
   if ($('edRecoverWrap')) $('edRecoverWrap').style.display = currentTour.recovered ? '' : 'none'; // tournée récupérée : compléter les données manquantes pour les stats
   if ($('edRepairWrap')) $('edRepairWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : réparation manuelle d'une facture abîmée (recalcul complet depuis les adresses)
+  if ($('edCancelBillWrap')) $('edCancelBillWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : annuler une facturation (cheval/arrêt/client/tournée)
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
   $('edDelete').style.display = '';
@@ -5319,6 +5327,72 @@ function modalCancelRdv(nom, opts) {
     closeModal(); opts.onDone();
   });
 }
+// Annuler une facturation sur une tournée CLÔTURÉE (figée) : choisir tournée entière / arrêt / client / cheval.
+// Retire SEULEMENT la part de facture (géométrie, km, temps, route, autres clients : inchangés → recalcul LOCAL qui réutilise la géométrie figée) et met à jour les stats (tournée + globales).
+// Règles note de crédit : virement + facture → NC obligatoire ; liquide, liquide+facture, virement sans facture → suppression de la répartition SANS NC.
+function modalCancelBilling(t) {
+  const groups = [];
+  (t.arrets || []).forEach((a, ai) => {
+    const clientsG = [];
+    (a.clients || []).forEach((cl) => {
+      const chs = (cl.chevaux || []).filter((cv) => chevalFait(cv)); // annulables = acte fait, pas déjà annulé
+      if (!chs.length) return;
+      const p = (t.payments || {})[cl.clientId] || {};
+      clientsG.push({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: chs, method: p.method || null, fac: !!p.facture, nc: p.method === 'virement' && !!p.facture, locked: comptaLocked(t, cl.clientId) });
+    });
+    if (clientsG.length) groups.push({ ai, label: labelFor(a) || ('Arrêt ' + (ai + 1)), clients: clientsG });
+  });
+  if (!groups.length) { alert('Aucune facturation annulable sur cette tournée (déjà annulée, ou rien de facturé).'); return; }
+  let reason = 'client';
+  let html = `<div class="modal-head"><b>🚫 Annuler une facturation — ${esc(fmtDateFr(t.date))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Cochez ce que vous voulez retirer de la facture : la tournée entière, un arrêt, un client ou un cheval. Le trajet, les kilomètres, le temps et les autres clients ne changent pas — seule la part facturée est retirée, et les statistiques sont mises à jour.</p>
+    <label class="chk2"><input type="checkbox" id="cbAll"/> <b>Toute la tournée</b></label>
+    <div id="cbTree" style="margin:6px 0 4px 0">`;
+  groups.forEach((g) => {
+    html += `<div class="cb-arret" style="margin:8px 0 2px 0"><label class="chk2"><input type="checkbox" data-arret="${g.ai}"/> <b>${esc(g.label)}</b></label>`;
+    g.clients.forEach((c) => {
+      const key = g.ai + ':' + c.clientId;
+      const tag = c.locked ? ' <span class="li-sub">🔒 période comptable verrouillée</span>' : (c.nc ? ' <span class="li-sub">→ note de crédit (virement + facture)</span>' : (c.method ? ' <span class="li-sub">→ suppression, pas de NC</span>' : ' <span class="li-sub">non payé → suppression</span>'));
+      html += `<div style="padding-left:14px"><label class="chk2"><input type="checkbox" data-client="${key}"${c.locked ? ' disabled' : ''}/> <b>${esc(c.nom)}</b>${tag}</label>`;
+      c.chevaux.forEach((cv) => { html += `<div style="padding-left:16px"><label class="chk2"><input type="checkbox" data-cv="${key}:${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}"${c.locked ? ' disabled' : ''}/> 🐴 ${esc(cv.nom)}</label></div>`; });
+      html += `</div>`;
+    });
+    html += `</div>`;
+  });
+  html += `</div>
+    <label>Motif</label><div class="seg" id="cbReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
+    <label>Note (facultatif)<input type="text" id="cbNote" placeholder="ex. erreur de facturation, geste commercial…"/></label>
+    <div class="actions"><button class="btn danger block" id="cbOk">Annuler les facturations cochées</button></div>`;
+  openModal(html);
+  $('mX').addEventListener('click', closeModal);
+  const box = $('cbTree');
+  $('cbAll').addEventListener('change', (e) => box.querySelectorAll('input[type=checkbox]:not(:disabled)').forEach((c) => (c.checked = e.target.checked)));
+  box.querySelectorAll('[data-arret]').forEach((ac) => ac.addEventListener('change', (e) => box.querySelectorAll(`[data-client^="${ac.dataset.arret}:"]:not(:disabled),[data-cv^="${ac.dataset.arret}:"]:not(:disabled)`).forEach((c) => (c.checked = e.target.checked))));
+  box.querySelectorAll('[data-client]').forEach((cc) => cc.addEventListener('change', (e) => box.querySelectorAll(`[data-cv^="${cc.dataset.client}:"]:not(:disabled)`).forEach((c) => (c.checked = e.target.checked))));
+  document.querySelectorAll('#cbReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cbReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
+  $('cbOk').addEventListener('click', () => {
+    const note = $('cbNote').value.trim();
+    const checked = Array.from(box.querySelectorAll('[data-cv]:checked'));
+    if (!checked.length) { alert('Cochez au moins un cheval, client ou arrêt à annuler.'); return; }
+    let nNC = 0, nDel = 0;
+    checked.forEach((cb) => {
+      const parts = cb.dataset.cv.split(':'); const ai = +parts[0], clientId = parts[1], chId = parts[2];
+      const a = t.arrets[ai]; if (!a) return;
+      const cl = (a.clients || []).find((x) => x.clientId === clientId); if (!cl) return;
+      const cv = (cl.chevaux || []).find((x) => (chId && x.id != null && String(x.id) === chId) || norm(x.nom) === norm(cb.dataset.nom));
+      if (!cv || chevalCancelled(cv)) return;
+      const p = (t.payments || {})[clientId] || {};
+      const nc = p.method === 'virement' && !!p.facture;
+      cv.cancel = { status: 'annule', reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
+      if (nc) { cv.cancel.creditNoteId = createCreditNote(clientId, t, cv, reason, note); cv.cancel.credited = true; nNC++; } // NC lit le montant dans le résultat ENCORE figé (avant recalcul)
+      else nDel++;
+    });
+    recomputeTourLocal(t); // recalcul argent uniquement : réutilise la géométrie figée → km/temps/route/autres clients identiques
+    currentTour = t; persistCurrentTour(); // conserve t.closed (reste figée)
+    closeModal(); refreshEverywhere(); openEditor();
+    alert(`Annulation effectuée : ${nDel} facturation(s) retirée(s)${nNC ? `, ${nNC} note(s) de crédit créée(s)` : ''}. Stats mises à jour.`);
+  });
+}
 // Paiement d'un arrêt (par client) : liquide / virement + facture ? + (si liquide) montant réel payé (arrondi caisse).
 // onCommit (optionnel) : appelé UNIQUEMENT quand le paiement est enregistré et valide (sert à clôturer l'arrêt).
 function modalPayment(t, arret, after, onCommit) {
@@ -6095,6 +6169,7 @@ window.addEventListener('DOMContentLoaded', () => {
     await calcTour(false); // recalcul complet API → restaure déplacement + matériel ; persistCurrentTour conserve t.closed
     openEditor(); // ré-affiche en mode figé avec le résultat réparé
   });
+  if ($('edCancelBill')) $('edCancelBill').addEventListener('click', () => { if (currentTour) modalCancelBilling(currentTour); });
   $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats et ses impayés liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(recapText(currentTour.result)); $('edStatus').className = 'status ok'; $('edStatus').textContent = 'Récap copié.'; } catch { $('edStatus').textContent = 'Copie impossible.'; } });
 
