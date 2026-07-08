@@ -303,6 +303,7 @@
         <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
         <button class="subtab" data-gsub="statut">Statut véhicule</button>
         <button class="subtab" data-gsub="planche">Planche contact</button>
+        <button class="subtab" data-gsub="contactmail">Contact mail</button>
         <button class="subtab" data-gsub="sms">SMS</button>
       </div>
     </nav>
@@ -446,6 +447,21 @@
         <p class="hint">Configurez la structure des planches (lignes = membres, colonnes = angles de vue). Les photos et PDF ne sont jamais stockés dans l'app : elles restent dans la bibliothèque du téléphone, le PDF est enregistré par le navigateur.</p>
         <div class="seg" id="plType"><button type="button" class="seg-btn on" data-plt="contact">Planche contact</button><button type="button" class="seg-btn" data-plt="avantapres">Avant / après</button></div>
         <div id="plancheBody"></div>
+      </section>
+    </div>
+
+    <div id="gsub-contactmail" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Contact mail</h2></div>
+        <p class="hint">Mails « prise de contact » récupérés depuis Gmail. « Créer le client » ouvre une fiche pré-remplie (client + 1 cheval, le formulaire complet est rangé sur la fiche du cheval). « Ignorer » masque le mail. Les mails déjà traités ou ignorés ne sont jamais ré-importés.</p>
+        <div class="actions two"><button class="btn" id="cmConnect">🔗 Connecter Gmail</button><button class="btn primary" id="cmFetch">📥 Récupérer les mails</button></div>
+        <p class="status" id="cmStatus"></p>
+        <p class="hint" id="cmTraites"></p>
+        <div id="cmList" class="list"></div>
+        <p class="empty" id="cmEmpty">Aucun mail récupéré. Cliquez « Récupérer les mails ».</p>
+        <h3 class="rsub">Ignorés</h3>
+        <div id="cmIgnored" class="list"></div>
+        <p class="empty" id="cmIgnoredEmpty">Aucun mail ignoré.</p>
       </section>
     </div>
 
@@ -609,6 +625,7 @@
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Configuration</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
         <button class="subtab active" data-rsub="config">Configuration</button>
+        <button class="subtab" data-rsub="mail">Mail</button>
         <button class="subtab" data-rsub="calendrier">Calendrier</button>
         <button class="subtab" data-rsub="synchro">Synchro</button>
         <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
@@ -700,6 +717,17 @@
     </section>
 
     </div><!-- /rsub-config -->
+
+    <div id="rsub-mail" class="subpanel">
+    <section class="card">
+      <h2>Mail — « prise de contact »</h2>
+      <p class="hint">Récupère dans <b>votre</b> Gmail les mails contenant un mot-clé et en extrait les infos client/cheval (formulaire à étiquettes). Nécessite votre ID client Google (Réglages → Synchro) avec l'accès Gmail activé dans votre console. Les mails ne sont <b>pas</b> stockés dans l'app — seules les infos extraites le sont. La liste des mails récupérés est dans <b>Gestion → Contact mail</b>.</p>
+      <h3 class="rsub">Mots-clés (au moins un)</h3>
+      <div id="mailKeywords" class="edit-list"></div>
+      <div class="actions two" style="margin-top:8px"><button class="btn" id="mailConnect">🔗 Connecter Gmail</button><button class="btn primary" id="mailFetch">📥 Récupérer les mails</button></div>
+      <p class="status" id="mailStatus"></p>
+    </section>
+    </div>
 
     <div id="rsub-sauvegarde" class="subpanel">
     <section class="card">

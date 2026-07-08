@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.81';
+const APP_VERSION = '1.1.82';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.82', date: '2026-07-08',
+    ajouts: [
+      'Nouveau module Contact mail (Gmail) : Réglages → « Mail » (mots-clés, ex. « prise de contact » + Connecter Gmail + Récupérer) et Gestion → « Contact mail » (liste des mails récupérés, statut, Ignorer, et « Créer le client » pré-rempli). Les mails déjà traités/ignorés ne sont jamais ré-importés (pas de doublon).',
+      '« Créer le client » extrait automatiquement du formulaire : nom, prénom, société, TVA, adresse, email (l\'expéditeur), téléphone, et 1 cheval (nom, naissance, race). Le formulaire complet est rangé comme « anamnèse » sur la fiche du cheval (bouton 📄 Formulaire).',
+      'Fiche client : nouveaux champs Email et Téléphone. Fiche cheval : champ Race.',
+    ],
+  },
   {
     version: '1.1.81', date: '2026-07-08',
     ajouts: [
@@ -727,6 +735,9 @@ S.planche.avantapres = Object.assign({ orientation: 'paysage', logo: false, mode
 if (!Array.isArray(S.planche.avantapres.pages)) S.planche.avantapres.pages = [{ membres: [] }, { membres: ['Cheval'] }];
 if (!S.planche.avantapres.modeles) S.planche.avantapres.modeles = _plModeles();
 delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
+// Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
+if (!Array.isArray(S.mailKeywords) || !S.mailKeywords.length) S.mailKeywords = ['prise de contact'];
+if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
 if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
@@ -1107,6 +1118,8 @@ const GDRIVE_FILE = 'galopodo-sync.json';
 // persistée une fois. Les deux constantes sont volontairement identiques : même clé de cache, même jeton partagé.
 const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.readonly';
 const GSCOPE_CAL = GSCOPE_DRIVE;
+// Lecture Gmail (scope RESTREINT) — connexion séparée, à activer dans la console Google Cloud de l'utilisateur.
+const GSCOPE_MAIL = 'https://www.googleapis.com/auth/gmail.readonly';
 // Vrai si un jeton VALIDE est déjà en cache pour ce scope → autorise une opération silencieuse SANS jamais afficher d'écran d'auth.
 function gTokenValid(scope) { const c = _gTokens[scope || GSCOPE_DRIVE]; return !!(c && Date.now() < c.exp - 60000); }
 function loadGis() {
@@ -1581,6 +1594,7 @@ function showReglages(sub) {
   if (rb && rl) rl.textContent = rb.textContent;
   if ($('reglagesSub')) $('reglagesSub').classList.remove('open');
   if (currentRsub === 'config') renderAmortStats();
+  if (currentRsub === 'mail') renderMailConfig();
   if (currentRsub === 'statistiques') renderStatConfig();
   if (currentRsub === 'calcul') renderCalcul();
   if (currentRsub === 'analyse') renderAnalyse();
@@ -1605,6 +1619,7 @@ function showGestion(sub) {
   if (currentGsub === 'vehicule') renderFraisVehicule();
   if (currentGsub === 'statut') renderStatutVehiculePage();
   if (currentGsub === 'planche') renderPlancheConfig();
+  if (currentGsub === 'contactmail') renderContactMail();
   if (currentGsub === 'sms') renderSMS();
 }
 
@@ -1776,10 +1791,19 @@ function renderClients() {
     list.appendChild(el);
   });
 }
-function editClient(existing, onSaved, prefillNom) {
+function editClient(existing, onSaved, prefillNom, prefill) {
   const key = 'client:' + (existing ? existing.id : 'new');
   const draft = DRAFTS.get(key);
-  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), civilite: '', politesse: true, prenom: '', nom: (prefillNom || ''), societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
+  const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), civilite: '', politesse: true, prenom: '', nom: (prefillNom || ''), email: '', tel: '', societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
+  // Pré-remplissage depuis un mail « prise de contact » (nouveau client, sans brouillon en cours).
+  if (!existing && !draft && prefill) {
+    if (prefill.prenom) w.prenom = prefill.prenom; if (prefill.nom) w.nom = prefill.nom;
+    if (prefill.societe) { w.societe = prefill.societe; w.assujettiTva = true; }
+    if (prefill.tvaNum) w.tvaNum = prefill.tvaNum;
+    if (prefill.email) w.email = prefill.email; if (prefill.tel) w.tel = prefill.tel;
+    if (prefill.rue || prefill.cpVille) { const cpm = (prefill.cpVille || '').match(/\d{4,5}/); const loc = (prefill.cpVille || '').replace(/\d{4,5}/, '').replace(/[,]/g, ' ').replace(/\s+/g, ' ').trim(); w.addr = Object.assign(emptyAddr(), { rue: prefill.rue || '', cp: cpm ? cpm[0] : '', localite: loc }); }
+    if (prefill.cheval && (prefill.cheval.nom || prefill.cheval.anamnese)) { (w.chevaux = w.chevaux || []).push({ id: uid(), nom: prefill.cheval.nom || '', dateNaissance: prefill.cheval.dateNaissance || '', race: prefill.cheval.race || '', anamnese: prefill.cheval.anamnese || null, addrSource: 'client', addr: emptyAddr() }); }
+  }
   w.addr = toAddr(w.addr); w.societeAddr = toAddr(w.societeAddr);
   if (w.prenom === undefined) w.prenom = '';
   if (w.societe === undefined) w.societe = '';
@@ -1789,6 +1813,7 @@ function editClient(existing, onSaved, prefillNom) {
     <div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} client</b><button class="x" id="mX">✕</button></div>
     ${draft ? '<div class="draft-bar">✏️ Brouillon en cours restauré<button class="btn small" id="cDraftReset">Effacer le brouillon</button></div>' : ''}
     <div class="row"><label style="flex:0 0 90px">Civilité<select id="cCivilite"><option value="">—</option><option value="Mr"${w.civilite === 'Mr' ? ' selected' : ''}>Mr</option><option value="Mme"${w.civilite === 'Mme' ? ' selected' : ''}>Mme</option></select></label><label class="grow">Prénom<input type="text" id="cPrenom" value="${esc(w.prenom || '')}" /></label><label class="grow">Nom<input type="text" id="cNom" value="${esc(w.nom)}" /></label></div>
+    <div class="row"><label class="grow">Email<input type="email" id="cEmail" value="${esc(w.email || '')}" placeholder="contact@exemple.be" /></label><label class="grow">Téléphone<input type="text" id="cTel" value="${esc(w.tel || '')}" /></label></div>
     <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
     <label class="chk2"><input type="checkbox" id="cPolitesse" ${w.politesse !== false ? 'checked' : ''}/> Politesse dans le SMS (Mr/Mme + nom ; sinon prénom)</label>
     <label class="chk2"><input type="checkbox" id="cActif" ${w.actif !== false ? 'checked' : ''}/> Client actif</label>
@@ -1824,7 +1849,9 @@ function editClient(existing, onSaved, prefillNom) {
       const row = document.createElement('div'); row.className = 'cheval';
       row.innerHTML = `<div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><label class="chk2"><input type="checkbox" data-actif ${h.actif !== false ? 'checked' : ''}/> Actif</label><button class="a-del" data-del>✕</button></div>
         <label>Date de naissance<input type="date" data-naiss value="${h.dateNaissance || ''}"/></label>
+        <label>Race<input type="text" data-race value="${esc(h.race || '')}" placeholder="Race (facultatif)"/></label>
         <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
+        ${h.anamnese ? '<button class="btn small" data-anam>📄 Formulaire (anamnèse)</button>' : ''}
         <label>Adresse du cheval<select data-src>
           <option value="client">Même adresse que le client</option>
           <option value="societe">Adresse de la société</option>
@@ -1835,6 +1862,8 @@ function editClient(existing, onSaved, prefillNom) {
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
       row.querySelector('[data-actif]').addEventListener('change', (e) => { h.actif = e.target.checked; saveDraft(); });
       row.querySelector('[data-naiss]').addEventListener('change', (e) => { h.dateNaissance = e.target.value || ''; saveDraft(); });
+      row.querySelector('[data-race]').addEventListener('input', (e) => { h.race = e.target.value; saveDraft(); });
+      { const ab = row.querySelector('[data-anam]'); if (ab) ab.addEventListener('click', () => modalAnamnese(h)); }
       row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
@@ -1848,6 +1877,8 @@ function editClient(existing, onSaved, prefillNom) {
   if (draft && $('cDraftReset')) $('cDraftReset').addEventListener('click', () => { DRAFTS.clear(key); closeModal(); editClient(existing, onSaved); });
   $('cPrenom').addEventListener('input', (e) => { w.prenom = e.target.value; saveDraft(); });
   $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
+  if ($('cEmail')) $('cEmail').addEventListener('input', (e) => { w.email = e.target.value; saveDraft(); });
+  if ($('cTel')) $('cTel').addEventListener('input', (e) => { w.tel = e.target.value; saveDraft(); });
   $('cSociete').addEventListener('input', (e) => { w.societe = e.target.value; updateLegalState(); saveDraft(); });
   if ($('cActif')) $('cActif').addEventListener('change', (e) => { w.actif = e.target.checked; saveDraft(); });
   if ($('cCivilite')) $('cCivilite').addEventListener('change', (e) => { w.civilite = e.target.value; saveDraft(); });
@@ -1867,6 +1898,14 @@ function editClient(existing, onSaved, prefillNom) {
   });
 }
 
+// Formulaire d'anamnèse (issu d'un mail « prise de contact ») rangé sur la fiche cheval — visualisation.
+function modalAnamnese(h) {
+  const f = (h && h.anamnese) || {};
+  const keys = Object.keys(f);
+  const rows = keys.length ? keys.map((k) => `<div class="inv-line"><span>${esc(k)}</span><span>${esc(f[k] || '')}</span></div>`).join('') : '<p class="hint">Formulaire vide.</p>';
+  openModal(`<div class="modal-head"><b>📄 Formulaire — ${esc((h && h.nom) || 'cheval')}</b><button class="x" id="mX">✕</button></div><div style="max-height:60vh;overflow:auto">${rows}</div><div class="actions"><button class="btn block" id="anClose">Fermer</button></div>`);
+  $('mX').addEventListener('click', closeModal); $('anClose').addEventListener('click', closeModal);
+}
 // ================= GESTION → MES ADRESSES (départ) =================
 function renderAdresses() {
   const box = $('adressesList'); if (!box) return; box.innerHTML = '';
@@ -4323,6 +4362,111 @@ function modalTourArticle(existing, opts) {
   });
 }
 
+// ================= CONTACT MAIL (Gmail) — récupération + parsing du formulaire « prise de contact » =================
+// Parse un mail « prise de contact » (étiquettes « Label : valeur »). Renvoie un dictionnaire { labelNormalisé: valeur }. Testé sur le modèle réel.
+function parseContactMail(text) {
+  const fields = {}; const lines = (text || '').split(/\r?\n/);
+  const normLabel = (s) => s.toLowerCase().replace(/[’‘`]/g, "'").replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+  let cur = null;
+  lines.forEach((line) => {
+    const idx = line.indexOf(':');
+    if (idx > 0 && idx < 80) { const lab = normLabel(line.slice(0, idx)); if (lab && lab.length <= 60) { fields[lab] = line.slice(idx + 1).trim(); cur = lab; return; } }
+    if (!line.trim()) { cur = null; return; }
+    if (cur) fields[cur] = (fields[cur] ? fields[cur] + ' ' : '') + line.trim();
+  });
+  return fields;
+}
+const mailField = (f, ...labels) => { for (const l of labels) { const n = l.toLowerCase().replace(/[’‘`]/g, "'").replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim(); if (f && f[n] != null && f[n] !== '') return f[n]; } return ''; };
+const mailExtractEmail = (from) => { const m = /<([^>]+)>/.exec(from || ''); return (m ? m[1] : (from || '')).trim(); };
+function gmailHeader(msg, name) { const h = (msg && msg.payload && msg.payload.headers) || []; const x = h.find((y) => (y.name || '').toLowerCase() === name.toLowerCase()); return x ? x.value : ''; }
+function b64urlDecode(data) { try { let s = (data || '').replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const bin = atob(s); try { return decodeURIComponent(escape(bin)); } catch { return bin; } } catch { return ''; } }
+function gmailPlainBody(payload) {
+  if (!payload) return '';
+  if (payload.mimeType === 'text/plain' && payload.body && payload.body.data) return b64urlDecode(payload.body.data);
+  if (payload.parts) { for (const p of payload.parts) { const t = gmailPlainBody(p); if (t) return t; } }
+  if (payload.mimeType === 'text/html' && payload.body && payload.body.data) return b64urlDecode(payload.body.data).replace(/<\/(p|div|br|tr|li)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ');
+  if (payload.body && payload.body.data) return b64urlDecode(payload.body.data);
+  return '';
+}
+async function gmailConnect(statusEl) {
+  try { if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Connexion à Gmail…'; } await googleToken(true, GSCOPE_MAIL); if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = 'Gmail connecté ✔ — vous pouvez récupérer les mails.'; } }
+  catch (e) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Connexion Gmail impossible : ' + (e && e.message || e); } }
+}
+async function gmailFetch(statusEl, after) {
+  if (!S.googleClientId) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Renseignez d\'abord votre ID client Google (Réglages → Synchro).'; } return; }
+  try {
+    if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Récupération des mails…'; }
+    const token = await googleToken(true, GSCOPE_MAIL);
+    const q = (S.mailKeywords || []).filter(Boolean).map((k) => '"' + k.replace(/"/g, '') + '"').join(' OR ') || '"prise de contact"';
+    const lr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=40&q=' + encodeURIComponent(q), { headers: { Authorization: 'Bearer ' + token } });
+    if (!lr.ok) throw new Error('API Gmail (' + lr.status + ')');
+    const list = await lr.json();
+    const seen = new Set((S.contactMails || []).map((x) => x.id)); // déjà récupérés OU ignorés → jamais ré-importés (pas de doublon)
+    let added = 0;
+    for (const mm of (list.messages || [])) {
+      if (seen.has(mm.id)) continue;
+      const mr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + mm.id + '?format=full', { headers: { Authorization: 'Bearer ' + token } });
+      if (!mr.ok) continue;
+      const msg = await mr.json();
+      const fromRaw = gmailHeader(msg, 'From');
+      S.contactMails.push({ id: mm.id, from: mailExtractEmail(fromRaw), fromRaw, subject: gmailHeader(msg, 'Subject'), date: gmailHeader(msg, 'Date'), fields: parseContactMail(gmailPlainBody(msg.payload)), status: 'nouveau', clientId: null, chevalNom: '' });
+      added++;
+    }
+    saveSettings();
+    if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = added ? (added + ' nouveau(x) mail(s) récupéré(s).') : 'Aucun nouveau mail (les déjà traités et ignorés ne sont pas ré-importés).'; }
+    if (after) after();
+  } catch (e) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Récupération impossible : ' + (e && e.message || e); } }
+}
+// Réglages → Mail : mots-clés + connexion + récupération.
+function renderMailConfig() {
+  const kb = $('mailKeywords'); if (kb) plancheList(kb, S.mailKeywords, renderMailConfig, '+ Ajouter un mot-clé');
+  const c = $('mailConnect'); if (c) c.onclick = () => gmailConnect($('mailStatus'));
+  const f = $('mailFetch'); if (f) f.onclick = () => gmailFetch($('mailStatus'));
+}
+// Gestion → Contact mail : liste des mails récupérés (nouveaux) + section « Ignorés ».
+function renderContactMail() {
+  const c = $('cmConnect'); if (c) c.onclick = () => gmailConnect($('cmStatus'));
+  const f = $('cmFetch'); if (f) f.onclick = () => gmailFetch($('cmStatus'), renderContactMail);
+  const box = $('cmList'); if (!box) return;
+  const nouveaux = (S.contactMails || []).filter((m) => m.status === 'nouveau');
+  const ignores = (S.contactMails || []).filter((m) => m.status === 'ignore');
+  const traites = (S.contactMails || []).filter((m) => m.status === 'client').length;
+  if ($('cmTraites')) $('cmTraites').textContent = traites ? (traites + ' mail(s) déjà transformé(s) en client.') : '';
+  box.innerHTML = ''; if ($('cmEmpty')) $('cmEmpty').style.display = nouveaux.length ? 'none' : 'block';
+  nouveaux.forEach((m) => box.appendChild(contactMailRow(m, false)));
+  const ib = $('cmIgnored'); if (ib) { ib.innerHTML = ''; ignores.forEach((m) => ib.appendChild(contactMailRow(m, true))); if ($('cmIgnoredEmpty')) $('cmIgnoredEmpty').style.display = ignores.length ? 'none' : 'block'; }
+}
+function contactMailRow(m, ignored) {
+  const f = m.fields || {};
+  const nom = (mailField(f, 'Prénom') + ' ' + mailField(f, 'Nom')).trim() || m.from || '(inconnu)';
+  const cheval = mailField(f, 'Nom du cheval'), soc = mailField(f, "Nom de l'entreprise");
+  const el = document.createElement('div'); el.className = 'list-item';
+  el.innerHTML = `<div class="li-main"><b>${esc(nom)}${cheval ? ' · 🐴 ' + esc(cheval) : ''}</b><span class="li-sub">${esc(m.from || '')}${soc ? ' · ' + esc(soc) : ''}${m.date ? ' · ' + esc(String(m.date).slice(0, 16)) : ''}</span></div>`
+    + (ignored ? '<div class="li-act"><button class="btn small" data-restore>↩ Réactiver</button></div>'
+      : '<div class="li-act"><button class="btn small primary" data-create>👤 Créer le client</button> <button class="btn small" data-ignore>Ignorer</button></div>');
+  if (ignored) el.querySelector('[data-restore]').addEventListener('click', () => { m.status = 'nouveau'; saveSettings(); renderContactMail(); });
+  else { el.querySelector('[data-create]').addEventListener('click', () => createClientFromMail(m)); el.querySelector('[data-ignore]').addEventListener('click', () => { m.status = 'ignore'; saveSettings(); renderContactMail(); }); }
+  return el;
+}
+// Normalise une date saisie librement (« 2015-04-01 », « 01/04/2015 », « 2015 ») en 'YYYY-MM-DD' si possible.
+function parseDateLoose(s) {
+  s = (s || '').trim(); if (!s) return '';
+  let m = /(\d{4})-(\d{2})-(\d{2})/.exec(s); if (m) return m[0];
+  m = /(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/.exec(s); if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+  return '';
+}
+// « Créer le client » depuis un mail : ouvre la fiche client pré-remplie + 1 cheval (anamnèse = formulaire complet).
+function createClientFromMail(m) {
+  const f = m.fields || {};
+  const prefill = {
+    prenom: mailField(f, 'Prénom'), nom: mailField(f, 'Nom'),
+    societe: mailField(f, "Nom de l'entreprise"), tvaNum: mailField(f, 'Numéro de TVA', 'N° de TVA'),
+    email: m.from || '', tel: mailField(f, 'Numéro de téléphone'),
+    rue: mailField(f, 'Votre adresse (domicile) N° et rue', 'Adresse de facturation'), cpVille: mailField(f, 'Code postal et localité'),
+    cheval: { nom: mailField(f, 'Nom du cheval'), dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f },
+  };
+  editClient(null, (saved) => { m.status = 'client'; m.clientId = saved && saved.id; m.chevalNom = prefill.cheval.nom; saveSettings(); if (currentGsub === 'contactmail') renderContactMail(); }, null, prefill);
+}
 // ================= PLANCHES CONTACT / AVANT-APRÈS — paramétrage =================
 let plancheType = 'contact', plancheModele = '3';
 const moveInArr = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; const t = arr[i]; arr[i] = arr[j]; arr[j] = t; };
