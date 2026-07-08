@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.93';
+const APP_VERSION = '1.1.94';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.94', date: '2026-07-08',
+    ajouts: [
+      'Correctif clé (montant bloqué à l\'ancien total) : quand le total d\'un client payé en LIQUIDE change (correction de prestations, recalcul, ou annulation), l\'app redemande maintenant le montant liquide arrondi réellement encaissé. Avant, l\'ancien montant encaissé « écrasait » le nouveau total via l\'arrondi caisse (la facture restait par ex. à 74,54 € au lieu de 200,25 €).',
+      'Arrondi caisse obligatoire pour tout paiement en liquide (avec ou sans facture) dès que le total change.',
+    ],
+  },
   {
     version: '1.1.93', date: '2026-07-08',
     ajouts: [
@@ -5443,10 +5450,25 @@ function modalEditPrestations(t) {
     // Recalcul argent : réutilise la géométrie figée si elle est cohérente ; sinon recalcul COMPLET depuis les adresses (garantit la reprise du déplacement/matériel).
     if (recomputeTourLocal(t)) persistCurrentTour();
     else await calcTour(false);
-    refreshEverywhere(); openEditor();
     const R = currentTour && currentTour.result;
-    alert('Prestations mises à jour.\n\n• déplacement HT : ' + eur((R && R.htDeplacement) || 0) + '\n• matériel HT : ' + eur((R && R.materielHT) || 0) + '\n• total TTC : ' + eur((R && R.totalTTC) || 0) + (R && R.htDeplacement > 0 ? '' : '\n\n⚠ Déplacement toujours à 0 : ' + ((R && R.totalKm) ? 'tarif/km à 0 (Réglages → Véhicule).' : 'aucun km (adresses à re-géolocaliser).')));
+    const recap = 'Prestations mises à jour.\n\n• déplacement HT : ' + eur((R && R.htDeplacement) || 0) + '\n• matériel HT : ' + eur((R && R.materielHT) || 0) + '\n• total TTC : ' + eur((R && R.totalTTC) || 0) + (R && R.htDeplacement > 0 ? '' : '\n\n⚠ Déplacement toujours à 0 : ' + ((R && R.totalKm) ? 'tarif/km à 0 (Réglages → Véhicule).' : 'aucun km (adresses à re-géolocaliser).'));
+    // Paiement liquide : le total a changé → l'arrondi caisse (montant encaissé) doit être ressaisi, sinon la facture reste bloquée à l'ancien montant encaissé.
+    const adj = cashClientsNeedingArrondi(currentTour);
+    if (adj.length) { modalAdjustArrondi(currentTour, adj, recap); return; }
+    refreshEverywhere(); openEditor();
+    alert(recap);
   });
+}
+// Clients payés en LIQUIDE dont l'arrondi caisse est périmé (montant encaissé ≠ total facturé recalculé) → l'arrondi doit être ressaisi (obligatoire, avec ou sans facture).
+function cashClientsNeedingArrondi(t) {
+  const out = []; const R = t && t.result; if (!R || !R.parClient) return out;
+  R.parClient.forEach((m) => {
+    const p = (t.payments || {})[m.clientId];
+    if (!p || p.method !== 'liquide' || (m.totalTTC || 0) <= 0.005) return;
+    const rect = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null && !p.partiel ? p.montantPaye : null);
+    if (rect == null || Math.abs(rect - m.totalTTC) > 1.5) out.push({ clientId: m.clientId, nom: clientName(m.clientId), total: m.totalTTC });
+  });
+  return out;
 }
 // Annuler une facturation sur une tournée CLÔTURÉE (figée) : choisir tournée entière / arrêt / client / cheval.
 // Retire SEULEMENT la part de facture (géométrie, km, temps, route, autres clients : inchangés → recalcul LOCAL qui réutilise la géométrie figée) et met à jour les stats (tournée + globales).
@@ -5516,7 +5538,7 @@ function modalCancelBilling(t) {
     const toAdjust = [];
     affected.forEach((clientId) => {
       const p = (t.payments || {})[clientId];
-      if (!p || p.method !== 'liquide' || p.facture) return;
+      if (!p || p.method !== 'liquide') return; // liquide → arrondi obligatoire (avec OU sans facture) ; virement = montants exacts
       const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === clientId);
       if (!m || (m.totalTTC || 0) <= 0.005) { p.rectifie = null; p.montantPaye = null; return; } // entièrement annulé → plus rien à encaisser
       toAdjust.push({ clientId, nom: clientName(clientId), total: m.totalTTC });
@@ -5531,7 +5553,7 @@ function modalCancelBilling(t) {
 // Après une annulation partielle, saisie du montant liquide arrondi réellement encaissé (reste) pour les clients liquide SANS facture.
 function modalAdjustArrondi(t, list, msg) {
   let html = `<div class="modal-head"><b>💶 Arrondi de l'encaissement liquide</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Après annulation, indiquez le montant liquide réellement encaissé (arrondi à l'euro) pour chaque client — c'est ce que vous gardez après avoir rendu la différence. Uniquement pour le liquide sans facture.</p><div id="ajList">`;
+    <p class="hint">Le total a changé : indiquez le montant liquide réellement <b>encaissé</b> (arrondi à l'euro) pour chaque client payé en espèces. La différence avec le total facturé passe en « arrondi caisse ». Obligatoire pour le liquide (avec ou sans facture).</p><div id="ajList">`;
   list.forEach((c, i) => { html += `<div class="pay-block"><h3 style="font-size:.9rem;margin:.3rem 0">${esc(c.nom)} <span class="li-sub">— reste facturé ${eur(c.total)}</span></h3><label>Montant liquide encaissé (arrondi)<input type="number" step="1" min="0" inputmode="numeric" data-aj="${i}" value="${Math.round(c.total)}"/></label></div>`; });
   html += `</div><div class="actions"><button class="btn primary block" id="ajOk">Enregistrer</button></div>`;
   openModal(html);
@@ -6348,6 +6370,8 @@ window.addEventListener('DOMContentLoaded', () => {
         + (R.htDeplacement > 0 ? '' : '⚠ Déplacement à 0 : ' + ((R.totalKm || 0) === 0 ? 'aucun km calculé (adresses non géocodées ?).' : 'tarif/km à 0 (Réglages → Véhicule : base véhicule + carburant).') + '\n')
         + (R.materielHT > 0 || nbParage === 0 ? '' : '⚠ Matériel à 0 alors qu\'il y a du parage : aucun matériel configuré (Réglages → Matériel).'));
     }
+    const adj = cashClientsNeedingArrondi(currentTour);
+    if (adj.length) { modalAdjustArrondi(currentTour, adj); return; } // total liquide changé → ressaisir l'arrondi caisse
     openEditor(); // ré-affiche en mode figé avec le résultat réparé
   });
   if ($('edActes')) $('edActes').addEventListener('click', () => { if (currentTour) modalEditPrestations(currentTour); });
