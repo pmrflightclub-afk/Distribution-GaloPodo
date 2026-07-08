@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.84';
+const APP_VERSION = '1.1.85';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.85', date: '2026-07-08',
+    ajouts: [
+      'Planche de contact — création (étape 2/4) : le bouton « ＋ Créer une planche » (Gestion → Planche, et Déclarer → « Planche de contact ») ouvre l\'écran de création.',
+      'Importez vos photos (bouton « Importer des photos ») : elles restent dans la mémoire de l\'app le temps de la création et ne sont JAMAIS enregistrées ni synchronisées (elles restent dans la galerie du téléphone).',
+      'Placez chaque photo dans la grille : touchez une vignette pour la sélectionner, puis touchez la case voulue (ligne = membre/page, colonne = angle du modèle 3/4/5). Touchez une case remplie pour la vider. Le glisser-déposer fonctionne aussi sur ordinateur.',
+      'La date de prise de vue est lue automatiquement dans la photo (EXIF), corrigeable à la main, avec une case « jour » (met la date du jour).',
+      'En-tête (cheval, client, date), note en bas de page, logo optionnel et orientation (paysage par défaut) repris du paramétrage. Multi-pages géré (une page par groupe de lignes configuré).',
+      'Génération du PDF via l\'impression du navigateur (« Enregistrer en PDF ») : l\'appareil choisit le dossier d\'enregistrement. Aucune image ni PDF n\'est conservé dans l\'app.',
+    ],
+  },
   {
     version: '1.1.84', date: '2026-07-08',
     ajouts: [
@@ -2874,14 +2885,13 @@ function recalcAllTours() {
   // 2) Articles d'impayé orphelins (référencent un impayé qui n'existe plus) → retirés de toutes les tournées.
   const live = new Set(); clients.forEach((c) => (c.impayes || []).forEach((im) => live.add(im.id)));
   allTours().forEach((t) => { if (Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !a.impaye || (a.impayeId && live.has(a.impayeId))); });
-  // 3) Tournées NON figées (aujourd'hui / à venir) : on recalcule l'argent (tarifs/logique courants).
-  //    Tournées CLÔTURÉES / archivées : la répartition facture reste FIGÉE — on ne nettoie que les listes de chevaux (stats), jamais les montants.
+  // 3) On NE recalcule PLUS les montants ici (ça pouvait casser une facture : déplacement/matériel qui sautaient).
+  //    On rafraîchit seulement les listes de chevaux pour les stats (sanitizeTourStats ne touche jamais les montants)
+  //    et on répare les arrondis caisse devenus aberrants. Pour recalculer une facture, ouvrez la tournée (recalcul complet à l'ouverture).
   let n = 0;
   allTours().forEach((t) => {
-    const st = statusOf(t);
-    if (st === 'active' || st === 'avenir') { if (recomputeTourLocal(t)) n++; }
-    else sanitizeTourStats(t);
-    // Arrondi caisse devenu aberrant (facture modifiée depuis l'encaissement) : |arrondi| > 10 € → on retire le montant rectifié (un vrai arrondi caisse est de l'ordre de l'euro).
+    if (sanitizeTourStats(t)) n++;
+    // Arrondi caisse aberrant (|arrondi| > 10 € : un vrai arrondi caisse est de l'ordre de l'euro) → on retire le montant rectifié.
     if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; if (p && p.method === 'liquide' && m && Math.abs(payRectifie(m, p) - (m.totalTTC || 0)) > 10) { p.rectifie = null; p.montantPaye = null; } });
   });
   saveClients(); saveTournees(); saveArchive();
@@ -4546,6 +4556,220 @@ function renderPlancheConfig() {
   });
   $('plAddPage').addEventListener('click', () => { P.pages.push({ membres: [] }); saveSettings(); renderPlancheConfig(); });
 }
+
+// ================= Création de planche (Phase 2 : planche contact) =================
+// IMPORTANT : les images sélectionnées restent EN MÉMOIRE uniquement, le temps de la création.
+// Elles ne sont JAMAIS écrites dans localStorage/S ni synchronisées (décision produit verrouillée).
+let plCreate = null; // état de la planche en cours de création : { type, modele, angles, pages, cheval, client, date, note, photos:[{id,url,date,jour}], cells:{'page_row_col':photoId}, sel }
+
+// Réduit une image (canvas) pour l'intégration au PDF, sans jamais la persister. Renvoie un data-URL JPEG.
+function plResizeImage(file, maxDim, cb) {
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    let w = img.naturalWidth || 1, h = img.naturalHeight || 1;
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
+    let data = '';
+    try { const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h); data = cv.toDataURL('image/jpeg', 0.82); } catch (e) { data = ''; }
+    URL.revokeObjectURL(url); cb(data);
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); cb(''); };
+  img.src = url;
+}
+
+// Mini-parseur EXIF : extrait la date de prise de vue (DateTimeOriginal 0x9003, repli DateTime 0x0132) d'un JPEG → 'YYYY-MM-DD' (ou '' si absente).
+function plExifDate(file, cb) {
+  const r = new FileReader();
+  r.onload = () => {
+    let out = '';
+    try {
+      const dv = new DataView(r.result);
+      if (dv.getUint16(0) === 0xFFD8) { // JPEG
+        let off = 2, tiff = -1;
+        while (off < dv.byteLength - 4) {
+          const marker = dv.getUint16(off);
+          if (marker === 0xFFE1) { if (dv.getUint32(off + 4) === 0x45786966) tiff = off + 10; break; } // APP1 « Exif »
+          if ((marker & 0xFF00) !== 0xFF00) break;
+          off += 2 + dv.getUint16(off + 2);
+        }
+        if (tiff > 0) {
+          const little = dv.getUint16(tiff) === 0x4949;
+          const g16 = (o) => dv.getUint16(o, little), g32 = (o) => dv.getUint32(o, little);
+          const strAt = (o, n) => { let s = ''; for (let i = 0; i < n; i++) { const ch = dv.getUint8(o + i); if (!ch) break; s += String.fromCharCode(ch); } return s; };
+          const findInIfd = (ifd, tag) => { const n = g16(ifd); for (let i = 0; i < n; i++) { const e = ifd + 2 + i * 12; if (g16(e) === tag) { const cnt = g32(e + 4); return { e, vOff: cnt > 4 ? tiff + g32(e + 8) : e + 8 }; } } return null; };
+          const ifd0 = tiff + g32(tiff + 4);
+          let dateStr = '';
+          const exifPtr = findInIfd(ifd0, 0x8769);
+          if (exifPtr) { const exifIfd = tiff + g32(exifPtr.vOff); const dto = findInIfd(exifIfd, 0x9003) || findInIfd(exifIfd, 0x9004); if (dto) dateStr = strAt(dto.vOff, 19); }
+          if (!dateStr) { const dt = findInIfd(ifd0, 0x0132); if (dt) dateStr = strAt(dt.vOff, 19); }
+          const m = dateStr.match(/^(\d{4}):(\d{2}):(\d{2})/);
+          if (m && m[1] !== '0000') out = m[1] + '-' + m[2] + '-' + m[3];
+        }
+      }
+    } catch (e) { /* fichier non lisible / EXIF absent → pas de date */ }
+    cb(out);
+  };
+  r.readAsArrayBuffer(file.slice(0, 262144)); // 256 Ko suffisent largement pour l'en-tête EXIF
+}
+
+function modalPlancheCreate(type) {
+  type = type || 'contact';
+  if (type !== 'contact') { alert('La création « Avant/après » arrive à la prochaine étape. La planche de contact est disponible dès maintenant.'); return; }
+  const P = S.planche.contact;
+  const modele = P.modeles[plancheModele] ? plancheModele : '4';
+  plCreate = { type: 'contact', modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), cheval: '', client: '', date: todayStr(), note: '', photos: [], cells: {}, sel: null };
+  const chNames = [], clNames = [];
+  clients.forEach((c) => { const n = fullName(c); if (n) clNames.push(n); (c.chevaux || []).forEach((h) => { if (h.nom) chNames.push(h.nom); }); });
+  const uniq = (a) => Array.from(new Set(a));
+  openModal(`<div class="modal-head"><b>🖼 Créer une planche de contact</b><button class="x" id="mX">✕</button></div>
+    <div style="max-height:80vh;overflow:auto" id="plCbody">
+      <section class="card">
+        <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
+        <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" placeholder="Nom du client"/></label></div>
+        <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+        <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+        <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>
+        <label>Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
+      </section>
+      <section class="card">
+        <div class="card-head"><h3 class="rsub" style="margin:0">Photos</h3><button class="btn small" id="plCimport">＋ Importer des photos</button></div>
+        <p class="hint">Les photos restent dans la mémoire de l'app le temps de la création (jamais enregistrées). Touchez une vignette pour la <b>sélectionner</b>, puis touchez une case de la grille pour l'y <b>placer</b>. Touchez une case remplie pour la vider.</p>
+        <input type="file" id="plCfiles" accept="image/*" multiple hidden/>
+        <div class="pl-pot" id="plCpot"></div>
+      </section>
+      <section class="card">
+        <h3 class="rsub">Aperçu / mise en page</h3>
+        <div id="plCgrid"></div>
+      </section>
+      <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCclose">Fermer</button></div>
+    </div>`);
+  const close = () => { plCreate = null; closeModal(); };
+  $('mX').onclick = close; $('plCclose').onclick = close;
+  $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((b) => b.addEventListener('click', () => {
+    plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.sel = null;
+    $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.plcm === plCreate.modele));
+    plRenderPot(); plRenderGrid();
+  }));
+  $('plCcheval').addEventListener('input', (e) => { plCreate.cheval = e.target.value; });
+  $('plCclient').addEventListener('input', (e) => { plCreate.client = e.target.value; });
+  $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
+  $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
+  $('plCimport').onclick = () => $('plCfiles').click();
+  $('plCfiles').addEventListener('change', plHandleFiles);
+  $('plCpdf').onclick = planchePrint;
+  plRenderPot(); plRenderGrid();
+}
+
+function plHandleFiles(e) {
+  const files = Array.from(e.target.files || []); e.target.value = '';
+  files.forEach((f) => {
+    if (!/^image\//.test(f.type || '')) return;
+    const rec = { id: uid(), name: f.name || 'photo', url: '', date: '', jour: false };
+    plCreate.photos.push(rec);
+    plExifDate(f, (d) => { if (plCreate) { rec.date = d || ''; plRenderPot(); } });
+    plResizeImage(f, 1000, (url) => { if (plCreate) { rec.url = url; plRenderPot(); plRenderGrid(); } });
+  });
+  plRenderPot();
+}
+
+function plRenderPot() {
+  const box = $('plCpot'); if (!box || !plCreate) return;
+  box.innerHTML = '';
+  if (!plCreate.photos.length) { box.innerHTML = '<p class="hint" style="margin:0">Aucune photo importée.</p>'; return; }
+  const placed = new Set(Object.values(plCreate.cells));
+  plCreate.photos.forEach((ph) => {
+    const t = document.createElement('div');
+    t.className = 'pl-thumb' + (plCreate.sel === ph.id ? ' sel' : '') + (placed.has(ph.id) ? ' placed' : '');
+    t.setAttribute('draggable', 'true');
+    t.innerHTML = `${ph.url ? `<img src="${ph.url}" alt=""/>` : '<div class="pl-th-load">…</div>'}<button class="pl-th-x" title="Retirer">✕</button>`
+      + `<div class="pl-th-meta"><input type="date" value="${esc(ph.date)}" class="pl-th-date" title="Date de la photo"/><label class="pl-th-jour"><input type="checkbox" ${ph.jour ? 'checked' : ''}/> jour</label></div>`;
+    t.addEventListener('dragstart', () => { plCreate.sel = ph.id; });
+    t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
+    t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
+    t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; ph.jour = false; plRenderPot(); });
+    t.querySelector('.pl-th-jour input').addEventListener('change', (ev) => { ph.jour = ev.target.checked; if (ph.jour) ph.date = todayStr(); plRenderPot(); });
+    box.appendChild(t);
+  });
+}
+
+function plPlace(key) {
+  if (!plCreate.sel) return;
+  Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === plCreate.sel) delete plCreate.cells[k]; }); // une photo = une seule case
+  plCreate.cells[key] = plCreate.sel; plCreate.sel = null; plRenderPot(); plRenderGrid();
+}
+
+function plRenderGrid() {
+  const box = $('plCgrid'); if (!box || !plCreate) return;
+  box.innerHTML = '';
+  const pages = plCreate.pages || [], angles = plCreate.angles || [];
+  if (!pages.length) { box.innerHTML = '<p class="hint">Aucune page configurée. Configurez la planche dans Gestion → Planche.</p>'; return; }
+  pages.forEach((pg, pi) => {
+    const membres = Array.isArray(pg.membres) ? pg.membres : [];
+    const wrap = document.createElement('div'); wrap.className = 'pl-grid-wrap';
+    wrap.innerHTML = `<div class="pl-page-lbl">Page ${pi + 1}</div>`;
+    const tbl = document.createElement('table'); tbl.className = 'pl-egrid';
+    let html = `<thead><tr><th></th>${angles.map((a) => `<th>${esc(a)}</th>`).join('')}</tr></thead><tbody>`;
+    if (!membres.length) html += `<tr><td colspan="${angles.length + 1}" class="hint" style="text-align:center;padding:8px">Page sans ligne (configurez les lignes dans Gestion → Planche).</td></tr>`;
+    membres.forEach((m, ri) => {
+      html += `<tr><th class="pl-mem">${esc(m)}</th>` + angles.map((a, ci) => {
+        const key = pi + '_' + ri + '_' + ci, pid = plCreate.cells[key], ph = pid && plCreate.photos.find((p) => p.id === pid);
+        return `<td class="pl-cell${plCreate.sel && !ph ? ' sel-target' : ''}" data-key="${key}">${ph && ph.url ? `<img src="${ph.url}" alt=""/>` : '<span class="pl-cell-ph">+</span>'}</td>`;
+      }).join('') + '</tr>';
+    });
+    html += '</tbody>';
+    tbl.innerHTML = html;
+    tbl.querySelectorAll('.pl-cell').forEach((td) => {
+      const key = td.dataset.key;
+      td.addEventListener('click', () => { if (plCreate.cells[key]) { delete plCreate.cells[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); } });
+      td.addEventListener('dragover', (e) => e.preventDefault());
+      td.addEventListener('drop', (e) => { e.preventDefault(); plPlace(key); });
+    });
+    wrap.appendChild(tbl); box.appendChild(wrap);
+  });
+}
+
+// Génère le PDF de la planche via l'impression navigateur (l'OS choisit « Enregistrer en PDF »). Rien n'est stocké.
+function planchePrint() {
+  if (!plCreate) return;
+  const st = plCreate;
+  if (!Object.keys(st.cells).length && !confirm('Aucune photo n\'est placée dans la grille. Générer quand même la planche (vide) ?')) return;
+  const ori = st.orientation === 'portrait' ? 'portrait' : 'landscape';
+  const logoHtml = st.logo ? '<img class="pl-logo" src="icons/logo-mark.png" alt=""/>' : '';
+  let body = `<style>
+    @page{size:${ori};margin:8mm;}
+    #printArea .pl-page{page-break-after:always;}
+    #printArea .pl-page:last-child{page-break-after:auto;}
+    #printArea .pl-head{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:8px;}
+    #printArea .pl-hl{display:flex;align-items:center;gap:8px;}
+    #printArea .pl-logo{height:32px;}
+    #printArea .pl-htitle{font-size:15px;font-weight:700;color:#111;}
+    #printArea .pl-hinfo{font-size:12px;color:#111;text-align:right;}
+    #printArea table.pl-ptable{width:100%;border-collapse:collapse;table-layout:fixed;}
+    #printArea table.pl-ptable th,#printArea table.pl-ptable td{border:1px solid #444;padding:2px;text-align:center;vertical-align:middle;}
+    #printArea table.pl-ptable thead th{background:#eee;font-size:11px;}
+    #printArea table.pl-ptable th.pl-mem{width:72px;font-size:11px;font-weight:700;background:#f5f5f5;text-align:left;}
+    #printArea table.pl-ptable td img{width:100%;height:auto;max-height:158px;object-fit:contain;display:block;margin:0 auto;}
+    #printArea .pl-note{margin-top:8px;font-size:11px;color:#111;border-top:1px solid #999;padding-top:4px;white-space:pre-wrap;}
+  </style>`;
+  (st.pages || []).forEach((pg, pi) => {
+    const membres = Array.isArray(pg.membres) ? pg.membres : [];
+    body += `<div class="pl-page"><div class="pl-head"><div class="pl-hl">${logoHtml}<span class="pl-htitle">Planche de contact</span></div>`
+      + `<div class="pl-hinfo"><b>${esc(st.cheval) || '—'}</b><br>${esc(st.client) || '—'} · ${esc(fmtDateFr(st.date))}</div></div>`;
+    body += `<table class="pl-ptable"><thead><tr><th class="pl-mem"></th>${st.angles.map((a) => `<th>${esc(a)}</th>`).join('')}</tr></thead><tbody>`;
+    membres.forEach((m, ri) => {
+      body += `<tr><th class="pl-mem">${esc(m)}</th>` + st.angles.map((a, ci) => {
+        const pid = st.cells[pi + '_' + ri + '_' + ci], ph = pid && st.photos.find((p) => p.id === pid);
+        return `<td>${ph && ph.url ? `<img src="${ph.url}" alt=""/>` : ''}</td>`;
+      }).join('') + '</tr>';
+    });
+    body += '</tbody></table>';
+    if (st.note) body += `<div class="pl-note">${esc(st.note)}</div>`;
+    body += '</div>';
+  });
+  printHtml('Planche — ' + (st.cheval || 'cheval'), body);
+}
+
 // ================= SMS (modèle) =================
 const SMS_FIELDS = [
   { k: '{civilite}', label: 'Civilité (Mr/Mme)' },
