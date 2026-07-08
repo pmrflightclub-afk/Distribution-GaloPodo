@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.85';
+const APP_VERSION = '1.1.86';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.86', date: '2026-07-08',
+    ajouts: [
+      'Google : Drive, Agenda et Gmail partagent maintenant UNE SEULE connexion (un seul jeton mutualisé). Après cette mise à jour, une reconnexion unique est demandée, puis les 3 fonctionnent ensemble sans redemander de jeton. (Pensez à avoir activé l\'API Gmail dans votre console Google Cloud.)',
+    ],
+  },
   {
     version: '1.1.85', date: '2026-07-08',
     ajouts: [
@@ -1141,10 +1147,11 @@ function persistGTokens() { try { LS.set('ftr.gtokens', _gTokens); } catch { /* 
 const GDRIVE_FILE = 'galopodo-sync.json';
 // UN SEUL jeton combiné (Drive appData + Calendar lecture) → une seule connexion couvre Drive ET Agenda,
 // persistée une fois. Les deux constantes sont volontairement identiques : même clé de cache, même jeton partagé.
-const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.readonly';
+// UN SEUL jeton mutualisé Drive + Calendar + Gmail : les 3 constantes sont volontairement IDENTIQUES → même clé de cache, une seule connexion couvre tout.
+const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/gmail.readonly';
 const GSCOPE_CAL = GSCOPE_DRIVE;
 // Lecture Gmail (scope RESTREINT) — connexion séparée, à activer dans la console Google Cloud de l'utilisateur.
-const GSCOPE_MAIL = 'https://www.googleapis.com/auth/gmail.readonly';
+const GSCOPE_MAIL = GSCOPE_DRIVE; // Gmail mutualisé avec Drive/Calendar (même jeton, une seule connexion)
 // Vrai si un jeton VALIDE est déjà en cache pour ce scope → autorise une opération silencieuse SANS jamais afficher d'écran d'auth.
 function gTokenValid(scope) { const c = _gTokens[scope || GSCOPE_DRIVE]; return !!(c && Date.now() < c.exp - 60000); }
 function loadGis() {
