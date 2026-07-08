@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.95';
+const APP_VERSION = '1.1.96';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.96', date: '2026-07-08',
+    ajouts: [
+      'Contact mail — mails anciens : la récupération parcourt maintenant TOUTES les pages Gmail (avant, seuls les 100 mails les plus récents remontaient, d\'où « rien avant 2023 »).',
+      'Contact mail — vos envois masqués : l\'app mémorise l\'adresse du compte connecté et masque les mails que VOUS avez envoyés (formulaire vierge), y compris ceux importés avant l\'ajout du filtre.',
+      'Contact mail — bouton intelligent : chaque mail indique « client connu » ou « nouveau », et met en avant le bon bouton (« Créer le client » pour un nouveau, « Mettre à jour [nom] » pour un client déjà en fiche).',
+    ],
+  },
   {
     version: '1.1.95', date: '2026-07-08',
     ajouts: [
@@ -835,6 +843,7 @@ if (!Array.isArray(S.mailKeywords) || !S.mailKeywords.length) S.mailKeywords = [
 if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, body, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
 if (typeof S.mailExcludeSelf !== 'boolean') S.mailExcludeSelf = true; // n'inclut pas les mails que VOUS avez envoyés (seulement les réponses reçues)
 if (typeof S.mailScanForm !== 'boolean') S.mailScanForm = true;       // détecte aussi les formulaires sans le mot-clé (étiquettes distinctives)
+if (typeof S.mailSelf !== 'string') S.mailSelf = '';                  // adresse du compte Gmail connecté (pour masquer VOS mails envoyés déjà importés)
 if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
@@ -4558,26 +4567,36 @@ async function gmailFetch(statusEl, after) {
   try {
     if (statusEl) { statusEl.className = 'status'; statusEl.textContent = 'Récupération des mails…'; }
     const token = await googleToken(true, GSCOPE_MAIL);
+    // Adresse du compte connecté → masquer les mails que VOUS avez envoyés (y compris ceux importés avant le filtre -from:me).
+    try { const pr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', { headers: { Authorization: 'Bearer ' + token } }); if (pr.ok) { const pj = await pr.json(); if (pj.emailAddress) { S.mailSelf = pj.emailAddress; saveSettings(); } } } catch { /* profil indisponible : le filtre -from:me joue quand même */ }
     const kws = (S.mailKeywords || []).filter(Boolean).map((k) => '"' + k.replace(/"/g, '') + '"');
     if (S.mailScanForm !== false) kws.push('"Nom du cheval"', '"Adresse de l\'écurie"'); // détecte aussi les FORMULAIRES sans le mot-clé (étiquettes distinctives)
     const orPart = kws.length ? '(' + kws.join(' OR ') + ')' : '"prise de contact"';
     const q = orPart + (S.mailExcludeSelf !== false ? ' -from:me' : ''); // n'inclut PAS les mails que VOUS avez envoyés, seulement les réponses reçues
-    const lr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100&q=' + encodeURIComponent(q), { headers: { Authorization: 'Bearer ' + token } });
-    if (!lr.ok) throw new Error('API Gmail (' + lr.status + ')');
-    const list = await lr.json();
+    // Pagination : Gmail ne renvoie que 100 résultats par page → on parcourt toutes les pages (sinon seuls les plus récents remontent, rien d'ancien).
+    const ids = []; let pageToken = '', pages = 0;
+    do {
+      const lr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100&q=' + encodeURIComponent(q) + (pageToken ? '&pageToken=' + pageToken : ''), { headers: { Authorization: 'Bearer ' + token } });
+      if (!lr.ok) throw new Error('API Gmail (' + lr.status + ')');
+      const list = await lr.json();
+      (list.messages || []).forEach((mm) => ids.push(mm.id));
+      pageToken = list.nextPageToken || ''; pages++;
+      if (statusEl) statusEl.textContent = 'Recherche des mails… (' + ids.length + ' trouvés)';
+    } while (pageToken && pages < 30); // garde-fou : 30 pages = 3000 mails max
     const seen = new Set((S.contactMails || []).map((x) => x.id)); // déjà récupérés OU ignorés → jamais ré-importés (pas de doublon)
+    const toFetch = ids.filter((id) => !seen.has(id));
     let added = 0;
-    for (const mm of (list.messages || [])) {
-      if (seen.has(mm.id)) continue;
-      const mr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + mm.id + '?format=full', { headers: { Authorization: 'Bearer ' + token } });
+    for (const id of toFetch) {
+      const mr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + id + '?format=full', { headers: { Authorization: 'Bearer ' + token } });
       if (!mr.ok) continue;
       const msg = await mr.json();
       const fromRaw = gmailHeader(msg, 'From'); const body = gmailPlainBody(msg.payload);
-      S.contactMails.push({ id: mm.id, from: mailExtractEmail(fromRaw), fromRaw, subject: gmailHeader(msg, 'Subject'), date: gmailHeader(msg, 'Date'), fields: parseContactMail(body), body: (body || '').slice(0, 8000), status: 'nouveau', clientId: null, chevalNom: '' });
+      S.contactMails.push({ id, from: mailExtractEmail(fromRaw), fromRaw, subject: gmailHeader(msg, 'Subject'), date: gmailHeader(msg, 'Date'), fields: parseContactMail(body), body: (body || '').slice(0, 8000), status: 'nouveau', clientId: null, chevalNom: '' });
       added++;
+      if (statusEl && added % 10 === 0) statusEl.textContent = 'Import… (' + added + '/' + toFetch.length + ')';
     }
     saveSettings();
-    if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = added ? (added + ' nouveau(x) mail(s) récupéré(s).') : 'Aucun nouveau mail (les déjà traités et ignorés ne sont pas ré-importés).'; }
+    if (statusEl) { statusEl.className = 'status ok'; statusEl.textContent = added ? (added + ' nouveau(x) mail(s) récupéré(s) sur ' + ids.length + ' trouvé(s).') : (ids.length + ' mail(s) trouvé(s), tous déjà traités.'); }
     if (after) after();
   } catch (e) { if (statusEl) { statusEl.className = 'status err'; statusEl.textContent = 'Récupération impossible : ' + (e && e.message || e); } }
 }
@@ -4602,12 +4621,20 @@ function modalMailView(m) {
   $('mX').addEventListener('click', closeModal); $('mvClose').addEventListener('click', closeModal);
 }
 // Gestion → Contact mail : liste des mails récupérés (nouveaux) + section « Ignorés ».
+// Mail envoyé PAR l'utilisateur (à masquer) : from = adresse du compte connecté.
+function mailIsSelf(m) { return !!(S.mailExcludeSelf !== false && S.mailSelf && m && m.from && norm(m.from) === norm(S.mailSelf)); }
+// Clients existants correspondant à un mail (par e-mail expéditeur, ou nom + prénom). Sert au bouton « connu/nouveau » et à la mise à jour.
+function findClientForMail(m) {
+  const f = (m && m.fields) || {};
+  const email = (m && m.from) || '', nomM = norm(mailField(f, 'Nom')), prenomM = norm(mailField(f, 'Prénom'));
+  return clients.filter((c) => (email && c.email && norm(c.email) === norm(email)) || (nomM && norm(c.nom) === nomM && (!prenomM || !c.prenom || norm(c.prenom) === prenomM)));
+}
 function renderContactMail() {
   const c = $('cmConnect'); if (c) c.onclick = () => gmailConnect($('cmStatus'));
   const f = $('cmFetch'); if (f) f.onclick = () => gmailFetch($('cmStatus'), renderContactMail);
   const box = $('cmList'); if (!box) return;
-  const nouveaux = (S.contactMails || []).filter((m) => m.status === 'nouveau');
-  const ignores = (S.contactMails || []).filter((m) => m.status === 'ignore');
+  const nouveaux = (S.contactMails || []).filter((m) => m.status === 'nouveau' && !mailIsSelf(m));
+  const ignores = (S.contactMails || []).filter((m) => m.status === 'ignore' && !mailIsSelf(m));
   const traites = (S.contactMails || []).filter((m) => m.status === 'client').length;
   if ($('cmTraites')) $('cmTraites').textContent = traites ? (traites + ' mail(s) déjà transformé(s) en client.') : '';
   box.innerHTML = ''; if ($('cmEmpty')) $('cmEmpty').style.display = nouveaux.length ? 'none' : 'block';
@@ -4618,11 +4645,13 @@ function contactMailRow(m, ignored) {
   const f = m.fields || {};
   const nom = (mailField(f, 'Prénom') + ' ' + mailField(f, 'Nom')).trim() || m.from || '(inconnu)';
   const cheval = mailField(f, 'Nom du cheval'), soc = mailField(f, "Nom de l'entreprise");
+  const known = findClientForMail(m); const isKnown = known.length > 0; // client déjà en fiche → on met « Mettre à jour » en avant
   const el = document.createElement('div'); el.className = 'list-item';
   el.className = 'list-item stack-act';
-  el.innerHTML = `<div class="li-main"><b>${esc(nom)}${cheval ? ' · 🐴 ' + esc(cheval) : ''}</b><span class="li-sub">${esc(m.from || '')}${soc ? ' · ' + esc(soc) : ''}${m.date ? ' · ' + esc(String(m.date).slice(0, 16)) : ''}</span></div>`
+  const badge = isKnown ? ' <span class="rem-tag">client connu : ' + esc(fullName(known[0])) + '</span>' : ' <span class="rem-tag">nouveau</span>';
+  el.innerHTML = `<div class="li-main"><b>${esc(nom)}${cheval ? ' · 🐴 ' + esc(cheval) : ''}</b>${badge}<span class="li-sub">${esc(m.from || '')}${soc ? ' · ' + esc(soc) : ''}${m.date ? ' · ' + esc(String(m.date).slice(0, 16)) : ''}</span></div>`
     + (ignored ? '<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small" data-restore>↩ Réactiver</button></div>'
-      : '<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small primary" data-create>👤 Créer le client</button><button class="btn small" data-update>🔄 Mettre à jour un client</button><button class="btn small" data-ignore>Ignorer</button></div>');
+      : `<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small${isKnown ? '' : ' primary'}" data-create>👤 Créer le client</button><button class="btn small${isKnown ? ' primary' : ''}" data-update>🔄 Mettre à jour${isKnown ? ' ' + esc(fullName(known[0])) : ' un client'}</button><button class="btn small" data-ignore>Ignorer</button></div>`);
   el.querySelector('[data-view]').addEventListener('click', () => modalMailView(m));
   if (ignored) el.querySelector('[data-restore]').addEventListener('click', () => { m.status = 'nouveau'; saveSettings(); renderContactMail(); });
   else {
@@ -4653,9 +4682,7 @@ function createClientFromMail(m) {
 }
 // « Mettre à jour un client » depuis un mail : trouve le client existant puis propose des modifications à valider (sans écraser).
 function updateClientFromMail(m) {
-  const f = m.fields || {};
-  const email = m.from || '', nomM = norm(mailField(f, 'Nom')), prenomM = norm(mailField(f, 'Prénom'));
-  const cand = clients.filter((c) => (email && c.email && norm(c.email) === norm(email)) || (nomM && norm(c.nom) === nomM && (!prenomM || !c.prenom || norm(c.prenom) === prenomM)));
+  const cand = findClientForMail(m);
   if (cand.length === 1) return modalUpdateClientFields(m, cand[0]);
   const list = (cand.length ? cand : clients).slice().sort((a, b) => fullName(a).localeCompare(fullName(b)));
   modalActions(cand.length ? 'Quel client mettre à jour ?' : 'Aucune correspondance — choisir le client', list.map((c) => ({ label: fullName(c) + (c.societe ? ' — ' + c.societe : ''), onClick: () => modalUpdateClientFields(m, c) })));
