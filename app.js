@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.87';
+const APP_VERSION = '1.1.88';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.88', date: '2026-07-08',
+    ajouts: [
+      'Réparation de facture : sur une tournée clôturée (figée), un bouton « 🔧 Recalculer cette tournée » permet de recalculer entièrement les montants depuis les adresses (via la carte). À utiliser si une facture a été abîmée (frais de déplacement/matériel manquants, arrondi disparu). La tournée reste clôturée ; seuls les montants sont recalculés et refigés.',
+    ],
+  },
   {
     version: '1.1.87', date: '2026-07-08',
     ajouts: [
@@ -2355,6 +2361,7 @@ function openEditor() {
   if ($('edLockBanner')) { if (review) $('edLockBanner').textContent = '📥 Tournée importée « à revalider » — vérifiez chaque arrêt puis « ✓ Valider » ci-dessous pour recalculer et figer.'; else if (locked) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.'; }
   if ($('edRevalider')) $('edRevalider').style.display = review ? '' : 'none';
   if ($('edRecoverWrap')) $('edRecoverWrap').style.display = currentTour.recovered ? '' : 'none'; // tournée récupérée : compléter les données manquantes pour les stats
+  if ($('edRepairWrap')) $('edRepairWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : réparation manuelle d'une facture abîmée (recalcul complet depuis les adresses)
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
   $('edDelete').style.display = '';
@@ -6081,6 +6088,13 @@ window.addEventListener('DOMContentLoaded', () => {
   $('edDate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } });
   $('edCalc').addEventListener('click', calcTour);
   if ($('edRecover')) $('edRecover').addEventListener('click', () => { if (currentTour) modalRecoverStats(currentTour); });
+  if ($('edRepair')) $('edRepair').addEventListener('click', async () => {
+    if (!currentTour) return;
+    if (!currentTour.arrets || !currentTour.arrets.length) { alert('Aucun arrêt à recalculer.'); return; }
+    if (!confirm('Recalculer entièrement cette tournée figée depuis les adresses (via la carte) ?\n\nÀ utiliser pour réparer une facture abîmée (déplacement/matériel manquants). La tournée reste clôturée ; seuls les montants sont recalculés.')) return;
+    await calcTour(false); // recalcul complet API → restaure déplacement + matériel ; persistCurrentTour conserve t.closed
+    openEditor(); // ré-affiche en mode figé avec le résultat réparé
+  });
   $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats et ses impayés liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(recapText(currentTour.result)); $('edStatus').className = 'status ok'; $('edStatus').textContent = 'Récap copié.'; } catch { $('edStatus').textContent = 'Copie impossible.'; } });
 
