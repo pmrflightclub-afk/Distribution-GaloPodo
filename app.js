@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.77';
+const APP_VERSION = '1.1.78';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.78', date: '2026-07-08',
+    ajouts: [
+      'Durée de tournée : la tuile « Durée » utilise maintenant le temps de trajet RÉEL encodé (bouton Route par arrêt + retour) là où il existe, et l\'estimation ailleurs — au lieu d\'une estimation pure.',
+      'Arrondi de caisse (liquide) : le Total HT, la TVA, le Total TTC en haut de la tournée ET la section Analytique tiennent maintenant compte de l\'arrondi (avant, seul le pied de facture le faisait). Le montant se recalcule bien partout.',
+    ],
+  },
   {
     version: '1.1.77', date: '2026-07-08',
     ajouts: [
@@ -2842,21 +2849,31 @@ function renderArretInvoices() {
   });
 }
 // Rendu : tuiles (haut) + factures fusionnées sous chaque arrêt + total général (bloc bas).
+// Durée de tournée = temps réel encodé (Route par arrêt + retour) là où il existe, sinon estimé — même logique que le Temps de travail.
+function blendedTourMin(t) {
+  const R = t && t.result; if (!R) return null;
+  const mpk = (R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 50));
+  let total = 0;
+  (t.arrets || []).forEach((a, i) => { total += (typeof a.realMin === 'number') ? a.realMin : ((R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) * mpk : 0); });
+  total += (typeof t.returnRealMin === 'number') ? t.returnRealMin : ((R.kmLastHome != null) ? R.kmLastHome * mpk : 0);
+  return total;
+}
 function renderResultUI(R) {
+  let arHT = 0, arTVA = 0, arTTC = 0;
   if (R) {
+    const pays = (currentTour && currentTour.payments) || {};
+    (R.parClient || []).forEach((m) => { const ar = cashRounding(m, pays[m.clientId]); arHT += ar.ht; arTVA += ar.tva; arTTC += ar.ttc; });
     $('rKm').textContent = km(R.totalKm);
-    $('rMin').textContent = durMin(R.totalMin);
-    $('rHT').textContent = eur(R.totalHT) + ' HT'; $('rTVA').textContent = eur(R.totalTVA);
-    $('rTTC').textContent = eur(R.totalTTC) + ' TTC';
+    const dmin = (currentTour && currentTour.result === R) ? blendedTourMin(currentTour) : null; // réel encodé sinon estimé
+    $('rMin').textContent = durMin(dmin != null ? dmin : R.totalMin);
+    $('rHT').textContent = eur(R.totalHT + arHT) + ' HT'; $('rTVA').textContent = eur(R.totalTVA + arTVA);
+    $('rTTC').textContent = eur(R.totalTTC + arTTC) + ' TTC';
   } else { ['rKm', 'rMin', 'rHT', 'rTVA', 'rTTC'].forEach((id) => { if ($(id)) $(id).textContent = '—'; }); }
-  renderAnalytique(R);
+  renderAnalytique(R, arHT);
   renderArretInvoices();
   const box = $('edInvoice'); if (!box) return; box.innerHTML = '';
   if (!R || !R.parClient || !R.parClient.length) { if ($('edInvoiceEmpty')) $('edInvoiceEmpty').style.display = 'block'; box.style.display = 'none'; return; }
   if ($('edInvoiceEmpty')) $('edInvoiceEmpty').style.display = 'none'; box.style.display = '';
-  const pays = (currentTour && currentTour.payments) || {};
-  let arHT = 0, arTVA = 0, arTTC = 0;
-  R.parClient.forEach((m) => { const ar = cashRounding(m, pays[m.clientId]); arHT += ar.ht; arTVA += ar.tva; arTTC += ar.ttc; });
   const f = document.createElement('div'); f.className = 'inv-footer';
   f.innerHTML = `<div class="inv-line"><span>Total HT</span><span>${eur(R.totalHT + arHT)}</span></div>
     <div class="inv-line"><span>TVA</span><span>${eur(R.totalTVA + arTVA)}</span></div>
@@ -3101,7 +3118,7 @@ function applyStatOrder() {
   if (!box._dragWired) { wireTileDrag(box, 'statOrder'); box._dragWired = true; }
 }
 // Cases Analytique (tournée) : construites dynamiquement, réordonnables, titres perso.
-function renderAnalytique(R) {
+function renderAnalytique(R, arrondiHT) {
   const box = $('analyticTiles'); if (!box) return;
   box.innerHTML = '';
   orderedKeys(S.analyticOrder, ANALYTIC_DEFS.map((d) => d.key)).forEach((key) => {
@@ -3110,6 +3127,8 @@ function renderAnalytique(R) {
     el.innerHTML = `<span class="t-label">${esc(tileLabel(key, d.label))}</span><span class="t-val">${R ? eur(d.get(R)) + ' HT' : '—'}</span>`;
     box.appendChild(el);
   });
+  // Arrondi caisse (liquide) : tuile informative (non réordonnable) quand un arrondi est appliqué.
+  if (R && Math.abs(arrondiHT || 0) >= 0.005) { const el = document.createElement('div'); el.className = 'tile'; el.innerHTML = `<span class="t-label">Arrondi caisse</span><span class="t-val">${eur(arrondiHT)} HT</span>`; box.appendChild(el); }
   wireTileDrag(box, 'analyticOrder');
 }
 // Réordonnancement des cases activable/désactivable par section (évite les déplacements involontaires au défilement).
