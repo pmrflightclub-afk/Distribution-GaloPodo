@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.83';
+const APP_VERSION = '1.1.84';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.84', date: '2026-07-08',
+    ajouts: [
+      'Correctif « Recalculer toutes les tournées » : il ne modifie plus la répartition facture des tournées clôturées/archivées (elle reste figée) ; il ne recalcule les montants que des tournées d\'aujourd\'hui / à venir, et nettoie les stats + impayés orphelins.',
+      'Correctif arrondi caisse aberrant : un arrondi devenu incohérent (> 10 €, suite à un recalcul antérieur) est réinitialisé automatiquement. Relancez « Recalculer toutes les tournées » pour corriger un arrondi déjà faussé.',
+    ],
+  },
   {
     version: '1.1.83', date: '2026-07-08',
     ajouts: [
@@ -2867,10 +2874,18 @@ function recalcAllTours() {
   // 2) Articles d'impayé orphelins (référencent un impayé qui n'existe plus) → retirés de toutes les tournées.
   const live = new Set(); clients.forEach((c) => (c.impayes || []).forEach((im) => live.add(im.id)));
   allTours().forEach((t) => { if (Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !a.impaye || (a.impayeId && live.has(a.impayeId))); });
-  // 3) Recalcul argent (tarifs/logique courants) sur toutes les tournées ayant une géométrie mémorisée.
-  let n = 0, skipped = 0; allTours().forEach((t) => { if (recomputeTourLocal(t)) n++; else if (t.result) skipped++; });
-  saveClients(); saveTournees(); saveArchive(); sanitizeAllTourStats();
-  return { n, skipped };
+  // 3) Tournées NON figées (aujourd'hui / à venir) : on recalcule l'argent (tarifs/logique courants).
+  //    Tournées CLÔTURÉES / archivées : la répartition facture reste FIGÉE — on ne nettoie que les listes de chevaux (stats), jamais les montants.
+  let n = 0;
+  allTours().forEach((t) => {
+    const st = statusOf(t);
+    if (st === 'active' || st === 'avenir') { if (recomputeTourLocal(t)) n++; }
+    else sanitizeTourStats(t);
+    // Arrondi caisse devenu aberrant (facture modifiée depuis l'encaissement) : |arrondi| > 10 € → on retire le montant rectifié (un vrai arrondi caisse est de l'ordre de l'euro).
+    if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; if (p && p.method === 'liquide' && m && Math.abs(payRectifie(m, p) - (m.totalTTC || 0)) > 10) { p.rectifie = null; p.montantPaye = null; } });
+  });
+  saveClients(); saveTournees(); saveArchive();
+  return { n };
 }
 
 // Recalcul complet GÉOMÉTRIE + argent (API). silent = ne change pas d'onglet, statut discret.
@@ -5717,7 +5732,7 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); _deferredInstall = e; });
   if ($('btnBackup')) $('btnBackup').addEventListener('click', modalBackup);
-  if ($('btnRecalcAll')) $('btnRecalcAll').addEventListener('click', () => { if (!confirm('Recalculer toutes les tournées (même clôturées) avec les tarifs/logique actuels, et réparer les impayés orphelins ?')) return; const r = recalcAllTours(); const h = $('recalcAllHint'); if (h) { h.className = 'status ok'; h.textContent = `✔ ${r.n} tournée(s) recalculée(s)${r.skipped ? ` · ${r.skipped} sans géométrie (à rouvrir pour recalcul complet)` : ''}. Impayés orphelins réparés.`; } refreshEverywhere(); });
+  if ($('btnRecalcAll')) $('btnRecalcAll').addEventListener('click', () => { if (!confirm('Recalculer toutes les tournées (même clôturées) avec les tarifs/logique actuels, et réparer les impayés orphelins ?')) return; const r = recalcAllTours(); const h = $('recalcAllHint'); if (h) { h.className = 'status ok'; h.textContent = `✔ ${r.n} tournée(s) recalculée(s) · factures clôturées non modifiées (figées) · impayés orphelins & arrondis aberrants réparés.`; } refreshEverywhere(); });
   if ($('syncExport')) $('syncExport').addEventListener('click', downloadSnapshot);
   if ($('syncFile')) $('syncFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importSyncFile(f, $('syncStatus')); e.target.value = ''; });
   if ($('googleConnect')) $('googleConnect').addEventListener('click', async () => { const h = $('googleStatus'); try { h.className = 'status'; h.textContent = 'Connexion…'; await googleToken(true); h.className = 'status ok'; h.textContent = 'Connecté ✔ — cliquez « Synchroniser ».'; } catch (e) { h.className = 'status err'; h.textContent = 'Erreur : ' + e.message; } });
