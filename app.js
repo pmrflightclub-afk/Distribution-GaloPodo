@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.135';
+const APP_VERSION = '1.1.136';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.136', date: '2026-07-09',
+    ajouts: [
+      'Compta → Mois en cours : nouveau bouton « 📅 Clôturer la caisse liquide → rattacher au mois précédent ». Coche les paiements liquide (sans facture) du mois en cours et rattache-les à un mois précédent (utile si le dépôt de caisse se fait après le 1ᵉʳ, ex. le 10). Les dates de tournées ne changent pas — seule la caisse comptable est déplacée. Réversible tant que la démarche liquide du mois cible n\'est pas figée.',
+      'Déclaration compta : nouveau bouton « 🖨 PDF complet » (sous Trier par / Période) → un seul PDF reprenant TOUTES les sections (Liquide, Virements, Factures pro, Notes de crédit) sur la période choisie, détail par mois + récapitulatif de plage.',
+      'Notes de crédit : la section est désormais toujours visible dans « Mois en cours » et « Déclaration compta » (même sans note ce mois-là) et possède son propre bouton 🖨 PDF. Elle est aussi incluse dans le PDF complet.',
+      'Synchronisation Google Drive plus rapide : le coffre est désormais compressé (gzip) à l\'envoi (~5-10× plus léger) — lecture rétro-compatible avec les anciens coffres. L\'envoi automatique est sauté quand rien n\'a changé, et la taille envoyée est affichée pendant la synchro manuelle.',
+    ],
+  },
   {
     version: '1.1.135', date: '2026-07-09',
     ajouts: [
@@ -1614,23 +1623,60 @@ async function driveFindFile(token) {
   const r = await fetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent("name='" + GDRIVE_FILE + "'")}&fields=files(id,name)`, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('Drive HTTP ' + r.status); const j = await r.json(); return (j.files && j.files[0]) || null;
 }
-async function driveDownload(token, id) { const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } }); if (!r.ok) throw new Error('Drive téléchargement ' + r.status); return r.json(); }
+// Compresse une chaîne en gzip (octets) si le navigateur le supporte, sinon renvoie null (repli JSON brut).
+async function gzipBytes(str) {
+  if (typeof CompressionStream === 'undefined') return null;
+  try { const stream = new Blob([str]).stream().pipeThrough(new CompressionStream('gzip')); return new Uint8Array(await new Response(stream).arrayBuffer()); } catch { return null; }
+}
+// Taille (octets) du coffre tel qu'il sera envoyé (gzip si dispo) — pour l'afficher à l'utilisateur.
+async function snapshotUploadSize(data) { const json = JSON.stringify(data); const gz = await gzipBytes(json); return { gz: gz ? gz.length : 0, json: json.length }; }
+function humanSize(b) { if (!b) return '0 o'; if (b < 1024) return b + ' o'; if (b < 1048576) return (b / 1024).toFixed(0) + ' Ko'; return (b / 1048576).toFixed(1) + ' Mo'; }
+// Lecture du coffre : détecte le gzip (octets magiques 1f 8b) → décompresse ; sinon JSON brut (RÉTRO-COMPATIBLE avec les anciens coffres non compressés).
+async function driveDownload(token, id) {
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw new Error('Drive téléchargement ' + r.status);
+  const buf = new Uint8Array(await r.arrayBuffer());
+  let text;
+  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
+    if (typeof DecompressionStream === 'undefined') throw new Error('coffre compressé mais navigateur incompatible (mettez l\'app à jour)');
+    const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
+    text = await new Response(stream).text();
+  } else { text = new TextDecoder().decode(buf); }
+  return JSON.parse(text);
+}
 async function driveUpload(token, id, data) {
   const meta = { name: GDRIVE_FILE }; if (!id) meta.parents = ['appDataFolder'];
   const boundary = 'gp' + Math.floor(Math.random() * 1e9).toString(36);
-  const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}\r\n--${boundary}--`;
+  const gz = await gzipBytes(JSON.stringify(data));
+  let body;
+  if (gz) { // envoi compressé (gzip) : ~5-10× plus léger
+    const pre = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/gzip\r\nContent-Transfer-Encoding: binary\r\n\r\n`;
+    body = new Blob([pre, gz, `\r\n--${boundary}--`]);
+  } else { // repli JSON brut (navigateur sans CompressionStream)
+    body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}\r\n--${boundary}--`;
+  }
   const url = id ? `https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=multipart` : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
   const r = await fetch(url, { method: id ? 'PATCH' : 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'multipart/related; boundary=' + boundary }, body });
   if (!r.ok) throw new Error('Drive envoi ' + r.status); return r.json();
 }
+// Hash de contenu du coffre (ignore l'horodatage volatil `at` et `settings.updatedAt`) → détecte « rien de neuf à envoyer ».
+function snapshotHash(snap) {
+  const s = Object.assign({}, snap && snap.settings); delete s.updatedAt;
+  const str = JSON.stringify([s, snap && snap.clients, snap && snap.tours, snap && snap.tomb]);
+  let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0; }
+  return str.length + ':' + h.toString(36);
+}
+let _lastPushHash = null; // hash du dernier coffre effectivement envoyé (E2 : saute l'upload auto si inchangé)
 // Synchro Drive : télécharge le distant, FUSIONNE, renvoie le tout (le coffre porte l'état fusionné). interactive = autorise l'écran de connexion.
 async function googleSync(interactive, statusEl, reload) {
   const setS = (cls, txt) => { if (statusEl) { statusEl.className = 'status ' + cls; statusEl.textContent = txt; } };
   try {
     setS('', 'Connexion à Google…'); const token = await googleToken(interactive);
     setS('', 'Synchronisation Drive…'); const f = await driveFindFile(token);
-    if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); await driveUpload(token, f.id, exportSnapshot()); }
-    else { await driveUpload(token, null, exportSnapshot()); }
+    if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); }
+    const snap = exportSnapshot(); const sz = await snapshotUploadSize(snap);
+    setS('', 'Envoi… ' + humanSize(sz.gz || sz.json) + (sz.gz ? ' (compressé)' : ''));
+    await driveUpload(token, f ? f.id : null, snap); _lastPushHash = snapshotHash(snap);
     if (reload) { setS('ok', 'Synchronisé ✔ Rechargement…'); setTimeout(() => location.reload(), 800); }
     else { setS('ok', 'Synchronisé ✔'); refreshEverywhere(); if ($('tab-accueil').classList.contains('active')) renderHome(); if ($('tab-agenda') && $('tab-agenda').classList.contains('active')) renderAgendaItems(); }
   } catch (e) { setS('err', 'Erreur : ' + e.message); }
@@ -1666,8 +1712,10 @@ async function drivePushNow() {
   try {
     const token = await googleToken(false); // silencieux : jeton déjà en cache (retour immédiat, aucune UI)
     const f = await driveFindFile(token);
-    if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); await driveUpload(token, f.id, exportSnapshot()); }
-    else { await driveUpload(token, null, exportSnapshot()); }
+    if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); }
+    const snap = exportSnapshot(); const h = snapshotHash(snap);
+    if (h === _lastPushHash) return; // E2 : rien de neuf depuis le dernier envoi → on évite un aller-retour inutile
+    await driveUpload(token, f ? f.id : null, snap); _lastPushHash = h;
   } catch { /* hors-ligne ou jeton non consenti : la synchro au prochain boot rattrapera */ }
 }
 // D3 (mode fichier) : lit un fichier de synchro et le FUSIONNE (sans écraser).
@@ -4418,7 +4466,11 @@ const monthLabel = (ym) => { const d = new Date(ym + '-01T00:00:00'); return isN
 // Mois ayant au moins une tournée calculée (facturée).
 function comptaMonths() {
   const set = new Set();
-  allTours().forEach((t) => { if ((t.date || '') && t.result && t.result.parClient && t.result.parClient.length) set.add(t.date.slice(0, 7)); });
+  allTours().forEach((t) => {
+    if ((t.date || '') && t.result && t.result.parClient && t.result.parClient.length) set.add(t.date.slice(0, 7));
+    // Un paiement liquide rattaché à un autre mois (caisse) doit faire apparaître ce mois dans la liste.
+    Object.values(t.payments || {}).forEach((p) => { if (p && p.method === 'liquide' && !p.facture && p.comptaPeriod) set.add(p.comptaPeriod); });
+  });
   return [...set].sort().reverse();
 }
 // Retrouve une tournée (active ou archivée) par id.
@@ -4428,7 +4480,7 @@ function setComptaPayment(tourId, clientId, method) {
   const t = tourById(tourId); if (!t) return;
   if (!t.payments) t.payments = {};
   const prev = t.payments[clientId] || {};
-  const keepLiq = { rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null };
+  const keepLiq = { rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null, comptaPeriod: prev.comptaPeriod || null };
   if (method === 'liquide') t.payments[clientId] = Object.assign({ method: 'liquide', facture: false }, keepLiq);
   else if (method === 'facliq') t.payments[clientId] = Object.assign({ method: 'liquide', facture: true }, keepLiq); // facture pro payée en liquide
   else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null };
@@ -4445,22 +4497,29 @@ function comptaData(ym) {
   const liquideClients = [], virementClients = [], factureLiqClients = [], factureVirClients = [], aclasserClients = [];
   const posts = {}; const addPost = (lib, ht, tva, ttc) => { const p = posts[lib] = posts[lib] || { libelle: lib, ht: 0, tva: 0, ttc: 0 }; p.ht += ht; p.tva += tva; p.ttc += ttc; };
   allTours().forEach((t) => {
-    if (!(t.date || '').startsWith(ym) || !t.result || !t.result.parClient) return;
+    if (!t.result || !t.result.parClient) return;
+    const tourYm = (t.date || '').slice(0, 7); // mois « naturel » (date de la tournée)
     t.result.parClient.forEach((m) => {
       const p = (t.payments || {})[m.clientId];
       const method = p ? p.method : null; const fac = !!(p && p.facture);
       const mode = method === 'liquide' ? (fac ? 'facliq' : 'liquide') : method === 'virement' ? (fac ? 'facvir' : 'virement') : 'aclasser';
+      // Rattachement caisse : SEUL le liquide sans facture peut être rattaché à un autre mois (comptaPeriod). Tout le reste suit la date de tournée.
+      const effYm = (mode === 'liquide' && p && p.comptaPeriod) ? p.comptaPeriod : tourYm;
       const entry = { tourId: t.id, tourDate: t.date, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode, m, payment: p };
-      if (mode === 'aclasser') { aclasserClients.push(entry); return; }
-      if (mode === 'virement') { virementClients.push(entry); return; }
-      if (mode === 'facvir') { factureVirClients.push(entry); return; }
-      if (mode === 'facliq') { const cash = payRecu(m, p); factureLiqClients.push(Object.assign({}, entry, { ht: cash / (1 + r), tva: cash - cash / (1 + r), ttc: cash })); return; }
-      // mode === 'liquide' (globalisé, sans facture)
+      if (mode === 'aclasser') { if (tourYm === ym) aclasserClients.push(entry); return; }
+      if (mode === 'virement') { if (tourYm === ym) virementClients.push(entry); return; }
+      if (mode === 'facvir') { if (tourYm === ym) factureVirClients.push(entry); return; }
+      if (mode === 'facliq') { if (tourYm !== ym) return; const cash = payRecu(m, p); factureLiqClients.push(Object.assign({}, entry, { ht: cash / (1 + r), tva: cash - cash / (1 + r), ttc: cash })); return; }
+      // mode === 'liquide' (caisse globalisée, sans facture) — part cash rattachable via effYm.
+      if (p && p.partiel) {
+        // Un éventuel reste (virement) N'EST PAS de la caisse : il reste au mois de la tournée.
+        const reste = payImpaye(m, p);
+        if (reste > 0.005 && p.resteMode === 'virement' && tourYm === ym) virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: reste / (1 + r), tva: reste - reste / (1 + r), ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' });
+      }
+      if (effYm !== ym) return; // la part cash est comptée dans son mois de rattachement
       const cash = payRecu(m, p); const cHT = cash / (1 + r); liquideClients.push({ nom: m.nom, ht: cHT, tva: cash - cHT, ttc: cash });
       if (p && p.partiel) {
         addPost('Acompte liquide (partiel)', cHT, cash - cHT, cash);
-        const reste = payImpaye(m, p);
-        if (reste > 0.005 && p.resteMode === 'virement') virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: reste / (1 + r), tva: reste - reste / (1 + r), ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' });
       } else {
         (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
         if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
@@ -4755,7 +4814,8 @@ function comptaSectionsHtml(ym) {
   const liqDem = archived && statusOfKind('liquide') === 'encode';
   const liquideStatus = archived ? `<label>Démarche comptable (caisse du mois)<select data-status="liquide" data-ym="${ym}"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>` : '';
   const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><button class="btn small" data-print="liquide" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
-  const ncSec = d.notesCredit.length ? `<section class="card"><div class="card-head"><h3 style="margin:0">↩ Notes de crédit (réduction du CA)</h3></div><p class="hint">${tot(d.notesCreditTotal)}</p><div class="table-wrap"><table><thead><tr><th>Client</th><th>Cheval</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table></div></section>` : '';
+  const ncTbl = d.notesCredit.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Cheval</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucune.</p>';
+  const ncSec = `<section class="card"><div class="card-head"><h3 style="margin:0">↩ Notes de crédit (réduction du CA)</h3><button class="btn small" data-print="nc" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.notesCreditTotal)}</p>${ncTbl}</section>`;
   return liquideSec
     + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients)
     + section('🧾 Facture pro — liquide', 'facliq', d.factureLiqTotal, clientTbl(d.factureLiqClients), d.factureLiqClients)
@@ -4794,12 +4854,96 @@ function comptaPrint(ym, k) {
   if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>` + (d.liquidePosts.length ? postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal)) : '<p>Aucun paiement liquide ce mois.</p>'));
   else if (k === 'virement') printHtml('Virements — ' + ml, detailPdf(d.virementClients, d.virementTotal, 'Virements bancaires — détail', ml + ' — par client et par cheval', 'Aucun virement ce mois.'));
   else if (k === 'facliq') printHtml('Factures pro liquide — ' + ml, detailPdf(d.factureLiqClients, d.factureLiqTotal, 'Factures pro payées en liquide', ml + ' — par client et par cheval', 'Aucune facture liquide ce mois.'));
-  else printHtml('Factures pro virement — ' + ml, detailPdf(d.factureVirClients, d.factureVirTotal, 'Factures pro payées par virement', ml + ' — par client et par cheval', 'Aucune facture virement ce mois.'));
+  else if (k === 'facvir') printHtml('Factures pro virement — ' + ml, detailPdf(d.factureVirClients, d.factureVirTotal, 'Factures pro payées par virement', ml + ' — par client et par cheval', 'Aucune facture virement ce mois.'));
+  else if (k === 'nc') printHtml('Notes de crédit — ' + ml, `<h1>Notes de crédit (avoirs)</h1><h2>${ml} — réduction du chiffre d'affaires</h2>` + (d.notesCredit.length ? `<table><thead><tr><th>Client</th><th>Cheval</th><th>Émise le</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>${esc(fmtDateFr(n.date))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Total</td><td></td><td></td><td>${eur(d.notesCreditTotal.ttc)}</td></tr></tfoot></table>` : '<p>Aucune note de crédit ce mois.</p>'));
+}
+// PDF « complet » : toutes les sections (Liquide · Virements · Factures pro · Notes de crédit) sur la période sélectionnée (mois/trimestre/semestre/année), détail par mois + récap de plage.
+function comptaPrintFull(type, key) {
+  const months = monthsOfRange(type, key).filter((m) => comptaMonths().includes(m)).sort();
+  if (!months.length) { alert('Aucune donnée sur cette période.'); return; }
+  const perLabel = (comptaPeriodOptions(type).find((o) => o.key === key) || {}).label || key;
+  const sum = (arr) => arr.reduce((a, x) => ({ ht: a.ht + x.ht, tva: a.tva + x.tva, ttc: a.ttc + x.ttc }), { ht: 0, tva: 0, ttc: 0 });
+  const foot = (tt) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td></tr></tfoot>`;
+  const postTbl = (arr) => arr.length ? `<table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody>${foot(sum(arr))}</table>` : '<p>Aucun.</p>';
+  const cliTbl = (arr) => arr.length ? `<table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((e) => `<tr><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td></tr>`).join('')}</tbody>${foot(sum(arr))}</table>` : '<p>Aucun.</p>';
+  const ncTbl = (arr) => arr.length ? `<table><thead><tr><th>Client</th><th>Cheval</th><th>Émise le</th><th>TTC</th></tr></thead><tbody>${arr.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>${esc(fmtDateFr(n.date))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table>` : '<p>Aucune.</p>';
+  const gt = months.reduce((a, m) => { const d = comptaData(m); a.liq += d.liquideTotal.ttc; a.vir += d.virementTotal.ttc; a.fac += d.factureLiqTotal.ttc + d.factureVirTotal.ttc; a.nc += d.notesCreditTotal.ttc; return a; }, { liq: 0, vir: 0, fac: 0, nc: 0 });
+  let body = `<h1>Déclaration comptable — ${esc(perLabel)}</h1><h2>Toutes les sections (TTC)</h2>
+    <table><thead><tr><th>Récapitulatif de la plage</th><th>TTC</th></tr></thead><tbody>
+      <tr><td>💶 Liquide</td><td>${eur(gt.liq)}</td></tr>
+      <tr><td>🏦 Virements</td><td>${eur(gt.vir)}</td></tr>
+      <tr><td>🧾 Factures pro</td><td>${eur(gt.fac)}</td></tr>
+      <tr><td>↩ Notes de crédit</td><td>${eur(gt.nc)}</td></tr>
+    </tbody><tfoot><tr><td>Net</td><td>${eur(gt.liq + gt.vir + gt.fac + gt.nc)}</td></tr></tfoot></table>`;
+  months.forEach((m) => {
+    const d = comptaData(m);
+    body += `<h2 style="margin-top:18px">${monthLabel(m)}</h2>`;
+    body += `<h3>💶 Liquide (globalisé, sans nom de client)</h3>${postTbl(d.liquidePosts)}`;
+    body += `<h3>🏦 Virements</h3>${cliTbl(d.virementClients)}`;
+    body += `<h3>🧾 Facture pro — liquide</h3>${cliTbl(d.factureLiqClients)}`;
+    body += `<h3>🧾 Facture pro — virement</h3>${cliTbl(d.factureVirClients)}`;
+    body += `<h3>↩ Notes de crédit</h3>${ncTbl(d.notesCredit)}`;
+  });
+  printHtml('Déclaration complète — ' + perLabel, body);
 }
 function renderComptaMois() {
   const box = $('comptaMoisBody'); if (!box) return;
-  box.innerHTML = comptaSectionsHtml(todayStr().slice(0, 7));
+  const ym = todayStr().slice(0, 7);
+  // Récap des paiements liquide de ce mois déjà rattachés à un mois précédent (caisse).
+  let outN = 0, outT = 0;
+  allTours().forEach((t) => { if ((t.date || '').slice(0, 7) !== ym || !t.result || !t.result.parClient) return; t.result.parClient.forEach((m) => { const p = (t.payments || {})[m.clientId]; if (p && p.method === 'liquide' && !p.facture && p.comptaPeriod && p.comptaPeriod !== ym) { outN++; outT += payRecu(m, p); } }); });
+  const rebaseInfo = outN ? `<p class="hint">↩ <b>${outN}</b> paiement(s) liquide (${eur(outT)}) rattaché(s) à un mois précédent — hors caisse de ${monthLabel(ym)}.</p>` : '';
+  box.innerHTML = `<div class="actions" style="margin-bottom:6px"><button class="btn small block" id="cmRebaseBtn">📅 Clôturer la caisse liquide → rattacher au mois précédent</button></div>${rebaseInfo}` + comptaSectionsHtml(ym);
+  const rb = $('cmRebaseBtn'); if (rb) rb.onclick = () => modalRebaseLiquide();
   comptaWire(box, renderComptaMois);
+}
+// Rattache des paiements LIQUIDE (sans facture) du mois en cours à un mois précédent (dépôt de caisse décalé). Ne touche pas aux dates de tournées.
+function modalRebaseLiquide() {
+  const cur = todayStr().slice(0, 7);
+  const shiftMonth = (ym, delta) => { const [y, mo] = ym.split('-').map(Number); const idx = (y * 12 + (mo - 1)) + delta; return Math.floor(idx / 12) + '-' + String((idx % 12) + 1).padStart(2, '0'); };
+  const shortD = (d) => (d && d.length >= 10) ? d.slice(8, 10) + '/' + d.slice(5, 7) : (d || '');
+  const rows = [];
+  allTours().forEach((t) => {
+    if ((t.date || '').slice(0, 7) !== cur || !t.result || !t.result.parClient) return;
+    t.result.parClient.forEach((m) => { const p = (t.payments || {})[m.clientId]; if (!p || p.method !== 'liquide' || p.facture) return; rows.push({ key: t.id + ':' + m.clientId, tourId: t.id, clientId: m.clientId, date: t.date, nom: m.nom, cash: payRecu(m, p) }); });
+  });
+  rows.sort((a, b) => (a.date || '').localeCompare(b.date || '') || String(a.nom).localeCompare(String(b.nom)));
+  const targets = [1, 2, 3, 4, 5, 6].map((d) => shiftMonth(cur, -d));
+  let target = targets[0];
+  const payOf = (r) => (((tourById(r.tourId) || {}).payments) || {})[r.clientId] || null;
+  const isLocked = () => !!(S.comptaStatus && S.comptaStatus[target] && S.comptaStatus[target].liquide === 'encode');
+  const sel = new Set();
+  const initSel = () => { sel.clear(); rows.forEach((r) => { const p = payOf(r); if (p && p.comptaPeriod === target) sel.add(r.key); }); };
+  initSel();
+  const render = () => {
+    const locked = isLocked();
+    const chosen = rows.filter((r) => sel.has(r.key));
+    const totSel = chosen.reduce((s, r) => s + r.cash, 0), totRest = rows.filter((r) => !sel.has(r.key)).reduce((s, r) => s + r.cash, 0);
+    openModal(`<div class="modal-head"><b>📅 Clôturer la caisse liquide</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Rattache des paiements <b>liquide</b> de ${monthLabel(cur)} à un mois précédent (ex. dépôt du 10). Les dates de tournées ne changent pas ; seule la caisse comptable est déplacée.</p>
+      <label>Rattacher au mois<select id="rbTarget">${targets.map((mm) => `<option value="${mm}"${mm === target ? ' selected' : ''}>${monthLabel(mm)}</option>`).join('')}</select></label>
+      ${locked ? `<p class="hint" style="color:var(--warn);font-weight:700">⚠ La démarche liquide de ${monthLabel(target)} est déjà validée (figée) : rattachement impossible tant qu'elle est encodée.</p>` : ''}
+      <div id="rbList" style="max-height:50vh;overflow:auto;margin:8px 0">${rows.length ? rows.map((r) => `<label class="chk2" style="display:flex;gap:8px;align-items:center;justify-content:space-between"><span><input type="checkbox" data-k="${r.key}"${sel.has(r.key) ? ' checked' : ''}${locked ? ' disabled' : ''}/> ${esc(shortD(r.date))} · ${esc(r.nom)}</span><b>${eur(r.cash)}</b></label>`).join('') : '<p class="empty">Aucun paiement liquide ce mois.</p>'}</div>
+      <p class="hint">→ <b>${chosen.length}</b> paiement(s) · <b>${eur(totSel)}</b> rattaché(s) à ${monthLabel(target)} · reste en ${monthLabel(cur)} : <b>${eur(totRest)}</b></p>
+      <div class="actions"><button class="btn primary block" id="rbOk"${locked || !rows.length ? ' disabled' : ''}>Appliquer</button><button class="btn block" id="rbClose">Fermer</button></div>`);
+    $('mX').onclick = closeModal; $('rbClose').onclick = closeModal;
+    $('rbTarget').addEventListener('change', (e) => { target = e.target.value; initSel(); render(); });
+    $('rbList').querySelectorAll('[data-k]').forEach((cb) => cb.addEventListener('change', (e) => { const k = e.target.dataset.k; if (e.target.checked) sel.add(k); else sel.delete(k); render(); }));
+    const ok = $('rbOk'); if (ok) ok.onclick = () => {
+      if (isLocked()) return;
+      let touched = false;
+      rows.forEach((r) => {
+        const t = tourById(r.tourId); if (!t || !t.payments || !t.payments[r.clientId]) return;
+        const p = t.payments[r.clientId];
+        if (sel.has(r.key)) { if (p.comptaPeriod !== target) { p.comptaPeriod = target; touched = true; } }
+        else if (p.comptaPeriod === target) { delete p.comptaPeriod; touched = true; }
+      });
+      if (touched) { saveTournees(); saveArchive(); }
+      closeModal(); renderComptaMois();
+      alert(chosen.length + ' paiement(s) rattaché(s) à ' + monthLabel(target) + ' (' + eur(totSel) + '). Caisse de ' + monthLabel(cur) + ' : ' + eur(totRest) + '.');
+    };
+  };
+  render();
 }
 // --- Déclaration : filtre mois/trimestre/semestre/année → mois empilés ---
 const comptaYears = () => [...new Set(comptaMonths().map((m) => m.slice(0, 4)))].sort().reverse();
@@ -4825,6 +4969,7 @@ function renderComptaDecl() {
   const opts = comptaPeriodOptions(type);
   typeSel.onchange = () => { declPeriod = null; renderComptaDecl(); };
   perSel.onchange = () => { declPeriod = perSel.value; renderComptaDecl(); };
+  if ($('declFullPdf')) $('declFullPdf').onclick = () => comptaPrintFull(typeSel.value || 'mois', declPeriod);
   if (!opts.length) { perSel.innerHTML = ''; box.innerHTML = ''; if ($('comptaDeclEmpty')) $('comptaDeclEmpty').style.display = 'block'; return; }
   if (!opts.some((o) => o.key === declPeriod)) declPeriod = opts[0].key;
   perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === declPeriod ? ' selected' : ''}>${o.label}</option>`).join('');
