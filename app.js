@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.114';
+const APP_VERSION = '1.1.115';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.115', date: '2026-07-09',
+    ajouts: [
+      'Bandeau du haut : les widgets (⛽ 🚗 🗓 · 👤 🐴 🗺) sont rangés en grille alignée et leur texte est un peu plus petit (l\'icône garde sa taille). Les colonnes des deux lignes sont bien alignées.',
+    ],
+  },
   {
     version: '1.1.114', date: '2026-07-09',
     ajouts: [
@@ -6985,16 +6991,17 @@ function updateReglagesUI() {
       : 'Renseignez l\'achat et la durée de vie pour inclure l\'amortissement dans la base véhicule.';
   }
 }
+const chipHtml = (ico, val) => '<span class="chip-ico">' + ico + '</span><span class="chip-val">' + esc(val) + '</span>';
 function refreshEverywhere() {
-  $('fuelChip').textContent = '⛽ ' + eur(S.prixPleinL) + '/L';
-  $('consoChip').textContent = '🚗 ' + (S.consoL100 || 0) + ' L/100';
-  if ($('kmMonthChip')) $('kmMonthChip').textContent = '🗓 ' + km(kmStats().mois);
+  $('fuelChip').innerHTML = chipHtml('⛽', eur(S.prixPleinL) + '/L');
+  $('consoChip').innerHTML = chipHtml('🚗', (S.consoL100 || 0) + ' L/100');
+  if ($('kmMonthChip')) $('kmMonthChip').innerHTML = chipHtml('🗓', km(kmStats().mois));
   const actifs = clients.filter(isClientActif);
   const nCh = actifs.reduce((s, c) => s + activeChevaux(c).length, 0);
   const ym = todayStr().slice(0, 7); const nT = allTours().filter((t) => (t.date || '').startsWith(ym)).length;
-  if ($('clientsChip')) $('clientsChip').textContent = '👤 ' + actifs.length + ' Clients';
-  if ($('chevauxChip')) $('chevauxChip').textContent = '🐴 ' + nCh + ' Chevaux';
-  if ($('toursMonthChip')) $('toursMonthChip').textContent = '🗺 ' + nT + ' Tournées';
+  if ($('clientsChip')) $('clientsChip').innerHTML = chipHtml('👤', actifs.length + ' Clients');
+  if ($('chevauxChip')) $('chevauxChip').innerHTML = chipHtml('🐴', nCh + ' Chevaux');
+  if ($('toursMonthChip')) $('toursMonthChip').innerHTML = chipHtml('🗺', nT + ' Tournées');
   refreshTarifTable(); updateReglagesUI();
   if ($('tab-accueil').classList.contains('active')) renderHome();
   // Note : vehicule / materiel / articles ne sont PAS re-rendus ici (édition inline = ne pas détruire les champs en cours de frappe).
