@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.116';
+const APP_VERSION = '1.1.117';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.117', date: '2026-07-09',
+    ajouts: [
+      'Accueil → « Rendez-vous à prendre » : la section n\'affiche plus qu\'un seul cheval + la ligne « + N autre(s) · voir la liste complète » (2 lignes au lieu de 4), pour rester bien compacte.',
+    ],
+  },
   {
     version: '1.1.116', date: '2026-07-09',
     ajouts: [
@@ -5820,16 +5826,16 @@ function renderRdvAPrendre() {
   const items = rdvAPrendre();
   card.classList.toggle('hidden', !items.length);
   list.innerHTML = '';
-  items.slice(0, 3).forEach(({ client, cheval, reported }) => { // n'afficher que les 3 premiers (liste complète dans la modale)
+  items.slice(0, 1).forEach(({ client, cheval, reported }) => { // n'afficher que le 1er (liste complète dans la modale)
     const el = document.createElement('div'); el.className = 'list-item clickable';
     const badge = reported.length ? ' <span class="badge">↩ reporté</span>' : '';
     el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cheval.nom)}${badge}</b><span class="li-sub">${esc(fullName(client))}${client.societe ? ' — ' + esc(client.societe) : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => modalRdvAPrendre());
     list.appendChild(el);
   });
-  if (items.length > 3) {
+  if (items.length > 1) {
     const more = document.createElement('div'); more.className = 'list-item clickable';
-    more.innerHTML = `<div class="li-main"><b>+ ${items.length - 3} autre(s)</b><span class="li-sub">Voir la liste complète</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    more.innerHTML = `<div class="li-main"><b>+ ${items.length - 1} autre(s)</b><span class="li-sub">Voir la liste complète</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
     more.addEventListener('click', () => modalRdvAPrendre());
     list.appendChild(more);
   }
