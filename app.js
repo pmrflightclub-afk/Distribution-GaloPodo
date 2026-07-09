@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.139';
+const APP_VERSION = '1.1.140';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.140', date: '2026-07-10',
+    ajouts: [
+      'Planches — types/stades : nouvelle liste éditable « Types de planche (stades) » dans Gestion → Planche (par défaut : Cheval ferré, Déferrage, Après parage).',
+      'À la création d\'une planche de contact, un sélecteur « Type de planche (stade) » a été ajouté.',
+      'Planche depuis une tournée : pour chaque cheval, on choisit le ou les stades à produire. L\'app enchaîne alors une planche (un PDF) par cheval × stade, l\'une après l\'autre, chacune avec ses propres photos (bouton « Planche suivante »).',
+      'Le stade apparaît dans l\'en-tête du PDF et dans le nom du fichier : planche-<cheval>-<date>-<stade>.',
+    ],
+  },
   {
     version: '1.1.139', date: '2026-07-10',
     ajouts: [
@@ -1154,6 +1163,7 @@ S.planche.avantapres = Object.assign({ orientation: 'paysage', logo: false, mode
 if (!Array.isArray(S.planche.avantapres.pages)) S.planche.avantapres.pages = [{ membres: [] }, { membres: ['Cheval'] }];
 if (!S.planche.avantapres.modeles) S.planche.avantapres.modeles = _plModeles();
 delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
+if (!Array.isArray(S.planche.stades)) S.planche.stades = ['Cheval ferré', 'Déferrage', 'Après parage']; // types/étapes de planche (étiquette sur une planche de contact), éditables
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
 // { data:dataURL, zoom:multiplicateur, x/y:décalage en FRACTION du cadre (pan) } — cadrage repris à l'identique dans l'en-tête PDF.
 if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
@@ -5784,6 +5794,13 @@ function renderPlancheConfig() {
     const dp = pd.querySelector('[data-delpage]'); if (dp) dp.addEventListener('click', () => { P.pages.splice(pi, 1); saveSettings(); renderPlancheConfig(); });
   });
   $('plAddPage').addEventListener('click', () => { P.pages.push({ membres: [] }); saveSettings(); renderPlancheConfig(); });
+  // Stades / types de planche (contact) : étiquettes proposées à la création (Cheval ferré, Déferrage, Après parage…).
+  if (plancheType === 'contact') {
+    const ss = document.createElement('section'); ss.className = 'card';
+    ss.innerHTML = `<h3 class="rsub">Types de planche (stades)</h3><p class="hint">Étiquettes proposées à la création (ex. Cheval ferré, Déferrage, Après parage). À la création, on choisit un ou plusieurs stades par cheval ; le stade apparaît dans l'en-tête et le nom du PDF.</p><div id="plStades"></div>`;
+    body.appendChild(ss);
+    plancheList($('plStades'), S.planche.stades, renderPlancheConfig, '+ Ajouter un stade', true);
+  }
 }
 
 // ================= Création de planche (contact + avant/après) =================
@@ -5926,39 +5943,48 @@ function modalPlancheTourSelect(t) {
   const rows = [];
   (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalCancelled(cv)) return; rows.push({ clientNom: clientName(cl.clientId), cheval: cv.nom }); })));
   if (!rows.length) { alert('Aucun cheval sur cette tournée.'); return; }
-  const sel = new Set(rows.map((_, i) => i));
+  const stades = (S.planche.stades || []).slice();
+  const sel = {}; rows.forEach((_, i) => { sel[i] = new Set(stades.length ? [stades[0]] : ['']); }); // défaut : 1er stade coché (ou « sans stade »)
+  const count = () => rows.reduce((n, _, i) => n + sel[i].size, 0);
   openModal(`<div class="modal-head"><b>📅 ${esc(fmtDateFr(t.date))} — chevaux</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Cochez les chevaux à traiter (plusieurs clients / chevaux possibles). Une planche — et un PDF — sera créée pour chaque cheval, l'un après l'autre.</p>
+    <p class="hint">Pour chaque cheval, choisissez le ou les <b>stades</b> de planche à produire (${stades.length ? esc(stades.join(' · ')) : 'aucun stade configuré → 1 planche par cheval'}). Une planche = un PDF par (cheval × stade), à la suite. Gérez les stades dans Gestion → Planche.</p>
     <div id="ptcList" style="max-height:58vh;overflow:auto"></div>
-    <div class="actions"><button class="btn primary block" id="ptcOk">Créer les planches (<span id="ptcN">${sel.size}</span>)</button><button class="btn block" id="ptcClose">Fermer</button></div>`);
+    <div class="actions"><button class="btn primary block" id="ptcOk">Créer les planches (<span id="ptcN">${count()}</span>)</button><button class="btn block" id="ptcClose">Fermer</button></div>`);
   $('mX').onclick = closeModal; $('ptcClose').onclick = closeModal;
   const box = $('ptcList'); let cur = null;
   rows.forEach((r, i) => {
     if (r.clientNom !== cur) { cur = r.clientNom; const h = document.createElement('div'); h.className = 'pt-client'; h.textContent = '👤 ' + r.clientNom; box.appendChild(h); }
-    const row = document.createElement('label'); row.className = 'chk'; row.style.display = 'flex'; row.style.margin = '4px 0 4px 6px';
-    row.innerHTML = `<input type="checkbox" ${sel.has(i) ? 'checked' : ''}/> 🐴 ${esc(r.cheval)}`;
-    row.querySelector('input').addEventListener('change', (e) => { if (e.target.checked) sel.add(i); else sel.delete(i); if ($('ptcN')) $('ptcN').textContent = sel.size; });
+    const row = document.createElement('div'); row.style.margin = '6px 0 8px 6px';
+    if (stades.length) {
+      row.innerHTML = `<div><b>🐴 ${esc(r.cheval)}</b></div><div class="pt-stades" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:3px"></div>`;
+      const sb = row.querySelector('.pt-stades');
+      stades.forEach((s) => { const chip = document.createElement('button'); chip.type = 'button'; chip.className = 'seg-btn' + (sel[i].has(s) ? ' on' : ''); chip.style.fontSize = '.82rem'; chip.textContent = s; chip.addEventListener('click', () => { if (sel[i].has(s)) sel[i].delete(s); else sel[i].add(s); chip.classList.toggle('on'); if ($('ptcN')) $('ptcN').textContent = count(); }); sb.appendChild(chip); });
+    } else {
+      row.innerHTML = `<label class="chk" style="display:flex"><input type="checkbox" checked/> 🐴 ${esc(r.cheval)}</label>`;
+      row.querySelector('input').addEventListener('change', (e) => { sel[i].clear(); if (e.target.checked) sel[i].add(''); if ($('ptcN')) $('ptcN').textContent = count(); });
+    }
     box.appendChild(row);
   });
   $('ptcOk').onclick = () => {
-    const items = rows.filter((_, i) => sel.has(i)).map((r) => ({ cheval: r.cheval, client: r.clientNom, date: t.date }));
-    if (!items.length) { alert('Cochez au moins un cheval.'); return; }
+    const items = [];
+    rows.forEach((r, i) => { const chosen = stades.length ? stades.filter((s) => sel[i].has(s)) : (sel[i].has('') ? [''] : []); chosen.forEach((s) => items.push({ cheval: r.cheval, client: r.clientNom, date: t.date, stade: s })); });
+    if (!items.length) { alert('Choisissez au moins un stade / cheval.'); return; }
     startPlancheQueue(items);
   };
 }
 function startPlancheQueue(items) {
-  modalPlancheCreate('contact', { cheval: items[0].cheval, client: items[0].client, date: items[0].date, queue: items.slice(1), queueTotal: items.length, queueIdx: 1 });
+  modalPlancheCreate('contact', { cheval: items[0].cheval, client: items[0].client, date: items[0].date, stade: items[0].stade || '', queue: items.slice(1), queueTotal: items.length, queueIdx: 1 });
 }
 function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), note: '', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   const chNames = [], clNames = [];
   clients.forEach((c) => { const n = fullName(c); if (n) clNames.push(n); (c.chevaux || []).forEach((h) => { if (h.nom) chNames.push(h.nom); }); });
   const uniq = (a) => Array.from(new Set(a));
-  const titre = (type === 'avantapres' ? 'Créer une planche avant / après' : 'Créer une planche de contact') + (plCreate.queueTotal ? ' — cheval ' + plCreate.queueIdx + '/' + plCreate.queueTotal : '');
+  const titre = (type === 'avantapres' ? 'Créer une planche avant / après' : 'Créer une planche de contact') + (plCreate.queueTotal ? ' — cheval ' + plCreate.queueIdx + '/' + plCreate.queueTotal : '') + (plCreate.stade ? ' · ' + plCreate.stade : '');
   openModal(`<div class="modal-head"><b>🖼 ${titre}</b><button class="x" id="mX">✕</button></div>
     <div style="max-height:80vh;overflow:auto" id="plCbody">
       <section class="card">
@@ -5968,6 +5994,7 @@ function modalPlancheCreate(type, prefill) {
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>
+        ${type === 'contact' ? `<label>Type de planche (stade)<select id="plCstade"><option value="">(aucun)</option>${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
         <label>Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
       </section>
       <section class="card">
@@ -5985,7 +6012,7 @@ function modalPlancheCreate(type, prefill) {
   const close = () => { plCreate = null; closeModal(); };
   $('mX').onclick = close; $('plCclose').onclick = close;
   if ($('plCfromTour')) $('plCfromTour').onclick = () => modalPlancheFromTour();
-  if ($('plCnext')) $('plCnext').onclick = () => { const q = plCreate.queue || []; if (q.length) modalPlancheCreate('contact', { cheval: q[0].cheval, client: q[0].client, date: q[0].date, queue: q.slice(1), queueTotal: plCreate.queueTotal, queueIdx: plCreate.queueIdx + 1 }); else close(); };
+  if ($('plCnext')) $('plCnext').onclick = () => { const q = plCreate.queue || []; if (q.length) modalPlancheCreate('contact', { cheval: q[0].cheval, client: q[0].client, date: q[0].date, stade: q[0].stade || '', queue: q.slice(1), queueTotal: plCreate.queueTotal, queueIdx: plCreate.queueIdx + 1 }); else close(); };
   $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((b) => b.addEventListener('click', () => {
     plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.sel = null;
     $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.plcm === plCreate.modele));
@@ -5996,6 +6023,7 @@ function modalPlancheCreate(type, prefill) {
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
   $('plCdate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } }); // ouvre l'agenda au clic (comme la date de tournée)
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
+  if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; });
   $('plCimport').onclick = () => $('plCfiles').click();
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
@@ -6102,8 +6130,8 @@ function plRenderGrid() {
   });
 }
 
-// Nom de fichier d'une planche : planche-<cheval>-<date> (le stade s'ajoutera à l'étape « stades »).
-function plancheBaseName(st) { st = st || plCreate || {}; return ['planche', (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval'), st.date || todayStr()].filter(Boolean).join('-'); }
+// Nom de fichier d'une planche : planche-<cheval>-<date>[-<stade>].
+function plancheBaseName(st) { st = st || plCreate || {}; return ['planche', (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval'), st.date || todayStr(), (st.stade ? norm(st.stade).replace(/\s+/g, '-') : '')].filter(Boolean).join('-'); }
 // Génère le PDF de la planche via l'impression navigateur (l'OS choisit « Enregistrer en PDF »). Rien n'est stocké.
 function planchePrint() {
   if (!plCreate) return;
@@ -6111,7 +6139,7 @@ function planchePrint() {
   if (!Object.keys(st.cells).length && !confirm('Aucune photo n\'est placée dans la grille. Générer quand même la planche (vide) ?')) return;
   const ori = st.orientation === 'portrait' ? 'portrait' : 'landscape';
   const logoHtml = st.logo ? proLogoBox(150, 58) : '';
-  const titre = st.type === 'avantapres' ? 'Avant / après (parage)' : 'Planche de contact';
+  const titre = (st.type === 'avantapres' ? 'Avant / après (parage)' : 'Planche de contact') + (st.stade ? ' — ' + st.stade : '');
   let body = `<style>
     @page{size:${ori};margin:8mm;}
     #printArea .pl-page{page-break-after:always;}
