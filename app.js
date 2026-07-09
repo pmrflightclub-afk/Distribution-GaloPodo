@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.141';
+const APP_VERSION = '1.1.142';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.142', date: '2026-07-10',
+    ajouts: [
+      'Frais matériel : nouveau champ « Chevaux / mois » (cadence). Il est estimé automatiquement d\'après votre historique de tournées, et reste modifiable (videz-le pour revenir à l\'auto).',
+      'Chaque matériel affiche maintenant, en plus du prix unitaire, son renouvellement estimé : 🔁 « ~ N mois » (ou années et mois) = nombre de chevaux ÷ chevaux par mois. Mise à jour en direct.',
+    ],
+  },
   {
     version: '1.1.141', date: '2026-07-10',
     ajouts: [
@@ -1357,6 +1364,7 @@ if (!S.visiteSeeded) {
   LS.set('ftr.settings', S);
 }
 S.materiel.forEach((m) => { if (typeof m.nbChevaux !== 'number') m.nbChevaux = 1; }); // migration nbChevaux
+if (typeof S.chevauxParMois !== 'number') S.chevauxParMois = 0; // cadence chevaux/mois pour l'échéance matériel (0 = auto depuis l'historique)
 // V2 : retire les anciens produits, itemise le matériel, ajoute les catégories véhicule
 if (!S.seededV2) {
   S.seededV2 = true;
@@ -1404,6 +1412,25 @@ if (!S.pincesAdded) {
 const PAYS_TVA = { be: { nom: 'Belgique', std: 21, rates: [21, 6, 0] }, fr: { nom: 'France', std: 20, rates: [20, 10, 5.5, 0] } };
 const tvaRatesPays = () => (PAYS_TVA[S.pays] || PAYS_TVA.be).rates;
 const baseMateriel = () => S.materiel.reduce((s, m) => s + ((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1)), 0);
+// Chevaux facturés (parés/visités) dans une tournée.
+function billedHorsesInTour(t) { let n = 0; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv)) n++; }))); return n; }
+// Cadence moyenne de chevaux/mois estimée sur l'historique (total chevaux facturés ÷ mois d'activité écoulés).
+function chevauxParMoisAuto() {
+  const tours = allTours().filter((t) => t.result && t.date);
+  if (!tours.length) return 0;
+  let total = 0; tours.forEach((t) => { total += billedHorsesInTour(t); });
+  const first = tours.map((t) => t.date).sort()[0];
+  return total / Math.max(1, monthsBetween(first, todayStr()) + 1);
+}
+// Cadence effective : valeur saisie par l'utilisateur si > 0, sinon estimation automatique.
+const chevauxParMoisEff = () => ((S.chevauxParMois > 0) ? S.chevauxParMois : chevauxParMoisAuto());
+// Texte de renouvellement d'un matériel : combien de temps il tient (nb chevaux ÷ cadence chevaux/mois).
+function matRenouvText(m) {
+  const cad = chevauxParMoisEff();
+  if (!(cad > 0)) return '🔁 renouvellement : renseignez la cadence « chevaux / mois » ci-dessus (ou faites quelques tournées).';
+  const mois = (m.nbChevaux || 1) / cad;
+  return `🔁 renouvellement ~ ${durMonthsLabel(Math.round(mois))} (${fmtNum(mois, 1)} mois pour ${fmtNum(m.nbChevaux || 1, 0)} chevaux à ${fmtNum(cad, 1)}/mois)`;
+}
 function saveSettings() { S.updatedAt = Date.now(); LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); scheduleDrivePush(); }
 
 // ---------- Thème (couleur bandeau & boutons) ----------
@@ -5362,6 +5389,10 @@ function modalFrais(existing) {
 function renderMateriel() {
   if ($('matUnitHT')) { makeReadout($('matUnitHT'), '€/cheval HT'); $('matUnitHT').value = fmtNum(baseMateriel(), 2); fitSize($('matUnitHT')); }
   if ($('matUnitTTC')) { makeReadout($('matUnitTTC'), '€/cheval TTC'); $('matUnitTTC').value = fmtNum(ttc(baseMateriel()), 2); fitSize($('matUnitTTC')); }
+  const cm = $('matChevMois');
+  const refreshCadHint = () => { if ($('matChevMoisHint')) { const auto = chevauxParMoisAuto(); $('matChevMoisHint').innerHTML = (S.chevauxParMois > 0) ? `Cadence saisie : <b>${fmtNum(S.chevauxParMois, 1)}</b> chevaux/mois (auto estimée : ${fmtNum(auto, 1)}). Videz le champ pour revenir à l'auto.` : (auto > 0 ? `Cadence auto (historique) : <b>${fmtNum(auto, 1)}</b> chevaux/mois. Saisissez une valeur pour la forcer.` : 'Renseignez votre cadence, ou faites quelques tournées pour l\'estimer automatiquement.'); } };
+  if (cm) { cm.value = (S.chevauxParMois > 0) ? S.chevauxParMois : ''; cm.oninput = (e) => { S.chevauxParMois = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); refreshCadHint(); box.querySelectorAll('.er-renouv').forEach((p, i) => { p.textContent = matRenouvText(S.materiel[i]); }); }; }
+  refreshCadHint();
   const box = $('materielList'); if (!box) return; box.innerHTML = '';
   $('materielEmpty').style.display = S.materiel.length ? 'none' : 'block';
   S.materiel.forEach((m, i) => {
@@ -5373,11 +5404,12 @@ function renderMateriel() {
         <label>Prix d'achat<input data-k="montantHT" type="number" step="0.01" min="0" value="${m.montantHT || ''}"/></label>
         <label>Nb de chevaux<input data-k="nbChevaux" type="number" step="1" min="1" value="${m.nbChevaux || 1}"/></label>
         <label>Prix unitaire<input data-ro="unit" readonly/></label>
-      </div>`;
+      </div>
+      <p class="hint er-renouv">${esc(matRenouvText(m))}</p>`;
     const ro = el.querySelector('[data-ro="unit"]');
     const montEl = el.querySelector('[data-k="montantHT"]'), nbEl = el.querySelector('[data-k="nbChevaux"]');
     addUnit(montEl, '€ HT'); addUnit(nbEl, 'chevaux'); makeReadout(ro, '€/cheval');
-    const paintRo = () => { ro.value = fmtNum((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1), 2); fitSize(ro); if ($('matUnitHT')) { $('matUnitHT').value = fmtNum(baseMateriel(), 2); fitSize($('matUnitHT')); } if ($('matUnitTTC')) { $('matUnitTTC').value = fmtNum(ttc(baseMateriel()), 2); fitSize($('matUnitTTC')); } };
+    const paintRo = () => { ro.value = fmtNum((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1), 2); fitSize(ro); const rn = el.querySelector('.er-renouv'); if (rn) rn.textContent = matRenouvText(m); if ($('matUnitHT')) { $('matUnitHT').value = fmtNum(baseMateriel(), 2); fitSize($('matUnitHT')); } if ($('matUnitTTC')) { $('matUnitTTC').value = fmtNum(ttc(baseMateriel()), 2); fitSize($('matUnitTTC')); } };
     wireNum(montEl, { get: () => m.montantHT, dec: 2, set: (v) => { m.montantHT = v; paintRo(); }, after: () => saveSettings() });
     wireNum(nbEl, { get: () => m.nbChevaux, dec: 0, set: (v) => { m.nbChevaux = Math.max(1, v); paintRo(); }, after: () => saveSettings() });
     paintRo();
@@ -5395,7 +5427,7 @@ function modalMateriel(existing) {
     <p class="hint" id="mHint"></p>
     ${existing ? '<button class="btn small danger" id="mDel">Supprimer</button>' : ''}
     <div class="actions"><button class="btn primary block" id="mOk">Enregistrer</button></div>`);
-  const upd = () => { const p = parseFloat($('mMont').value) || 0, n = Math.max(1, parseFloat($('mNb').value) || 1); $('mHint').innerHTML = `Prix unitaire = ${eur(p)} ÷ ${n} = <b>${eur(p / n)}/cheval</b>`; };
+  const upd = () => { const p = parseFloat($('mMont').value) || 0, n = Math.max(1, parseFloat($('mNb').value) || 1); const cad = chevauxParMoisEff(); const ren = cad > 0 ? ` · 🔁 renouvellement ~ <b>${durMonthsLabel(Math.round(n / cad))}</b>` : ''; $('mHint').innerHTML = `Prix unitaire = ${eur(p)} ÷ ${n} = <b>${eur(p / n)}/cheval</b>${ren}`; };
   upd(); $('mMont').addEventListener('input', upd); $('mNb').addEventListener('input', upd);
   $('mX').addEventListener('click', closeModal);
   if (existing) $('mDel').addEventListener('click', () => { if (!confirm('Supprimer ce matériel ?')) return; S.materiel = S.materiel.filter((x) => x.id !== w.id); saveSettings(); closeModal(); renderMateriel(); });
