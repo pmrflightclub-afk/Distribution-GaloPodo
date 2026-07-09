@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.102';
+const APP_VERSION = '1.1.103';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.103', date: '2026-07-09',
+    ajouts: [
+      'Accueil simplifié : les sections « Replacer un RDV » et « Chevaux sans prochain RDV » sont fusionnées en une seule — « 📅 Rendez-vous à prendre ». Chaque cheval n\'y apparaît qu\'une seule fois (fini le doublon).',
+      'Un cheval issu d\'un RDV reporté porte l\'étiquette « ↩ reporté ». Quand vous lui prenez un RDV, il sort automatiquement de la file des reports (marqué « replacé » dans les Annulations), comme avant.',
+      'Chaque cheval garde ses actions : « 📅 Prendre un RDV », « 💤 Inactif » et « ⛔ Liste noire ». (La page détaillée Tournée → Replacer reste disponible pour traiter tous les reports d\'un client d\'un coup.)',
+    ],
+  },
   {
     version: '1.1.102', date: '2026-07-09',
     ajouts: [
@@ -5358,45 +5366,45 @@ function reportAllTour(t) {
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
   renderHome();
 }
-function renderReplacerHome() {
-  const card = $('homeReplacer'), list = $('homeReplacerList'); if (!card || !list) return;
-  const groups = reportedByClient();
-  card.classList.toggle('hidden', !groups.length);
-  list.innerHTML = '';
-  groups.forEach((g) => {
-    const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>${esc(g.nom)}</b><span class="li-sub">🐴 ${esc(g.items.map((c) => c.cheval).join(', '))} · ${g.items.length} reporté(s)</span></div><div class="li-act"><button class="btn small primary" data-fix>📅 Date</button></div>`;
-    el.querySelector('[data-fix]').addEventListener('click', () => modalReplacerDate(g));
-    list.appendChild(el);
-  });
-}
 // Un cheval a-t-il un RDV à venir (tournée non clôturée : aujourd'hui ou plus tard) ?
 function chevalHasUpcomingRdv(clientId, chevalId) {
   return tournees.some((t) => statusOf(t) !== 'cloturee' && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === clientId && (cl.chevaux || []).some((cv) => cv.id === chevalId))));
 }
-// Chevaux ACTIFS (de clients actifs) sans aucun RDV à venir (ignorés lors d'un RDV, ou jamais replacés). Les inactifs / liste noire sont exclus.
-function chevauxSansRdv() {
+// « Rendez-vous à prendre » (fusion « Replacer un RDV » + « Chevaux sans prochain RDV ») : chevaux ACTIFS (clients actifs, hors liste noire)
+// sans aucun RDV à venir. Chaque cheval apparaît UNE seule fois. `reported` = les enregistrements d'annulation « reporté » (non replacés)
+// qui portent sur ce cheval (par nom) → à la prise de RDV, on les marque « replacés » pour les sortir de la file « Replacer ».
+function rdvAPrendre() {
+  const reportedMap = {}; // clientId -> { normNom -> [items d'annulation reportée] }
+  reportedByClient().forEach((g) => { const m = {}; g.items.forEach((it) => { const k = norm(it.cheval); (m[k] = m[k] || []).push(it); }); reportedMap[g.clientId] = m; });
   const out = [];
-  clients.forEach((c) => { if (c.actif === false) return; activeChevaux(c).forEach((h) => { if (!chevalHasUpcomingRdv(c.id, h.id)) out.push({ client: c, cheval: h }); }); });
+  clients.forEach((c) => {
+    if (c.actif === false) return;
+    const rm = reportedMap[c.id] || {};
+    activeChevaux(c).forEach((h) => {
+      if (chevalHasUpcomingRdv(c.id, h.id)) return;
+      out.push({ client: c, cheval: h, reported: rm[norm(h.nom)] || [] });
+    });
+  });
   return out;
 }
-// Section Accueil « Chevaux sans prochain RDV » : attribuer un RDV, ou passer le cheval en inactif / liste noire.
-function renderHomeNoRdv() {
-  const card = $('homeNoRdv'), list = $('homeNoRdvList'); if (!card || !list) return;
-  const items = chevauxSansRdv();
+// Section Accueil « Rendez-vous à prendre » : prendre un RDV, ou passer le cheval en inactif / liste noire.
+function renderRdvAPrendre() {
+  const card = $('homeRdvAPrendre'), list = $('homeRdvAPrendreList'); if (!card || !list) return;
+  const items = rdvAPrendre();
   card.classList.toggle('hidden', !items.length);
   list.innerHTML = '';
-  items.forEach(({ client, cheval }) => {
+  items.forEach(({ client, cheval, reported }) => {
     const el = document.createElement('div'); el.className = 'list-item stack-act';
-    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cheval.nom)}</b><span class="li-sub">${esc(fullName(client))}${client.societe ? ' — ' + esc(client.societe) : ''}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-rdv>📅 Attribuer un RDV</button><button class="btn small" data-inact>💤 Inactif</button><button class="btn small danger" data-bl>⛔ Liste noire</button></div>`;
-    el.querySelector('[data-rdv]').addEventListener('click', () => modalAssignRdvCheval(client, cheval));
-    el.querySelector('[data-inact]').addEventListener('click', () => { if (!confirm('Passer le cheval « ' + cheval.nom + ' » en inactif ? Il ne sera plus proposé pour les RDV.')) return; cheval.actif = false; saveClients(); renderHomeNoRdv(); });
-    el.querySelector('[data-bl]').addEventListener('click', () => { if (!confirm('Mettre le cheval « ' + cheval.nom + ' » en liste noire ? Il devient inactif et n\'est plus proposé pour les RDV (réversible dans la fiche client).')) return; cheval.blacklist = true; cheval.actif = false; saveClients(); renderHomeNoRdv(); });
+    const badge = reported.length ? ' <span class="badge">↩ reporté</span>' : '';
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cheval.nom)}${badge}</b><span class="li-sub">${esc(fullName(client))}${client.societe ? ' — ' + esc(client.societe) : ''}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-rdv>📅 Prendre un RDV</button><button class="btn small" data-inact>💤 Inactif</button><button class="btn small danger" data-bl>⛔ Liste noire</button></div>`;
+    el.querySelector('[data-rdv]').addEventListener('click', () => modalAssignRdvCheval(client, cheval, reported));
+    el.querySelector('[data-inact]').addEventListener('click', () => { if (!confirm('Passer le cheval « ' + cheval.nom + ' » en inactif ? Il ne sera plus proposé pour les RDV.')) return; cheval.actif = false; saveClients(); renderRdvAPrendre(); });
+    el.querySelector('[data-bl]').addEventListener('click', () => { if (!confirm('Mettre le cheval « ' + cheval.nom + ' » en liste noire ? Il devient inactif et n\'est plus proposé pour les RDV (réversible dans la fiche client).')) return; cheval.blacklist = true; cheval.actif = false; saveClients(); renderRdvAPrendre(); });
     list.appendChild(el);
   });
 }
-// Attribuer un RDV à UN cheval précis (depuis l'Accueil « Chevaux sans prochain RDV »).
-function modalAssignRdvCheval(client, cheval) {
+// Prendre un RDV pour UN cheval précis (Accueil « Rendez-vous à prendre »). Si le cheval provient d'un RDV reporté, on marque ces reports comme « replacés ».
+function modalAssignRdvCheval(client, cheval, reportedItems) {
   const proposed = proposedRdvDate(todayStr());
   openModal(`<div class="modal-head"><b>📅 RDV — 🐴 ${esc(cheval.nom)}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Client : <b>${esc(fullName(client))}</b>. Choisissez la date du prochain RDV pour ce cheval.</p>
@@ -5406,7 +5414,12 @@ function modalAssignRdvCheval(client, cheval) {
   $('mX').addEventListener('click', closeModal);
   const prev = () => { const d = $('arCvDate').value; const pv = rdvDayPreview(d); $('arCvPrev').innerHTML = d ? `<b>${fmtDateFr(d)}</b> — arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}` : ''; };
   $('arCvDate').addEventListener('change', prev); prev();
-  $('arCvOk').addEventListener('click', () => { const d = $('arCvDate').value; if (!d) { closeModal(); return; } scheduleClientOnDate(d, client, [cheval]); closeModal(); renderHome(); });
+  $('arCvOk').addEventListener('click', () => {
+    const d = $('arCvDate').value; if (!d) { closeModal(); return; }
+    const res = scheduleClientOnDate(d, client, [cheval]);
+    if (reportedItems && reportedItems.length && res && res.tour) { reportedItems.forEach((it) => { if (it.cv && it.cv.cancel) it.cv.cancel.replacedTourId = res.tour.id; }); saveTournees(); saveArchive(); } // sort ces reports de la file « Replacer » (Annulations : marqués « replacé »)
+    closeModal(); renderHome();
+  });
 }
 function deleteTourById(id) { purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); }
 // Section dédiée (au-dessus du Trajet du jour) : tournées dépassées non clôturées.
@@ -6100,8 +6113,7 @@ function renderHome() {
   renderVehiculeStatut();
   renderBlockingArrets();
   renderHomeTrajet();
-  renderReplacerHome();
-  renderHomeNoRdv();
+  renderRdvAPrendre();
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
 }
 function renewFrais(f) { f.date = todayStr(); f.kmDebut = odometer(); saveSettings(); } // nouveau cycle : repart du km actuel
