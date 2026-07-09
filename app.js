@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.104';
+const APP_VERSION = '1.1.105';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.105', date: '2026-07-09',
+    ajouts: [
+      'Statut des clients : un client peut être Actif, Inactif ou en Liste noire. La fiche client a une case « Liste noire » (client refusé). Seuls les clients ACTIFS sont proposés à la création des tournées et des arrêts.',
+      'Gestion → Clients : filtre en haut de page (Actifs par défaut · Inactifs · Liste noire).',
+      'Contact mail : deux nouveaux boutons « 💤 Créer (inactif) » et « ⛔ Créer (liste noire) ». Ils importent quand même toutes les infos (client + cheval + formulaire), mais créent le client en inactif (chevaux inactifs aussi) ou en liste noire.',
+    ],
+  },
   {
     version: '1.1.104', date: '2026-07-09',
     ajouts: [
@@ -1994,19 +2002,24 @@ function createTourFromDay(day, items) {
 }
 
 // ================= CLIENTS =================
-const isClientActif = (c) => !!c && c.actif !== false;                     // défaut = actif
+const isClientActif = (c) => !!c && c.actif !== false && !c.blacklist;     // défaut = actif ; ni inactif ni liste noire
+const isClientNoir = (c) => !!(c && c.blacklist);                          // client en liste noire (refusé)
 const activeChevaux = (c) => ((c && c.chevaux) || []).filter((h) => h.actif !== false && !h.blacklist);
+let clientsFilter = 'actifs'; // actifs (défaut) | inactifs | noir
 function renderClients() {
+  const seg = $('clientsFilterSeg'); if (seg) seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._cfw) { b._cfw = true; b.addEventListener('click', () => { clientsFilter = b.dataset.cf; renderClients(); }); } b.classList.toggle('on', b.dataset.cf === clientsFilter); });
   const list = $('clientsList'); list.innerHTML = '';
-  $('clientsEmpty').style.display = clients.length ? 'none' : 'block';
-  // Actifs d'abord, inactifs en fin de liste (grisés).
-  [...clients].sort((a, b) => (isClientActif(a) === isClientActif(b) ? 0 : (isClientActif(a) ? -1 : 1))).forEach((c) => {
+  const match = (c) => clientsFilter === 'noir' ? isClientNoir(c) : clientsFilter === 'inactifs' ? (c.actif === false && !c.blacklist) : isClientActif(c);
+  const shown = clients.filter(match).sort((a, b) => fullName(a).localeCompare(fullName(b)));
+  if ($('clientsEmpty')) { $('clientsEmpty').style.display = shown.length ? 'none' : 'block'; $('clientsEmpty').textContent = clients.length ? 'Aucun client dans cette catégorie.' : 'Aucun client. Créez-en un.'; }
+  shown.forEach((c) => {
     const nAdr = new Set((c.chevaux || []).map((h) => norm(addrStr(chevalAddr(c, h))))).size || 1;
     const soc = c.societe ? ' — ' + esc(c.societe) : '';
-    const inactif = !isClientActif(c);
+    const off = isClientNoir(c) || c.actif === false;
+    const badge = isClientNoir(c) ? ' <span class="badge">liste noire</span>' : (c.actif === false ? ' <span class="badge">inactif</span>' : '');
     const nChev = (c.chevaux || []).length, nChevInact = (c.chevaux || []).filter((h) => h.actif === false).length;
-    const el = document.createElement('div'); el.className = 'list-item clickable' + (inactif ? ' item-off' : '');
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${inactif ? ' <span class="badge">inactif</span>' : ''}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    const el = document.createElement('div'); el.className = 'list-item clickable' + (off ? ' item-off' : '');
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => editClient(c));
     list.appendChild(el);
   });
@@ -2022,7 +2035,10 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     if (prefill.tvaNum) w.tvaNum = prefill.tvaNum;
     if (prefill.email) w.email = prefill.email; if (prefill.tel) w.tel = prefill.tel;
     if (prefill.rue || prefill.cpVille) { const cpm = (prefill.cpVille || '').match(/\d{4,5}/); const loc = (prefill.cpVille || '').replace(/\d{4,5}/, '').replace(/[,]/g, ' ').replace(/\s+/g, ' ').trim(); w.addr = Object.assign(emptyAddr(), { rue: prefill.rue || '', cp: cpm ? cpm[0] : '', localite: loc }); }
-    if (prefill.cheval && (prefill.cheval.nom || prefill.cheval.anamnese)) { (w.chevaux = w.chevaux || []).push({ id: uid(), nom: prefill.cheval.nom || '', dateNaissance: prefill.cheval.dateNaissance || '', race: prefill.cheval.race || '', anamnese: prefill.cheval.anamnese || null, addrSource: 'client', addr: emptyAddr() }); }
+    const chOff = prefill.status === 'inactif' || prefill.status === 'noir'; // client inactif/liste noire → chevaux importés inactifs
+    if (prefill.cheval && (prefill.cheval.nom || prefill.cheval.anamnese)) { (w.chevaux = w.chevaux || []).push({ id: uid(), nom: prefill.cheval.nom || '', dateNaissance: prefill.cheval.dateNaissance || '', race: prefill.cheval.race || '', anamnese: prefill.cheval.anamnese || null, actif: !chOff, addrSource: 'client', addr: emptyAddr() }); }
+    if (prefill.status === 'inactif') w.actif = false;
+    else if (prefill.status === 'noir') { w.blacklist = true; w.actif = false; }
   }
   w.addr = toAddr(w.addr); w.societeAddr = toAddr(w.societeAddr);
   if (w.prenom === undefined) w.prenom = '';
@@ -2036,7 +2052,8 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     <div class="row"><label class="grow">Email<input type="email" id="cEmail" value="${esc(w.email || '')}" placeholder="contact@exemple.be" /></label><label class="grow">Téléphone<input type="text" id="cTel" value="${esc(w.tel || '')}" /></label></div>
     <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
     <label class="chk2"><input type="checkbox" id="cPolitesse" ${w.politesse !== false ? 'checked' : ''}/> Politesse dans le SMS (Mr/Mme + nom ; sinon prénom)</label>
-    <label class="chk2"><input type="checkbox" id="cActif" ${w.actif !== false ? 'checked' : ''}/> Client actif</label>
+    <label class="chk2"><input type="checkbox" id="cActif" ${w.actif !== false && !w.blacklist ? 'checked' : ''}/> Client actif</label>
+    <label class="chk2"><input type="checkbox" id="cNoir" ${w.blacklist ? 'checked' : ''}/> Liste noire (client refusé — non proposé pour les tournées)</label>
     <h2 style="font-size:.9rem">Adresse du client</h2><div id="cAddr"></div>
     <div id="cLegal">
       <h2 style="font-size:.9rem">Informations légales</h2>
@@ -2102,7 +2119,8 @@ function editClient(existing, onSaved, prefillNom, prefill) {
   if ($('cEmail')) $('cEmail').addEventListener('input', (e) => { w.email = e.target.value; saveDraft(); });
   if ($('cTel')) $('cTel').addEventListener('input', (e) => { w.tel = e.target.value; saveDraft(); });
   $('cSociete').addEventListener('input', (e) => { w.societe = e.target.value; updateLegalState(); saveDraft(); });
-  if ($('cActif')) $('cActif').addEventListener('change', (e) => { w.actif = e.target.checked; saveDraft(); });
+  if ($('cActif')) $('cActif').addEventListener('change', (e) => { w.actif = e.target.checked; if (e.target.checked) { w.blacklist = false; if ($('cNoir')) $('cNoir').checked = false; } saveDraft(); });
+  if ($('cNoir')) $('cNoir').addEventListener('change', (e) => { w.blacklist = e.target.checked; if (e.target.checked) { w.actif = false; if ($('cActif')) $('cActif').checked = false; } saveDraft(); });
   if ($('cCivilite')) $('cCivilite').addEventListener('change', (e) => { w.civilite = e.target.value; saveDraft(); });
   if ($('cPolitesse')) $('cPolitesse').addEventListener('change', (e) => { w.politesse = e.target.checked; saveDraft(); });
   $('cAssuj').addEventListener('change', (e) => { w.assujettiTva = e.target.checked; saveDraft(); });
@@ -2614,7 +2632,8 @@ function pickClientForArret(highlightId) {
     <div id="pickPicker"></div>`);
   $('mX').addEventListener('click', closeModal);
   $('pNew').addEventListener('click', () => editClient(null, (nc) => pickClientForArret(nc.id)));
-  if (clients.length) mountClientPicker($('pickPicker'), { list: clients, highlightId, onPick: (c) => chooseClientTargets(c) });
+  const pickList = clients.filter(isClientActif); // seuls les clients actifs sont proposés (ni inactifs, ni liste noire)
+  if (pickList.length) mountClientPicker($('pickPicker'), { list: pickList, highlightId, onPick: (c) => chooseClientTargets(c) });
 }
 const societeAddrOf = (c) => (c.societeMemeAdresse !== false || !addrStr(c.societeAddr)) ? c.addr : c.societeAddr;
 const chevalAddr = (c, h) => {
@@ -2624,7 +2643,7 @@ const chevalAddr = (c, h) => {
   return c.addr;
 };
 function chooseClientTargets(c) {
-  const chs = c.chevaux || [];
+  const chs = activeChevaux(c); // seuls les chevaux actifs (hors inactif / liste noire) sont proposés
   const distinct = new Set(chs.map((h) => norm(addrStr(chevalAddr(c, h)))));
   if (!chs.length || distinct.size <= 1) { addClientToTour(c, chs); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); return; }
   const picked = new Set(chs.map((_, i) => i));
@@ -4741,11 +4760,13 @@ function contactMailRow(m, ignored) {
   const badge = isKnown ? ' <span class="rem-tag">client connu : ' + esc(fullName(known[0])) + '</span>' : ' <span class="rem-tag">nouveau</span>';
   el.innerHTML = `<div class="li-main"><b>${esc(nom)}${cheval ? ' · 🐴 ' + esc(cheval) : ''}</b>${badge}<span class="li-sub">${esc(m.from || '')}${soc ? ' · ' + esc(soc) : ''}${m.date ? ' · ' + esc(String(m.date).slice(0, 16)) : ''}</span></div>`
     + (ignored ? '<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small" data-restore>↩ Réactiver</button></div>'
-      : `<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small${isKnown ? '' : ' primary'}" data-create>👤 Créer le client</button><button class="btn small${isKnown ? ' primary' : ''}" data-update>🔄 Mettre à jour${isKnown ? ' ' + esc(fullName(known[0])) : ' un client'}</button><button class="btn small" data-ignore>Ignorer</button></div>`);
+      : `<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small${isKnown ? '' : ' primary'}" data-create>👤 Créer le client</button><button class="btn small" data-create-inact>💤 Créer (inactif)</button><button class="btn small" data-create-noir>⛔ Créer (liste noire)</button><button class="btn small${isKnown ? ' primary' : ''}" data-update>🔄 Mettre à jour${isKnown ? ' ' + esc(fullName(known[0])) : ' un client'}</button><button class="btn small" data-ignore>Ignorer</button></div>`);
   el.querySelector('[data-view]').addEventListener('click', () => modalMailView(m));
   if (ignored) el.querySelector('[data-restore]').addEventListener('click', () => { m.status = 'nouveau'; saveSettings(); renderContactMail(); });
   else {
-    el.querySelector('[data-create]').addEventListener('click', () => createClientFromMail(m));
+    el.querySelector('[data-create]').addEventListener('click', () => createClientFromMail(m, 'normal'));
+    el.querySelector('[data-create-inact]').addEventListener('click', () => createClientFromMail(m, 'inactif'));
+    el.querySelector('[data-create-noir]').addEventListener('click', () => createClientFromMail(m, 'noir'));
     el.querySelector('[data-update]').addEventListener('click', () => updateClientFromMail(m));
     el.querySelector('[data-ignore]').addEventListener('click', () => { m.status = 'ignore'; saveSettings(); renderContactMail(); });
   }
@@ -4759,7 +4780,8 @@ function parseDateLoose(s) {
   return '';
 }
 // « Créer le client » depuis un mail : ouvre la fiche client pré-remplie + 1 cheval (anamnèse = formulaire complet).
-function createClientFromMail(m) {
+// status : 'normal' (défaut) · 'inactif' (client + chevaux inactifs) · 'noir' (client en liste noire, chevaux inactifs). Les infos sont toujours importées.
+function createClientFromMail(m, status) {
   const f = m.fields || {};
   const prefill = {
     prenom: mailField(f, 'Prénom'), nom: mailField(f, 'Nom'),
@@ -4767,6 +4789,7 @@ function createClientFromMail(m) {
     email: m.from || '', tel: mailField(f, 'Numéro de téléphone'),
     rue: mailField(f, 'Votre adresse (domicile) N° et rue', 'Adresse de facturation'), cpVille: mailField(f, 'Code postal et localité'),
     cheval: { nom: mailField(f, 'Nom du cheval'), dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f },
+    status: status || 'normal',
   };
   editClient(null, (saved) => { m.status = 'client'; m.clientId = saved && saved.id; m.chevalNom = prefill.cheval.nom; saveSettings(); if (currentGsub === 'contactmail') renderContactMail(); }, null, prefill);
 }
