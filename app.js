@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.107';
+const APP_VERSION = '1.1.108';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.108', date: '2026-07-09',
+    ajouts: [
+      'Adresse en liste noire : à l\'enregistrement d\'un client, si une de ses adresses (client, société ou cheval) est en liste noire, vous êtes averti (confirmation avant d\'enregistrer).',
+      'Dans les tournées : un arrêt situé à une adresse en liste noire est signalé visuellement (bord rouge + étiquette « ⛔ liste noire »), dans l\'éditeur de tournée et dans le Trajet du jour.',
+    ],
+  },
   {
     version: '1.1.107', date: '2026-07-09',
     ajouts: [
@@ -2154,6 +2161,11 @@ function editClient(existing, onSaved, prefillNom, prefill) {
   $('cSave').addEventListener('click', () => {
     if (!(w.nom || '').trim() && !(w.prenom || '').trim()) { $('cErr').textContent = 'Le nom (ou le prénom) est obligatoire.'; return; }
     if (!addrStr(w.addr).trim()) { $('cErr').textContent = 'L\'adresse du client est obligatoire.'; return; }
+    // Avertissement : adresse(s) en liste noire repérée(s) sur ce client / ses chevaux.
+    const noirs = []; const chk = (a, lbl) => { if (a && addrStr(a).trim() && isAddrNoir(a)) noirs.push(lbl + ' — ' + addrStr(a)); };
+    chk(w.addr, 'Adresse du client'); if (w.societe && w.societeMemeAdresse === false) chk(w.societeAddr, 'Adresse société');
+    (w.chevaux || []).forEach((h) => chk(chevalAddr(w, h), '🐴 ' + (h.nom || 'cheval')));
+    if (noirs.length && !confirm('⚠ Adresse(s) en LISTE NOIRE détectée(s) :\n\n' + noirs.join('\n') + '\n\nEnregistrer ce client quand même ?')) return;
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
     DRAFTS.clear(key); saveClients(); reconcileActiveTours(); closeModal();
     if (onSaved) onSaved(w); else renderClients();
@@ -2754,12 +2766,13 @@ function renderEditorArrets(locked) {
     const nb = arretNbClients(a);
     const single = a.clients.length === 1 ? a.clients[0] : null; // réduction dans l'en-tête si 1 seul client
     const aFinal = !locked && arretFinalise(currentTour, a); // arrêt finalisé dans une tournée encore ouverte → figé (lecture seule), les autres restent modifiables
-    const el = document.createElement('div'); el.className = 'arret' + (aFinal ? ' arret-locked' : ''); el.dataset.idx = i;
+    const addrNoir = isAddrNoir(a.addr);
+    const el = document.createElement('div'); el.className = 'arret' + (aFinal ? ' arret-locked' : '') + (addrNoir ? ' arret-noir' : ''); el.dataset.idx = i;
     el.innerHTML = `
       <div class="a-top">
         ${locked ? '' : '<div class="a-drag" title="Glisser pour réordonner">⠿</div>'}
         ${locked ? `<span class="a-num">${i + 1}</span>` : `<input class="a-num-in" data-order type="number" min="1" max="${N}" value="${i + 1}" title="N° d'ordre de passage (modifiable)"/>`}
-        <div class="grow"><b>${esc(labelFor(a))}</b>${aFinal ? ' <span class="badge badge-lock">🔒 clôturé</span>' : ''}<div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
+        <div class="grow"><b>${esc(labelFor(a))}</b>${aFinal ? ' <span class="badge badge-lock">🔒 clôturé</span>' : ''}${addrNoir ? ' <span class="badge badge-noir">⛔ adresse liste noire</span>' : ''}<div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
         ${locked ? '' : '<button class="a-del" data-del title="Retirer">✕</button>'}
       </div>
       ${(!locked && single) ? `<label class="a-reduc-row"><span>Réduction articles</span><span class="fu"><input type="number" data-reduc-h min="0" max="100" step="1" value="${currentTour.reductions && currentTour.reductions[single.clientId] || ''}" placeholder="0"/><span class="fu-unit">%</span></span></label>` : ''}
@@ -5600,7 +5613,8 @@ function renderHomeTrajet() {
       let arState = 'à faire', arCls = '';
       if (t.startedAt) { if (validated) { arState = '✅ clôturé'; arCls = 'ok'; } else if (seqLocked) { arState = '⏳ en attente'; arCls = 'wait'; } else if (!acteOK) { arState = '⚠ cocher un cheval'; arCls = 'warn'; } else { arState = '➡ à finaliser'; arCls = 'now'; } }
       if (arCls === 'now') el.classList.add('arret-now');
-      el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b> <span class="ar-state ${arCls}">${arState}</span><span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
+      if (isAddrNoir(a.addr)) el.classList.add('arret-noir');
+      el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b> <span class="ar-state ${arCls}">${arState}</span>${isAddrNoir(a.addr) ? ' <span class="badge badge-noir">⛔ liste noire</span>' : ''}<span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
         <div class="li-act"><button class="btn small" data-agir${seqLocked ? ' disabled title="Finalisez d\'abord l\'arrêt précédent"' : ''}>⚡ Agir</button> ${clotBtn}</div>`;
       // « Agir » : regroupe Waze / Route / SMS / Ticket dans une modale (évite la surcharge de boutons).
       const smsAction = () => modalSmsChoice(c0, smsDataFor(c0, { cheval: chNames, trajet, adresse }));
