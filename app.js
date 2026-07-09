@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.112';
+const APP_VERSION = '1.1.113';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.113', date: '2026-07-09',
+    ajouts: [
+      'Dans une tournée (même clôturée), chaque arrêt a un bouton « 📷 Planche / compte rendu » : créez une planche de contact préremplie (cheval, client et date repris automatiquement) pour un cheval de l\'arrêt, ou ajoutez-le au « Compte rendu photo ».',
+      'Nouvelle section Accueil « 📷 Compte rendu photo » : liste les chevaux dont une planche est à faire. « Créer la planche » ouvre la planche préremplie ; le cheval disparaît de la liste une fois la planche générée ou envoyée.',
+      'Accueil → « Rendez-vous à prendre » : la section n\'affiche plus que les 3 premiers chevaux (+ « voir la liste complète ») pour rester compacte.',
+    ],
+  },
   {
     version: '1.1.112', date: '2026-07-09',
     ajouts: [
@@ -956,6 +964,8 @@ delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
 if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
 // Statut des adresses de chevaux (clé = adresse normalisée) : { [addrKey]: 'inactif' | 'noir' } (absent = actif). Partagé par tous les chevaux à cette adresse.
 if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {};
+// Chevaux en attente de planche photo (« Compte rendu photo » sur l'Accueil) : { id, clientId, chevalId, chevalNom, date, tourId }. Aucune image stockée.
+if (!Array.isArray(S.plancheTodo)) S.plancheTodo = [];
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
 if (!Array.isArray(S.mailKeywords) || !S.mailKeywords.length) S.mailKeywords = ['prise de contact'];
 if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, body, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
@@ -2820,6 +2830,11 @@ function renderEditorArrets(locked) {
       const ah = nav.querySelector('[data-aheure]'); if (ah) ah.addEventListener('change', (e) => { a.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = ah.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!a.heure); if (i === 0 && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } });
     }
     el.appendChild(nav);
+    // Bouton planche / compte rendu photo — disponible même sur une tournée clôturée (récupère cheval/client/date).
+    const pb = document.createElement('div'); pb.className = 'a-planche';
+    pb.innerHTML = '<button class="btn small" data-planche>📷 Planche / compte rendu</button>';
+    pb.querySelector('[data-planche]').addEventListener('click', () => modalArretPlanche(currentTour, a));
+    el.appendChild(pb);
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
@@ -5293,11 +5308,11 @@ function plPageRows(pi) {
 }
 const plCellKey = (pi, r, ci) => plCreate.type === 'avantapres' ? (pi + '_' + r.ri + '_' + r.pj + '_' + ci) : (pi + '_' + r.ri + '_' + ci);
 
-function modalPlancheCreate(type) {
+function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: '', client: '', date: todayStr(), note: '', photos: [], cells: {}, sel: null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), note: '', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   const chNames = [], clNames = [];
   clients.forEach((c) => { const n = fullName(c); if (n) clNames.push(n); (c.chevaux || []).forEach((h) => { if (h.nom) chNames.push(h.nom); }); });
   const uniq = (a) => Array.from(new Set(a));
@@ -5306,7 +5321,7 @@ function modalPlancheCreate(type) {
     <div style="max-height:80vh;overflow:auto" id="plCbody">
       <section class="card">
         <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
-        <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" placeholder="Nom du client"/></label></div>
+        <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>
@@ -5344,7 +5359,8 @@ function modalPlancheCreate(type) {
     try {
       const blob = await planchePdfBlob();
       const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
-      await shareDoc(blob, 'planche-' + (norm(plCreate.cheval || 'cheval').replace(/\s+/g, '-')) + '.pdf', 'Planche — ' + (plCreate.cheval || 'cheval'), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval')));
+      const ok = await shareDoc(blob, 'planche-' + (norm(plCreate.cheval || 'cheval').replace(/\s+/g, '-')) + '.pdf', 'Planche — ' + (plCreate.cheval || 'cheval'), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval')));
+      if (ok) plancheTodoDone(plCreate);
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
   };
@@ -5478,7 +5494,10 @@ function planchePrint() {
     body += '</div>';
   });
   printHtml('Planche — ' + (st.cheval || 'cheval'), body);
+  plancheTodoDone(st); // planche générée → le cheval quitte le « Compte rendu photo »
 }
+// Retire le cheval du « Compte rendu photo » (une planche a été produite pour lui).
+function plancheTodoDone(st) { if (st && st.todoId) { S.plancheTodo = (S.plancheTodo || []).filter((y) => y.id !== st.todoId); st.todoId = null; saveSettings(); renderComptePhoto(); } }
 
 // ================= Comparaison de documents (Phase 4) =================
 // Importe 2 images (planches déjà enregistrées, captures…) et les met côte à côte en PDF. Rien n'est stocké (décision : pas de rendu PDF ré-importé, on compare des images).
@@ -5712,13 +5731,19 @@ function renderRdvAPrendre() {
   const items = rdvAPrendre();
   card.classList.toggle('hidden', !items.length);
   list.innerHTML = '';
-  items.forEach(({ client, cheval, reported }) => {
+  items.slice(0, 3).forEach(({ client, cheval, reported }) => { // n'afficher que les 3 premiers (liste complète dans la modale)
     const el = document.createElement('div'); el.className = 'list-item clickable';
     const badge = reported.length ? ' <span class="badge">↩ reporté</span>' : '';
     el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cheval.nom)}${badge}</b><span class="li-sub">${esc(fullName(client))}${client.societe ? ' — ' + esc(client.societe) : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => modalRdvAPrendre());
     list.appendChild(el);
   });
+  if (items.length > 3) {
+    const more = document.createElement('div'); more.className = 'list-item clickable';
+    more.innerHTML = `<div class="li-main"><b>+ ${items.length - 3} autre(s)</b><span class="li-sub">Voir la liste complète</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    more.addEventListener('click', () => modalRdvAPrendre());
+    list.appendChild(more);
+  }
 }
 // Modale « Rendez-vous à prendre » : liste complète avec, pour chaque cheval, les boutons Prendre un RDV / Inactif / Liste noire.
 function modalRdvAPrendre() {
@@ -5759,6 +5784,47 @@ function modalAssignRdvCheval(client, cheval, reportedItems) {
     const res = scheduleClientOnDate(d, client, [cheval]);
     if (reportedItems && reportedItems.length && res && res.tour) { reportedItems.forEach((it) => { if (it.cv && it.cv.cancel) it.cv.cancel.replacedTourId = res.tour.id; }); saveTournees(); saveArchive(); } // sort ces reports de la file « Replacer » (Annulations : marqués « replacé »)
     closeModal(); renderHome();
+  });
+}
+// ===== Compte rendu photo (planches à faire) =====
+function addPlancheTodo(x) {
+  if (!Array.isArray(S.plancheTodo)) S.plancheTodo = [];
+  const key = (y) => y.clientId + '|' + norm(y.chevalNom || '') + '|' + (y.date || '');
+  if (S.plancheTodo.some((y) => key(y) === key(x))) return false;
+  S.plancheTodo.push(Object.assign({ id: uid() }, x)); saveSettings(); return true;
+}
+// Depuis un arrêt (tournée ouverte OU clôturée) : créer une planche préremplie pour un cheval, ou l'ajouter au « Compte rendu photo ».
+function modalArretPlanche(t, a) {
+  const rows = [];
+  (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalCancelled(cv)) return; rows.push({ cl, cv }); }));
+  if (!rows.length) { alert('Aucun cheval sur cet arrêt.'); return; }
+  openModal(`<div class="modal-head"><b>📷 Planche / compte rendu photo</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">RDV du ${esc(fmtDateFr(t.date))}. Créez une planche de contact préremplie (nom du cheval, client et date repris automatiquement), ou ajoutez le cheval au « Compte rendu photo » de l'Accueil pour le faire plus tard.</p>
+    <div id="apList"></div>
+    <div class="actions"><button class="btn block" id="apClose">Fermer</button></div>`);
+  $('mX').onclick = closeModal; $('apClose').onclick = closeModal;
+  const box = $('apList');
+  rows.forEach(({ cl, cv }) => {
+    const el = document.createElement('div'); el.className = 'list-item stack-act';
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cv.nom)}</b><span class="li-sub">${esc(clientName(cl.clientId))}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-make>🖼 Créer la planche</button><button class="btn small" data-todo>➕ Compte rendu photo</button></div>`;
+    el.querySelector('[data-make]').addEventListener('click', () => { closeModal(); modalPlancheCreate('contact', { cheval: cv.nom, client: clientName(cl.clientId), date: t.date }); });
+    const tb = el.querySelector('[data-todo]');
+    tb.addEventListener('click', () => { const added = addPlancheTodo({ clientId: cl.clientId, chevalId: cv.id, chevalNom: cv.nom, date: t.date, tourId: t.id }); tb.textContent = added ? '✓ Ajouté' : 'Déjà dans la liste'; tb.disabled = true; renderHome(); });
+    box.appendChild(el);
+  });
+}
+// Section Accueil « Compte rendu photo » : chevaux dont une planche est à faire → créer la planche préremplie (disparaît quand la planche est générée).
+function renderComptePhoto() {
+  const card = $('homeComptePhoto'), list = $('homeComptePhotoList'); if (!card || !list) return;
+  const items = S.plancheTodo || [];
+  card.classList.toggle('hidden', !items.length);
+  list.innerHTML = '';
+  items.forEach((x) => {
+    const el = document.createElement('div'); el.className = 'list-item stack-act';
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(x.chevalNom)}</b><span class="li-sub">${esc(clientName(x.clientId))} · RDV du ${esc(fmtDateFr(x.date))}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-make>🖼 Créer la planche</button><button class="btn small" data-rm>Retirer</button></div>`;
+    el.querySelector('[data-make]').addEventListener('click', () => modalPlancheCreate('contact', { cheval: x.chevalNom, client: clientName(x.clientId), date: x.date, todoId: x.id }));
+    el.querySelector('[data-rm]').addEventListener('click', () => { if (!confirm('Retirer ce cheval du compte rendu photo ?')) return; S.plancheTodo = (S.plancheTodo || []).filter((y) => y.id !== x.id); saveSettings(); renderComptePhoto(); });
+    list.appendChild(el);
   });
 }
 function deleteTourById(id) { purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); }
@@ -6455,6 +6521,7 @@ function renderHome() {
   renderBlockingArrets();
   renderHomeTrajet();
   renderRdvAPrendre();
+  renderComptePhoto();
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
 }
 function renewFrais(f) { f.date = todayStr(); f.kmDebut = odometer(); saveSettings(); } // nouveau cycle : repart du km actuel

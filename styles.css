@@ -381,6 +381,7 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 /* Arrêt finalisé (clôturé) dans une tournée encore ouverte : lecture seule */
 .badge-lock { background: color-mix(in srgb, var(--ok, #2e9e5b) 18%, var(--card)); color: var(--ok, #2e9e5b); }
 .arret-noir { border-color: #c0392b; border-left-width: 4px; }
+.a-planche { margin-top: 6px; }
 .arret-locked .a-drag, .arret-locked [data-del] { display: none; }
 .arret-locked input, .arret-locked select, .arret-locked .a-nav-b button, .arret-locked .a-articles button, .arret-locked .a-prets button { pointer-events: none; opacity: .5; }
 .a-prets .a-art-head span:first-child { color: var(--accent); }
