@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.138';
+const APP_VERSION = '1.1.139';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.139', date: '2026-07-10',
+    ajouts: [
+      'Planche (création) : le champ Date ouvre désormais l\'agenda au clic (comme la date d\'une tournée), plus besoin de saisir à la main.',
+      'Photos de la planche : chaque photo garde sa date EXIF, et un bouton « = planche » lui met la date de la planche. Nouveau bouton « 📅 Tout dater à la planche » applique la date de la planche à toutes les photos d\'un coup.',
+      'Le PDF/fichier d\'une planche est nommé avec le cheval ET la date : planche-<cheval>-<date> (le type de planche s\'ajoutera prochainement).',
+    ],
+  },
   {
     version: '1.1.138', date: '2026-07-09',
     ajouts: [
@@ -5963,7 +5971,7 @@ function modalPlancheCreate(type, prefill) {
         <label>Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
       </section>
       <section class="card">
-        <div class="card-head"><h3 class="rsub" style="margin:0">Photos</h3><button class="btn small" id="plCimport">＋ Importer des photos</button></div>
+        <div class="card-head"><h3 class="rsub" style="margin:0">Photos</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCdateAll">📅 Tout dater à la planche</button><button class="btn small" id="plCimport">＋ Importer des photos</button></div></div>
         <p class="hint">Les photos restent dans la mémoire de l'app le temps de la création (jamais enregistrées). Touchez une vignette pour la <b>sélectionner</b>, puis touchez une case de la grille pour l'y <b>placer</b>. Touchez une case remplie pour la vider.</p>
         <input type="file" id="plCfiles" accept="image/*" multiple hidden/>
         <div class="pl-pot" id="plCpot"></div>
@@ -5986,8 +5994,10 @@ function modalPlancheCreate(type, prefill) {
   $('plCcheval').addEventListener('input', (e) => { plCreate.cheval = e.target.value; });
   $('plCclient').addEventListener('input', (e) => { plCreate.client = e.target.value; });
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
+  $('plCdate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } }); // ouvre l'agenda au clic (comme la date de tournée)
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
   $('plCimport').onclick = () => $('plCfiles').click();
+  if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
   $('plCpdf').onclick = planchePrint;
   $('plCmail').onclick = async () => {
@@ -5996,7 +6006,7 @@ function modalPlancheCreate(type, prefill) {
     try {
       const blob = await planchePdfBlob();
       const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
-      const ok = await shareDoc(blob, 'planche-' + (norm(plCreate.cheval || 'cheval').replace(/\s+/g, '-')) + '.pdf', 'Planche — ' + (plCreate.cheval || 'cheval'), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval')));
+      const ok = await shareDoc(blob, plancheBaseName(plCreate) + '.pdf', 'Planche — ' + (plCreate.cheval || 'cheval'), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval')));
       if (ok) plancheTodoDone(plCreate);
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
@@ -6026,12 +6036,13 @@ function plRenderPot() {
     t.className = 'pl-thumb' + (plCreate.sel === ph.id ? ' sel' : '') + (placed.has(ph.id) ? ' placed' : '');
     t.setAttribute('draggable', 'true');
     t.innerHTML = `${ph.url ? `<img src="${ph.url}" alt=""/>` : '<div class="pl-th-load">…</div>'}<button class="pl-th-x" title="Retirer">✕</button>`
-      + `<div class="pl-th-meta"><input type="date" value="${esc(ph.date)}" class="pl-th-date" title="Date de la photo"/><label class="pl-th-jour"><input type="checkbox" ${ph.jour ? 'checked' : ''}/> jour</label></div>`;
+      + `<div class="pl-th-meta"><input type="date" value="${esc(ph.date)}" class="pl-th-date" title="Date de la photo (EXIF par défaut)"/><button type="button" class="pl-th-setdate" title="Mettre la date de la planche">= planche</button></div>`;
     t.addEventListener('dragstart', () => { plCreate.sel = ph.id; });
     t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
     t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
-    t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; ph.jour = false; plRenderPot(); });
-    t.querySelector('.pl-th-jour input').addEventListener('change', (ev) => { ph.jour = ev.target.checked; if (ph.jour) ph.date = todayStr(); plRenderPot(); });
+    t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; plRenderPot(); });
+    t.querySelector('.pl-th-date').addEventListener('click', (ev) => { if (ev.target.showPicker) { try { ev.target.showPicker(); } catch { } } }); // agenda au clic
+    t.querySelector('.pl-th-setdate').addEventListener('click', () => { ph.date = plCreate.date; plRenderPot(); }); // = date de la planche
     box.appendChild(t);
   });
 }
@@ -6091,6 +6102,8 @@ function plRenderGrid() {
   });
 }
 
+// Nom de fichier d'une planche : planche-<cheval>-<date> (le stade s'ajoutera à l'étape « stades »).
+function plancheBaseName(st) { st = st || plCreate || {}; return ['planche', (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval'), st.date || todayStr()].filter(Boolean).join('-'); }
 // Génère le PDF de la planche via l'impression navigateur (l'OS choisit « Enregistrer en PDF »). Rien n'est stocké.
 function planchePrint() {
   if (!plCreate) return;
@@ -6130,7 +6143,7 @@ function planchePrint() {
     if (st.note) body += `<div class="pl-note">${esc(st.note)}</div>`;
     body += '</div>';
   });
-  printHtml('Planche — ' + (st.cheval || 'cheval'), body);
+  printHtml(plancheBaseName(st), body);
   plancheTodoDone(st); // planche générée → le cheval quitte le « Compte rendu photo »
 }
 // Retire le cheval du « Compte rendu photo » (une planche a été produite pour lui).
