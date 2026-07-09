@@ -437,6 +437,13 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 .pro-logo-zoom input { width: 100%; }
 .pro-logo-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 
+/* Formulaire (anamnèse / mail) : intitulé de référence encadré + réponse en dessous, avec espace */
+.anam-list { padding: 2px 0; }
+.anam-item { margin-bottom: 12px; }
+.anam-q { background: var(--bg); border-left: 3px solid var(--accent); padding: 6px 9px; border-radius: 7px; font-weight: 700; font-size: .8rem; color: var(--strong); }
+.anam-a { padding: 6px 10px 0; font-size: .95rem; white-space: pre-wrap; word-break: break-word; }
+.anam-empty { color: var(--muted); font-style: italic; }
+
 /* RDV : placement par cheval (même RDV / date différente / ignorer) */
 .rdv-cheval { padding: 8px 10px; }
 .rdv-cheval.rdv-ignored { opacity: .55; }

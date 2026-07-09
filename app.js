@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.105';
+const APP_VERSION = '1.1.106';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.106', date: '2026-07-09',
+    ajouts: [
+      'Formulaire (anamnèse / mail) plus lisible : chaque intitulé de référence est encadré et surligné, et la réponse du client s\'affiche en dessous, avec de l\'espace entre chaque question. Fini la confusion entre les questions et les réponses.',
+    ],
+  },
   {
     version: '1.1.105', date: '2026-07-09',
     ajouts: [
@@ -2138,12 +2144,16 @@ function editClient(existing, onSaved, prefillNom, prefill) {
   });
 }
 
+// Mise en page d'un formulaire (anamnèse / mail) : chaque champ = l'intitulé de référence encadré/surligné, puis la réponse du client en dessous, avec de l'espace pour bien les distinguer.
+function anamneseRowsHtml(f) {
+  const keys = Object.keys(f || {});
+  if (!keys.length) return '<p class="hint">Formulaire vide.</p>';
+  return keys.map((k) => `<div class="anam-item"><div class="anam-q">${esc(k)}</div><div class="anam-a">${f[k] ? esc(f[k]) : '<span class="anam-empty">— (non renseigné)</span>'}</div></div>`).join('');
+}
 // Formulaire d'anamnèse (issu d'un mail « prise de contact ») rangé sur la fiche cheval — visualisation.
 function modalAnamnese(h) {
   const f = (h && h.anamnese) || {};
-  const keys = Object.keys(f);
-  const rows = keys.length ? keys.map((k) => `<div class="inv-line"><span>${esc(k)}</span><span>${esc(f[k] || '')}</span></div>`).join('') : '<p class="hint">Formulaire vide.</p>';
-  openModal(`<div class="modal-head"><b>📄 Formulaire — ${esc((h && h.nom) || 'cheval')}</b><button class="x" id="mX">✕</button></div><div style="max-height:60vh;overflow:auto">${rows}</div><div class="actions"><button class="btn block" id="anClose">Fermer</button></div>`);
+  openModal(`<div class="modal-head"><b>📄 Formulaire — ${esc((h && h.nom) || 'cheval')}</b><button class="x" id="mX">✕</button></div><div class="anam-list" style="max-height:64vh;overflow:auto">${anamneseRowsHtml(f)}</div><div class="actions"><button class="btn block" id="anClose">Fermer</button></div>`);
   $('mX').addEventListener('click', closeModal); $('anClose').addEventListener('click', closeModal);
 }
 // ================= GESTION → MES ADRESSES (départ) =================
@@ -4710,11 +4720,9 @@ function renderMailConfig() {
 // Visualisation d'un mail « prise de contact » (corps + champs détectés) pour décider du statut.
 function modalMailView(m) {
   const f = m.fields || {};
-  const keys = Object.keys(f);
-  const champs = keys.length ? keys.map((k) => `<div class="inv-line"><span>${esc(k)}</span><span>${esc(f[k] || '')}</span></div>`).join('') : '<p class="hint">Aucun champ détecté.</p>';
   openModal(`<div class="modal-head"><b>✉️ ${esc(m.from || 'Mail')}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">${esc(m.subject || '')}${m.date ? ' · ' + esc(String(m.date).slice(0, 24)) : ''}</p>
-    <h3 class="rsub">Champs détectés</h3><div>${champs}</div>
+    <h3 class="rsub">Champs détectés</h3><div class="anam-list">${anamneseRowsHtml(f)}</div>
     <h3 class="rsub">Corps du mail</h3><pre style="white-space:pre-wrap;font-size:.8rem;max-height:40vh;overflow:auto;background:var(--bg);padding:8px;border-radius:8px">${esc(m.body || '(corps non disponible)')}</pre>
     <div class="actions"><button class="btn block" id="mvClose">Fermer</button></div>`);
   $('mX').addEventListener('click', closeModal); $('mvClose').addEventListener('click', closeModal);
