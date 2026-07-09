@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.109';
+const APP_VERSION = '1.1.110';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.110', date: '2026-07-09',
+    ajouts: [
+      'Accueil → « Rendez-vous à prendre » : la section liste maintenant juste les noms (cheval — client), sans boutons. Touchez un cheval pour ouvrir la liste complète dans une fenêtre, avec pour chacun les boutons « Prendre un RDV », « Inactif » et « Liste noire ».',
+    ],
+  },
   {
     version: '1.1.109', date: '2026-07-09',
     ajouts: [
@@ -5518,21 +5524,42 @@ function rdvAPrendre() {
   });
   return out;
 }
-// Section Accueil « Rendez-vous à prendre » : prendre un RDV, ou passer le cheval en inactif / liste noire.
+// Section Accueil « Rendez-vous à prendre » : liste SEULEMENT les noms (cheval — client), cliquables. Les actions sont dans la modale (au clic).
 function renderRdvAPrendre() {
   const card = $('homeRdvAPrendre'), list = $('homeRdvAPrendreList'); if (!card || !list) return;
   const items = rdvAPrendre();
   card.classList.toggle('hidden', !items.length);
   list.innerHTML = '';
   items.forEach(({ client, cheval, reported }) => {
-    const el = document.createElement('div'); el.className = 'list-item stack-act';
+    const el = document.createElement('div'); el.className = 'list-item clickable';
     const badge = reported.length ? ' <span class="badge">↩ reporté</span>' : '';
-    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cheval.nom)}${badge}</b><span class="li-sub">${esc(fullName(client))}${client.societe ? ' — ' + esc(client.societe) : ''}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-rdv>📅 Prendre un RDV</button><button class="btn small" data-inact>💤 Inactif</button><button class="btn small danger" data-bl>⛔ Liste noire</button></div>`;
-    el.querySelector('[data-rdv]').addEventListener('click', () => modalAssignRdvCheval(client, cheval, reported));
-    el.querySelector('[data-inact]').addEventListener('click', () => { if (!confirm('Passer le cheval « ' + cheval.nom + ' » en inactif ? Il ne sera plus proposé pour les RDV.')) return; cheval.actif = false; saveClients(); renderRdvAPrendre(); });
-    el.querySelector('[data-bl]').addEventListener('click', () => { if (!confirm('Mettre le cheval « ' + cheval.nom + ' » en liste noire ? Il devient inactif et n\'est plus proposé pour les RDV (réversible dans la fiche client).')) return; cheval.blacklist = true; cheval.actif = false; saveClients(); renderRdvAPrendre(); });
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cheval.nom)}${badge}</b><span class="li-sub">${esc(fullName(client))}${client.societe ? ' — ' + esc(client.societe) : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    el.addEventListener('click', () => modalRdvAPrendre());
     list.appendChild(el);
   });
+}
+// Modale « Rendez-vous à prendre » : liste complète avec, pour chaque cheval, les boutons Prendre un RDV / Inactif / Liste noire.
+function modalRdvAPrendre() {
+  const render = () => {
+    const items = rdvAPrendre();
+    if (!items.length) { closeModal(); renderHome(); return; }
+    openModal(`<div class="modal-head"><b>📅 Rendez-vous à prendre</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Chevaux actifs sans rendez-vous à venir. Pour chacun : prenez un RDV, ou passez-le en inactif / liste noire.</p>
+      <div id="rapList" style="max-height:66vh;overflow:auto"></div>
+      <div class="actions"><button class="btn block" id="rapClose">Fermer</button></div>`);
+    $('mX').addEventListener('click', closeModal); $('rapClose').addEventListener('click', closeModal);
+    const box = $('rapList');
+    items.forEach(({ client, cheval, reported }) => {
+      const el = document.createElement('div'); el.className = 'list-item stack-act';
+      const badge = reported.length ? ' <span class="badge">↩ reporté</span>' : '';
+      el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cheval.nom)}${badge}</b><span class="li-sub">${esc(fullName(client))}${client.societe ? ' — ' + esc(client.societe) : ''}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-rdv>📅 Prendre un RDV</button><button class="btn small" data-inact>💤 Inactif</button><button class="btn small danger" data-bl>⛔ Liste noire</button></div>`;
+      el.querySelector('[data-rdv]').addEventListener('click', () => modalAssignRdvCheval(client, cheval, reported));
+      el.querySelector('[data-inact]').addEventListener('click', () => { if (!confirm('Passer le cheval « ' + cheval.nom + ' » en inactif ? Il ne sera plus proposé pour les RDV.')) return; cheval.actif = false; saveClients(); renderHome(); render(); });
+      el.querySelector('[data-bl]').addEventListener('click', () => { if (!confirm('Mettre le cheval « ' + cheval.nom + ' » en liste noire ? Il devient inactif et n\'est plus proposé pour les RDV (réversible dans la fiche client).')) return; cheval.blacklist = true; cheval.actif = false; saveClients(); renderHome(); render(); });
+      box.appendChild(el);
+    });
+  };
+  render();
 }
 // Prendre un RDV pour UN cheval précis (Accueil « Rendez-vous à prendre »). Si le cheval provient d'un RDV reporté, on marque ces reports comme « replacés ».
 function modalAssignRdvCheval(client, cheval, reportedItems) {
