@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.127';
+const APP_VERSION = '1.1.128';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.128', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : l\'odomètre actuel estimé est affiché en haut de la page, avec un bouton « ＋ Relevé compteur » pour le déclarer directement.',
+      'Si un frais ne peut pas calculer ses « km roulés » (odomètre actuel ≤ km du dernier entretien), il l\'indique clairement (« km actuel manquant… ») au lieu d\'afficher 0. Déclarez le km réel du compteur actuel et le calcul se fait pour tous les frais.',
+    ],
+  },
   {
     version: '1.1.127', date: '2026-07-09',
     ajouts: [
@@ -4786,26 +4793,31 @@ function normalizeFraisOrder() {
   if (reordered) S.frais = out;
   return healed || reordered;
 }
+// Texte de la jauge d'un frais (km roulés / échéance). Avertit si l'odomètre actuel est manquant (≤ km du dernier entretien) → calcul impossible.
+function fraisJaugeText(f) {
+  const odo = odometer();
+  if (f.parentId) { const p = (S.frais || []).find((x) => x.id === f.parentId); return `🔗 lié à « ${p ? p.poste : '?'} » — réinitialisé avec l'entretien${f.date ? ' · dernier ' + fmtDateFr(f.date) : ''}`; }
+  const kd = f.kmDebut || 0, par = odo - kd;
+  if (kd > 0 && odo <= kd) return `⚠ km actuel manquant : odomètre estimé ${km(odo)} ≤ dernier entretien ${km(kd)}. Déclarez le relevé compteur actuel.`;
+  if (f.nature === 'recurrent') return `récurrent · ${km(Math.max(0, par))} roulés / ${km(f.kmPrevus)} avant échéance`;
+  return fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, (f.kmPrevus || 0) - par))}` : 'exceptionnel · épuisé ✔ — inactif (retiré de la base véhicule)';
+}
 function renderFraisVehicule() {
   if (normalizeFraisOrder()) saveSettings();
   const odo = odometer();
-  if ($('kmIndicatif')) $('kmIndicatif').innerHTML = `Tarif indicatif tournée : <b>${eurkm(tarifHT('tournee'))} HT</b> · <b>${eurkm(ttc(tarifHT('tournee')))} TVAC</b> (base véhicule + carburant).`;
+  if ($('kmIndicatif')) { $('kmIndicatif').innerHTML = `Odomètre actuel estimé : <b>${km(odo)}</b> <button class="btn small" id="fraisOdoBtn">＋ Relevé compteur</button><br><span class="hint">Les « km roulés » d'un frais = odomètre actuel − km du dernier entretien. Déclarez le km réel du compteur pour un calcul juste.</span><br>Tarif indicatif tournée : <b>${eurkm(tarifHT('tournee'))} HT</b> · <b>${eurkm(ttc(tarifHT('tournee')))} TVAC</b> (base véhicule + carburant).`; const ob = $('fraisOdoBtn'); if (ob) ob.onclick = () => modalStatutVehicule(); }
   if ($('fraisUnitHT')) { makeReadout($('fraisUnitHT'), '€/km HT'); $('fraisUnitHT').value = fmtNum(baseVehiculeHT(), 3); fitSize($('fraisUnitHT')); }
   if ($('fraisUnitTTC')) { makeReadout($('fraisUnitTTC'), '€/km TTC'); $('fraisUnitTTC').value = fmtNum(ttc(baseVehiculeHT()), 3); fitSize($('fraisUnitTTC')); }
   const box = $('fraisList'); if (!box) return; box.innerHTML = '';
   $('fraisEmpty').style.display = S.frais.length ? 'none' : 'block';
   const dl = document.createElement('datalist'); dl.id = 'fraisGrpList'; dl.innerHTML = fraisGroupes().map((g) => `<option value="${esc(g)}"></option>`).join(''); box.appendChild(dl);
   S.frais.forEach((f, i) => {
-    const parcouru = odo - (f.kmDebut || 0);
     const isChild = !!f.parentId;
     const parent = isChild ? S.frais.find((x) => x.id === f.parentId) : null;
     const children = f.nature === 'recurrent' ? S.frais.filter((x) => x.parentId === f.id) : [];
     const recurrents = S.frais.filter((x) => x.nature === 'recurrent');
     const epuise = f.nature === 'exceptionnel' && !isChild && !fraisActif(f); // épuisé → inactif : ne contribue plus à la base véhicule
-    const jauge = isChild ? `🔗 lié à « ${esc(parent ? parent.poste : '?')} » — réinitialisé avec l'entretien${f.date ? ' · dernier ' + esc(fmtDateFr(f.date)) : ''}`
-      : (f.nature === 'recurrent'
-        ? `récurrent · ${km(Math.max(0, parcouru))} roulés / ${km(f.kmPrevus)} avant échéance`
-        : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, f.kmPrevus - parcouru))}` : 'exceptionnel · épuisé ✔ — inactif (retiré de la base véhicule)'));
+    const jauge = esc(fraisJaugeText(f));
     const el = document.createElement('div'); el.className = 'edit-row' + (epuise ? ' frais-off' : '') + (isChild ? ' frais-child' : ''); el.dataset.idx = i;
     el.innerHTML = `<div class="er-top"><span class="drag-h">⠿</span>
         <input class="grow er-title" data-k="poste" value="${esc(f.poste)}" placeholder="Poste (entretien, assurance…)"/>
@@ -4827,7 +4839,7 @@ function renderFraisVehicule() {
     const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]'), kmDebEl = el.querySelector('[data-k="kmDebut"]');
     addUnit(montEl, '€ HT'); addUnit(kmEl, 'km'); if (kmDebEl) addUnit(kmDebEl, 'km'); makeReadout(ro, '€/km');
     // Recalcul live de la jauge (km roulés / avant échéance) quand on édite un champ.
-    const refreshJauge = () => { const p = el.querySelector('.er-jauge'); if (!p) return; const par = odometer() - (f.kmDebut || 0); p.textContent = isChild ? `🔗 lié à « ${parent ? parent.poste : '?'} » — réinitialisé avec l'entretien${f.date ? ' · dernier ' + fmtDateFr(f.date) : ''}` : (f.nature === 'recurrent' ? `récurrent · ${km(Math.max(0, par))} roulés / ${km(f.kmPrevus)} avant échéance` : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, (f.kmPrevus || 0) - par))}` : 'exceptionnel · épuisé ✔ — inactif (retiré de la base véhicule)')); };
+    const refreshJauge = () => { const p = el.querySelector('.er-jauge'); if (p) p.textContent = fraisJaugeText(f); };
     wireNum(montEl, { get: () => f.montantHT, dec: 0, set: (v) => { f.montantHT = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
     wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); refreshJauge(); }, after: () => saveSettings() });
     const syncChildren = () => { (S.frais || []).forEach((c) => { if (c.parentId === f.id) { c.kmDebut = f.kmDebut || 0; c.date = f.date || ''; } }); }; // un entretien propage son km/date à ses frais liés
