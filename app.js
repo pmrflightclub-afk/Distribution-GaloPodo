@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.121';
+const APP_VERSION = '1.1.122';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.122', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : un frais exceptionnel (Pièces, Réparation…) peut être « lié à l\'entretien ». Un frais lié se remet à zéro automatiquement quand vous faites l\'entretien (même km + même date), n\'apparaît plus « à renouveler » tout seul, et s\'affiche sous la carte de l\'entretien. Il garde son propre montant et sa durée de vie pour le calcul du coût au km.',
+      'Champ « Lié à l\'entretien » sur chaque frais exceptionnel (— indépendant / Entretien / …). Faire « ✅ Entretien fait » réinitialise l\'entretien ET tous ses frais liés d\'un coup.',
+    ],
+  },
   {
     version: '1.1.121', date: '2026-07-09',
     ajouts: [
@@ -1696,7 +1703,7 @@ function declareOdo(km, date) {
   saveSettings();
 }
 const odoDeclarationDue = () => { const last = lastOdoReleve(); return !last || (last.ym || (last.date || '').slice(0, 7)) < todayStr().slice(0, 7); };
-const fraisActif = (f) => f.nature === 'recurrent' ? true : (odometer() - (f.kmDebut || 0)) < (f.kmPrevus || 0);
+const fraisActif = (f) => (f.nature === 'recurrent' || f.parentId) ? true : (odometer() - (f.kmDebut || 0)) < (f.kmPrevus || 0); // les frais liés à un entretien suivent le parent → toujours actifs (réinitialisés avec lui)
 const fraisContribHT = (f) => (f.kmPrevus > 0 && fraisActif(f)) ? (f.montantHT || 0) / f.kmPrevus : 0;
 const amortContribHT = () => (S.amortissement.achatHT > 0 && S.amortissement.dureeVieKm > 0) ? S.amortissement.achatHT / S.amortissement.dureeVieKm : 0;
 const baseVehiculeHT = () => amortContribHT() + S.frais.reduce((s, f) => s + fraisContribHT(f), 0);
@@ -4742,39 +4749,46 @@ function renderFraisVehicule() {
   const dl = document.createElement('datalist'); dl.id = 'fraisGrpList'; dl.innerHTML = fraisGroupes().map((g) => `<option value="${esc(g)}"></option>`).join(''); box.appendChild(dl);
   S.frais.forEach((f, i) => {
     const parcouru = odo - (f.kmDebut || 0);
-    const epuise = f.nature === 'exceptionnel' && !fraisActif(f); // épuisé → inactif : ne contribue plus à la base véhicule
-    const jauge = f.nature === 'recurrent'
-      ? `récurrent · ${km(Math.max(0, parcouru))} roulés / ${km(f.kmPrevus)} avant échéance`
-      : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, f.kmPrevus - parcouru))}` : 'exceptionnel · épuisé ✔ — inactif (retiré de la base véhicule)');
-    const el = document.createElement('div'); el.className = 'edit-row' + (epuise ? ' frais-off' : ''); el.dataset.idx = i;
+    const isChild = !!f.parentId;
+    const parent = isChild ? S.frais.find((x) => x.id === f.parentId) : null;
+    const children = f.nature === 'recurrent' ? S.frais.filter((x) => x.parentId === f.id) : [];
+    const recurrents = S.frais.filter((x) => x.nature === 'recurrent');
+    const epuise = f.nature === 'exceptionnel' && !isChild && !fraisActif(f); // épuisé → inactif : ne contribue plus à la base véhicule
+    const jauge = isChild ? `🔗 lié à « ${esc(parent ? parent.poste : '?')} » — réinitialisé avec l'entretien${f.date ? ' · dernier ' + esc(fmtDateFr(f.date)) : ''}`
+      : (f.nature === 'recurrent'
+        ? `récurrent · ${km(Math.max(0, parcouru))} roulés / ${km(f.kmPrevus)} avant échéance`
+        : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, f.kmPrevus - parcouru))}` : 'exceptionnel · épuisé ✔ — inactif (retiré de la base véhicule)'));
+    const el = document.createElement('div'); el.className = 'edit-row' + (epuise ? ' frais-off' : '') + (isChild ? ' frais-child' : ''); el.dataset.idx = i;
     el.innerHTML = `<div class="er-top"><span class="drag-h">⠿</span>
         <input class="grow er-title" data-k="poste" value="${esc(f.poste)}" placeholder="Poste (entretien, assurance…)"/>
         <button class="a-del" data-del title="Supprimer">✕</button></div>
       <div class="er-grid">
         <label>Nature<select data-k="nature"><option value="recurrent">Récurrent</option><option value="exceptionnel">Exceptionnel</option></select></label>
-        <label>Date entretien<input data-k="date" type="date" value="${f.date || ''}"/></label>
+        ${isChild ? '' : `<label>Date entretien<input data-k="date" type="date" value="${f.date || ''}"/></label>`}
         <label>Montant<input data-k="montantHT" type="number" step="1" min="0" value="${f.montantHT || ''}"/></label>
         <label>Km prévus (intervalle)<input data-k="kmPrevus" type="number" step="1000" min="0" value="${f.kmPrevus || ''}"/></label>
-        <label>Km dernier entretien<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>
-        <label>Groupe<input data-k="groupe" list="fraisGrpList" value="${esc(f.groupe || '')}" placeholder="Freins, Pneus…"/></label>
+        ${isChild ? '' : `<label>Km dernier entretien<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>`}
+        ${f.nature === 'exceptionnel' ? `<label>Lié à l'entretien<select data-k="parentId"><option value="">— indépendant</option>${recurrents.map((p) => `<option value="${p.id}"${f.parentId === p.id ? ' selected' : ''}>${esc(p.poste || 'Récurrent')}</option>`).join('')}</select></label>` : `<label>Groupe<input data-k="groupe" list="fraisGrpList" value="${esc(f.groupe || '')}" placeholder="Freins, Pneus…"/></label>`}
         <label>Contribution<input data-ro="contrib" readonly/></label>
       </div>
       <p class="hint er-jauge">${jauge}</p>
-      <div class="er-renew"><button class="btn small" data-done>✅ Entretien fait (km + date)</button></div>`;
+      ${children.length ? `<p class="hint">🔗 Inclut (réinitialisés avec cet entretien) : <b>${children.map((c) => esc(c.poste || 'Frais')).join(', ')}</b>.</p>` : ''}
+      ${isChild ? '' : '<div class="er-renew"><button class="btn small" data-done>✅ Entretien fait (km + date)</button></div>'}`;
     el.querySelector('[data-k="nature"]').value = f.nature;
     const ro = el.querySelector('[data-ro="contrib"]');
     const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]'), kmDebEl = el.querySelector('[data-k="kmDebut"]');
-    addUnit(montEl, '€ HT'); addUnit(kmEl, 'km'); addUnit(kmDebEl, 'km'); makeReadout(ro, '€/km');
+    addUnit(montEl, '€ HT'); addUnit(kmEl, 'km'); if (kmDebEl) addUnit(kmDebEl, 'km'); makeReadout(ro, '€/km');
     wireNum(montEl, { get: () => f.montantHT, dec: 0, set: (v) => { f.montantHT = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
     wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
-    wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; }, after: () => { saveSettings(); const p = el.querySelector('.er-jauge'); const par = odometer() - (f.kmDebut || 0); if (p) p.textContent = f.nature === 'recurrent' ? `récurrent · ${km(Math.max(0, par))} roulés / ${km(f.kmPrevus)} avant échéance` : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, f.kmPrevus - par))}` : 'exceptionnel · épuisé ✔'); } });
+    if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; }, after: () => saveSettings() });
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
-    el.querySelector('[data-k="date"]').addEventListener('change', (e) => { f.date = e.target.value || ''; saveSettings(); });
-    el.querySelector('[data-k="groupe"]').addEventListener('input', (e) => { f.groupe = e.target.value.trim(); saveSettings(); });
-    el.querySelector('[data-done]').addEventListener('click', () => modalFraisDone(f)); // enregistre km + date du dernier entretien (+ regroupement)
-    el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; if (f.nature === 'exceptionnel' && !f.kmDebut) f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); });
-    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== f.id); saveSettings(); renderFraisVehicule(); });
+    { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; saveSettings(); }); }
+    { const ge = el.querySelector('[data-k="groupe"]'); if (ge) ge.addEventListener('input', (e) => { f.groupe = e.target.value.trim(); saveSettings(); }); }
+    { const pe = el.querySelector('[data-k="parentId"]'); if (pe) pe.addEventListener('change', (e) => { f.parentId = e.target.value || null; if (f.parentId) { const p = S.frais.find((x) => x.id === f.parentId); if (p) { f.kmDebut = p.kmDebut || 0; f.date = p.date || ''; } } saveSettings(); renderFraisVehicule(); }); }
+    { const db = el.querySelector('[data-done]'); if (db) db.addEventListener('click', () => modalFraisDone(f)); }
+    el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; if (f.nature === 'recurrent') f.parentId = null; if (f.nature === 'exceptionnel' && !f.kmDebut) f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); });
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== f.id); (S.frais || []).forEach((x) => { if (x.parentId === f.id) x.parentId = null; }); saveSettings(); renderFraisVehicule(); });
     box.appendChild(el);
   });
   enableRowDrag(box, S.frais, () => saveSettings());
@@ -4826,17 +4840,20 @@ function modalFraisMigration() {
 // Enregistre le km + la date du dernier entretien pour un ensemble de frais (récurrents et/ou exceptionnels).
 function markFraisDone(ids, kmVal, dateVal) {
   const idset = new Set(ids);
+  (S.frais || []).forEach((f) => { if (f.parentId && idset.has(f.parentId)) idset.add(f.id); }); // un entretien réinitialise aussi ses frais liés (Pièces, Réparation…)
   (S.frais || []).forEach((f) => { if (idset.has(f.id)) { f.kmDebut = Math.max(0, Math.round(kmVal || 0)); f.date = dateVal || todayStr(); } });
   saveSettings();
 }
 // « Entretien fait » : km + date du dernier entretien d'un frais, en cochant les autres frais faits en même temps (groupe mémorisable).
 function modalFraisDone(f) {
-  const others = (S.frais || []).filter((x) => x.id !== f.id);
+  const linked = (S.frais || []).filter((x) => x.parentId === f.id); // frais liés (réinitialisés automatiquement)
+  const others = (S.frais || []).filter((x) => x.id !== f.id && x.parentId !== f.id);
   const pre = new Set(f.groupe ? others.filter((x) => x.groupe === f.groupe).map((x) => x.id) : []);
   openModal(`<div class="modal-head"><b>✅ Entretien fait — ${esc(f.poste || 'Frais')}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Enregistre le kilométrage et la date du dernier entretien de ce frais. Le compteur « à renouveler » repart de ce point.</p>
     <div class="row"><label class="grow">Km au dernier entretien<input type="number" id="fdKm" step="1" min="0" inputmode="numeric" value="${Math.round(odometer())}"/></label><label class="grow">Date<input type="date" id="fdDate" value="${todayStr()}" max="${todayStr()}"/></label></div>
-    ${others.length ? `<p class="hint">Autres frais faits <b>en même temps</b> (même km / date) :</p><div id="fdOthers" style="max-height:34vh;overflow:auto"></div><label class="chk2"><input type="checkbox" id="fdRemember" ${pre.size ? 'checked' : ''}/> 🔗 Se souvenir de ce regroupement</label>` : ''}
+    ${linked.length ? `<p class="hint">🔗 Réinitialisés automatiquement avec cet entretien : <b>${linked.map((x) => esc(x.poste || 'Frais')).join(', ')}</b>.</p>` : ''}
+    ${others.length ? `<p class="hint">Autres frais faits <b>en même temps</b> (même km / date) :</p><div id="fdOthers" style="max-height:30vh;overflow:auto"></div><label class="chk2"><input type="checkbox" id="fdRemember" ${pre.size ? 'checked' : ''}/> 🔗 Se souvenir de ce regroupement</label>` : ''}
     <div class="actions"><button class="btn primary block" id="fdOk">Enregistrer</button></div>`);
   $('mX').addEventListener('click', closeModal);
   const ob = $('fdOthers');
@@ -6839,7 +6856,7 @@ function renderChangelog() {
 // Frais « échus » (à renouveler) : exceptionnel épuisé, ou récurrent dont le cycle km est atteint.
 function fraisEchus() {
   const odo = odometer();
-  return (S.frais || []).filter((f) => { if (!(f.kmPrevus > 0)) return false; const parcouru = odo - (f.kmDebut || 0); return f.nature === 'exceptionnel' ? !fraisActif(f) : (parcouru >= f.kmPrevus); });
+  return (S.frais || []).filter((f) => { if (f.parentId) return false; if (!(f.kmPrevus > 0)) return false; const parcouru = odo - (f.kmDebut || 0); return f.nature === 'exceptionnel' ? !fraisActif(f) : (parcouru >= f.kmPrevus); }); // les frais liés suivent l'entretien parent (jamais listés seuls)
 }
 // Relevé du compteur RÉEL (statut véhicule) : compare à l'estimé, enregistre, calcule l'usage privé.
 function modalStatutVehicule() {
