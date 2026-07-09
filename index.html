@@ -454,10 +454,17 @@
         <p class="empty" id="statutEmpty">Aucun relevé. Déclarez le km réel du compteur.</p>
       </section>
       <section class="card">
-        <div class="card-head"><h2>Frais à renouveler</h2><button class="btn small" id="btnFraisMigration">🧭 Régler l'historique</button></div>
-        <p class="hint">« Régler l'historique » : indiquez pour chaque frais quand il a été fait la dernière fois (km + date), pour corriger d'un coup ce qui est affiché « à renouveler » à tort.</p>
+        <div class="card-head"><h2>Contrôle véhicule (échéances)</h2><button class="btn small" id="btnFraisMigration">🧭 Régler l'historique</button></div>
+        <p class="hint">Postes/éléments dont le kilométrage prévu est dépassé. « ✅ Changement fait » ouvre une note de frais (remplace le poste + gère ses éléments liés) ; « ⏳ Repousser » ajoute des km au seuil si le garage n'a pas encore fait le remplacement.</p>
+        <div class="actions"><button class="btn primary block" id="btnNoteFrais">🧾 Note de frais véhicule</button></div>
         <div id="statutFraisEchus" class="list"></div>
-        <p class="empty" id="statutFraisEchusEmpty">Aucun frais à renouveler.</p>
+        <p class="empty" id="statutFraisEchusEmpty">Aucune échéance en cours.</p>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Historique des remplacements</h2></div>
+        <p class="hint">Postes/éléments remplacés (inactivés, hors calcul du tarif) — pour la traçabilité.</p>
+        <div id="statutRemplaces" class="list"></div>
+        <p class="empty" id="statutRemplacesEmpty">Aucun remplacement enregistré.</p>
       </section>
     </div>
 
