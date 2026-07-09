@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.103';
+const APP_VERSION = '1.1.104';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.104', date: '2026-07-09',
+    ajouts: [
+      'Cohérence des noms : le sous-onglet « Tournée → Replacer un RDV » est renommé « Rendez-vous à prendre » (même nom que la section de l\'Accueil). Cette page reste l\'outil détaillé pour traiter tous les reports d\'un client d\'un coup.',
+    ],
+  },
   {
     version: '1.1.103', date: '2026-07-09',
     ajouts: [
