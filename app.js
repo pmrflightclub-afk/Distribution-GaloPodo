@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.119';
+const APP_VERSION = '1.1.120';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.120', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : le champ « Km à l\'achat » devient « Km au dernier entretien » (avec une date). C\'est ce couple km + date qui décide si un frais est « à renouveler ».',
+      'Nouveau bouton « ✅ Entretien fait » sur chaque frais : saisissez le km (par défaut le compteur actuel) et la date du dernier entretien ; le compteur repart de ce point. Vous pouvez cocher les autres frais faits en même temps (ex. plaquettes + disques, pneus + montage) et mémoriser ce regroupement (champ « Groupe »).',
+      'Accueil → Statut véhicule : la section affiche le bouton de relevé, un seul frais à renouveler, puis « + N autre(s) » qui mène à la liste complète (Gestion → Statut véhicule).',
+      'Note : pour remettre d\'aplomb vos frais déjà enregistrés (entretiens déjà faits mais affichés « à renouveler »), un assistant de migration arrive à la prochaine mise à jour ; en attendant, vous pouvez déjà utiliser « ✅ Entretien fait ».',
+    ],
+  },
   {
     version: '1.1.119', date: '2026-07-09',
     ajouts: [
@@ -3897,7 +3906,7 @@ function renderVehiculePieces() {
     const reste = f.kmPrevus ? Math.max(0, f.kmPrevus - usage) : null;
     const el = document.createElement('div'); el.className = 'inv-client';
     let h = `<div class="inv-head"><span>${esc(f.poste || 'Pièce')}</span><span>${km(usage)} d'usage</span></div>`;
-    h += `<div class="inv-line"><span>Km à l'achat</span><span>${km(kmDebut)}</span></div>`;
+    h += `<div class="inv-line"><span>Km au dernier entretien</span><span>${km(kmDebut)}</span></div>`;
     h += `<div class="inv-line"><span>Km parcourus depuis l'achat</span><span>${km(usage)}</span></div>`;
     if (f.kmPrevus) h += `<div class="inv-line"><span>${f.nature === 'recurrent' ? 'Avant échéance' : 'Reste avant épuisement'}</span><span>${km(f.kmPrevus)} prévus · ${reste != null ? km(reste) + ' restants' : '—'}</span></div>`;
     el.innerHTML = h; box.appendChild(el);
@@ -4724,6 +4733,7 @@ function renderFraisVehicule() {
   if ($('fraisUnitTTC')) { makeReadout($('fraisUnitTTC'), '€/km TTC'); $('fraisUnitTTC').value = fmtNum(ttc(baseVehiculeHT()), 3); fitSize($('fraisUnitTTC')); }
   const box = $('fraisList'); if (!box) return; box.innerHTML = '';
   $('fraisEmpty').style.display = S.frais.length ? 'none' : 'block';
+  const dl = document.createElement('datalist'); dl.id = 'fraisGrpList'; dl.innerHTML = fraisGroupes().map((g) => `<option value="${esc(g)}"></option>`).join(''); box.appendChild(dl);
   S.frais.forEach((f, i) => {
     const parcouru = odo - (f.kmDebut || 0);
     const epuise = f.nature === 'exceptionnel' && !fraisActif(f); // épuisé → inactif : ne contribue plus à la base véhicule
@@ -4736,14 +4746,15 @@ function renderFraisVehicule() {
         <button class="a-del" data-del title="Supprimer">✕</button></div>
       <div class="er-grid">
         <label>Nature<select data-k="nature"><option value="recurrent">Récurrent</option><option value="exceptionnel">Exceptionnel</option></select></label>
-        <label>Date<input data-k="date" type="date" value="${f.date || ''}"/></label>
+        <label>Date entretien<input data-k="date" type="date" value="${f.date || ''}"/></label>
         <label>Montant<input data-k="montantHT" type="number" step="1" min="0" value="${f.montantHT || ''}"/></label>
-        <label>Km prévus<input data-k="kmPrevus" type="number" step="1000" min="0" value="${f.kmPrevus || ''}"/></label>
-        <label>Km à l'achat<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>
+        <label>Km prévus (intervalle)<input data-k="kmPrevus" type="number" step="1000" min="0" value="${f.kmPrevus || ''}"/></label>
+        <label>Km dernier entretien<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>
+        <label>Groupe<input data-k="groupe" list="fraisGrpList" value="${esc(f.groupe || '')}" placeholder="Freins, Pneus…"/></label>
         <label>Contribution<input data-ro="contrib" readonly/></label>
       </div>
       <p class="hint er-jauge">${jauge}</p>
-      ${epuise ? '<div class="er-renew"><button class="btn small" data-renew>♻ Renouveler (nouvelle date + km actuel)</button></div>' : ''}`;
+      <div class="er-renew"><button class="btn small" data-done>✅ Entretien fait (km + date)</button></div>`;
     el.querySelector('[data-k="nature"]').value = f.nature;
     const ro = el.querySelector('[data-ro="contrib"]');
     const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]'), kmDebEl = el.querySelector('[data-k="kmDebut"]');
@@ -4754,7 +4765,8 @@ function renderFraisVehicule() {
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
     el.querySelector('[data-k="date"]').addEventListener('change', (e) => { f.date = e.target.value || ''; saveSettings(); });
-    const rnw = el.querySelector('[data-renew]'); if (rnw) rnw.addEventListener('click', () => { f.date = todayStr(); f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); }); // réactive le frais : nouveau cycle à partir du km actuel
+    el.querySelector('[data-k="groupe"]').addEventListener('input', (e) => { f.groupe = e.target.value.trim(); saveSettings(); });
+    el.querySelector('[data-done]').addEventListener('click', () => modalFraisDone(f)); // enregistre km + date du dernier entretien (+ regroupement)
     el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; if (f.nature === 'exceptionnel' && !f.kmDebut) f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); });
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== f.id); saveSettings(); renderFraisVehicule(); });
     box.appendChild(el);
@@ -4767,16 +4779,45 @@ function renderArticlesPage() {
   updateReadouts();
   renderArticlesCat();
 }
+const fraisGroupes = () => [...new Set((S.frais || []).map((f) => f.groupe).filter(Boolean))];
+// Enregistre le km + la date du dernier entretien pour un ensemble de frais (récurrents et/ou exceptionnels).
+function markFraisDone(ids, kmVal, dateVal) {
+  const idset = new Set(ids);
+  (S.frais || []).forEach((f) => { if (idset.has(f.id)) { f.kmDebut = Math.max(0, Math.round(kmVal || 0)); f.date = dateVal || todayStr(); } });
+  saveSettings();
+}
+// « Entretien fait » : km + date du dernier entretien d'un frais, en cochant les autres frais faits en même temps (groupe mémorisable).
+function modalFraisDone(f) {
+  const others = (S.frais || []).filter((x) => x.id !== f.id);
+  const pre = new Set(f.groupe ? others.filter((x) => x.groupe === f.groupe).map((x) => x.id) : []);
+  openModal(`<div class="modal-head"><b>✅ Entretien fait — ${esc(f.poste || 'Frais')}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Enregistre le kilométrage et la date du dernier entretien de ce frais. Le compteur « à renouveler » repart de ce point.</p>
+    <div class="row"><label class="grow">Km au dernier entretien<input type="number" id="fdKm" step="1" min="0" inputmode="numeric" value="${Math.round(odometer())}"/></label><label class="grow">Date<input type="date" id="fdDate" value="${todayStr()}" max="${todayStr()}"/></label></div>
+    ${others.length ? `<p class="hint">Autres frais faits <b>en même temps</b> (même km / date) :</p><div id="fdOthers" style="max-height:34vh;overflow:auto"></div><label class="chk2"><input type="checkbox" id="fdRemember" ${pre.size ? 'checked' : ''}/> 🔗 Se souvenir de ce regroupement</label>` : ''}
+    <div class="actions"><button class="btn primary block" id="fdOk">Enregistrer</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  const ob = $('fdOthers');
+  if (ob) others.forEach((x) => { const row = document.createElement('label'); row.className = 'chk'; row.style.display = 'flex'; row.style.margin = '3px 0'; row.innerHTML = `<input type="checkbox" data-id="${x.id}" ${pre.has(x.id) ? 'checked' : ''}/> ${esc(x.poste || 'Frais')} <span class="li-sub">(${x.nature === 'recurrent' ? 'récurrent' : 'exceptionnel'})</span>`; ob.appendChild(row); });
+  $('fdOk').addEventListener('click', () => {
+    const kmVal = parseNum($('fdKm').value), dateVal = $('fdDate').value || todayStr();
+    if (dateVal > todayStr()) { alert('La date ne peut pas être dans le futur.'); return; }
+    const ids = [f.id]; if (ob) ob.querySelectorAll('[data-id]').forEach((c) => { if (c.checked) ids.push(c.dataset.id); });
+    markFraisDone(ids, kmVal, dateVal);
+    if ($('fdRemember') && $('fdRemember').checked && ids.length > 1) { const g = f.groupe || ('grp' + Date.now().toString(36)); const idset = new Set(ids); (S.frais || []).forEach((x) => { if (idset.has(x.id)) x.groupe = g; }); saveSettings(); }
+    closeModal(); if (typeof renderFraisVehicule === 'function') renderFraisVehicule(); if (typeof renderStatutVehiculePage === 'function') renderStatutVehiculePage(); renderHome();
+  });
+}
 function modalFrais(existing) {
   const w = existing ? Object.assign({}, existing) : { id: uid(), poste: '', nature: 'recurrent', montantHT: 0, kmPrevus: 0, kmDebut: odometer(), date: todayStr() };
   openModal(`<div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} frais véhicule</b><button class="x" id="mX">✕</button></div>
     <label>Poste<input type="text" id="fPoste" value="${esc(w.poste)}" placeholder="Entretien annuel, assurance, réparation…" /></label>
-    <label>Date (achat / installation)<input type="date" id="fDate" value="${w.date || ''}" /></label>
     <label>Nature<select id="fNature">
       <option value="recurrent">Récurrent (facture annuelle : entretien, assurance…)</option>
       <option value="exceptionnel">Exceptionnel (réparation ponctuelle…)</option>
     </select></label>
-    <div class="row"><label class="grow">Montant HT (€)<input type="number" id="fMontant" step="1" min="0" value="${w.montantHT || ''}" /></label><label class="grow">Km prévus<input type="number" id="fKm" step="1000" min="0" value="${w.kmPrevus || ''}" /></label></div>
+    <div class="row"><label class="grow">Montant HT (€)<input type="number" id="fMontant" step="1" min="0" value="${w.montantHT || ''}" /></label><label class="grow">Km prévus (intervalle)<input type="number" id="fKm" step="1000" min="0" value="${w.kmPrevus || ''}" /></label></div>
+    <div class="row"><label class="grow">Km au dernier entretien<input type="number" id="fKmDebut" step="1000" min="0" value="${w.kmDebut || ''}" /></label><label class="grow">Date du dernier entretien<input type="date" id="fDate" value="${w.date || ''}" /></label></div>
+    <label>Groupe (fait en même temps que…)<input type="text" id="fGroupe" list="fraisGrpModal" value="${esc(w.groupe || '')}" placeholder="Freins, Pneus…" /><datalist id="fraisGrpModal">${fraisGroupes().map((g) => `<option value="${esc(g)}"></option>`).join('')}</datalist></label>
     <p class="hint" id="fBreak"></p>
     ${existing ? '<button class="btn small danger" id="fDel">Supprimer ce frais</button>' : ''}
     <div class="actions"><button class="btn primary block" id="fOk">Enregistrer</button></div>`);
@@ -4788,6 +4829,7 @@ function modalFrais(existing) {
   $('fOk').addEventListener('click', () => {
     w.poste = $('fPoste').value.trim() || 'Frais'; w.nature = $('fNature').value; w.date = $('fDate').value || '';
     w.montantHT = parseFloat($('fMontant').value) || 0; w.kmPrevus = parseFloat($('fKm').value) || 0;
+    w.kmDebut = parseFloat($('fKmDebut').value) || 0; w.groupe = ($('fGroupe').value || '').trim();
     const i = S.frais.findIndex((x) => x.id === w.id); if (i >= 0) S.frais[i] = w; else S.frais.push(w);
     saveSettings(); closeModal(); renderFraisVehicule();
   });
@@ -6648,13 +6690,19 @@ function renderVehiculeStatut() {
   }
   const btn = $('homeVehiculeBtn'); if (btn) { btn.style.display = due ? '' : 'none'; btn.onclick = () => modalStatutVehicule(); }
   const box = $('homeFraisEchus'); if (box) { box.innerHTML = '';
-    echus.forEach((f) => {
-      const el = document.createElement('div'); el.className = 'list-item';
+    echus.slice(0, 1).forEach((f) => { // 1 seul item ; le reste via la ligne « + N » → page complète
+      const el = document.createElement('div'); el.className = 'list-item stack-act';
       const parcouru = odometer() - (f.kmDebut || 0);
-      el.innerHTML = `<div class="li-main"><b>🧾 ${esc(f.poste || 'Frais')}</b><span class="li-sub">${f.nature === 'exceptionnel' ? 'exceptionnel épuisé' : 'récurrent à renouveler'} · ${km(Math.max(0, parcouru))} / ${km(f.kmPrevus)}</span></div><div class="li-act"><button class="btn small" data-renew>♻ Renouveler</button></div>`;
-      el.querySelector('[data-renew]').addEventListener('click', () => { renewFrais(f); renderHome(); });
+      el.innerHTML = `<div class="li-main"><b>🧾 ${esc(f.poste || 'Frais')}</b><span class="li-sub">${f.nature === 'exceptionnel' ? 'exceptionnel épuisé' : 'récurrent à renouveler'} · ${km(Math.max(0, parcouru))} / ${km(f.kmPrevus)}</span></div><div class="li-act"><button class="btn small primary" data-done>✅ Fait</button></div>`;
+      el.querySelector('[data-done]').addEventListener('click', () => modalFraisDone(f));
       box.appendChild(el);
     });
+    if (echus.length > 1) {
+      const more = document.createElement('div'); more.className = 'list-item clickable';
+      more.innerHTML = `<div class="li-main"><b>+ ${echus.length - 1} autre(s) à renouveler</b><span class="li-sub">Voir la liste complète (Gestion → Statut véhicule)</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+      more.addEventListener('click', () => { showTab('gestion'); showGestion('statut'); });
+      box.appendChild(more);
+    }
   }
 }
 // Stats d'amortissement (Réglages → Configuration) : progression km, montant amorti, âge, km/an, usage privé.
@@ -6699,8 +6747,9 @@ function renderStatutVehiculePage() {
     echus.forEach((f) => {
       const parcouru = odometer() - (f.kmDebut || 0);
       const el = document.createElement('div'); el.className = 'list-item';
-      el.innerHTML = `<div class="li-main"><b>🧾 ${esc(f.poste || 'Frais')}</b><span class="li-sub">${f.nature === 'exceptionnel' ? 'exceptionnel épuisé' : 'récurrent à renouveler'} · ${km(Math.max(0, parcouru))} / ${km(f.kmPrevus)}${f.date ? ' · depuis le ' + esc(fmtDateFr(f.date)) : ''}</span></div><div class="li-act"><button class="btn small" data-renew>♻ Renouveler</button></div>`;
-      el.querySelector('[data-renew]').addEventListener('click', () => { renewFrais(f); renderStatutVehiculePage(); renderHome(); });
+      el.className = 'list-item stack-act';
+      el.innerHTML = `<div class="li-main"><b>🧾 ${esc(f.poste || 'Frais')}</b><span class="li-sub">${f.nature === 'exceptionnel' ? 'exceptionnel épuisé' : 'récurrent à renouveler'} · ${km(Math.max(0, parcouru))} / ${km(f.kmPrevus)}${f.date ? ' · dernier entretien le ' + esc(fmtDateFr(f.date)) : ''}</span></div><div class="li-act"><button class="btn small primary" data-done>✅ Entretien fait</button></div>`;
+      el.querySelector('[data-done]').addEventListener('click', () => modalFraisDone(f));
       fbox.appendChild(el);
     });
   }
