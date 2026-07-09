@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.118';
+const APP_VERSION = '1.1.119';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.119', date: '2026-07-09',
+    ajouts: [
+      '« Trajet du jour » remonte encore : il est maintenant placé au-dessus de « Statut véhicule » (juste après le message de version). Ordre : Créer une tournée · version · Trajet du jour · Statut véhicule · Tournées dépassées · Rendez-vous à prendre · Compte rendu photo · À venir.',
+    ],
+  },
   {
     version: '1.1.118', date: '2026-07-09',
     ajouts: [

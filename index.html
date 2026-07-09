@@ -53,6 +53,12 @@
     </div>
     <div class="actions"><button class="btn primary block big" id="btnNewTour">➕ Créer une tournée</button></div>
     <div class="card changelog-card hidden" id="homeChangelog"></div>
+    <section class="card" id="homeTrajetCard">
+      <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
+      <p class="hint">La tournée du jour puis chaque arrêt, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
+      <div id="homeTrajet" class="list"></div>
+      <p class="empty" id="homeTrajetEmpty">Aucune tournée aujourd'hui.</p>
+    </section>
     <section class="card blocking-card hidden" id="homeVehicule">
       <h2>🚗 Statut véhicule</h2>
       <p class="hint" id="homeVehiculeHint"></p>
@@ -63,12 +69,6 @@
       <h2>⚠ Tournées dépassées</h2>
       <p class="hint">Tournées dont le jour est passé sans clôture. <b>Démarrée</b> → finalisez les arrêts restants. <b>Jamais démarrée</b> → reportez chaque client à une nouvelle date, ou supprimez la tournée.</p>
       <div id="homeBlockingList" class="list"></div>
-    </section>
-    <section class="card" id="homeTrajetCard">
-      <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
-      <p class="hint">La tournée du jour puis chaque arrêt, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
-      <div id="homeTrajet" class="list"></div>
-      <p class="empty" id="homeTrajetEmpty">Aucune tournée aujourd'hui.</p>
     </section>
     <section class="card hidden" id="homeRdvAPrendre">
       <h2>📅 Rendez-vous à prendre</h2>
