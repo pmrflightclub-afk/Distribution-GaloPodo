@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.113';
+const APP_VERSION = '1.1.114';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.114', date: '2026-07-09',
+    ajouts: [
+      'Trajet du jour → « Agir » : nouvelle action « 📧 Email au client ». Joignez un PDF ou une image (planche/facture déjà enregistrée) → le partage s\'ouvre pour l\'envoyer par Gmail ; ou, sans pièce jointe, un email est préparé avec l\'adresse du client déjà remplie.',
+    ],
+  },
   {
     version: '1.1.113', date: '2026-07-09',
     ajouts: [
@@ -4504,6 +4510,26 @@ function ncPdfBlob(n) {
     { text: 'Montant a rembourser TTC : ' + eur(n.montantTTC), size: 14, bold: true },
   ]);
 }
+// Email libre au client (depuis « Agir ») : joindre un PDF/image (→ partage natif vers Gmail) ou email prérempli (mailto, destinataire rempli, sans pièce jointe).
+function modalEmailClient(client) {
+  if (!client) { alert('Client introuvable.'); return; }
+  let file = null;
+  openModal(`<div class="modal-head"><b>📧 Email — ${esc(fullName(client))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Destinataire : <b>${client.email ? esc(client.email) : '⚠ aucune adresse email en fiche client'}</b>. Joignez un PDF (planche ou facture déjà enregistrée) puis choisissez Gmail dans le partage, ou ouvrez un email prérempli sans pièce jointe.</p>
+    <input type="file" id="emFile" accept="application/pdf,image/*" hidden/>
+    <button class="btn block" id="emPick">📎 Joindre un fichier (PDF / image)</button>
+    <p class="hint" id="emFileName"></p>
+    <div class="actions"><button class="btn primary block" id="emSend">📧 Ouvrir l'email</button><button class="btn block" id="emClose">Fermer</button></div>`);
+  $('mX').onclick = closeModal; $('emClose').onclick = closeModal;
+  $('emPick').onclick = () => $('emFile').click();
+  $('emFile').addEventListener('change', (e) => { file = (e.target.files && e.target.files[0]) || null; if ($('emFileName')) $('emFileName').textContent = file ? '📎 ' + file.name : ''; });
+  $('emSend').onclick = async () => {
+    const body = mailBodyFor(client, file ? file.name : 'notre échange');
+    if (file) { await shareDoc(file, file.name, 'Document — ' + fullName(client), body); closeModal(); return; }
+    location.href = 'mailto:' + encodeURIComponent(client.email || '') + '?subject=' + encodeURIComponent('Message') + '&body=' + encodeURIComponent(body);
+    closeModal();
+  };
+}
 // Partage un document client par email (pièce jointe), puis exécute onSent() si l'envoi a bien été lancé.
 async function sendClientDoc(client, blob, filename, docLabel, onSent) {
   const ok = await shareDoc(blob, filename, docLabel, mailBodyFor(client, docLabel));
@@ -5936,6 +5962,7 @@ function renderHomeTrajet() {
           { label: '＋ Prêt', done: pretDone, onClick: () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, t); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, t) }))); } },
           { label: '💶 Paiement', done: arretPaiementDone(t, a), onClick: () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); }) },
           { label: '📅 RDV', done: !!a.rdvDone, onClick: () => { if (c0id) modalRDV(t, a, c0id, renderHomeTrajet); } },
+          { label: '📧 Email au client', keepOpen: true, onClick: () => { const cls = a.clients || []; if (cls.length === 1) modalEmailClient(clients.find((x) => x.id === cls[0].clientId)); else if (cls.length) modalActions('Email — quel client ?', cls.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalEmailClient(clients.find((x) => x.id === cl.clientId)) }))); } },
         ]);
       });
       const vb = el.querySelector('[data-valid]'); if (vb && !clotDis) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); })); // paiement enregistré (valide) → clôture l'arrêt (heure = 1re validation) ; verrouillé une fois clôturé
