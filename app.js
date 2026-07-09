@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.100';
+const APP_VERSION = '1.1.101';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.101', date: '2026-07-09',
+    ajouts: [
+      'Accueil : nouvelle section « 🐴 Chevaux sans prochain RDV » (visible seulement s\'il y en a). Elle liste tous les chevaux actifs (de clients actifs) qui n\'ont aucun rendez-vous à venir — par exemple ceux ignorés lors d\'un RDV, ou jamais replacés.',
+      'Pour chaque cheval de la liste : « 📅 Attribuer un RDV » (choix d\'une date), « 💤 Inactif » (ne plus le proposer), ou « ⛔ Liste noire » (le passe en inactif et ne le propose plus). La liste noire est réversible depuis la fiche du client.',
+      'Fiche client : chaque cheval a maintenant une case « Liste noire » (réversible).',
+    ],
+  },
   {
     version: '1.1.100', date: '2026-07-09',
     ajouts: [
@@ -1967,7 +1975,7 @@ function createTourFromDay(day, items) {
 
 // ================= CLIENTS =================
 const isClientActif = (c) => !!c && c.actif !== false;                     // défaut = actif
-const activeChevaux = (c) => ((c && c.chevaux) || []).filter((h) => h.actif !== false);
+const activeChevaux = (c) => ((c && c.chevaux) || []).filter((h) => h.actif !== false && !h.blacklist);
 function renderClients() {
   const list = $('clientsList'); list.innerHTML = '';
   $('clientsEmpty').style.display = clients.length ? 'none' : 'block';
@@ -2040,6 +2048,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = 'specifique';
       const row = document.createElement('div'); row.className = 'cheval';
       row.innerHTML = `<div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><label class="chk2"><input type="checkbox" data-actif ${h.actif !== false ? 'checked' : ''}/> Actif</label><button class="a-del" data-del>✕</button></div>
+        <label class="chk2"><input type="checkbox" data-bl ${h.blacklist ? 'checked' : ''}/> Liste noire (ne plus proposer de RDV)</label>
         <label>Date de naissance<input type="date" data-naiss value="${h.dateNaissance || ''}"/></label>
         <label>Race<input type="text" data-race value="${esc(h.race || '')}" placeholder="Race (facultatif)"/></label>
         <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
@@ -2053,6 +2062,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       row.querySelector('[data-src]').value = h.addrSource;
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
       row.querySelector('[data-actif]').addEventListener('change', (e) => { h.actif = e.target.checked; saveDraft(); });
+      row.querySelector('[data-bl]').addEventListener('change', (e) => { h.blacklist = e.target.checked; if (e.target.checked) { h.actif = false; const ac = row.querySelector('[data-actif]'); if (ac) ac.checked = false; } saveDraft(); });
       row.querySelector('[data-naiss]').addEventListener('change', (e) => { h.dateNaissance = e.target.value || ''; saveDraft(); });
       row.querySelector('[data-race]').addEventListener('input', (e) => { h.race = e.target.value; saveDraft(); });
       { const ab = row.querySelector('[data-anam]'); if (ab) ab.addEventListener('click', () => modalAnamnese(h)); }
@@ -5354,6 +5364,44 @@ function renderReplacerHome() {
     list.appendChild(el);
   });
 }
+// Un cheval a-t-il un RDV à venir (tournée non clôturée : aujourd'hui ou plus tard) ?
+function chevalHasUpcomingRdv(clientId, chevalId) {
+  return tournees.some((t) => statusOf(t) !== 'cloturee' && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === clientId && (cl.chevaux || []).some((cv) => cv.id === chevalId))));
+}
+// Chevaux ACTIFS (de clients actifs) sans aucun RDV à venir (ignorés lors d'un RDV, ou jamais replacés). Les inactifs / liste noire sont exclus.
+function chevauxSansRdv() {
+  const out = [];
+  clients.forEach((c) => { if (c.actif === false) return; activeChevaux(c).forEach((h) => { if (!chevalHasUpcomingRdv(c.id, h.id)) out.push({ client: c, cheval: h }); }); });
+  return out;
+}
+// Section Accueil « Chevaux sans prochain RDV » : attribuer un RDV, ou passer le cheval en inactif / liste noire.
+function renderHomeNoRdv() {
+  const card = $('homeNoRdv'), list = $('homeNoRdvList'); if (!card || !list) return;
+  const items = chevauxSansRdv();
+  card.classList.toggle('hidden', !items.length);
+  list.innerHTML = '';
+  items.forEach(({ client, cheval }) => {
+    const el = document.createElement('div'); el.className = 'list-item stack-act';
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cheval.nom)}</b><span class="li-sub">${esc(fullName(client))}${client.societe ? ' — ' + esc(client.societe) : ''}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-rdv>📅 Attribuer un RDV</button><button class="btn small" data-inact>💤 Inactif</button><button class="btn small danger" data-bl>⛔ Liste noire</button></div>`;
+    el.querySelector('[data-rdv]').addEventListener('click', () => modalAssignRdvCheval(client, cheval));
+    el.querySelector('[data-inact]').addEventListener('click', () => { if (!confirm('Passer le cheval « ' + cheval.nom + ' » en inactif ? Il ne sera plus proposé pour les RDV.')) return; cheval.actif = false; saveClients(); renderHomeNoRdv(); });
+    el.querySelector('[data-bl]').addEventListener('click', () => { if (!confirm('Mettre le cheval « ' + cheval.nom + ' » en liste noire ? Il devient inactif et n\'est plus proposé pour les RDV (réversible dans la fiche client).')) return; cheval.blacklist = true; cheval.actif = false; saveClients(); renderHomeNoRdv(); });
+    list.appendChild(el);
+  });
+}
+// Attribuer un RDV à UN cheval précis (depuis l'Accueil « Chevaux sans prochain RDV »).
+function modalAssignRdvCheval(client, cheval) {
+  const proposed = proposedRdvDate(todayStr());
+  openModal(`<div class="modal-head"><b>📅 RDV — 🐴 ${esc(cheval.nom)}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Client : <b>${esc(fullName(client))}</b>. Choisissez la date du prochain RDV pour ce cheval.</p>
+    <label>Date du RDV<input type="date" id="arCvDate" value="${proposed}"/></label>
+    <p class="hint" id="arCvPrev"></p>
+    <div class="actions"><button class="btn primary block" id="arCvOk">Enregistrer le RDV</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  const prev = () => { const d = $('arCvDate').value; const pv = rdvDayPreview(d); $('arCvPrev').innerHTML = d ? `<b>${fmtDateFr(d)}</b> — arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}` : ''; };
+  $('arCvDate').addEventListener('change', prev); prev();
+  $('arCvOk').addEventListener('click', () => { const d = $('arCvDate').value; if (!d) { closeModal(); return; } scheduleClientOnDate(d, client, [cheval]); closeModal(); renderHome(); });
+}
 function deleteTourById(id) { purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); }
 // Section dédiée (au-dessus du Trajet du jour) : tournées dépassées non clôturées.
 // Démarrée inachevée → « Finaliser » (arrêts restants) ; jamais démarrée → « Reporter » (client par client) ou « Supprimer ».
@@ -6047,6 +6095,7 @@ function renderHome() {
   renderBlockingArrets();
   renderHomeTrajet();
   renderReplacerHome();
+  renderHomeNoRdv();
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
 }
 function renewFrais(f) { f.date = todayStr(); f.kmDebut = odometer(); saveSettings(); } // nouveau cycle : repart du km actuel
