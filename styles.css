@@ -437,6 +437,8 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 .pro-logo-zoom input { width: 100%; }
 .pro-logo-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 
+.badge-noir { background: #c0392b; color: #fff; }
+
 /* Formulaire (anamnèse / mail) : intitulé de référence encadré + réponse en dessous, avec espace */
 .anam-list { padding: 2px 0; }
 .anam-item { margin-bottom: 12px; }

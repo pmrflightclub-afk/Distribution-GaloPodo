@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.106';
+const APP_VERSION = '1.1.107';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.107', date: '2026-07-09',
+    ajouts: [
+      'Nom d\'adresse par cheval (fiche client) : « même adresse que le client » → nom = nom du client ; « adresse de la société » → nom = société. Pour une adresse spécifique : cochez « Adresse privée » (nom = nom du client) ou saisissez un nom (ex. « Écurie du Nord »).',
+      'Nouvelle page Gestion → « Adresses chevaux » (entre Mes adresses et Clients) : liste toutes les adresses des chevaux répertoriées, avec un filtre Actives / Inactives / Liste noire.',
+      'Vous pouvez passer une adresse de cheval en Inactive ou en Liste noire depuis cette page (le statut s\'applique à tous les chevaux à cette adresse).',
+    ],
+  },
   {
     version: '1.1.106', date: '2026-07-09',
     ajouts: [
@@ -913,6 +921,8 @@ delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
 // { data:dataURL, zoom:multiplicateur, x/y:décalage en FRACTION du cadre (pan) } — cadrage repris à l'identique dans l'en-tête PDF.
 if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
+// Statut des adresses de chevaux (clé = adresse normalisée) : { [addrKey]: 'inactif' | 'noir' } (absent = actif). Partagé par tous les chevaux à cette adresse.
+if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {};
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
 if (!Array.isArray(S.mailKeywords) || !S.mailKeywords.length) S.mailKeywords = ['prise de contact'];
 if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, body, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
@@ -1848,6 +1858,7 @@ function showGestion(sub) {
   if ($('gestionSub')) $('gestionSub').classList.remove('open');
   if (currentGsub === 'clients') renderClients();
   if (currentGsub === 'adresses') renderAdresses();
+  if (currentGsub === 'adrchev') renderChevAddresses();
   if (currentGsub === 'articles') renderArticlesPage();
   if (currentGsub === 'materiel') renderMateriel();
   if (currentGsub === 'vehicule') renderFraisVehicule();
@@ -2101,6 +2112,9 @@ function editClient(existing, onSaved, prefillNom, prefill) {
           <option value="societe">Adresse de la société</option>
           <option value="specifique">Adresse spécifique</option>
         </select></label>
+        ${h.addrSource === 'specifique'
+    ? `<label class="chk2"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> Adresse privée (nom = nom du client)</label>${h.addrPrivee ? '' : `<label>Nom de l'adresse<input type="text" data-addrnom value="${esc(h.addrNom || '')}" placeholder="Écurie du Nord, pré de…"/></label>`}`
+    : `<p class="hint">Nom de l'adresse : <b>${esc(chevalAddrNom(w, h))}</b> (repris ${h.addrSource === 'societe' ? 'de la société' : 'du client'}).</p>`}
         <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>`;
       row.querySelector('[data-src]').value = h.addrSource;
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
@@ -2112,6 +2126,8 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
+      { const pv = row.querySelector('[data-priv]'); if (pv) pv.addEventListener('change', (e) => { h.addrPrivee = e.target.checked; renderCh(); saveDraft(); }); }
+      { const an = row.querySelector('[data-addrnom]'); if (an) an.addEventListener('input', (e) => { h.addrNom = e.target.value; saveDraft(); }); }
       if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; saveDraft(); });
       box.appendChild(row);
     });
@@ -2155,6 +2171,25 @@ function modalAnamnese(h) {
   const f = (h && h.anamnese) || {};
   openModal(`<div class="modal-head"><b>📄 Formulaire — ${esc((h && h.nom) || 'cheval')}</b><button class="x" id="mX">✕</button></div><div class="anam-list" style="max-height:64vh;overflow:auto">${anamneseRowsHtml(f)}</div><div class="actions"><button class="btn block" id="anClose">Fermer</button></div>`);
   $('mX').addEventListener('click', closeModal); $('anClose').addEventListener('click', closeModal);
+}
+// ================= GESTION → ADRESSES CHEVAUX =================
+let adrChevFilter = 'actives'; // actives (défaut) | inactifs | noir
+function renderChevAddresses() {
+  const seg = $('adrChevFilterSeg'); if (seg) seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._afw) { b._afw = true; b.addEventListener('click', () => { adrChevFilter = b.dataset.af; renderChevAddresses(); }); } b.classList.toggle('on', b.dataset.af === adrChevFilter); });
+  const box = $('adrChevList'); if (!box) return; box.innerHTML = '';
+  const all = chevalAddresses();
+  const match = (e) => { const st = addrStatusOf(e.addr); return adrChevFilter === 'noir' ? st === 'noir' : adrChevFilter === 'inactifs' ? st === 'inactif' : st === 'actif'; };
+  const shown = all.filter(match).sort((a, b) => addrStr(a.addr).localeCompare(addrStr(b.addr)));
+  if ($('adrChevEmpty')) { $('adrChevEmpty').style.display = shown.length ? 'none' : 'block'; $('adrChevEmpty').textContent = all.length ? 'Aucune adresse dans cette catégorie.' : 'Aucune adresse.'; }
+  shown.forEach((e) => {
+    const st = addrStatusOf(e.addr);
+    const noms = Array.from(e.noms).filter(Boolean).join(' · ');
+    const badge = st === 'noir' ? ' <span class="badge badge-noir">liste noire</span>' : st === 'inactif' ? ' <span class="badge">inactive</span>' : '';
+    const el = document.createElement('div'); el.className = 'list-item stack-act' + (st !== 'actif' ? ' item-off' : '');
+    el.innerHTML = `<div class="li-main"><b>${esc(noms || 'Adresse')}${badge}</b><span class="li-sub">${esc(addrStr(e.addr))} · ${e.usages.length} cheval(aux)</span></div><div class="li-act li-act-col">${st !== 'actif' ? '<button class="btn small" data-st="actif">✅ Activer</button>' : ''}${st !== 'inactif' ? '<button class="btn small" data-st="inactif">💤 Inactive</button>' : ''}${st !== 'noir' ? '<button class="btn small danger" data-st="noir">⛔ Liste noire</button>' : ''}</div>`;
+    el.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', () => { setAddrStatus(e.addr, b.dataset.st); renderChevAddresses(); }));
+    box.appendChild(el);
+  });
 }
 // ================= GESTION → MES ADRESSES (départ) =================
 function renderAdresses() {
@@ -2652,6 +2687,28 @@ const chevalAddr = (c, h) => {
   if (src === 'specifique') return addrStr(h.addr) ? h.addr : c.addr;
   return c.addr;
 };
+// Nom d'affichage de l'adresse d'un cheval, selon la source : client → nom du client ; société → nom de la société ; spécifique → « adresse privée » (= nom du client) ou nom saisi.
+function chevalAddrNom(c, h) {
+  const src = h.addrSource || 'client';
+  if (src === 'societe') return c.societe || fullName(c);
+  if (src === 'specifique') { if (h.addrPrivee) return fullName(c); return (h.addrNom || '').trim() || fullName(c) || 'Adresse'; }
+  return fullName(c) || 'Adresse';
+}
+// Statut d'une adresse PHYSIQUE (clé = adresse normalisée), partagé par tous les chevaux à cette adresse : 'actif' (défaut) | 'inactif' | 'noir' (liste noire).
+const addrKey = (a) => norm(addrStr(a));
+function addrStatusOf(a) { const k = addrKey(a); return (k && S.addrStatus && S.addrStatus[k]) || 'actif'; }
+function setAddrStatus(a, st) { const k = addrKey(a); if (!k) return; if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {}; if (st === 'actif') delete S.addrStatus[k]; else S.addrStatus[k] = st; saveSettings(); }
+const isAddrNoir = (a) => addrStatusOf(a) === 'noir';
+// Toutes les adresses de chevaux répertoriées, agrégées par adresse physique.
+function chevalAddresses() {
+  const map = {};
+  clients.forEach((c) => (c.chevaux || []).forEach((h) => {
+    const a = chevalAddr(c, h); const k = addrKey(a); if (!k) return;
+    if (!map[k]) map[k] = { key: k, addr: a, noms: new Set(), usages: [] };
+    map[k].noms.add(chevalAddrNom(c, h)); map[k].usages.push({ client: c, cheval: h });
+  }));
+  return Object.values(map);
+}
 function chooseClientTargets(c) {
   const chs = activeChevaux(c); // seuls les chevaux actifs (hors inactif / liste noire) sont proposés
   const distinct = new Set(chs.map((h) => norm(addrStr(chevalAddr(c, h)))));
