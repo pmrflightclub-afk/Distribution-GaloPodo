@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.126';
+const APP_VERSION = '1.1.127';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.127', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : la jauge « km roulés / avant échéance » se recalcule maintenant en direct quand vous modifiez le km du dernier entretien ou l\'intervalle (km prévus).',
+      'Rappel : « km roulés » = kilométrage actuel du compteur − km du dernier entretien. S\'il reste à 0, c\'est que le compteur actuel n\'est pas (ou plus) renseigné : déclarez un relevé dans Gestion → Statut véhicule (＋ Relevé) pour que les km parcourus s\'affichent.',
+    ],
+  },
   {
     version: '1.1.126', date: '2026-07-09',
     ajouts: [
@@ -4819,10 +4826,12 @@ function renderFraisVehicule() {
     const ro = el.querySelector('[data-ro="contrib"]');
     const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]'), kmDebEl = el.querySelector('[data-k="kmDebut"]');
     addUnit(montEl, '€ HT'); addUnit(kmEl, 'km'); if (kmDebEl) addUnit(kmDebEl, 'km'); makeReadout(ro, '€/km');
+    // Recalcul live de la jauge (km roulés / avant échéance) quand on édite un champ.
+    const refreshJauge = () => { const p = el.querySelector('.er-jauge'); if (!p) return; const par = odometer() - (f.kmDebut || 0); p.textContent = isChild ? `🔗 lié à « ${parent ? parent.poste : '?'} » — réinitialisé avec l'entretien${f.date ? ' · dernier ' + fmtDateFr(f.date) : ''}` : (f.nature === 'recurrent' ? `récurrent · ${km(Math.max(0, par))} roulés / ${km(f.kmPrevus)} avant échéance` : (fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, (f.kmPrevus || 0) - par))}` : 'exceptionnel · épuisé ✔ — inactif (retiré de la base véhicule)')); };
     wireNum(montEl, { get: () => f.montantHT, dec: 0, set: (v) => { f.montantHT = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
-    wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
+    wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); refreshJauge(); }, after: () => saveSettings() });
     const syncChildren = () => { (S.frais || []).forEach((c) => { if (c.parentId === f.id) { c.kmDebut = f.kmDebut || 0; c.date = f.date || ''; } }); }; // un entretien propage son km/date à ses frais liés
-    if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; }, after: () => { syncChildren(); saveSettings(); } });
+    if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; refreshJauge(); }, after: () => { syncChildren(); saveSettings(); } });
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
     { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; syncChildren(); saveSettings(); renderFraisVehicule(); }); }
