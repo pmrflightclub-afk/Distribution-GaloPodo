@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.111';
+const APP_VERSION = '1.1.112';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.112', date: '2026-07-09',
+    ajouts: [
+      'Planche de contact / avant-après : nouveau bouton « 📧 Envoyer par email ». L\'app génère un PDF de la planche (une page par page de la planche, avec vos photos, l\'en-tête et votre logo) et ouvre le partage → choisissez Gmail, le PDF est déjà joint.',
+    ],
+  },
   {
     version: '1.1.111', date: '2026-07-09',
     ajouts: [
@@ -4303,6 +4309,77 @@ async function shareDoc(blob, filename, title, text) {
 }
 // Texte du mail (destinataire non préréglable via le partage natif → on le rappelle dans le corps).
 function mailBodyFor(client, docLabel) { return `Bonjour${client && fullName(client) ? ' ' + fullName(client) : ''},\n\nVeuillez trouver ci-joint : ${docLabel}.\n\nBien à vous.${client && client.email ? '\n\n(Destinataire : ' + client.email + ')' : ''}`; }
+function concatBytes(parts) { let len = 0; parts.forEach((p) => len += p.length); const out = new Uint8Array(len); let o = 0; parts.forEach((p) => { out.set(p, o); o += p.length; }); return out; }
+function dataUrlToBytes(u) { const b64 = (u || '').split(',')[1] || ''; const bin = atob(b64); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
+// PDF binaire : une image JPEG par page (DCTDecode), mise à l'échelle A4 (paysage/portrait). pages = [{bytes,w,h}].
+function pdfFromJpegPages(pages, land) {
+  const PW = land ? 842 : 595, PH = land ? 595 : 842, m = 20;
+  const parts = []; let len = 0; const offsets = [];
+  const add = (b) => { parts.push(b); len += b.length; };
+  const addStr = (s) => add(latin1Bytes(s));
+  const writeObj = (num, headStr, streamBytes) => { offsets[num] = len; addStr(num + ' 0 obj\n' + headStr); if (streamBytes) { addStr('stream\n'); add(streamBytes); addStr('\nendstream'); } addStr('\nendobj\n'); };
+  addStr('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  const n = pages.length, kids = pages.map((_, i) => (3 + i * 3) + ' 0 R').join(' ');
+  writeObj(1, '<</Type/Catalog/Pages 2 0 R>>');
+  writeObj(2, '<</Type/Pages/Kids[' + kids + ']/Count ' + n + '>>');
+  pages.forEach((p, i) => {
+    const pageN = 3 + i * 3, contN = 4 + i * 3, imgN = 5 + i * 3;
+    const scale = Math.min((PW - 2 * m) / p.w, (PH - 2 * m) / p.h), dw = p.w * scale, dh = p.h * scale, x = (PW - dw) / 2, y = (PH - dh) / 2;
+    const cbytes = latin1Bytes('q ' + dw.toFixed(2) + ' 0 0 ' + dh.toFixed(2) + ' ' + x.toFixed(2) + ' ' + y.toFixed(2) + ' cm /Im0 Do Q');
+    writeObj(pageN, '<</Type/Page/Parent 2 0 R/MediaBox[0 0 ' + PW + ' ' + PH + ']/Contents ' + contN + ' 0 R/Resources<</XObject<</Im0 ' + imgN + ' 0 R>>>>>>');
+    writeObj(contN, '<</Length ' + cbytes.length + '>>\n', cbytes);
+    writeObj(imgN, '<</Type/XObject/Subtype/Image/Width ' + p.w + '/Height ' + p.h + '/ColorSpace/DeviceRGB/BitsPerComponent 8/Filter/DCTDecode/Length ' + p.bytes.length + '>>\n', p.bytes);
+  });
+  const xref = len, totalObjs = 2 + 3 * n;
+  let xr = 'xref\n0 ' + (totalObjs + 1) + '\n0000000000 65535 f \n';
+  for (let k = 1; k <= totalObjs; k++) xr += String(offsets[k]).padStart(10, '0') + ' 00000 n \n';
+  xr += 'trailer\n<</Size ' + (totalObjs + 1) + '/Root 1 0 R>>\nstartxref\n' + xref + '\n%%EOF';
+  addStr(xr);
+  return new Blob([concatBytes(parts)], { type: 'application/pdf' });
+}
+function plLoadImg(src) { return new Promise((res) => { if (!src) return res(null); const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; }); }
+function plTrunc(ctx, s, maxW) { s = String(s || ''); if (ctx.measureText(s).width <= maxW) return s; while (s.length && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1); return s + '…'; }
+// Rend une page de planche sur un canvas (en-tête + grille + photos) → pour l'export PDF image / email.
+async function planchePageCanvas(pi) {
+  const st = plCreate, land = st.orientation !== 'portrait', W = land ? 1400 : 990, H = land ? 990 : 1400;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.textBaseline = 'top';
+  const M = 28, headH = 86; let hx = M;
+  if (st.logo && S.proLogo && S.proLogo.data) { const lg = await plLoadImg(S.proLogo.data); if (lg) { const lw = 190, lh = 64; ctx.save(); ctx.beginPath(); ctx.rect(M, M, lw, lh); ctx.clip(); const z = S.proLogo.zoom || 1, s = Math.min(lw / lg.width, lh / lg.height) * z, dw = lg.width * s, dh = lg.height * s, cx = M + lw / 2 + (S.proLogo.x || 0) * lw, cy = M + lh / 2 + (S.proLogo.y || 0) * lh; ctx.drawImage(lg, cx - dw / 2, cy - dh / 2, dw, dh); ctx.restore(); hx = M + lw + 14; } }
+  ctx.fillStyle = '#111'; ctx.font = 'bold 26px sans-serif';
+  ctx.fillText(st.type === 'avantapres' ? 'Avant / apres (parage)' : 'Planche de contact', hx, M + 8);
+  ctx.font = '15px sans-serif'; ctx.textAlign = 'right';
+  ctx.fillText((st.cheval || '-') + '  ·  ' + (st.client || '-'), W - M, M + 8);
+  ctx.fillText(fmtDateFr(st.date), W - M, M + 30); ctx.textAlign = 'left';
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(M, M + headH); ctx.lineTo(W - M, M + headH); ctx.stroke();
+  const angles = st.angles || [], rows = plPageRows(pi), gx = M, gw = W - 2 * M, top = M + headH + 10, noteH = st.note ? 56 : 0, gh = H - top - M - noteH;
+  const labelW = Math.min(180, gw * 0.18), colW = (gw - labelW) / Math.max(1, angles.length), headerRowH = 30, rowH = (gh - headerRowH) / Math.max(1, rows.length);
+  ctx.fillStyle = '#eee'; ctx.fillRect(gx, top, gw, headerRowH);
+  ctx.fillStyle = '#111'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+  angles.forEach((a, ci) => ctx.fillText(plTrunc(ctx, a, colW - 8), gx + labelW + ci * colW + colW / 2, top + 8)); ctx.textAlign = 'left';
+  const imgs = {};
+  for (const r of rows) for (let ci = 0; ci < angles.length; ci++) { const pid = st.cells[plCellKey(pi, r, ci)], ph = pid && st.photos.find((p) => p.id === pid); if (ph && ph.url) imgs[r.ri + '_' + r.pj + '_' + ci] = await plLoadImg(ph.url); }
+  ctx.font = 'bold 13px sans-serif';
+  rows.forEach((r, ri) => {
+    const ry = top + headerRowH + ri * rowH;
+    ctx.fillStyle = (r.pj === 1) ? '#e7eef7' : '#f5f5f5'; ctx.fillRect(gx, ry, labelW, rowH);
+    ctx.fillStyle = '#111'; ctx.save(); ctx.beginPath(); ctx.rect(gx + 3, ry, labelW - 6, rowH); ctx.clip(); ctx.fillText(plTrunc(ctx, r.label, labelW - 8), gx + 5, ry + rowH / 2 - 7); ctx.restore();
+    angles.forEach((a, ci) => { const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (im) { const s = Math.min((colW - 6) / im.width, (rowH - 6) / im.height), dw = im.width * s, dh = im.height * s; ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); } });
+  });
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
+  const gridBottom = top + headerRowH + rows.length * rowH;
+  for (let ci = 0; ci <= angles.length; ci++) { const xx = gx + labelW + ci * colW; ctx.moveTo(xx, top); ctx.lineTo(xx, gridBottom); }
+  ctx.moveTo(gx, top); ctx.lineTo(gx, gridBottom);
+  for (let ri = 0; ri <= rows.length; ri++) { const yy = top + headerRowH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gx + gw, yy); }
+  ctx.moveTo(gx, top); ctx.lineTo(gx + gw, top); ctx.stroke();
+  if (st.note) { ctx.fillStyle = '#111'; ctx.font = '13px sans-serif'; ctx.save(); ctx.beginPath(); ctx.rect(gx, H - M - noteH + 6, gw, noteH); ctx.clip(); ctx.fillText(plTrunc(ctx, 'Note : ' + st.note, gw), gx, H - M - noteH + 10); ctx.restore(); }
+  return cv;
+}
+async function planchePdfBlob() {
+  const land = plCreate.orientation !== 'portrait', pages = [];
+  for (let pi = 0; pi < (plCreate.pages || []).length; pi++) { const cv = await planchePageCanvas(pi); pages.push({ bytes: dataUrlToBytes(cv.toDataURL('image/jpeg', 0.85)), w: cv.width, h: cv.height }); }
+  return pdfFromJpegPages(pages, land);
+}
 function printHtml(title, bodyHtml) {
   let pa = document.getElementById('printArea');
   if (!pa) { pa = document.createElement('div'); pa.id = 'printArea'; document.body.appendChild(pa); }
@@ -5245,7 +5322,7 @@ function modalPlancheCreate(type) {
         <h3 class="rsub">Aperçu / mise en page</h3>
         <div id="plCgrid"></div>
       </section>
-      <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCclose">Fermer</button></div>
+      <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button><button class="btn block" id="plCclose">Fermer</button></div>
     </div>`);
   const close = () => { plCreate = null; closeModal(); };
   $('mX').onclick = close; $('plCclose').onclick = close;
@@ -5261,6 +5338,16 @@ function modalPlancheCreate(type) {
   $('plCimport').onclick = () => $('plCfiles').click();
   $('plCfiles').addEventListener('change', plHandleFiles);
   $('plCpdf').onclick = planchePrint;
+  $('plCmail').onclick = async () => {
+    if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo placée. Envoyer quand même la planche (vide) ?')) return;
+    const btn = $('plCmail'); const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Préparation…';
+    try {
+      const blob = await planchePdfBlob();
+      const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
+      await shareDoc(blob, 'planche-' + (norm(plCreate.cheval || 'cheval').replace(/\s+/g, '-')) + '.pdf', 'Planche — ' + (plCreate.cheval || 'cheval'), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval')));
+    } catch (e) { alert('Impossible de générer la planche.'); }
+    if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
+  };
   plRenderPot(); plRenderGrid();
 }
 
