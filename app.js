@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.128';
+const APP_VERSION = '1.1.129';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.129', date: '2026-07-09',
+    ajouts: [
+      'Accueil → carte « Nouveautés » : nouveau bouton « ✓ Tout lu » pour marquer toutes les versions comme lues d\'un coup (la carte disparaît).',
+    ],
+  },
   {
     version: '1.1.128', date: '2026-07-09',
     ajouts: [
@@ -6914,9 +6920,11 @@ function renderHomeChangelog() {
   if (!unread.length) { card.classList.add('hidden'); card.innerHTML = ''; card.onclick = null; return; }
   const e = unread[0];
   card.classList.remove('hidden');
-  card.innerHTML = `<div class="cl-msg"><div class="li-main"><b>📣 Nouveautés — version ${esc(e.version)}</b><span class="li-sub">Appuyez pour découvrir les nouveautés et corrections.</span></div><span class="li-chev">›</span></div>`;
+  card.innerHTML = `<div class="cl-msg"><div class="li-main"><b>📣 Nouveautés — version ${esc(e.version)}${unread.length > 1 ? ' (+' + (unread.length - 1) + ')' : ''}</b><span class="li-sub">Appuyez pour découvrir les nouveautés et corrections.</span></div><div style="display:flex;gap:8px;align-items:center"><button class="btn small" id="clMarkAll" title="Tout marquer comme lu">✓ Tout lu</button><span class="li-chev">›</span></div></div>`;
   card.onclick = () => openChangelogEntry(e);
+  const mb = $('clMarkAll'); if (mb) mb.addEventListener('click', (ev) => { ev.stopPropagation(); markAllChangelogRead(); renderHomeChangelog(); });
 }
+function markAllChangelogRead() { if (!Array.isArray(S.changelogRead)) S.changelogRead = []; CHANGELOG.forEach((e) => { if (!S.changelogRead.includes(e.version)) S.changelogRead.push(e.version); }); saveSettings(); }
 // Réglages → Changelog : toutes les versions ; non lues mises en avant, lues grisées.
 function renderChangelog() {
   const box = $('changelogList'); if (!box) return; box.innerHTML = '';
