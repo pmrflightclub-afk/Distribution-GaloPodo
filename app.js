@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.133';
+const APP_VERSION = '1.1.134';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.134', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule — assistant de migration tout-en-un (étape 3/3, Gestion → Statut véhicule → « 🧭 Régler l\'historique »). Pour chaque frais : rattachez-le à un type (Pièces/Réparation → Entretien, Montage → Pneus… pré-remplis) ou laissez-le type à part entière, réglez l\'état (Fait avec km + date, ou seulement la date → km estimé).',
+      'Option « Amorcer le journal des frais réels » : enregistre les montants « Fait » comme factures d\'achat passées, pour que la stat « provision vs réel » soit juste dès le départ. À faire en une passe.',
+    ],
+  },
   {
     version: '1.1.133', date: '2026-07-09',
     ajouts: [
@@ -4937,52 +4944,47 @@ function renderArticlesPage() {
   renderArticlesCat();
 }
 const fraisGroupes = () => [...new Set((S.frais || []).map((f) => f.groupe).filter(Boolean))];
-// Assistant de migration : régler le dernier entretien (km + date) de chaque frais ET lier les exceptionnels à leur entretien — le tout en une passe.
+// Assistant de migration tout-en-un : régler km/date de référence, organiser les frais en Types (lier les éléments), et amorcer le journal des frais réels — en une passe.
 function modalFraisMigration() {
   const odo = odometer();
-  const recurrents = (S.frais || []).filter((f) => f.nature === 'recurrent' && f.kmPrevus > 0);
-  const exceptionnels = (S.frais || []).filter((f) => f.nature === 'exceptionnel');
-  if (!recurrents.length && !exceptionnels.length) { alert('Aucun frais à régler.'); return; }
+  const frais = (S.frais || []).filter((f) => f.kmPrevus > 0);
+  if (!frais.length) { alert('Aucun frais avec un intervalle (km prévus) à régler.'); return; }
   const st = {};
-  (S.frais || []).forEach((f) => { st[f.id] = { mode: (f.kmDebut > 0 && (odo - f.kmDebut) < f.kmPrevus) ? 'fait' : 'afaire', km: f.kmDebut || Math.max(0, Math.round(odo - (f.kmPrevus || 0))), date: f.date || todayStr() }; });
-  // Liens pré-remplis : parent existant, sinon Pièces/Réparation → l'entretien.
-  const link = {}; const ent = recurrents.find((r) => /entretien/i.test(r.poste || ''));
-  exceptionnels.forEach((f) => { if (f.parentId) link[f.id] = f.parentId; else if (ent && /pi[eè]ce|r[ée]para/i.test(f.poste || '')) link[f.id] = ent.id; });
-  const modeSel = (id) => { const s = st[id]; return `<label>État<select data-mode="${id}"><option value="fait"${s.mode === 'fait' ? ' selected' : ''}>Fait (dernier entretien)</option><option value="afaire"${s.mode === 'afaire' ? ' selected' : ''}>À faire (reste à renouveler)</option><option value="neuf"${s.mode === 'neuf' ? ' selected' : ''}>Neuf / repart maintenant</option></select></label>${s.mode === 'fait' ? `<div class="row"><label class="grow">Km dernier entretien<input type="number" data-km="${id}" step="1" min="0" inputmode="numeric" value="${s.km}"/></label><label class="grow">Date<input type="date" data-date="${id}" value="${s.date}" max="${todayStr()}"/></label></div>` : ''}`; };
+  frais.forEach((f) => { st[f.id] = { mode: (f.kmDebut > 0 && (odo - f.kmDebut) < f.kmPrevus) ? 'fait' : 'afaire', km: f.kmDebut || Math.max(0, Math.round(odo - (f.kmPrevus || 0))), date: f.date || todayStr() }; });
+  const link = {}; const findHead = (re) => frais.find((f) => re.test(f.poste || ''));
+  const ent = findHead(/entretien/i), pneu = findHead(/pneu/i);
+  frais.forEach((f) => { if (f.parentId) link[f.id] = f.parentId; else if (ent && f.id !== ent.id && /pi[eè]ce|r[ée]para/i.test(f.poste || '')) link[f.id] = ent.id; else if (pneu && f.id !== pneu.id && /montage|[ée]quilibr/i.test(f.poste || '')) link[f.id] = pneu.id; });
+  const seed = { on: true };
+  const modeSel = (id) => { const s = st[id]; return `<label>État<select data-mode="${id}"><option value="fait"${s.mode === 'fait' ? ' selected' : ''}>Fait (dernier)</option><option value="afaire"${s.mode === 'afaire' ? ' selected' : ''}>À faire (reste à renouveler)</option><option value="neuf"${s.mode === 'neuf' ? ' selected' : ''}>Neuf / repart maintenant</option></select></label>${s.mode === 'fait' ? `<div class="row"><label class="grow">Km<input type="number" data-km="${id}" step="1" min="0" inputmode="numeric" value="${s.km}"/></label><label class="grow">Date<input type="date" data-date="${id}" value="${s.date}" max="${todayStr()}"/></label></div>` : ''}`; };
   const render = () => {
-    openModal(`<div class="modal-head"><b>🧭 Régler l'historique des entretiens</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">« Fait » = km + date du dernier entretien · « À faire » = reste à renouveler · « Neuf » = repart pour un cycle complet (compteur ${km(odo)}). <b>Si vous ne connaissez pas le km exact</b>, indiquez la <b>date</b> : l'app reprend le km d'un relevé de cette date, sinon l'estime. Cochez les frais <b>liés</b> à un entretien (Pièces, Réparation…) : ils héritent de son km/date.</p>
-      <div id="fmList" style="max-height:62vh;overflow:auto"></div>
+    openModal(`<div class="modal-head"><b>🧭 Régler l'historique (types + km/date)</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Pour chaque frais : rattachez-le à un <b>type</b> (ex. Pièces/Réparation → Entretien ; Montage → Pneus) ou laissez-le « type à part entière ». Puis réglez l'état (Fait = km + date ; à défaut de km exact, la date suffit → estimé). Un élément lié hérite du km/date de son type.</p>
+      <div id="fmList" style="max-height:58vh;overflow:auto"></div>
+      <label class="chk2"><input type="checkbox" id="fmSeed" ${seed.on ? 'checked' : ''}/> Amorcer le journal des frais réels avec les montants « Fait » (pour la stat provision vs réel)</label>
       <div class="actions"><button class="btn primary block" id="fmOk">Appliquer</button><button class="btn block" id="fmClose">Fermer</button></div>`);
     $('mX').onclick = closeModal; $('fmClose').onclick = closeModal;
     const box = $('fmList');
-    recurrents.forEach((r) => {
-      const el = document.createElement('div'); el.className = 'card'; el.style.margin = '8px 0';
-      const linkedEx = exceptionnels.filter((x) => link[x.id] === r.id);
-      el.innerHTML = `<div class="a-art-head"><span><b>${esc(r.poste || 'Entretien')}</b> <span class="li-sub">(récurrent · tous les ${km(r.kmPrevus)})</span></span></div>${modeSel(r.id)}
-        ${exceptionnels.length ? `<p class="hint" style="margin:8px 0 2px">Frais liés (réinitialisés avec cet entretien) :</p><div class="fm-linked">${exceptionnels.map((x) => `<label class="chk"><input type="checkbox" data-link="${x.id}" data-parent="${r.id}" ${link[x.id] === r.id ? 'checked' : ''}/> ${esc(x.poste || 'Frais')}</label>`).join('')}</div>` : ''}`;
+    frais.forEach((f) => {
+      const linked = !!link[f.id];
+      const parents = frais.filter((x) => x.id !== f.id && !link[x.id]); // un frais lié ne peut pas être un type parent
+      const el = document.createElement('div'); el.className = 'card' + (linked ? ' frais-child' : ''); el.style.margin = '8px 0';
+      el.innerHTML = `<div class="a-art-head"><span><b>${esc(f.poste || 'Frais')}</b> <span class="li-sub">(tous les ${km(f.kmPrevus)})</span></span></div>
+        <label>Lié au type<select data-link="${f.id}"><option value="">— type à part entière</option>${parents.map((p) => `<option value="${p.id}"${link[f.id] === p.id ? ' selected' : ''}>${esc(p.poste || 'Type')}</option>`).join('')}</select></label>
+        ${linked ? '<p class="hint">→ hérite du km / date de son type.</p>' : modeSel(f.id)}`;
       box.appendChild(el);
     });
-    const indep = exceptionnels.filter((x) => !link[x.id] && x.kmPrevus > 0);
-    if (indep.length) { const sep = document.createElement('p'); sep.className = 'hint'; sep.style.marginTop = '10px'; sep.innerHTML = '<b>Frais exceptionnels indépendants</b> (non liés à un entretien) :'; box.appendChild(sep); }
-    indep.forEach((f) => {
-      const el = document.createElement('div'); el.className = 'card'; el.style.margin = '8px 0';
-      el.innerHTML = `<div class="a-art-head"><span><b>${esc(f.poste || 'Frais')}</b> <span class="li-sub">(exceptionnel · tous les ${km(f.kmPrevus)})</span></span></div>${modeSel(f.id)}`;
-      box.appendChild(el);
-    });
+    $('fmSeed').addEventListener('change', (e) => { seed.on = e.target.checked; });
+    box.querySelectorAll('[data-link]').forEach((sel) => sel.addEventListener('change', (e) => { const id = e.target.dataset.link; if (e.target.value) link[id] = e.target.value; else delete link[id]; render(); }));
     box.querySelectorAll('[data-mode]').forEach((sel) => sel.addEventListener('change', (e) => { st[e.target.dataset.mode].mode = e.target.value; render(); }));
     box.querySelectorAll('[data-km]').forEach((i) => i.addEventListener('input', (e) => { st[e.target.dataset.km].km = parseNum(e.target.value); }));
-    box.querySelectorAll('[data-date]').forEach((i) => i.addEventListener('change', (e) => { const id = e.target.dataset.date; st[id].date = e.target.value; if (st[id].date) { const rel = (S.odoReleves || []).find((r) => r && r.date === st[id].date && typeof r.km === 'number'); if (rel) st[id].km = rel.km; else { const est = Math.round(estOdoAt(st[id].date)); if (est > 0) st[id].km = est; } } render(); })); // date → km repris d'un relevé, sinon estimé
-    box.querySelectorAll('[data-link]').forEach((c) => c.addEventListener('change', (e) => { const id = e.target.dataset.link; if (e.target.checked) link[id] = e.target.dataset.parent; else delete link[id]; render(); }));
+    box.querySelectorAll('[data-date]').forEach((i) => i.addEventListener('change', (e) => { const id = e.target.dataset.date; st[id].date = e.target.value; if (st[id].date) { const rel = (S.odoReleves || []).find((r) => r && r.date === st[id].date && typeof r.km === 'number'); if (rel) st[id].km = rel.km; else { const est = Math.round(estOdoAt(st[id].date)); if (est > 0) st[id].km = est; } } render(); }));
     $('fmOk').onclick = () => {
       const applyMode = (f) => { const s = st[f.id]; if (s.mode === 'neuf') { f.kmDebut = Math.round(odo); f.date = todayStr(); } else if (s.mode === 'afaire') { f.kmDebut = Math.max(0, Math.round(odo - (f.kmPrevus || 0))); } else { f.kmDebut = Math.max(0, Math.round(s.km || 0)); f.date = s.date || todayStr(); } };
-      recurrents.forEach(applyMode); // les entretiens d'abord
-      exceptionnels.forEach((f) => {
-        if (link[f.id]) { f.parentId = link[f.id]; const p = S.frais.find((x) => x.id === f.parentId); if (p) { f.kmDebut = p.kmDebut || 0; f.date = p.date || ''; } } // hérite de l'entretien
-        else { f.parentId = null; if (f.kmPrevus > 0) applyMode(f); }
-      });
+      frais.filter((f) => !link[f.id]).forEach((f) => { f.parentId = null; applyMode(f); }); // les têtes de type d'abord
+      frais.filter((f) => link[f.id]).forEach((f) => { f.parentId = link[f.id]; const p = S.frais.find((x) => x.id === f.parentId); if (p) { f.kmDebut = p.kmDebut || 0; f.date = p.date || ''; } });
+      if (seed.on) { if (!Array.isArray(S.fraisJournal)) S.fraisJournal = []; frais.forEach((f) => { const headId = link[f.id] || f.id; const headFait = st[headId] && st[headId].mode === 'fait'; if (headFait && (f.montantHT || 0) > 0 && f.date) { if (!S.fraisJournal.some((j) => j.fraisId === f.id && j.date === f.date)) S.fraisJournal.push({ id: uid(), date: f.date, km: f.kmDebut || 0, fraisId: f.id, poste: f.poste || 'Frais', montant: f.montantHT || 0 }); } }); }
       saveSettings(); closeModal(); renderFraisVehicule(); renderStatutVehiculePage(); renderHome();
-      alert('Historique réglé et frais liés à leur entretien — le Statut véhicule est à jour.');
+      alert('Types organisés, historique réglé, journal amorcé — le Statut véhicule est à jour.');
     };
   };
   render();
