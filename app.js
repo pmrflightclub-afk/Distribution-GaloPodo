@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.115';
+const APP_VERSION = '1.1.116';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.116', date: '2026-07-09',
+    ajouts: [
+      'Déclarer → Planche de contact : nouveau bouton « 📅 Créer depuis une tournée ». Choisissez une tournée (toutes sont proposées), cochez les clients et chevaux voulus (plusieurs possibles), et l\'app enchaîne une planche — et un PDF séparé — pour CHAQUE cheval.',
+      'Les planches s\'enchaînent une par une (« cheval 1/3 », puis « ➡ Planche suivante ») pour ne pas surcharger l\'écran : vous préparez et générez la planche d\'un cheval, puis passez au suivant. Cheval, client et date sont repris automatiquement.',
+      'Rappel : dans une tournée (bouton « 📷 Planche / compte rendu » d\'un arrêt), on traite toujours un seul cheval à la fois. Le regroupement multi-clients/chevaux n\'existe que dans « Déclarer » (planche centralisée).',
+    ],
+  },
   {
     version: '1.1.115', date: '2026-07-09',
     ajouts: [
@@ -5340,18 +5348,65 @@ function plPageRows(pi) {
 }
 const plCellKey = (pi, r, ci) => plCreate.type === 'avantapres' ? (pi + '_' + r.ri + '_' + r.pj + '_' + ci) : (pi + '_' + r.ri + '_' + ci);
 
+// Déclarer → Planche : choisir une tournée effectuée (toutes) pour préremplir. On sélectionne des clients/chevaux, puis on enchaîne UNE planche (UN PDF) par cheval.
+function modalPlancheFromTour() {
+  const tours = allTours().slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  if (!tours.length) { alert('Aucune tournée enregistrée.'); return; }
+  openModal(`<div class="modal-head"><b>📅 Planche depuis une tournée</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Choisissez une tournée. Vous cocherez ensuite les clients et chevaux ; l'app enchaîne une planche (un PDF) par cheval.</p>
+    <div id="ptList" style="max-height:66vh;overflow:auto"></div>
+    <div class="actions"><button class="btn block" id="ptClose">Fermer</button></div>`);
+  $('mX').onclick = closeModal; $('ptClose').onclick = closeModal;
+  const box = $('ptList');
+  tours.forEach((t) => {
+    const noms = (t.arrets || []).flatMap((a) => (a.clients || []).map((cl) => clientName(cl.clientId)));
+    const el = document.createElement('div'); el.className = 'list-item clickable';
+    el.innerHTML = `<div class="li-main"><b>${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' · ' + esc(t.nom.trim()) : ''}</b><span class="li-sub">${esc([...new Set(noms)].join(' · ') || 'aucun client')}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    el.addEventListener('click', () => modalPlancheTourSelect(t));
+    box.appendChild(el);
+  });
+}
+function modalPlancheTourSelect(t) {
+  const rows = [];
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalCancelled(cv)) return; rows.push({ clientNom: clientName(cl.clientId), cheval: cv.nom }); })));
+  if (!rows.length) { alert('Aucun cheval sur cette tournée.'); return; }
+  const sel = new Set(rows.map((_, i) => i));
+  openModal(`<div class="modal-head"><b>📅 ${esc(fmtDateFr(t.date))} — chevaux</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Cochez les chevaux à traiter (plusieurs clients / chevaux possibles). Une planche — et un PDF — sera créée pour chaque cheval, l'un après l'autre.</p>
+    <div id="ptcList" style="max-height:58vh;overflow:auto"></div>
+    <div class="actions"><button class="btn primary block" id="ptcOk">Créer les planches (<span id="ptcN">${sel.size}</span>)</button><button class="btn block" id="ptcClose">Fermer</button></div>`);
+  $('mX').onclick = closeModal; $('ptcClose').onclick = closeModal;
+  const box = $('ptcList'); let cur = null;
+  rows.forEach((r, i) => {
+    if (r.clientNom !== cur) { cur = r.clientNom; const h = document.createElement('div'); h.className = 'pt-client'; h.textContent = '👤 ' + r.clientNom; box.appendChild(h); }
+    const row = document.createElement('label'); row.className = 'chk'; row.style.display = 'flex'; row.style.margin = '4px 0 4px 6px';
+    row.innerHTML = `<input type="checkbox" ${sel.has(i) ? 'checked' : ''}/> 🐴 ${esc(r.cheval)}`;
+    row.querySelector('input').addEventListener('change', (e) => { if (e.target.checked) sel.add(i); else sel.delete(i); if ($('ptcN')) $('ptcN').textContent = sel.size; });
+    box.appendChild(row);
+  });
+  $('ptcOk').onclick = () => {
+    const items = rows.filter((_, i) => sel.has(i)).map((r) => ({ cheval: r.cheval, client: r.clientNom, date: t.date }));
+    if (!items.length) { alert('Cochez au moins un cheval.'); return; }
+    startPlancheQueue(items);
+  };
+}
+function startPlancheQueue(items) {
+  modalPlancheCreate('contact', { cheval: items[0].cheval, client: items[0].client, date: items[0].date, queue: items.slice(1), queueTotal: items.length, queueIdx: 1 });
+}
 function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
   plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), note: '', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   const chNames = [], clNames = [];
   clients.forEach((c) => { const n = fullName(c); if (n) clNames.push(n); (c.chevaux || []).forEach((h) => { if (h.nom) chNames.push(h.nom); }); });
   const uniq = (a) => Array.from(new Set(a));
-  const titre = type === 'avantapres' ? 'Créer une planche avant / après' : 'Créer une planche de contact';
+  const titre = (type === 'avantapres' ? 'Créer une planche avant / après' : 'Créer une planche de contact') + (plCreate.queueTotal ? ' — cheval ' + plCreate.queueIdx + '/' + plCreate.queueTotal : '');
   openModal(`<div class="modal-head"><b>🖼 ${titre}</b><button class="x" id="mX">✕</button></div>
     <div style="max-height:80vh;overflow:auto" id="plCbody">
       <section class="card">
+        ${plCreate.allowTourPick && !plCreate.queueTotal ? '<button class="btn small block" id="plCfromTour" style="margin-bottom:8px">📅 Créer depuis une tournée (récupérer cheval / client / date)</button>' : ''}
         <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
         <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
@@ -5369,10 +5424,12 @@ function modalPlancheCreate(type, prefill) {
         <h3 class="rsub">Aperçu / mise en page</h3>
         <div id="plCgrid"></div>
       </section>
-      <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button><button class="btn block" id="plCclose">Fermer</button></div>
+      <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button>${plCreate.queueTotal ? '<button class="btn block primary" id="plCnext">' + (plCreate.queue && plCreate.queue.length ? '➡ Planche suivante' : '✅ Terminer') + '</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
     </div>`);
   const close = () => { plCreate = null; closeModal(); };
   $('mX').onclick = close; $('plCclose').onclick = close;
+  if ($('plCfromTour')) $('plCfromTour').onclick = () => modalPlancheFromTour();
+  if ($('plCnext')) $('plCnext').onclick = () => { const q = plCreate.queue || []; if (q.length) modalPlancheCreate('contact', { cheval: q[0].cheval, client: q[0].client, date: q[0].date, queue: q.slice(1), queueTotal: plCreate.queueTotal, queueIdx: plCreate.queueIdx + 1 }); else close(); };
   $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((b) => b.addEventListener('click', () => {
     plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.sel = null;
     $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.plcm === plCreate.modele));
@@ -6706,7 +6763,7 @@ function modalVehicule() {
     <p class="status" id="vUpdateStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
   $('vClient').addEventListener('click', () => { closeModal(); editClient(null); });
-  $('vPlanche').addEventListener('click', () => { closeModal(); if (typeof modalPlancheCreate === 'function') modalPlancheCreate('contact'); else { showTab('gestion'); showGestion('planche'); } });
+  $('vPlanche').addEventListener('click', () => { closeModal(); if (typeof modalPlancheCreate === 'function') modalPlancheCreate('contact', { allowTourPick: true }); else { showTab('gestion'); showGestion('planche'); } });
   $('vStatut').addEventListener('click', () => { closeModal(); modalStatutVehicule(); });
   $('vPlein').addEventListener('click', modalPlein);
   $('vConso').addEventListener('click', modalConso);
