@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.99';
+const APP_VERSION = '1.1.100';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.100', date: '2026-07-09',
+    ajouts: [
+      'RDV : chaque cheval peut maintenant être placé séparément. Par défaut, tous les chevaux vont sur le même RDV (une seule date commune). Devant chaque cheval, cochez « date différente » pour lui choisir un autre jour (un sélecteur de date apparaît), ou « ne pas replacer » pour l\'ignorer (il n\'est pas remis sur un RDV).',
+      'Même fonctionnement dans « Replacer » (chevaux reportés depuis une annulation) : RDV commun par défaut, date différente ou ignorer, cheval par cheval.',
+      'Comparaison de documents : nouveau choix de disposition — « côte à côte » OU « l\'une au-dessus de l\'autre ».',
+    ],
+  },
   {
     version: '1.1.99', date: '2026-07-09',
     ajouts: [
@@ -2287,27 +2295,45 @@ function renderReplacer() {
     box.appendChild(el);
   });
 }
-// Fixe une date de remplacement pour tous les chevaux reportés d'un client (insérés dans la tournée de cette date ou nouvelle tournée).
+// Replace les chevaux reportés d'un client : par défaut sur le MÊME RDV (date commune) ; chaque cheval peut aller à une DATE DIFFÉRENTE ou être IGNORÉ (non replacé).
 function modalReplacerDate(g) {
   const client = clients.find((x) => x.id === g.clientId); if (!client) { renderReplacer(); return; }
   const proposed = proposedRdvDate(todayStr());
-  const chn = g.items.map((c) => c.cheval).join(', ');
-  openModal(`<div class="modal-head"><b>📅 Replacer — ${esc(g.nom)}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Chevaux reportés : <b>🐴 ${esc(chn)}</b>. Ils seront ajoutés à la tournée de la date choisie (ou une nouvelle tournée est créée).</p>
-    <label>Date de remplacement<input type="date" id="rpDate" value="${proposed}"/></label>
-    <p class="hint" id="rpPrev"></p>
-    <div class="actions"><button class="btn primary block" id="rpOk">Fixer le RDV</button></div>`);
-  $('mX').addEventListener('click', closeModal);
-  const prev = () => { const d = $('rpDate').value; const pv = rdvDayPreview(d); $('rpPrev').innerHTML = d ? `<b>${fmtDateFr(d)}</b> — arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}` : ''; };
-  $('rpDate').addEventListener('change', prev); prev();
-  $('rpOk').addEventListener('click', () => {
-    const date = $('rpDate').value; if (!date) { closeModal(); return; }
-    const ids = new Set(); g.items.forEach((c) => { const h = (client.chevaux || []).find((x) => norm(x.nom) === norm(c.cheval)); if (h) ids.add(h.id); });
-    const chevalObjs = (client.chevaux || []).filter((h) => ids.has(h.id));
-    const res = scheduleClientOnDate(date, client, chevalObjs.length ? chevalObjs : activeChevaux(client));
-    g.items.forEach((c) => { if (c.cv.cancel) c.cv.cancel.replacedTourId = res.tour.id; }); // marque comme replacé (sort de la liste, reste dans Annulations)
-    saveTournees(); saveArchive(); closeModal(); renderHome();
-  });
+  const common = { date: proposed };
+  const entries = g.items.map((it) => ({ item: it, nom: it.cheval, cvObj: (client.chevaux || []).find((x) => norm(x.nom) === norm(it.cheval)) || null, ignore: false, sep: false, date: proposed }));
+  const previewHtml = (d) => { const pv = rdvDayPreview(d); return `<b>${d ? fmtDateFr(d) : '—'}</b> — arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}`; };
+  const render = () => {
+    openModal(`<div class="modal-head"><b>📅 Replacer — ${esc(g.nom)}</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Par défaut, tous les chevaux reportés sont replacés sur le <b>même RDV</b>. Cochez « date différente » pour en placer un un autre jour, ou « ne pas replacer » pour l'ignorer.</p>
+      <div class="card" style="margin-bottom:8px"><label>Date du RDV commun<input type="date" id="rpCommon" value="${common.date}"/></label><p class="hint" id="rpCommonPrev"></p></div>
+      <div id="rpChevaux"></div>
+      <div class="actions"><button class="btn primary block" id="rpOk">Fixer les RDV</button></div>`);
+    $('mX').addEventListener('click', closeModal);
+    const cp = $('rpCommonPrev'); const upCommon = () => { if (cp) cp.innerHTML = previewHtml(common.date); };
+    $('rpCommon').addEventListener('change', (e) => { common.date = e.target.value; upCommon(); }); upCommon();
+    const box = $('rpChevaux');
+    entries.forEach((en) => {
+      const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.ignore ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
+      let inner = `<div class="rdv-ch-head"><b>🐴 ${esc(en.nom)}</b>${en.cvObj ? '' : ' <span class="li-sub">(cheval introuvable)</span>'}<label class="rdv-ch-opt"><input type="checkbox" data-ign ${en.ignore ? 'checked' : ''}/> ne pas replacer</label></div>`;
+      if (!en.ignore && en.cvObj) { inner += `<label class="rdv-ch-opt"><input type="checkbox" data-sep ${en.sep ? 'checked' : ''}/> date différente</label>`; inner += en.sep ? `<label>Date du RDV<input type="date" data-date value="${en.date}"/></label><p class="hint" data-prev></p>` : `<p class="hint">→ sur le RDV commun</p>`; }
+      wrap.innerHTML = inner;
+      wrap.querySelector('[data-ign]').addEventListener('change', (e) => { en.ignore = e.target.checked; render(); });
+      const sep = wrap.querySelector('[data-sep]'); if (sep) sep.addEventListener('change', (e) => { en.sep = e.target.checked; render(); });
+      const dt = wrap.querySelector('[data-date]'), prev = wrap.querySelector('[data-prev]');
+      if (dt) { const up = () => { if (prev) prev.innerHTML = previewHtml(dt.value); }; dt.addEventListener('change', (e) => { en.date = e.target.value; up(); }); up(); }
+      box.appendChild(wrap);
+    });
+    $('rpOk').addEventListener('click', () => {
+      const groups = {};
+      entries.forEach((en) => { if (en.ignore || !en.cvObj) return; const d = en.sep ? en.date : common.date; if (!d) return; (groups[d] = groups[d] || []).push(en); });
+      Object.keys(groups).forEach((d) => {
+        const res = scheduleClientOnDate(d, client, groups[d].map((en) => en.cvObj));
+        groups[d].forEach((en) => { if (en.item.cv && en.item.cv.cancel) en.item.cv.cancel.replacedTourId = res.tour.id; }); // marque replacé (sort de la liste, reste dans Annulations)
+      });
+      saveTournees(); saveArchive(); closeModal(); renderHome();
+    });
+  };
+  render();
 }
 // D2 — archivage : déplace les tournées clôturées > 4 semaines de `tournees` vers `archive` (simple déplacement, union inchangée).
 function archiveOldTours() {
@@ -5115,11 +5141,12 @@ function planchePrint() {
 // Importe 2 images (planches déjà enregistrées, captures…) et les met côte à côte en PDF. Rien n'est stocké (décision : pas de rendu PDF ré-importé, on compare des images).
 let plCompare = null;
 function modalPlancheCompare() {
-  plCompare = { orientation: 'paysage', title: 'Comparaison', a: '', b: '', la: 'Document 1', lb: 'Document 2' };
+  plCompare = { orientation: 'paysage', layout: 'side', title: 'Comparaison', a: '', b: '', la: 'Document 1', lb: 'Document 2' };
   openModal(`<div class="modal-head"><b>🔎 Comparaison de documents</b><button class="x" id="mX">✕</button></div>
     <div style="max-height:80vh;overflow:auto">
-      <p class="hint">Importez deux images (planches déjà enregistrées en PDF/PNG, captures d'écran…). Elles seront placées <b>côte à côte</b> sur une page à imprimer / enregistrer en PDF. Rien n'est stocké dans l'app.</p>
+      <p class="hint">Importez deux images (planches déjà enregistrées en PDF/PNG, captures d'écran…). Choisissez la disposition (côte à côte ou l'une au-dessus de l'autre), puis générez le PDF. Rien n'est stocké dans l'app.</p>
       <div class="row"><label class="grow">Titre<input type="text" id="plCmpTitle" value="Comparaison"/></label><label class="grow">Orientation<select id="plCmpOri"><option value="paysage">Paysage</option><option value="portrait">Portrait</option></select></label></div>
+      <label>Disposition<select id="plCmpLayout"><option value="side">Côte à côte</option><option value="stack">L'une au-dessus de l'autre</option></select></label>
       <div class="pl-cmp-2">
         <div class="pl-cmp-col"><label>Légende gauche<input type="text" id="plCmpLa" value="Document 1"/></label><button class="btn small block" id="plCmpImpA">＋ Importer l'image de gauche</button><input type="file" id="plCmpFileA" accept="image/*" hidden/><div class="pl-cmp-prev" id="plCmpPrevA"></div></div>
         <div class="pl-cmp-col"><label>Légende droite<input type="text" id="plCmpLb" value="Document 2"/></label><button class="btn small block" id="plCmpImpB">＋ Importer l'image de droite</button><input type="file" id="plCmpFileB" accept="image/*" hidden/><div class="pl-cmp-prev" id="plCmpPrevB"></div></div>
@@ -5130,6 +5157,7 @@ function modalPlancheCompare() {
   $('mX').onclick = close; $('plCmpClose').onclick = close;
   $('plCmpTitle').addEventListener('input', (e) => { plCompare.title = e.target.value; });
   $('plCmpOri').addEventListener('change', (e) => { plCompare.orientation = e.target.value; });
+  $('plCmpLayout').addEventListener('change', (e) => { plCompare.layout = e.target.value; });
   $('plCmpLa').addEventListener('input', (e) => { plCompare.la = e.target.value; });
   $('plCmpLb').addEventListener('input', (e) => { plCompare.lb = e.target.value; });
   const wire = (side, up) => {
@@ -5144,14 +5172,17 @@ function plancheComparePrint() {
   const c = plCompare;
   if (!c.a && !c.b) { alert('Importez au moins une image.'); return; }
   const ori = c.orientation === 'portrait' ? 'portrait' : 'landscape';
+  const stack = c.layout === 'stack';
   const cell = (url, lbl) => `<div class="pl-cmp-cell"><div class="pl-cmp-lbl">${esc(lbl)}</div>${url ? `<img src="${url}" alt=""/>` : '<div class="pl-cmp-empty">—</div>'}</div>`;
+  // Hauteur d'image selon disposition/orientation : empilé → 2 images sur la hauteur ; côte à côte → pleine hauteur.
+  const maxH = stack ? (ori === 'portrait' ? 350 : 230) : (ori === 'portrait' ? 340 : 470);
   const body = `<style>
     @page{size:${ori};margin:8mm;}
     #printArea .pl-cmp-title{font-size:15px;font-weight:700;color:#111;text-align:center;margin-bottom:8px;}
-    #printArea .pl-cmp-row{display:flex;gap:8px;align-items:flex-start;}
-    #printArea .pl-cmp-cell{flex:1;text-align:center;border:1px solid #999;padding:4px;}
+    #printArea .pl-cmp-row{display:flex;gap:8px;align-items:flex-start;flex-direction:${stack ? 'column' : 'row'};}
+    #printArea .pl-cmp-cell{${stack ? 'width:100%;' : 'flex:1;'}text-align:center;border:1px solid #999;padding:4px;box-sizing:border-box;}
     #printArea .pl-cmp-lbl{font-size:12px;font-weight:700;color:#111;margin-bottom:4px;}
-    #printArea .pl-cmp-cell img{width:100%;height:auto;max-height:${ori === 'portrait' ? '340' : '470'}px;object-fit:contain;display:block;margin:0 auto;}
+    #printArea .pl-cmp-cell img{width:100%;height:auto;max-height:${maxH}px;object-fit:contain;display:block;margin:0 auto;}
     #printArea .pl-cmp-empty{color:#999;padding:40px 0;}
   </style>
   <div class="pl-cmp-title">${esc(c.title || 'Comparaison')}</div>
@@ -5952,7 +5983,8 @@ function rdvDayPreview(date) {
   allTours().forEach((x) => { if (x.date !== date) return; (x.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { const chn = (cl.chevaux || []).map((c) => c.nom).join(', '); arrets.push(clientName(cl.clientId) + (chn ? ' (' + chn + ')' : '') + (statusOf(x) === 'cloturee' ? ' — clôturée' : '')); })); });
   return { arrets, priv: privateEventsForDay(date) };
 }
-// Modale « RDV » (depuis le paiement) : un ou plusieurs rendez-vous pour le client, chevaux par RDV, aperçu de la journée.
+// Modale « RDV » (depuis le paiement) : replacer les chevaux du client. Par défaut tous sur le MÊME RDV (date commune) ;
+// chaque cheval peut être placé à une DATE DIFFÉRENTE (case) ou IGNORÉ (non replacé). Les tournées sont créées si besoin.
 function modalRDV(t, arret, cid, onDone) {
   const client = clients.find((x) => x.id === cid);
   if (!client) { if (onDone) onDone(); return; }
@@ -5961,34 +5993,43 @@ function modalRDV(t, arret, cid, onDone) {
   const chevalPool = activeChevaux(client).filter((h) => !poolIds.length || poolIds.includes(h.id));
   const pool = chevalPool.length ? chevalPool : activeChevaux(client);
   const proposed = proposedRdvDate(t.date || todayStr());
-  const blocks = [{ date: proposed, ids: new Set(pool.map((h) => h.id)) }];
+  if (!pool.length) { alert('Aucun cheval à replacer pour ce client.'); if (onDone) onDone(); return; }
+  const common = { date: proposed }; // date du RDV commun (chevaux « même RDV »)
+  const entries = pool.map((h) => ({ id: h.id, nom: h.nom, ignore: false, sep: false, date: proposed }));
+  const previewHtml = (d) => { const pv = rdvDayPreview(d); return `<b>${d ? fmtDateFr(d) : '—'}</b> — Arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}`; };
   const render = () => {
     openModal(`<div class="modal-head"><b>📅 Programmer le suivi (RDV)</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">Client : <b>${esc(fullName(client))}</b>. Proposez la prochaine visite ; ajoutez plusieurs RDV si les chevaux ne reviennent pas le même jour. Les tournées sont créées si besoin, sinon le client/cheval est ajouté.</p>
-      <div id="rdvBlocks"></div>
-      <div class="actions two"><button class="btn" id="rdvAdd">+ Ajouter un RDV</button><button class="btn primary" id="rdvOk">Enregistrer les RDV</button></div>`);
+      <p class="hint">Client : <b>${esc(fullName(client))}</b>. Par défaut, tous les chevaux sont replacés sur le <b>même RDV</b>. Cochez « date différente » pour placer un cheval un autre jour, ou « ne pas replacer » pour l'ignorer.</p>
+      <div class="card" style="margin-bottom:8px"><label>Date du RDV commun<input type="date" id="rdvCommon" value="${common.date}"/></label><p class="hint" id="rdvCommonPrev"></p></div>
+      <div id="rdvChevaux"></div>
+      <div class="actions"><button class="btn primary block" id="rdvOk">Enregistrer les RDV</button></div>`);
     $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
-    const box = $('rdvBlocks');
-    blocks.forEach((blk, bi) => {
-      const wrap = document.createElement('div'); wrap.className = 'card'; wrap.style.marginBottom = '8px';
-      wrap.innerHTML = `<div class="a-art-head"><span>RDV n°${bi + 1}</span>${blocks.length > 1 ? '<button class="btn small danger" data-rm>✕</button>' : ''}</div>
-        <label>Date<input type="date" data-date value="${blk.date}"/></label>
-        <div class="rdv-chevaux">${pool.map((hrs) => `<label class="chk"><input type="checkbox" data-cv="${hrs.id}" ${blk.ids.has(hrs.id) ? 'checked' : ''}/> 🐴 ${esc(hrs.nom)}</label>`).join('')}</div>
-        <p class="hint" data-prev></p>`;
-      const prev = wrap.querySelector('[data-prev]');
-      const upPrev = () => { const d = wrap.querySelector('[data-date]').value; const pv = rdvDayPreview(d); prev.innerHTML = `<b>${d ? fmtDateFr(d) : '—'}</b> — Arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}`; };
-      wrap.querySelector('[data-date]').addEventListener('change', (e) => { blk.date = e.target.value; upPrev(); });
-      wrap.querySelectorAll('[data-cv]').forEach((c) => c.addEventListener('change', (e) => { if (e.target.checked) blk.ids.add(e.target.dataset.cv); else blk.ids.delete(e.target.dataset.cv); }));
-      const rm = wrap.querySelector('[data-rm]'); if (rm) rm.addEventListener('click', () => { blocks.splice(bi, 1); render(); });
-      box.appendChild(wrap); upPrev();
+    const cp = $('rdvCommonPrev'); const upCommon = () => { if (cp) cp.innerHTML = previewHtml(common.date); };
+    $('rdvCommon').addEventListener('change', (e) => { common.date = e.target.value; upCommon(); });
+    upCommon();
+    const box = $('rdvChevaux');
+    entries.forEach((en) => {
+      const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.ignore ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
+      let inner = `<div class="rdv-ch-head"><b>🐴 ${esc(en.nom)}</b><label class="rdv-ch-opt"><input type="checkbox" data-ign ${en.ignore ? 'checked' : ''}/> ne pas replacer</label></div>`;
+      if (!en.ignore) {
+        inner += `<label class="rdv-ch-opt"><input type="checkbox" data-sep ${en.sep ? 'checked' : ''}/> date différente</label>`;
+        if (en.sep) inner += `<label>Date du RDV<input type="date" data-date value="${en.date}"/></label><p class="hint" data-prev></p>`;
+        else inner += `<p class="hint">→ sur le RDV commun</p>`;
+      }
+      wrap.innerHTML = inner;
+      wrap.querySelector('[data-ign]').addEventListener('change', (e) => { en.ignore = e.target.checked; render(); });
+      const sep = wrap.querySelector('[data-sep]'); if (sep) sep.addEventListener('change', (e) => { en.sep = e.target.checked; render(); });
+      const dt = wrap.querySelector('[data-date]'), prev = wrap.querySelector('[data-prev]');
+      if (dt) { const up = () => { if (prev) prev.innerHTML = previewHtml(dt.value); }; dt.addEventListener('change', (e) => { en.date = e.target.value; up(); }); up(); }
+      box.appendChild(wrap);
     });
-    $('rdvAdd').addEventListener('click', () => { blocks.push({ date: proposed, ids: new Set() }); render(); });
     $('rdvOk').addEventListener('click', () => {
+      const byDate = {};
+      entries.forEach((en) => { if (en.ignore) return; const d = en.sep ? en.date : common.date; if (!d) return; (byDate[d] = byDate[d] || []).push(en.id); });
       let scheduled = false;
-      blocks.forEach((blk) => {
-        if (!blk.date || !blk.ids.size) return;
-        const chevalObjs = (client.chevaux || []).filter((h) => blk.ids.has(h.id));
-        if (chevalObjs.length) { scheduleClientOnDate(blk.date, client, chevalObjs); scheduled = true; }
+      Object.keys(byDate).forEach((d) => {
+        const chevalObjs = (client.chevaux || []).filter((h) => byDate[d].includes(h.id));
+        if (chevalObjs.length) { scheduleClientOnDate(d, client, chevalObjs); scheduled = true; }
       });
       if (scheduled && arret) { arret.rdvDone = true; saveTournees(); } // marque l'arrêt : RDV suivant programmé
       closeModal(); if (onDone) onDone();

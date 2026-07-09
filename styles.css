@@ -436,3 +436,9 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 .pro-logo-zoom { display: block; margin: 10px 0 4px; }
 .pro-logo-zoom input { width: 100%; }
 .pro-logo-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* RDV : placement par cheval (même RDV / date différente / ignorer) */
+.rdv-cheval { padding: 8px 10px; }
+.rdv-cheval.rdv-ignored { opacity: .55; }
+.rdv-ch-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.rdv-ch-opt { display: inline-flex; align-items: center; gap: 4px; font-size: .84rem; color: var(--muted); }
