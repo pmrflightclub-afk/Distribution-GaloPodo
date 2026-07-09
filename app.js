@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.130';
+const APP_VERSION = '1.1.131';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.131', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : un frais individuel (non lié) affiche « Km d\'achat / installation » (le point de départ de son décompte), et un entretien affiche « Km dernier entretien ». Un frais lié n\'a pas de champ km (il suit l\'entretien).',
+      'Correction : modifier le km d\'un entretien met bien à jour tous ses frais liés à l\'écran (avant, l\'affichage des frais liés ne se rafraîchissait pas).',
+      'Aide « je ne connais pas le km exact » : si vous renseignez une date sur un frais (ou dans l\'assistant de migration), le km est repris d\'un relevé de cette date, sinon estimé à partir de vos relevés et tournées.',
+    ],
+  },
   {
     version: '1.1.130', date: '2026-07-09',
     ajouts: [
@@ -4841,7 +4849,7 @@ function renderFraisVehicule() {
         ${isChild ? '' : `<label>Date entretien<input data-k="date" type="date" value="${f.date || ''}"/></label>`}
         <label>Montant<input data-k="montantHT" type="number" step="1" min="0" value="${f.montantHT || ''}"/></label>
         <label>Km prévus (intervalle)<input data-k="kmPrevus" type="number" step="1000" min="0" value="${f.kmPrevus || ''}"/></label>
-        ${isChild ? '' : `<label>Km dernier entretien<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>`}
+        ${isChild ? '' : `<label>${f.nature === 'recurrent' ? 'Km dernier entretien' : "Km d'achat / installation"}<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>`}
         ${f.nature === 'exceptionnel' ? `<label>Lié à l'entretien<select data-k="parentId"><option value="">— indépendant</option>${recurrents.map((p) => `<option value="${p.id}"${f.parentId === p.id ? ' selected' : ''}>${esc(p.poste || 'Récurrent')}</option>`).join('')}</select></label>` : `<label>Groupe<input data-k="groupe" list="fraisGrpList" value="${esc(f.groupe || '')}" placeholder="Freins, Pneus…"/></label>`}
         <label>Contribution<input data-ro="contrib" readonly/></label>
       </div>
@@ -4857,10 +4865,10 @@ function renderFraisVehicule() {
     wireNum(montEl, { get: () => f.montantHT, dec: 0, set: (v) => { f.montantHT = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
     wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); refreshJauge(); }, after: () => saveSettings() });
     const syncChildren = () => { (S.frais || []).forEach((c) => { if (c.parentId === f.id) { c.kmDebut = f.kmDebut || 0; c.date = f.date || ''; } }); }; // un entretien propage son km/date à ses frais liés
-    if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; refreshJauge(); }, after: () => { syncChildren(); saveSettings(); } });
+    if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; refreshJauge(); }, after: () => { syncChildren(); saveSettings(); if (children.length) renderFraisVehicule(); } }); // re-render pour actualiser les frais liés
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
-    { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; const rel = (S.odoReleves || []).find((r) => r && r.date === f.date && typeof r.km === 'number'); if (rel) f.kmDebut = rel.km; /* pré-remplit le km depuis un relevé de même date */ syncChildren(); saveSettings(); renderFraisVehicule(); }); }
+    { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; if (f.date) { const rel = (S.odoReleves || []).find((r) => r && r.date === f.date && typeof r.km === 'number'); if (rel) f.kmDebut = rel.km; else { const est = Math.round(estOdoAt(f.date)); if (est > 0) f.kmDebut = est; } } /* km repris d'un relevé de même date, sinon estimé (relevés + tournées) à cette date */ syncChildren(); saveSettings(); renderFraisVehicule(); }); }
     { const ge = el.querySelector('[data-k="groupe"]'); if (ge) ge.addEventListener('input', (e) => { f.groupe = e.target.value.trim(); saveSettings(); }); }
     { const pe = el.querySelector('[data-k="parentId"]'); if (pe) pe.addEventListener('change', (e) => { f.parentId = e.target.value || null; if (f.parentId) { const p = S.frais.find((x) => x.id === f.parentId); if (p) { f.kmDebut = p.kmDebut || 0; f.date = p.date || ''; } } saveSettings(); renderFraisVehicule(); }); }
     { const db = el.querySelector('[data-done]'); if (db) db.addEventListener('click', () => modalFraisDone(f)); }
@@ -4891,7 +4899,7 @@ function modalFraisMigration() {
   const modeSel = (id) => { const s = st[id]; return `<label>État<select data-mode="${id}"><option value="fait"${s.mode === 'fait' ? ' selected' : ''}>Fait (dernier entretien)</option><option value="afaire"${s.mode === 'afaire' ? ' selected' : ''}>À faire (reste à renouveler)</option><option value="neuf"${s.mode === 'neuf' ? ' selected' : ''}>Neuf / repart maintenant</option></select></label>${s.mode === 'fait' ? `<div class="row"><label class="grow">Km dernier entretien<input type="number" data-km="${id}" step="1" min="0" inputmode="numeric" value="${s.km}"/></label><label class="grow">Date<input type="date" data-date="${id}" value="${s.date}" max="${todayStr()}"/></label></div>` : ''}`; };
   const render = () => {
     openModal(`<div class="modal-head"><b>🧭 Régler l'historique des entretiens</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">« Fait » = km + date du dernier entretien · « À faire » = reste à renouveler · « Neuf » = repart pour un cycle complet (compteur ${km(odo)}). Cochez les frais <b>liés</b> à un entretien (Pièces, Réparation…) : ils héritent de son km/date et se réinitialiseront avec lui.</p>
+      <p class="hint">« Fait » = km + date du dernier entretien · « À faire » = reste à renouveler · « Neuf » = repart pour un cycle complet (compteur ${km(odo)}). <b>Si vous ne connaissez pas le km exact</b>, indiquez la <b>date</b> : l'app reprend le km d'un relevé de cette date, sinon l'estime. Cochez les frais <b>liés</b> à un entretien (Pièces, Réparation…) : ils héritent de son km/date.</p>
       <div id="fmList" style="max-height:62vh;overflow:auto"></div>
       <div class="actions"><button class="btn primary block" id="fmOk">Appliquer</button><button class="btn block" id="fmClose">Fermer</button></div>`);
     $('mX').onclick = closeModal; $('fmClose').onclick = closeModal;
@@ -4912,7 +4920,7 @@ function modalFraisMigration() {
     });
     box.querySelectorAll('[data-mode]').forEach((sel) => sel.addEventListener('change', (e) => { st[e.target.dataset.mode].mode = e.target.value; render(); }));
     box.querySelectorAll('[data-km]').forEach((i) => i.addEventListener('input', (e) => { st[e.target.dataset.km].km = parseNum(e.target.value); }));
-    box.querySelectorAll('[data-date]').forEach((i) => i.addEventListener('change', (e) => { st[e.target.dataset.date].date = e.target.value; }));
+    box.querySelectorAll('[data-date]').forEach((i) => i.addEventListener('change', (e) => { const id = e.target.dataset.date; st[id].date = e.target.value; if (st[id].date) { const rel = (S.odoReleves || []).find((r) => r && r.date === st[id].date && typeof r.km === 'number'); if (rel) st[id].km = rel.km; else { const est = Math.round(estOdoAt(st[id].date)); if (est > 0) st[id].km = est; } } render(); })); // date → km repris d'un relevé, sinon estimé
     box.querySelectorAll('[data-link]').forEach((c) => c.addEventListener('change', (e) => { const id = e.target.dataset.link; if (e.target.checked) link[id] = e.target.dataset.parent; else delete link[id]; render(); }));
     $('fmOk').onclick = () => {
       const applyMode = (f) => { const s = st[f.id]; if (s.mode === 'neuf') { f.kmDebut = Math.round(odo); f.date = todayStr(); } else if (s.mode === 'afaire') { f.kmDebut = Math.max(0, Math.round(odo - (f.kmPrevus || 0))); } else { f.kmDebut = Math.max(0, Math.round(s.km || 0)); f.date = s.date || todayStr(); } };
@@ -4941,7 +4949,7 @@ function modalFraisDone(f) {
   const pre = new Set(f.groupe ? others.filter((x) => x.groupe === f.groupe).map((x) => x.id) : []);
   openModal(`<div class="modal-head"><b>✅ Entretien fait — ${esc(f.poste || 'Frais')}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Enregistre le kilométrage et la date du dernier entretien de ce frais. Le compteur « à renouveler » repart de ce point.</p>
-    <div class="row"><label class="grow">Km au dernier entretien<input type="number" id="fdKm" step="1" min="0" inputmode="numeric" value="${Math.round(odometer())}"/></label><label class="grow">Date<input type="date" id="fdDate" value="${todayStr()}" max="${todayStr()}"/></label></div>
+    <div class="row"><label class="grow">${f.nature === 'recurrent' ? 'Km au dernier entretien' : "Km d'achat / remplacement"}<input type="number" id="fdKm" step="1" min="0" inputmode="numeric" value="${Math.round(odometer())}"/></label><label class="grow">Date<input type="date" id="fdDate" value="${todayStr()}" max="${todayStr()}"/></label></div>
     ${linked.length ? `<p class="hint">🔗 Réinitialisés automatiquement avec cet entretien : <b>${linked.map((x) => esc(x.poste || 'Frais')).join(', ')}</b>.</p>` : ''}
     ${others.length ? `<p class="hint">Autres frais faits <b>en même temps</b> (même km / date) :</p><div id="fdOthers" style="max-height:30vh;overflow:auto"></div><label class="chk2"><input type="checkbox" id="fdRemember" ${pre.size ? 'checked' : ''}/> 🔗 Se souvenir de ce regroupement</label>` : ''}
     <div class="actions"><button class="btn primary block" id="fdOk">Enregistrer</button></div>`);
