@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.140';
+const APP_VERSION = '1.1.141';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.141', date: '2026-07-10',
+    ajouts: [
+      'Gestion → Clients : la liste affiche désormais 📍 le nom des adresses spécifiques des chevaux (celles qui diffèrent de l\'adresse du client ou de la société).',
+      'Gestion → Adresses chevaux : chaque adresse indique sa source (client / société / spécifique). Pour une adresse spécifique, son nom (ex. « Écurie du Nord ») est modifiable directement dans la liste et met à jour la fiche du cheval ; un nom vide peut être encodé sur place. Un client peut avoir plusieurs adresses de chevaux.',
+    ],
+  },
   {
     version: '1.1.140', date: '2026-07-10',
     ajouts: [
@@ -2347,12 +2354,13 @@ function renderClients() {
   if ($('clientsEmpty')) { $('clientsEmpty').style.display = shown.length ? 'none' : 'block'; $('clientsEmpty').textContent = clients.length ? 'Aucun client dans cette catégorie.' : 'Aucun client. Créez-en un.'; }
   shown.forEach((c) => {
     const nAdr = new Set((c.chevaux || []).map((h) => norm(addrStr(chevalAddr(c, h))))).size || 1;
+    const specNoms = Array.from(new Set((c.chevaux || []).filter((h) => (h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client')) === 'specifique').map((h) => chevalAddrNom(c, h)).filter(Boolean))); // adresses spécifiques des chevaux (≠ client/société)
     const soc = c.societe ? ' — ' + esc(c.societe) : '';
     const off = isClientNoir(c) || c.actif === false;
     const badge = isClientNoir(c) ? ' <span class="badge">liste noire</span>' : (c.actif === false ? ' <span class="badge">inactif</span>' : '');
     const nChev = (c.chevaux || []).length, nChevInact = (c.chevaux || []).filter((h) => h.actif === false).length;
     const el = document.createElement('div'); el.className = 'list-item clickable' + (off ? ' item-off' : '');
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}${specNoms.length ? ' · 📍 ' + esc(specNoms.join(', ')) : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => editClient(c));
     list.appendChild(el);
   });
@@ -2502,13 +2510,24 @@ function renderChevAddresses() {
   const match = (e) => { const st = addrStatusOf(e.addr); return adrChevFilter === 'noir' ? st === 'noir' : adrChevFilter === 'inactifs' ? st === 'inactif' : st === 'actif'; };
   const shown = all.filter(match).sort((a, b) => addrStr(a.addr).localeCompare(addrStr(b.addr)));
   if ($('adrChevEmpty')) { $('adrChevEmpty').style.display = shown.length ? 'none' : 'block'; $('adrChevEmpty').textContent = all.length ? 'Aucune adresse dans cette catégorie.' : 'Aucune adresse.'; }
+  const srcOf = (h) => h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
+  const srcLbl = { client: 'client', societe: 'société', specifique: 'spécifique' };
   shown.forEach((e) => {
     const st = addrStatusOf(e.addr);
     const noms = Array.from(e.noms).filter(Boolean).join(' · ');
     const badge = st === 'noir' ? ' <span class="badge badge-noir">liste noire</span>' : st === 'inactif' ? ' <span class="badge">inactive</span>' : '';
+    const srcTxt = Array.from(new Set(e.usages.map((u) => srcLbl[srcOf(u.cheval)] || 'client'))).join(' / ');
+    const spec = e.usages.filter((u) => srcOf(u.cheval) === 'specifique' && !u.cheval.addrPrivee); // spécifiques nommables (hors « adresse privée »)
+    const multi = new Set(e.usages.map((u) => u.client.id)).size > 1;
+    const specHtml = spec.map((u, i) => `<label class="ac-nom"><span class="li-sub">🐴 ${esc(u.cheval.nom || 'cheval')}${multi ? ' · ' + esc(fullName(u.client)) : ''}</span><input type="text" data-nom="${i}" value="${esc(u.cheval.addrNom || '')}" placeholder="Nom de l'adresse (ex. Écurie du Nord)"/></label>`).join('');
     const el = document.createElement('div'); el.className = 'list-item stack-act' + (st !== 'actif' ? ' item-off' : '');
-    el.innerHTML = `<div class="li-main"><b>${esc(noms || 'Adresse')}${badge}</b><span class="li-sub">${esc(addrStr(e.addr))} · ${e.usages.length} cheval(aux)</span></div><div class="li-act li-act-col">${st !== 'actif' ? '<button class="btn small" data-st="actif">✅ Activer</button>' : ''}${st !== 'inactif' ? '<button class="btn small" data-st="inactif">💤 Inactive</button>' : ''}${st !== 'noir' ? '<button class="btn small danger" data-st="noir">⛔ Liste noire</button>' : ''}</div>`;
+    el.innerHTML = `<div class="li-main"><b>${esc(noms || 'Adresse')}${badge}</b><span class="li-sub">${esc(addrStr(e.addr))} · ${e.usages.length} cheval(aux) · source : ${esc(srcTxt)}</span>${specHtml}</div><div class="li-act li-act-col">${st !== 'actif' ? '<button class="btn small" data-st="actif">✅ Activer</button>' : ''}${st !== 'inactif' ? '<button class="btn small" data-st="inactif">💤 Inactive</button>' : ''}${st !== 'noir' ? '<button class="btn small danger" data-st="noir">⛔ Liste noire</button>' : ''}</div>`;
     el.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', () => { setAddrStatus(e.addr, b.dataset.st); renderChevAddresses(); }));
+    el.querySelectorAll('[data-nom]').forEach((inp) => {
+      const u = spec[+inp.dataset.nom];
+      inp.addEventListener('input', (ev) => { u.cheval.addrNom = ev.target.value; saveClients(); }); // met à jour la fiche cheval
+      inp.addEventListener('change', () => renderChevAddresses()); // rafraîchit le nom affiché
+    });
     box.appendChild(el);
   });
 }
