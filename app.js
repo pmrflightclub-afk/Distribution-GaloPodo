@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.129';
+const APP_VERSION = '1.1.130';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.130', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : la jauge affiche désormais « dernier à X km → prochain prévu à Y km (+ intervalle) ». Ce calcul = km du dernier entretien + intervalle, sans l\'odomètre. L\'odomètre actuel ne sert plus qu\'à afficher « ⚠ à renouveler » quand le prochain km est dépassé.',
+      'Pré-remplissage : si vous mettez sur un frais une date qui correspond à un relevé compteur, le « km du dernier entretien » est repris automatiquement de ce relevé.',
+    ],
+  },
   {
     version: '1.1.129', date: '2026-07-09',
     ajouts: [
@@ -4799,19 +4806,20 @@ function normalizeFraisOrder() {
   if (reordered) S.frais = out;
   return healed || reordered;
 }
-// Texte de la jauge d'un frais (km roulés / échéance). Avertit si l'odomètre actuel est manquant (≤ km du dernier entretien) → calcul impossible.
+// Texte de la jauge d'un frais. Calcul principal = prochain entretien à (km dernier entretien + intervalle) — sans l'odomètre.
+// L'odomètre actuel ne sert qu'à signaler « ⚠ à renouveler » (dépassé).
 function fraisJaugeText(f) {
-  const odo = odometer();
   if (f.parentId) { const p = (S.frais || []).find((x) => x.id === f.parentId); return `🔗 lié à « ${p ? p.poste : '?'} » — réinitialisé avec l'entretien${f.date ? ' · dernier ' + fmtDateFr(f.date) : ''}`; }
-  const kd = f.kmDebut || 0, par = odo - kd;
-  if (kd > 0 && odo <= kd) return `⚠ km actuel manquant : odomètre estimé ${km(odo)} ≤ dernier entretien ${km(kd)}. Déclarez le relevé compteur actuel.`;
-  if (f.nature === 'recurrent') return `récurrent · ${km(Math.max(0, par))} roulés / ${km(f.kmPrevus)} avant échéance`;
-  return fraisActif(f) ? `exceptionnel · reste ${km(Math.max(0, (f.kmPrevus || 0) - par))}` : 'exceptionnel · épuisé ✔ — inactif (retiré de la base véhicule)';
+  const kd = f.kmDebut || 0, interval = f.kmPrevus || 0, nat = f.nature === 'recurrent' ? 'récurrent' : 'exceptionnel';
+  if (!interval) return `${nat} · renseignez l'intervalle (km prévus)`;
+  if (!kd) return `${nat} · renseignez le km du dernier entretien / achat`;
+  const target = kd + interval, echu = odometer() >= target;
+  return `${nat} · dernier à ${km(kd)} → prochain prévu à ${km(target)} (+${km(interval)})${echu ? ' · ⚠ à renouveler' : ''}`;
 }
 function renderFraisVehicule() {
   if (normalizeFraisOrder()) saveSettings();
   const odo = odometer();
-  if ($('kmIndicatif')) { $('kmIndicatif').innerHTML = `Odomètre actuel estimé : <b>${km(odo)}</b> <button class="btn small" id="fraisOdoBtn">＋ Relevé compteur</button><br><span class="hint">Les « km roulés » d'un frais = odomètre actuel − km du dernier entretien. Déclarez le km réel du compteur pour un calcul juste.</span><br>Tarif indicatif tournée : <b>${eurkm(tarifHT('tournee'))} HT</b> · <b>${eurkm(ttc(tarifHT('tournee')))} TVAC</b> (base véhicule + carburant).`; const ob = $('fraisOdoBtn'); if (ob) ob.onclick = () => modalStatutVehicule(); }
+  if ($('kmIndicatif')) { $('kmIndicatif').innerHTML = `<span class="hint">Prochain entretien = <b>km du dernier entretien + intervalle</b>. L'odomètre actuel (${km(odo)}) sert seulement à signaler « à renouveler » (dépassé). <button class="btn small" id="fraisOdoBtn">＋ Relevé compteur</button></span><br>Tarif indicatif tournée : <b>${eurkm(tarifHT('tournee'))} HT</b> · <b>${eurkm(ttc(tarifHT('tournee')))} TVAC</b> (base véhicule + carburant).`; const ob = $('fraisOdoBtn'); if (ob) ob.onclick = () => modalStatutVehicule(); }
   if ($('fraisUnitHT')) { makeReadout($('fraisUnitHT'), '€/km HT'); $('fraisUnitHT').value = fmtNum(baseVehiculeHT(), 3); fitSize($('fraisUnitHT')); }
   if ($('fraisUnitTTC')) { makeReadout($('fraisUnitTTC'), '€/km TTC'); $('fraisUnitTTC').value = fmtNum(ttc(baseVehiculeHT()), 3); fitSize($('fraisUnitTTC')); }
   const box = $('fraisList'); if (!box) return; box.innerHTML = '';
@@ -4852,7 +4860,7 @@ function renderFraisVehicule() {
     if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; refreshJauge(); }, after: () => { syncChildren(); saveSettings(); } });
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
-    { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; syncChildren(); saveSettings(); renderFraisVehicule(); }); }
+    { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; const rel = (S.odoReleves || []).find((r) => r && r.date === f.date && typeof r.km === 'number'); if (rel) f.kmDebut = rel.km; /* pré-remplit le km depuis un relevé de même date */ syncChildren(); saveSettings(); renderFraisVehicule(); }); }
     { const ge = el.querySelector('[data-k="groupe"]'); if (ge) ge.addEventListener('input', (e) => { f.groupe = e.target.value.trim(); saveSettings(); }); }
     { const pe = el.querySelector('[data-k="parentId"]'); if (pe) pe.addEventListener('change', (e) => { f.parentId = e.target.value || null; if (f.parentId) { const p = S.frais.find((x) => x.id === f.parentId); if (p) { f.kmDebut = p.kmDebut || 0; f.date = p.date || ''; } } saveSettings(); renderFraisVehicule(); }); }
     { const db = el.querySelector('[data-done]'); if (db) db.addEventListener('click', () => modalFraisDone(f)); }
