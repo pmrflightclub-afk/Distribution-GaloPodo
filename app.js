@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.97';
+const APP_VERSION = '1.1.98';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.98', date: '2026-07-09',
+    ajouts: [
+      'Réglages → Configuration → « Logo / identité (documents) » : ajoutez VOTRE logo. Choisissez une image, puis zoomez (curseur ou boutons ➕/➖) et déplacez-la dans le cadre (glisser) pour l\'ajuster. Ce cadrage est repris tel quel en en-tête des planches. Le logo est enregistré dans l\'app (contrairement aux photos de planche).',
+      'Les planches de contact affichent désormais VOTRE logo en en-tête (si le logo est activé dans Gestion → Planche), à la place du logo de l\'application.',
+      'Planche « Avant / après » (création) : bouton « ＋ Créer une planche » avec le type « Avant / après » sélectionné. Ajoutez une ou plusieurs dates de comparaison ; chaque date crée automatiquement deux lignes « Avant » et « Après ». Les colonnes sont les angles du modèle (3/4/5). Placement des photos, EXIF, aperçu et PDF comme la planche de contact.',
+      'Comparaison de documents : bouton « 🔎 Comparaison documents » (Gestion → Planche). Importez deux images (planches déjà enregistrées, captures d\'écran…) : elles sont mises côte à côte, avec légendes et titre, sur une page à enregistrer en PDF. Rien n\'est stocké dans l\'app.',
+    ],
+  },
   {
     version: '1.1.97', date: '2026-07-08',
     ajouts: [
@@ -845,6 +854,9 @@ S.planche.avantapres = Object.assign({ orientation: 'paysage', logo: false, mode
 if (!Array.isArray(S.planche.avantapres.pages)) S.planche.avantapres.pages = [{ membres: [] }, { membres: ['Cheval'] }];
 if (!S.planche.avantapres.modeles) S.planche.avantapres.modeles = _plModeles();
 delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
+// Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
+// { data:dataURL, zoom:multiplicateur, x/y:décalage en FRACTION du cadre (pan) } — cadrage repris à l'identique dans l'en-tête PDF.
+if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
 if (!Array.isArray(S.mailKeywords) || !S.mailKeywords.length) S.mailKeywords = ['prise de contact'];
 if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, body, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
@@ -1759,7 +1771,7 @@ function showReglages(sub) {
   const rb = document.querySelector('#reglagesSub .subtab[data-rsub="' + currentRsub + '"]'), rl = document.querySelector('#reglagesSub .subnav-label');
   if (rb && rl) rl.textContent = rb.textContent;
   if ($('reglagesSub')) $('reglagesSub').classList.remove('open');
-  if (currentRsub === 'config') renderAmortStats();
+  if (currentRsub === 'config') { renderAmortStats(); renderProLogoEditor(); }
   if (currentRsub === 'mail') renderMailConfig();
   if (currentRsub === 'statistiques') renderStatConfig();
   if (currentRsub === 'calcul') renderCalcul();
@@ -4760,7 +4772,8 @@ function plancheList(box, arr, onChange, addLabel, allowEmpty) {
 }
 function renderPlancheConfig() {
   const seg = $('plType'); if (seg) seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._plw) { b._plw = true; b.addEventListener('click', () => { plancheType = b.dataset.plt; renderPlancheConfig(); }); } b.classList.toggle('on', b.dataset.plt === plancheType); });
-  const btn = $('plCreateBtn'); if (btn) btn.onclick = () => (typeof modalPlancheCreate === 'function' ? modalPlancheCreate(plancheType) : alert('La création de planche arrive à l\'étape suivante (le paramétrage est déjà en place).'));
+  const btn = $('plCreateBtn'); if (btn) btn.onclick = () => modalPlancheCreate(plancheType);
+  const cbtn = $('plCompareBtn'); if (cbtn) cbtn.onclick = () => modalPlancheCompare();
   const body = $('plancheBody'); if (!body) return; body.innerHTML = '';
   const P = plancheType === 'contact' ? S.planche.contact : S.planche.avantapres;
   // Orientation + logo
@@ -4798,13 +4811,13 @@ function renderPlancheConfig() {
   $('plAddPage').addEventListener('click', () => { P.pages.push({ membres: [] }); saveSettings(); renderPlancheConfig(); });
 }
 
-// ================= Création de planche (Phase 2 : planche contact) =================
+// ================= Création de planche (contact + avant/après) =================
 // IMPORTANT : les images sélectionnées restent EN MÉMOIRE uniquement, le temps de la création.
 // Elles ne sont JAMAIS écrites dans localStorage/S ni synchronisées (décision produit verrouillée).
 let plCreate = null; // état de la planche en cours de création : { type, modele, angles, pages, cheval, client, date, note, photos:[{id,url,date,jour}], cells:{'page_row_col':photoId}, sel }
 
-// Réduit une image (canvas) pour l'intégration au PDF, sans jamais la persister. Renvoie un data-URL JPEG.
-function plResizeImage(file, maxDim, cb) {
+// Réduit une image (canvas) pour l'intégration au PDF, sans jamais la persister. Renvoie un data-URL (JPEG par défaut, PNG si mime='image/png' — texte plus net).
+function plResizeImage(file, maxDim, cb, mime) {
   const img = new Image();
   const url = URL.createObjectURL(file);
   img.onload = () => {
@@ -4812,7 +4825,7 @@ function plResizeImage(file, maxDim, cb) {
     const scale = Math.min(1, maxDim / Math.max(w, h));
     w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
     let data = '';
-    try { const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h); data = cv.toDataURL('image/jpeg', 0.82); } catch (e) { data = ''; }
+    try { const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h); data = mime === 'image/png' ? cv.toDataURL('image/png') : cv.toDataURL('image/jpeg', 0.82); } catch (e) { data = ''; }
     URL.revokeObjectURL(url); cb(data);
   };
   img.onerror = () => { URL.revokeObjectURL(url); cb(''); };
@@ -4854,16 +4867,78 @@ function plExifDate(file, cb) {
   r.readAsArrayBuffer(file.slice(0, 262144)); // 256 Ko suffisent largement pour l'en-tête EXIF
 }
 
+// ---- Logo / identité du pro pour les documents (planches). Seul le logo est persisté (S.proLogo). ----
+const PRO_LOGO_FRAME_W = 260, PRO_LOGO_FRAME_H = 110; // cadre de référence ; le pan est stocké en FRACTION du cadre → cadrage valable à toute taille (éditeur / en-tête PDF).
+
+// Charge un fichier image comme logo : redimensionné (PNG pour garder la transparence) puis stocké dans S.proLogo.data.
+function proLogoLoadFile(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type || '')) { alert('Choisissez un fichier image.'); return; }
+  plResizeImage(file, 520, (data) => { if (!data) { alert('Image illisible.'); return; } S.proLogo = { data, zoom: 1, x: 0, y: 0 }; saveSettings(); renderProLogoEditor(); }, 'image/png');
+}
+
+// HTML d'un cadre contenant le logo, cadrage (zoom + pan) appliqué. '' si pas de logo. Utilisé dans l'en-tête PDF.
+function proLogoBox(boxW, boxH, extraStyle) {
+  const L = S.proLogo || {};
+  if (!L.data) return '';
+  const tx = (L.x || 0) * boxW, ty = (L.y || 0) * boxH, z = L.zoom || 1;
+  return `<div style="width:${boxW}px;height:${boxH}px;overflow:hidden;display:inline-block;vertical-align:middle;${extraStyle || ''}"><img src="${L.data}" alt="" style="width:100%;height:100%;object-fit:contain;transform:translate(${tx}px,${ty}px) scale(${z});transform-origin:center center;display:block"/></div>`;
+}
+
+function renderProLogoEditor() {
+  const box = $('proLogoEditor'); if (!box) return;
+  const L = S.proLogo || { data: '', zoom: 1, x: 0, y: 0 };
+  box.innerHTML = `
+    <div class="pro-logo-frame" id="proLogoFrame" style="width:${PRO_LOGO_FRAME_W}px;height:${PRO_LOGO_FRAME_H}px;max-width:100%">${L.data ? `<img id="proLogoImg" src="${L.data}" alt="" draggable="false"/>` : '<span class="pro-logo-empty">Aucun logo</span>'}</div>
+    <input type="file" id="proLogoFile" accept="image/*" hidden/>
+    ${L.data ? `<label class="pro-logo-zoom">Zoom<input type="range" id="proLogoZoom" min="0.3" max="4" step="0.05" value="${L.zoom || 1}"/></label>
+    <div class="pro-logo-btns"><button class="btn small" id="proLogoZoomOut">➖ Dézoomer</button><button class="btn small" id="proLogoZoomIn">➕ Zoomer</button><button class="btn small" id="proLogoCenter">Recentrer</button><button class="btn small danger" id="proLogoRemove">Retirer</button></div>
+    <p class="hint">Glissez le logo dans le cadre pour le déplacer. Le cadrage (zoom + position) est repris tel quel sur le PDF.</p>` : ''}
+    <button class="btn ${L.data ? '' : 'primary '}block" id="proLogoChoose" style="margin-top:8px">${L.data ? 'Changer de logo' : '📷 Choisir un logo'}</button>`;
+  const applyImg = () => { const im = $('proLogoImg'); if (im) { const tx = (S.proLogo.x || 0) * PRO_LOGO_FRAME_W, ty = (S.proLogo.y || 0) * PRO_LOGO_FRAME_H; im.style.transform = `translate(${tx}px,${ty}px) scale(${S.proLogo.zoom || 1})`; } };
+  applyImg();
+  $('proLogoChoose').onclick = () => $('proLogoFile').click();
+  $('proLogoFile').addEventListener('change', (e) => { proLogoLoadFile(e.target.files && e.target.files[0]); e.target.value = ''; });
+  if (L.data) {
+    $('proLogoZoom').addEventListener('input', (e) => { S.proLogo.zoom = parseFloat(e.target.value) || 1; applyImg(); saveSettings(); });
+    $('proLogoZoomIn').onclick = () => { S.proLogo.zoom = Math.min(4, (S.proLogo.zoom || 1) + 0.15); $('proLogoZoom').value = S.proLogo.zoom; applyImg(); saveSettings(); };
+    $('proLogoZoomOut').onclick = () => { S.proLogo.zoom = Math.max(0.3, (S.proLogo.zoom || 1) - 0.15); $('proLogoZoom').value = S.proLogo.zoom; applyImg(); saveSettings(); };
+    $('proLogoCenter').onclick = () => { S.proLogo.x = 0; S.proLogo.y = 0; S.proLogo.zoom = 1; $('proLogoZoom').value = 1; applyImg(); saveSettings(); };
+    $('proLogoRemove').onclick = () => { if (!confirm('Retirer le logo ?')) return; S.proLogo = { data: '', zoom: 1, x: 0, y: 0 }; saveSettings(); renderProLogoEditor(); };
+    const frame = $('proLogoFrame'); let drag = null;
+    frame.addEventListener('pointerdown', (e) => { if (!S.proLogo.data) return; drag = { sx: e.clientX, sy: e.clientY, ox: S.proLogo.x || 0, oy: S.proLogo.y || 0 }; try { frame.setPointerCapture(e.pointerId); } catch (err) {} e.preventDefault(); });
+    frame.addEventListener('pointermove', (e) => { if (!drag) return; S.proLogo.x = Math.max(-2, Math.min(2, drag.ox + (e.clientX - drag.sx) / PRO_LOGO_FRAME_W)); S.proLogo.y = Math.max(-2, Math.min(2, drag.oy + (e.clientY - drag.sy) / PRO_LOGO_FRAME_H)); applyImg(); });
+    frame.addEventListener('pointerup', () => { if (drag) { drag = null; saveSettings(); } });
+    frame.addEventListener('pointercancel', () => { if (drag) { drag = null; saveSettings(); } });
+  }
+}
+
+// Date courte JJ/MM/AAAA (libellés de lignes avant/après).
+const plShortDate = (d) => { if (!d) return 'Date ?'; const p = String(d).split('-'); return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : d; };
+// Lignes d'une page (générique contact / avant-après). Avant/après : page 0 = dates de comparaison, autres pages = membres ; chaque ligne éclatée en « Avant » / « Après ».
+function plPageRows(pi) {
+  const st = plCreate;
+  if (st.type === 'avantapres') {
+    const base = (pi === 0) ? (st.compar || []).map((c) => plShortDate(c.date)) : ((st.pages[pi] && st.pages[pi].membres) || []);
+    const rows = [];
+    base.forEach((label, ri) => ['Avant', 'Après'].forEach((ph, pj) => rows.push({ label: label + ' · ' + ph, ri, pj })));
+    return rows;
+  }
+  const membres = (st.pages[pi] && st.pages[pi].membres) || [];
+  return membres.map((label, ri) => ({ label, ri, pj: null }));
+}
+const plCellKey = (pi, r, ci) => plCreate.type === 'avantapres' ? (pi + '_' + r.ri + '_' + r.pj + '_' + ci) : (pi + '_' + r.ri + '_' + ci);
+
 function modalPlancheCreate(type) {
-  type = type || 'contact';
-  if (type !== 'contact') { alert('La création « Avant/après » arrive à la prochaine étape. La planche de contact est disponible dès maintenant.'); return; }
-  const P = S.planche.contact;
+  type = (type === 'avantapres') ? 'avantapres' : 'contact';
+  const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type: 'contact', modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), cheval: '', client: '', date: todayStr(), note: '', photos: [], cells: {}, sel: null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: '', client: '', date: todayStr(), note: '', photos: [], cells: {}, sel: null };
   const chNames = [], clNames = [];
   clients.forEach((c) => { const n = fullName(c); if (n) clNames.push(n); (c.chevaux || []).forEach((h) => { if (h.nom) chNames.push(h.nom); }); });
   const uniq = (a) => Array.from(new Set(a));
-  openModal(`<div class="modal-head"><b>🖼 Créer une planche de contact</b><button class="x" id="mX">✕</button></div>
+  const titre = type === 'avantapres' ? 'Créer une planche avant / après' : 'Créer une planche de contact';
+  openModal(`<div class="modal-head"><b>🖼 ${titre}</b><button class="x" id="mX">✕</button></div>
     <div style="max-height:80vh;overflow:auto" id="plCbody">
       <section class="card">
         <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
@@ -4943,26 +5018,45 @@ function plPlace(key) {
 function plRenderGrid() {
   const box = $('plCgrid'); if (!box || !plCreate) return;
   box.innerHTML = '';
-  const pages = plCreate.pages || [], angles = plCreate.angles || [];
+  const st = plCreate, pages = st.pages || [], angles = st.angles || [];
   if (!pages.length) { box.innerHTML = '<p class="hint">Aucune page configurée. Configurez la planche dans Gestion → Planche.</p>'; return; }
   pages.forEach((pg, pi) => {
-    const membres = Array.isArray(pg.membres) ? pg.membres : [];
     const wrap = document.createElement('div'); wrap.className = 'pl-grid-wrap';
-    wrap.innerHTML = `<div class="pl-page-lbl">Page ${pi + 1}</div>`;
+    wrap.innerHTML = `<div class="pl-page-lbl">Page ${pi + 1}${st.type === 'avantapres' && pi === 0 ? ' — comparaison (dates)' : ''}</div>`;
+    // Avant/après, page 0 : barre de gestion des dates de comparaison (chaque date = une paire Avant/Après de lignes)
+    if (st.type === 'avantapres' && pi === 0) {
+      const bar = document.createElement('div'); bar.className = 'pl-datebar';
+      (st.compar || []).forEach((c, ci2) => {
+        const chip = document.createElement('span'); chip.className = 'pl-datechip';
+        chip.innerHTML = `<input type="date" value="${esc(c.date)}"/>${st.compar.length > 1 ? '<button class="pl-date-x" title="Retirer">✕</button>' : ''}`;
+        chip.querySelector('input').addEventListener('change', (e) => { c.date = e.target.value; plRenderGrid(); });
+        const x = chip.querySelector('.pl-date-x');
+        if (x) x.addEventListener('click', () => {
+          st.compar.splice(ci2, 1);
+          const nc = {}; // ré-indexe les cellules de la page 0 (les lignes après celle retirée se décalent)
+          Object.keys(st.cells).forEach((k) => { const pp = k.split('_'); if (pp[0] !== '0') { nc[k] = st.cells[k]; return; } const ri = parseInt(pp[1], 10); if (ri === ci2) return; nc['0_' + (ri > ci2 ? ri - 1 : ri) + '_' + pp[2] + '_' + pp[3]] = st.cells[k]; });
+          st.cells = nc; plRenderPot(); plRenderGrid();
+        });
+        bar.appendChild(chip);
+      });
+      const add = document.createElement('button'); add.className = 'btn small'; add.textContent = '＋ Ajouter une date'; add.addEventListener('click', () => { st.compar.push({ id: uid(), date: todayStr() }); plRenderGrid(); });
+      bar.appendChild(add); wrap.appendChild(bar);
+    }
+    const rows = plPageRows(pi);
     const tbl = document.createElement('table'); tbl.className = 'pl-egrid';
     let html = `<thead><tr><th></th>${angles.map((a) => `<th>${esc(a)}</th>`).join('')}</tr></thead><tbody>`;
-    if (!membres.length) html += `<tr><td colspan="${angles.length + 1}" class="hint" style="text-align:center;padding:8px">Page sans ligne (configurez les lignes dans Gestion → Planche).</td></tr>`;
-    membres.forEach((m, ri) => {
-      html += `<tr><th class="pl-mem">${esc(m)}</th>` + angles.map((a, ci) => {
-        const key = pi + '_' + ri + '_' + ci, pid = plCreate.cells[key], ph = pid && plCreate.photos.find((p) => p.id === pid);
-        return `<td class="pl-cell${plCreate.sel && !ph ? ' sel-target' : ''}" data-key="${key}">${ph && ph.url ? `<img src="${ph.url}" alt=""/>` : '<span class="pl-cell-ph">+</span>'}</td>`;
+    if (!rows.length) html += `<tr><td colspan="${angles.length + 1}" class="hint" style="text-align:center;padding:8px">${st.type === 'avantapres' && pi === 0 ? 'Ajoutez au moins une date de comparaison.' : 'Page sans ligne (configurez les lignes dans Gestion → Planche).'}</td></tr>`;
+    rows.forEach((r) => {
+      html += `<tr><th class="pl-mem${r.pj === 1 ? ' pl-after' : ''}">${esc(r.label)}</th>` + angles.map((a, ci) => {
+        const key = plCellKey(pi, r, ci), pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
+        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}" data-key="${key}">${ph && ph.url ? `<img src="${ph.url}" alt=""/>` : '<span class="pl-cell-ph">+</span>'}</td>`;
       }).join('') + '</tr>';
     });
     html += '</tbody>';
     tbl.innerHTML = html;
     tbl.querySelectorAll('.pl-cell').forEach((td) => {
       const key = td.dataset.key;
-      td.addEventListener('click', () => { if (plCreate.cells[key]) { delete plCreate.cells[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); } });
+      td.addEventListener('click', () => { if (st.cells[key]) { delete st.cells[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); } });
       td.addEventListener('dragover', (e) => e.preventDefault());
       td.addEventListener('drop', (e) => { e.preventDefault(); plPlace(key); });
     });
@@ -4976,31 +5070,32 @@ function planchePrint() {
   const st = plCreate;
   if (!Object.keys(st.cells).length && !confirm('Aucune photo n\'est placée dans la grille. Générer quand même la planche (vide) ?')) return;
   const ori = st.orientation === 'portrait' ? 'portrait' : 'landscape';
-  const logoHtml = st.logo ? '<img class="pl-logo" src="icons/logo-mark.png" alt=""/>' : '';
+  const logoHtml = st.logo ? proLogoBox(150, 58) : '';
+  const titre = st.type === 'avantapres' ? 'Avant / après (parage)' : 'Planche de contact';
   let body = `<style>
     @page{size:${ori};margin:8mm;}
     #printArea .pl-page{page-break-after:always;}
     #printArea .pl-page:last-child{page-break-after:auto;}
     #printArea .pl-head{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:8px;}
     #printArea .pl-hl{display:flex;align-items:center;gap:8px;}
-    #printArea .pl-logo{height:32px;}
     #printArea .pl-htitle{font-size:15px;font-weight:700;color:#111;}
     #printArea .pl-hinfo{font-size:12px;color:#111;text-align:right;}
     #printArea table.pl-ptable{width:100%;border-collapse:collapse;table-layout:fixed;}
     #printArea table.pl-ptable th,#printArea table.pl-ptable td{border:1px solid #444;padding:2px;text-align:center;vertical-align:middle;}
     #printArea table.pl-ptable thead th{background:#eee;font-size:11px;}
-    #printArea table.pl-ptable th.pl-mem{width:72px;font-size:11px;font-weight:700;background:#f5f5f5;text-align:left;}
+    #printArea table.pl-ptable th.pl-mem{width:82px;font-size:10px;font-weight:700;background:#f5f5f5;text-align:left;}
+    #printArea table.pl-ptable th.pl-mem.pl-after{background:#e7eef7;}
     #printArea table.pl-ptable td img{width:100%;height:auto;max-height:158px;object-fit:contain;display:block;margin:0 auto;}
     #printArea .pl-note{margin-top:8px;font-size:11px;color:#111;border-top:1px solid #999;padding-top:4px;white-space:pre-wrap;}
   </style>`;
   (st.pages || []).forEach((pg, pi) => {
-    const membres = Array.isArray(pg.membres) ? pg.membres : [];
-    body += `<div class="pl-page"><div class="pl-head"><div class="pl-hl">${logoHtml}<span class="pl-htitle">Planche de contact</span></div>`
+    const rows = plPageRows(pi);
+    body += `<div class="pl-page"><div class="pl-head"><div class="pl-hl">${logoHtml}<span class="pl-htitle">${titre}</span></div>`
       + `<div class="pl-hinfo"><b>${esc(st.cheval) || '—'}</b><br>${esc(st.client) || '—'} · ${esc(fmtDateFr(st.date))}</div></div>`;
     body += `<table class="pl-ptable"><thead><tr><th class="pl-mem"></th>${st.angles.map((a) => `<th>${esc(a)}</th>`).join('')}</tr></thead><tbody>`;
-    membres.forEach((m, ri) => {
-      body += `<tr><th class="pl-mem">${esc(m)}</th>` + st.angles.map((a, ci) => {
-        const pid = st.cells[pi + '_' + ri + '_' + ci], ph = pid && st.photos.find((p) => p.id === pid);
+    rows.forEach((r) => {
+      body += `<tr><th class="pl-mem${r.pj === 1 ? ' pl-after' : ''}">${esc(r.label)}</th>` + st.angles.map((a, ci) => {
+        const pid = st.cells[plCellKey(pi, r, ci)], ph = pid && st.photos.find((p) => p.id === pid);
         return `<td>${ph && ph.url ? `<img src="${ph.url}" alt=""/>` : ''}</td>`;
       }).join('') + '</tr>';
     });
@@ -5009,6 +5104,54 @@ function planchePrint() {
     body += '</div>';
   });
   printHtml('Planche — ' + (st.cheval || 'cheval'), body);
+}
+
+// ================= Comparaison de documents (Phase 4) =================
+// Importe 2 images (planches déjà enregistrées, captures…) et les met côte à côte en PDF. Rien n'est stocké (décision : pas de rendu PDF ré-importé, on compare des images).
+let plCompare = null;
+function modalPlancheCompare() {
+  plCompare = { orientation: 'paysage', title: 'Comparaison', a: '', b: '', la: 'Document 1', lb: 'Document 2' };
+  openModal(`<div class="modal-head"><b>🔎 Comparaison de documents</b><button class="x" id="mX">✕</button></div>
+    <div style="max-height:80vh;overflow:auto">
+      <p class="hint">Importez deux images (planches déjà enregistrées en PDF/PNG, captures d'écran…). Elles seront placées <b>côte à côte</b> sur une page à imprimer / enregistrer en PDF. Rien n'est stocké dans l'app.</p>
+      <div class="row"><label class="grow">Titre<input type="text" id="plCmpTitle" value="Comparaison"/></label><label class="grow">Orientation<select id="plCmpOri"><option value="paysage">Paysage</option><option value="portrait">Portrait</option></select></label></div>
+      <div class="pl-cmp-2">
+        <div class="pl-cmp-col"><label>Légende gauche<input type="text" id="plCmpLa" value="Document 1"/></label><button class="btn small block" id="plCmpImpA">＋ Importer l'image de gauche</button><input type="file" id="plCmpFileA" accept="image/*" hidden/><div class="pl-cmp-prev" id="plCmpPrevA"></div></div>
+        <div class="pl-cmp-col"><label>Légende droite<input type="text" id="plCmpLb" value="Document 2"/></label><button class="btn small block" id="plCmpImpB">＋ Importer l'image de droite</button><input type="file" id="plCmpFileB" accept="image/*" hidden/><div class="pl-cmp-prev" id="plCmpPrevB"></div></div>
+      </div>
+      <div class="actions"><button class="btn primary block" id="plCmpPdf">🖨 Générer le PDF</button><button class="btn block" id="plCmpClose">Fermer</button></div>
+    </div>`);
+  const close = () => { plCompare = null; closeModal(); };
+  $('mX').onclick = close; $('plCmpClose').onclick = close;
+  $('plCmpTitle').addEventListener('input', (e) => { plCompare.title = e.target.value; });
+  $('plCmpOri').addEventListener('change', (e) => { plCompare.orientation = e.target.value; });
+  $('plCmpLa').addEventListener('input', (e) => { plCompare.la = e.target.value; });
+  $('plCmpLb').addEventListener('input', (e) => { plCompare.lb = e.target.value; });
+  const wire = (side, up) => {
+    $('plCmpImp' + up).onclick = () => $('plCmpFile' + up).click();
+    $('plCmpFile' + up).addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; plResizeImage(f, 1400, (url) => { if (!plCompare) return; plCompare[side] = url; const p = $('plCmpPrev' + up); if (p) p.innerHTML = url ? `<img src="${url}" alt=""/>` : ''; }, 'image/png'); });
+  };
+  wire('a', 'A'); wire('b', 'B');
+  $('plCmpPdf').onclick = plancheComparePrint;
+}
+function plancheComparePrint() {
+  if (!plCompare) return;
+  const c = plCompare;
+  if (!c.a && !c.b) { alert('Importez au moins une image.'); return; }
+  const ori = c.orientation === 'portrait' ? 'portrait' : 'landscape';
+  const cell = (url, lbl) => `<div class="pl-cmp-cell"><div class="pl-cmp-lbl">${esc(lbl)}</div>${url ? `<img src="${url}" alt=""/>` : '<div class="pl-cmp-empty">—</div>'}</div>`;
+  const body = `<style>
+    @page{size:${ori};margin:8mm;}
+    #printArea .pl-cmp-title{font-size:15px;font-weight:700;color:#111;text-align:center;margin-bottom:8px;}
+    #printArea .pl-cmp-row{display:flex;gap:8px;align-items:flex-start;}
+    #printArea .pl-cmp-cell{flex:1;text-align:center;border:1px solid #999;padding:4px;}
+    #printArea .pl-cmp-lbl{font-size:12px;font-weight:700;color:#111;margin-bottom:4px;}
+    #printArea .pl-cmp-cell img{width:100%;height:auto;max-height:${ori === 'portrait' ? '340' : '470'}px;object-fit:contain;display:block;margin:0 auto;}
+    #printArea .pl-cmp-empty{color:#999;padding:40px 0;}
+  </style>
+  <div class="pl-cmp-title">${esc(c.title || 'Comparaison')}</div>
+  <div class="pl-cmp-row">${cell(c.a, c.la || 'Document 1')}${cell(c.b, c.lb || 'Document 2')}</div>`;
+  printHtml('Comparaison — ' + (c.title || 'documents'), body);
 }
 
 // ================= SMS (modèle) =================

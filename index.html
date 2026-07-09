@@ -446,7 +446,7 @@
 
     <div id="gsub-planche" class="subpanel">
       <section class="card">
-        <div class="card-head"><h2>Planches — paramétrage</h2><button class="btn small primary" id="plCreateBtn">＋ Créer une planche</button></div>
+        <div class="card-head"><h2>Planches — paramétrage</h2><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCompareBtn">🔎 Comparaison documents</button><button class="btn small primary" id="plCreateBtn">＋ Créer une planche</button></div></div>
         <p class="hint">Configurez la structure des planches (lignes = membres, colonnes = angles de vue). Les photos et PDF ne sont jamais stockés dans l'app : elles restent dans la bibliothèque du téléphone, le PDF est enregistré par le navigateur.</p>
         <div class="seg" id="plType"><button type="button" class="seg-btn on" data-plt="contact">Planche contact</button><button type="button" class="seg-btn" data-plt="avantapres">Avant / après</button></div>
         <div id="plancheBody"></div>
@@ -717,6 +717,12 @@
       </div>
       <div id="amortStats"></div>
       <p class="hint">Progression basée sur l'odomètre <b>estimé</b> (recalé sur vos relevés « Statut véhicule »). Les dates servent à l'âge et au km/an.</p>
+    </section>
+
+    <section class="card">
+      <h2>Logo / identité (documents)</h2>
+      <p class="hint">Votre logo apparaît en en-tête des <b>planches de contact</b> (si le logo est activé dans Gestion → Planche). Choisissez une image, puis <b>zoomez</b> et <b>déplacez-la</b> dans le cadre pour l'ajuster. Le logo est enregistré dans l'app ; les photos de planche, elles, ne le sont jamais.</p>
+      <div id="proLogoEditor"></div>
     </section>
 
     </div><!-- /rsub-config -->
