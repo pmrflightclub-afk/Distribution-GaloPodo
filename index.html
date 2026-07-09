@@ -64,12 +64,6 @@
       <p class="hint">Tournées dont le jour est passé sans clôture. <b>Démarrée</b> → finalisez les arrêts restants. <b>Jamais démarrée</b> → reportez chaque client à une nouvelle date, ou supprimez la tournée.</p>
       <div id="homeBlockingList" class="list"></div>
     </section>
-    <section class="card">
-      <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
-      <p class="hint">La tournée du jour puis chaque arrêt, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
-      <div id="homeTrajet" class="list"></div>
-      <p class="empty" id="homeTrajetEmpty">Aucune tournée aujourd'hui.</p>
-    </section>
     <section class="card hidden" id="homeReplacer">
       <h2>📅 Replacer un RDV</h2>
       <p class="hint">RDV reportés à replacer. Cliquez un client pour fixer une date de remplacement.</p>
@@ -79,6 +73,12 @@
       <h2>🐴 Chevaux sans prochain RDV</h2>
       <p class="hint">Chevaux actifs qui n'ont aucun rendez-vous à venir (ignorés lors d'un RDV, ou jamais replacés). Attribuez-leur une date, ou passez-les en inactif / liste noire.</p>
       <div id="homeNoRdvList" class="list"></div>
+    </section>
+    <section class="card">
+      <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
+      <p class="hint">La tournée du jour puis chaque arrêt, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
+      <div id="homeTrajet" class="list"></div>
+      <p class="empty" id="homeTrajetEmpty">Aucune tournée aujourd'hui.</p>
     </section>
     <section class="card">
       <h2>À venir</h2>

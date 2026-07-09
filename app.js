@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.101';
+const APP_VERSION = '1.1.102';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.102', date: '2026-07-09',
+    ajouts: [
+      'Accueil réorganisé : « 📅 Replacer un RDV » et « 🐴 Chevaux sans prochain RDV » sont maintenant placés AVANT « Trajet du jour ».',
+    ],
+  },
   {
     version: '1.1.101', date: '2026-07-09',
     ajouts: [
