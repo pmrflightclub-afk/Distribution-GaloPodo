@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.124';
+const APP_VERSION = '1.1.125';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.125', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : si vous modifiez le km ou la date d\'un entretien, ses frais liés (Pièces, Réparation…) sont mis à jour automatiquement (ils reprennent le km et la date du dernier entretien).',
+    ],
+  },
   {
     version: '1.1.124', date: '2026-07-09',
     ajouts: [
@@ -4803,10 +4809,11 @@ function renderFraisVehicule() {
     addUnit(montEl, '€ HT'); addUnit(kmEl, 'km'); if (kmDebEl) addUnit(kmDebEl, 'km'); makeReadout(ro, '€/km');
     wireNum(montEl, { get: () => f.montantHT, dec: 0, set: (v) => { f.montantHT = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
     wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
-    if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; }, after: () => saveSettings() });
+    const syncChildren = () => { (S.frais || []).forEach((c) => { if (c.parentId === f.id) { c.kmDebut = f.kmDebut || 0; c.date = f.date || ''; } }); }; // un entretien propage son km/date à ses frais liés
+    if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; }, after: () => { syncChildren(); saveSettings(); } });
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
-    { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; saveSettings(); }); }
+    { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; syncChildren(); saveSettings(); renderFraisVehicule(); }); }
     { const ge = el.querySelector('[data-k="groupe"]'); if (ge) ge.addEventListener('input', (e) => { f.groupe = e.target.value.trim(); saveSettings(); }); }
     { const pe = el.querySelector('[data-k="parentId"]'); if (pe) pe.addEventListener('change', (e) => { f.parentId = e.target.value || null; if (f.parentId) { const p = S.frais.find((x) => x.id === f.parentId); if (p) { f.kmDebut = p.kmDebut || 0; f.date = p.date || ''; } } saveSettings(); renderFraisVehicule(); }); }
     { const db = el.querySelector('[data-done]'); if (db) db.addEventListener('click', () => modalFraisDone(f)); }
