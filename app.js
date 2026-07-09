@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.123';
+const APP_VERSION = '1.1.124';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.124', date: '2026-07-09',
+    ajouts: [
+      'Gestion → Frais véhicule : chaque frais lié à un entretien (Pièces, Réparation…) se range désormais automatiquement juste sous l\'entretien auquel il est lié (légèrement en retrait).',
+    ],
+  },
   {
     version: '1.1.123', date: '2026-07-09',
     ajouts: [
@@ -4746,7 +4752,17 @@ function renderFinanceCheval() {
     el.innerHTML = h; box.appendChild(el);
   });
 }
+// Range chaque frais lié (enfant) juste après son entretien (parent) dans S.frais. Renvoie true si l'ordre a changé.
+function normalizeFraisOrder() {
+  const frais = S.frais || []; const out = []; const placed = new Set();
+  frais.forEach((f) => { if (f.parentId) return; if (placed.has(f.id)) return; out.push(f); placed.add(f.id); frais.forEach((c) => { if (c.parentId === f.id && !placed.has(c.id)) { out.push(c); placed.add(c.id); } }); });
+  frais.forEach((f) => { if (!placed.has(f.id)) { out.push(f); placed.add(f.id); } }); // enfants orphelins / indépendants restants
+  const changed = out.some((f, i) => frais[i] !== f);
+  if (changed) S.frais = out;
+  return changed;
+}
 function renderFraisVehicule() {
+  if (normalizeFraisOrder()) saveSettings();
   const odo = odometer();
   if ($('kmIndicatif')) $('kmIndicatif').innerHTML = `Tarif indicatif tournée : <b>${eurkm(tarifHT('tournee'))} HT</b> · <b>${eurkm(ttc(tarifHT('tournee')))} TVAC</b> (base véhicule + carburant).`;
   if ($('fraisUnitHT')) { makeReadout($('fraisUnitHT'), '€/km HT'); $('fraisUnitHT').value = fmtNum(baseVehiculeHT(), 3); fitSize($('fraisUnitHT')); }
