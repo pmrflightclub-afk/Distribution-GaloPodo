@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.134';
+const APP_VERSION = '1.1.135';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.135', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : le champ « km dernier entretien » d\'un poste principal s\'appelle désormais « Kilométrage achat ». Les éléments liés n\'ont pas ce champ (repris automatiquement du principal).',
+      'Le tarif au km (base véhicule HT/TTC + tarif indicatif) se recalcule maintenant en direct à chaque champ modifié (plus besoin de quitter la page). La section « prix unitaire » ne contient plus le bouton relevé compteur.',
+      'Nouveau bouton en bas de page « ♻ Repartir à zéro » : réinitialise les frais à la structure par défaut (Entretien + Pièces + Réparation ; Pneus + Montage & équilibrage ; Plaquettes + Disques) sans toucher à l\'odomètre ni aux relevés.',
+      'Nouvelle installation : frais livrés déjà organisés en types avec leurs éléments liés.',
+      'Assistant « Régler l\'historique » : le menu « Lié au type » et les cartes affichent un identifiant #xxxx + le nom + la date, pour choisir le bon poste avec certitude (utile si deux postes ont le même nom).',
+    ],
+  },
   {
     version: '1.1.134', date: '2026-07-09',
     ajouts: [
@@ -1235,7 +1245,22 @@ const FRAIS_REF = [
   { poste: 'Montage & équilibrage pneus', nature: 'exceptionnel', montantHT: 0, kmPrevus: 0 },
 ];
 const mkMat = () => MATERIEL_REF.map((m) => ({ id: uid(), libelle: m.libelle, montantHT: m.montantHT, nbChevaux: m.nbChevaux }));
-const mkFrais = () => FRAIS_REF.map((f) => ({ id: uid(), poste: f.poste, nature: f.nature, montantHT: f.montantHT, kmPrevus: f.kmPrevus, kmDebut: 0 }));
+// Frais par défaut organisés en TYPES : un poste principal + ses éléments liés (réinitialisés en refaisant le type).
+function mkFrais() {
+  const out = [];
+  const addType = (head, children) => { const h = Object.assign({ id: uid(), kmDebut: 0 }, head); out.push(h); (children || []).forEach((c) => out.push(Object.assign({ id: uid(), kmDebut: 0, parentId: h.id }, c))); };
+  addType({ poste: 'Entretien', nature: 'recurrent', montantHT: 800, kmPrevus: 30000 }, [
+    { poste: 'Pièces', nature: 'exceptionnel', montantHT: 0, kmPrevus: 30000 },
+    { poste: 'Réparation', nature: 'exceptionnel', montantHT: 0, kmPrevus: 30000 },
+  ]);
+  addType({ poste: 'Pneus', nature: 'recurrent', montantHT: 450, kmPrevus: 40000 }, [
+    { poste: 'Montage & équilibrage', nature: 'exceptionnel', montantHT: 150, kmPrevus: 40000 },
+  ]);
+  addType({ poste: 'Plaquettes de frein', nature: 'recurrent', montantHT: 450, kmPrevus: 30000 }, [
+    { poste: 'Disques de frein', nature: 'exceptionnel', montantHT: 500, kmPrevus: 60000 },
+  ]);
+  return out;
+}
 if (!S.seededServos) {
   S.seededServos = true;
   if (!S.materiel.length) S.materiel = mkMat();
@@ -4886,7 +4911,7 @@ function fraisJaugeText(f) {
 function renderFraisVehicule() {
   if (normalizeFraisOrder()) saveSettings();
   const odo = odometer();
-  if ($('kmIndicatif')) { $('kmIndicatif').innerHTML = `<span class="hint">Prochain entretien = <b>km du dernier entretien + intervalle</b>. L'odomètre actuel (${km(odo)}) sert seulement à signaler « à renouveler » (dépassé). <button class="btn small" id="fraisOdoBtn">＋ Relevé compteur</button></span><br>Tarif indicatif tournée : <b>${eurkm(tarifHT('tournee'))} HT</b> · <b>${eurkm(ttc(tarifHT('tournee')))} TVAC</b> (base véhicule + carburant).`; const ob = $('fraisOdoBtn'); if (ob) ob.onclick = () => modalStatutVehicule(); }
+  if ($('kmIndicatif')) $('kmIndicatif').innerHTML = `Tarif indicatif tournée : <b>${eurkm(tarifHT('tournee'))} HT</b> · <b>${eurkm(ttc(tarifHT('tournee')))} TVAC</b> (base véhicule + carburant).`;
   if ($('fraisUnitHT')) { makeReadout($('fraisUnitHT'), '€/km HT'); $('fraisUnitHT').value = fmtNum(baseVehiculeHT(), 3); fitSize($('fraisUnitHT')); }
   if ($('fraisUnitTTC')) { makeReadout($('fraisUnitTTC'), '€/km TTC'); $('fraisUnitTTC').value = fmtNum(ttc(baseVehiculeHT()), 3); fitSize($('fraisUnitTTC')); }
   const box = $('fraisList'); if (!box) return; box.innerHTML = '';
@@ -4900,7 +4925,7 @@ function renderFraisVehicule() {
     const epuise = f.nature === 'exceptionnel' && !isChild && !fraisActif(f); // épuisé → inactif : ne contribue plus à la base véhicule
     const jauge = esc(fraisJaugeText(f));
     const el = document.createElement('div'); el.className = 'edit-row' + (epuise ? ' frais-off' : '') + (isChild ? ' frais-child' : ''); el.dataset.idx = i;
-    el.innerHTML = `<div class="er-top"><span class="drag-h">⠿</span>
+    el.innerHTML = `<div class="er-top"><span class="drag-h">⠿</span><span class="li-sub" title="Identifiant du frais">#${f.id.slice(-4)}</span>
         <input class="grow er-title" data-k="poste" value="${esc(f.poste)}" placeholder="Poste (entretien, assurance…)"/>
         <button class="a-del" data-del title="Supprimer">✕</button></div>
       <div class="er-grid">
@@ -4908,8 +4933,8 @@ function renderFraisVehicule() {
         ${isChild ? '' : `<label>Date entretien<input data-k="date" type="date" value="${f.date || ''}"/></label>`}
         <label>Montant<input data-k="montantHT" type="number" step="1" min="0" value="${f.montantHT || ''}"/></label>
         <label>Km prévus (intervalle)<input data-k="kmPrevus" type="number" step="1000" min="0" value="${f.kmPrevus || ''}"/></label>
-        ${isChild ? '' : `<label>${f.nature === 'recurrent' ? 'Km dernier entretien' : "Km d'achat / installation"}<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>`}
-        ${!children.length ? `<label>Lié au type<select data-k="parentId"><option value="">— type à part entière</option>${typeHeads.map((p) => `<option value="${p.id}"${f.parentId === p.id ? ' selected' : ''}>${esc(p.poste || 'Type')}</option>`).join('')}</select></label>` : ''}
+        ${isChild ? '' : `<label>Kilométrage achat<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>`}
+        ${!children.length ? `<label>Lié au type<select data-k="parentId"><option value="">— type à part entière</option>${typeHeads.map((p) => `<option value="${p.id}"${f.parentId === p.id ? ' selected' : ''}>#${p.id.slice(-4)} · ${esc(p.poste || 'Type')}${p.date ? ' · ' + esc(fmtDateFr(p.date)) : ''}</option>`).join('')}</select></label>` : ''}
         <label>Contribution<input data-ro="contrib" readonly/></label>
       </div>
       <p class="hint er-jauge">${jauge}</p>
@@ -4919,10 +4944,11 @@ function renderFraisVehicule() {
     const ro = el.querySelector('[data-ro="contrib"]');
     const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]'), kmDebEl = el.querySelector('[data-k="kmDebut"]');
     addUnit(montEl, '€ HT'); addUnit(kmEl, 'km'); if (kmDebEl) addUnit(kmDebEl, 'km'); makeReadout(ro, '€/km');
-    // Recalcul live de la jauge (km roulés / avant échéance) quand on édite un champ.
+    // Recalcul live : jauge de la ligne + base véhicule €/km (haut de page) + tarif indicatif, à chaque champ modifié.
     const refreshJauge = () => { const p = el.querySelector('.er-jauge'); if (p) p.textContent = fraisJaugeText(f); };
-    wireNum(montEl, { get: () => f.montantHT, dec: 0, set: (v) => { f.montantHT = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); }, after: () => saveSettings() });
-    wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); refreshJauge(); }, after: () => saveSettings() });
+    const refreshBase = () => { if ($('fraisUnitHT')) { $('fraisUnitHT').value = fmtNum(baseVehiculeHT(), 3); fitSize($('fraisUnitHT')); } if ($('fraisUnitTTC')) { $('fraisUnitTTC').value = fmtNum(ttc(baseVehiculeHT()), 3); fitSize($('fraisUnitTTC')); } if ($('kmIndicatif')) $('kmIndicatif').innerHTML = `Tarif indicatif tournée : <b>${eurkm(tarifHT('tournee'))} HT</b> · <b>${eurkm(ttc(tarifHT('tournee')))} TVAC</b> (base véhicule + carburant).`; };
+    wireNum(montEl, { get: () => f.montantHT, dec: 0, set: (v) => { f.montantHT = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); refreshBase(); }, after: () => saveSettings() });
+    wireNum(kmEl, { get: () => f.kmPrevus, dec: 0, set: (v) => { f.kmPrevus = v; ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro); refreshJauge(); refreshBase(); }, after: () => saveSettings() });
     const syncChildren = () => { (S.frais || []).forEach((c) => { if (c.parentId === f.id) { c.kmDebut = f.kmDebut || 0; c.date = f.date || ''; } }); }; // un entretien propage son km/date à ses frais liés
     if (kmDebEl) wireNum(kmDebEl, { get: () => f.kmDebut, dec: 0, set: (v) => { f.kmDebut = v; refreshJauge(); }, after: () => { syncChildren(); saveSettings(); if (children.length) renderFraisVehicule(); } }); // re-render pour actualiser les frais liés
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
@@ -4936,6 +4962,13 @@ function renderFraisVehicule() {
     box.appendChild(el);
   });
   enableRowDrag(box, S.frais, () => saveSettings());
+  const reset = document.createElement('div'); reset.className = 'actions'; reset.style.marginTop = '16px';
+  reset.innerHTML = '<button class="btn small danger block" id="fraisResetBtn">♻ Repartir à zéro (frais par défaut, sans toucher l\'odomètre ni les relevés)</button>';
+  reset.querySelector('#fraisResetBtn').addEventListener('click', () => {
+    if (!confirm('Remettre les frais véhicule à la structure par défaut (Entretien+Pièces+Réparation, Pneus+Montage, Plaquettes+Disques) ? Vos relevés compteur et l\'amortissement sont conservés. Le journal des frais réels est vidé.')) return;
+    S.frais = mkFrais(); S.fraisJournal = []; saveSettings(); renderFraisVehicule(); renderStatutVehiculePage(); renderHome();
+  });
+  box.appendChild(reset);
 }
 // Page Articles = catalogue + forfaits pathologie + tableau des tarifs
 function renderArticlesPage() {
@@ -4968,8 +5001,9 @@ function modalFraisMigration() {
       const linked = !!link[f.id];
       const parents = frais.filter((x) => x.id !== f.id && !link[x.id]); // un frais lié ne peut pas être un type parent
       const el = document.createElement('div'); el.className = 'card' + (linked ? ' frais-child' : ''); el.style.margin = '8px 0';
-      el.innerHTML = `<div class="a-art-head"><span><b>${esc(f.poste || 'Frais')}</b> <span class="li-sub">(tous les ${km(f.kmPrevus)})</span></span></div>
-        <label>Lié au type<select data-link="${f.id}"><option value="">— type à part entière</option>${parents.map((p) => `<option value="${p.id}"${link[f.id] === p.id ? ' selected' : ''}>${esc(p.poste || 'Type')}</option>`).join('')}</select></label>
+      const optLbl = (p) => `#${p.id.slice(-4)} · ${p.poste || 'Frais'}${p.date ? ' · ' + fmtDateFr(p.date) : ''}`;
+      el.innerHTML = `<div class="a-art-head"><span><b>#${f.id.slice(-4)} · ${esc(f.poste || 'Frais')}</b> <span class="li-sub">(tous les ${km(f.kmPrevus)}${f.date ? ' · ' + esc(fmtDateFr(f.date)) : ''})</span></span></div>
+        <label>Lié au type<select data-link="${f.id}"><option value="">— type à part entière</option>${parents.map((p) => `<option value="${p.id}"${link[f.id] === p.id ? ' selected' : ''}>${esc(optLbl(p))}</option>`).join('')}</select></label>
         ${linked ? '<p class="hint">→ hérite du km / date de son type.</p>' : modeSel(f.id)}`;
       box.appendChild(el);
     });
