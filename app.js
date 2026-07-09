@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.98';
+const APP_VERSION = '1.1.99';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.99', date: '2026-07-09',
+    ajouts: [
+      'Le bouton « 🔧 Recalculer cette tournée » a été retiré : son rôle est désormais assuré automatiquement par « ✏️ Corriger les prestations ». Quand vous corrigez les prestations d\'une tournée clôturée, la facture est recalculée toute seule — et, si le calcul figé n\'est plus à jour, un recalcul complet depuis les adresses (via la carte) est fait automatiquement.',
+    ],
+  },
   {
     version: '1.1.98', date: '2026-07-09',
     ajouts: [
@@ -2489,8 +2495,7 @@ function openEditor() {
   if ($('edLockBanner')) { if (review) $('edLockBanner').textContent = '📥 Tournée importée « à revalider » — vérifiez chaque arrêt puis « ✓ Valider » ci-dessous pour recalculer et figer.'; else if (locked) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.'; }
   if ($('edRevalider')) $('edRevalider').style.display = review ? '' : 'none';
   if ($('edRecoverWrap')) $('edRecoverWrap').style.display = currentTour.recovered ? '' : 'none'; // tournée récupérée : compléter les données manquantes pour les stats
-  if ($('edRepairWrap')) $('edRepairWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : réparation manuelle d'une facture abîmée (recalcul complet depuis les adresses)
-  if ($('edActesWrap')) $('edActesWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : corriger les prestations (réactiver un cheval non facturé)
+  if ($('edActesWrap')) $('edActesWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : corriger les prestations (réactiver un cheval non facturé + recalcul auto complet si géométrie périmée)
   if ($('edCancelBillWrap')) $('edCancelBillWrap').style.display = (locked && !review) ? '' : 'none'; // tournée figée : annuler une facturation (cheval/arrêt/client/tournée)
   $('edAddArret').style.display = locked ? 'none' : '';
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
@@ -6552,29 +6557,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('edDate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } });
   $('edCalc').addEventListener('click', calcTour);
   if ($('edRecover')) $('edRecover').addEventListener('click', () => { if (currentTour) modalRecoverStats(currentTour); });
-  if ($('edRepair')) $('edRepair').addEventListener('click', async () => {
-    if (!currentTour) return;
-    if (!currentTour.arrets || !currentTour.arrets.length) { alert('Aucun arrêt à recalculer.'); return; }
-    if (!confirm('Recalculer entièrement cette tournée figée depuis les adresses (via la carte) ?\n\nÀ utiliser pour réparer une facture abîmée (déplacement/matériel manquants). La tournée reste clôturée ; seuls les montants sont recalculés.')) return;
-    await calcTour(false); // recalcul complet API → restaure déplacement + matériel ; persistCurrentTour conserve t.closed
-    const R = currentTour && currentTour.result;
-    if (R) {
-      let nbParage = 0, nbActe = 0;
-      (currentTour.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv)) { nbActe++; if (cv.parage) nbParage++; } })));
-      alert('🔍 Diagnostic du recalcul (envoie-moi cette capture si le montant est faux) :\n'
-        + '• km total : ' + (R.totalKm != null ? R.totalKm.toFixed(1) : '—') + ' km\n'
-        + '• tarif tournée : ' + eurkm(tarifHT('tournee')) + '/km (base véhicule ' + eur(baseVehiculeHT()) + '/km + carburant ' + eur(fuelPerKmHT()) + '/km)\n'
-        + '• DÉPLACEMENT HT : ' + eur(R.htDeplacement || 0) + '\n'
-        + '• MATÉRIEL HT : ' + eur(R.materielHT || 0) + ' (unitaire configuré ' + eur(baseMateriel()) + '/cheval · ' + nbParage + ' cheval(x) avec parage)\n'
-        + '• services/actes HT : ' + eur(R.servicesHT || 0) + '\n'
-        + '• TOTAL TTC : ' + eur(R.totalTTC || 0) + '\n\n'
-        + (R.htDeplacement > 0 ? '' : '⚠ Déplacement à 0 : ' + ((R.totalKm || 0) === 0 ? 'aucun km calculé (adresses non géocodées ?).' : 'tarif/km à 0 (Réglages → Véhicule : base véhicule + carburant).') + '\n')
-        + (R.materielHT > 0 || nbParage === 0 ? '' : '⚠ Matériel à 0 alors qu\'il y a du parage : aucun matériel configuré (Réglages → Matériel).'));
-    }
-    const adj = cashClientsNeedingArrondi(currentTour);
-    if (adj.length) { modalAdjustArrondi(currentTour, adj); return; } // total liquide changé → ressaisir l'arrondi caisse
-    openEditor(); // ré-affiche en mode figé avec le résultat réparé
-  });
+  // (« Recalculer cette tournée » retiré en 1.1.99 : le recalcul complet — fallback calcTour quand la géométrie figée est périmée — est désormais AUTOMATIQUE dans « Corriger les prestations ».)
   if ($('edActes')) $('edActes').addEventListener('click', () => { if (currentTour) modalEditPrestations(currentTour); });
   if ($('edCancelBill')) $('edCancelBill').addEventListener('click', () => { if (currentTour) modalCancelBilling(currentTour); });
   $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats et ses impayés liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
