@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.142';
+const APP_VERSION = '1.1.143';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.143', date: '2026-07-10',
+    ajouts: [
+      'Frais matériel : la cadence « chevaux / mois » auto peut se calculer sur une fenêtre au choix — Tout l\'historique, ou les 3 / 6 / 12 derniers mois (nouveau menu « Calcul auto sur »). Plus flexible pour refléter votre activité récente.',
+    ],
+  },
   {
     version: '1.1.142', date: '2026-07-10',
     ajouts: [
@@ -1365,6 +1371,7 @@ if (!S.visiteSeeded) {
 }
 S.materiel.forEach((m) => { if (typeof m.nbChevaux !== 'number') m.nbChevaux = 1; }); // migration nbChevaux
 if (typeof S.chevauxParMois !== 'number') S.chevauxParMois = 0; // cadence chevaux/mois pour l'échéance matériel (0 = auto depuis l'historique)
+if (typeof S.chevauxParMoisFenetre !== 'number') S.chevauxParMoisFenetre = 0; // fenêtre du calcul auto (0 = tout l'historique, sinon N derniers mois)
 // V2 : retire les anciens produits, itemise le matériel, ajoute les catégories véhicule
 if (!S.seededV2) {
   S.seededV2 = true;
@@ -1414,13 +1421,25 @@ const tvaRatesPays = () => (PAYS_TVA[S.pays] || PAYS_TVA.be).rates;
 const baseMateriel = () => S.materiel.reduce((s, m) => s + ((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1)), 0);
 // Chevaux facturés (parés/visités) dans une tournée.
 function billedHorsesInTour(t) { let n = 0; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv)) n++; }))); return n; }
-// Cadence moyenne de chevaux/mois estimée sur l'historique (total chevaux facturés ÷ mois d'activité écoulés).
+const shiftYm = (ym, delta) => { const [y, mo] = ym.split('-').map(Number); const idx = (y * 12 + (mo - 1)) + delta; return Math.floor(idx / 12) + '-' + String((idx % 12) + 1).padStart(2, '0'); };
+// Cadence moyenne de chevaux/mois estimée : total chevaux facturés ÷ mois d'activité. Fenêtre optionnelle (S.chevauxParMoisFenetre : 0 = tout l'historique, sinon N derniers mois).
 function chevauxParMoisAuto() {
-  const tours = allTours().filter((t) => t.result && t.date);
+  let tours = allTours().filter((t) => t.result && t.date);
   if (!tours.length) return 0;
+  const win = S.chevauxParMoisFenetre || 0;
+  let months;
+  if (win > 0) {
+    const cutoff = shiftYm(todayStr().slice(0, 7), -(win - 1)) + '-01'; // 1er jour du mois d'il y a (win-1) mois → fenêtre glissante incluant le mois courant
+    tours = tours.filter((t) => (t.date || '') >= cutoff);
+    if (!tours.length) return 0;
+    const first = tours.map((t) => t.date).sort()[0];
+    months = Math.max(1, Math.min(win, monthsBetween(first, todayStr()) + 1));
+  } else {
+    const first = tours.map((t) => t.date).sort()[0];
+    months = Math.max(1, monthsBetween(first, todayStr()) + 1);
+  }
   let total = 0; tours.forEach((t) => { total += billedHorsesInTour(t); });
-  const first = tours.map((t) => t.date).sort()[0];
-  return total / Math.max(1, monthsBetween(first, todayStr()) + 1);
+  return total / months;
 }
 // Cadence effective : valeur saisie par l'utilisateur si > 0, sinon estimation automatique.
 const chevauxParMoisEff = () => ((S.chevauxParMois > 0) ? S.chevauxParMois : chevauxParMoisAuto());
@@ -5389,11 +5408,19 @@ function modalFrais(existing) {
 function renderMateriel() {
   if ($('matUnitHT')) { makeReadout($('matUnitHT'), '€/cheval HT'); $('matUnitHT').value = fmtNum(baseMateriel(), 2); fitSize($('matUnitHT')); }
   if ($('matUnitTTC')) { makeReadout($('matUnitTTC'), '€/cheval TTC'); $('matUnitTTC').value = fmtNum(ttc(baseMateriel()), 2); fitSize($('matUnitTTC')); }
-  const cm = $('matChevMois');
-  const refreshCadHint = () => { if ($('matChevMoisHint')) { const auto = chevauxParMoisAuto(); $('matChevMoisHint').innerHTML = (S.chevauxParMois > 0) ? `Cadence saisie : <b>${fmtNum(S.chevauxParMois, 1)}</b> chevaux/mois (auto estimée : ${fmtNum(auto, 1)}). Videz le champ pour revenir à l'auto.` : (auto > 0 ? `Cadence auto (historique) : <b>${fmtNum(auto, 1)}</b> chevaux/mois. Saisissez une valeur pour la forcer.` : 'Renseignez votre cadence, ou faites quelques tournées pour l\'estimer automatiquement.'); } };
-  if (cm) { cm.value = (S.chevauxParMois > 0) ? S.chevauxParMois : ''; cm.oninput = (e) => { S.chevauxParMois = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); refreshCadHint(); box.querySelectorAll('.er-renouv').forEach((p, i) => { p.textContent = matRenouvText(S.materiel[i]); }); }; }
-  refreshCadHint();
   const box = $('materielList'); if (!box) return; box.innerHTML = '';
+  const cm = $('matChevMois'), cf = $('matChevFenetre');
+  const fenLbl = { 0: 'tout l\'historique', 3: '3 derniers mois', 6: '6 derniers mois', 12: '12 derniers mois' };
+  const refreshCadHint = () => {
+    if (cf) cf.disabled = (S.chevauxParMois > 0); // la fenêtre ne sert qu'à la cadence auto
+    if ($('matChevMoisHint')) { const auto = chevauxParMoisAuto(); const fen = fenLbl[S.chevauxParMoisFenetre || 0] || 'tout l\'historique';
+      $('matChevMoisHint').innerHTML = (S.chevauxParMois > 0)
+        ? `Cadence saisie : <b>${fmtNum(S.chevauxParMois, 1)}</b> chevaux/mois (auto sur ${fen} : ${fmtNum(auto, 1)}). Videz le champ pour revenir à l'auto.`
+        : (auto > 0 ? `Cadence auto sur <b>${fen}</b> : <b>${fmtNum(auto, 1)}</b> chevaux/mois. Saisissez une valeur pour la forcer.` : 'Renseignez votre cadence, ou faites quelques tournées pour l\'estimer automatiquement.'); } };
+  const refreshRenouv = () => box.querySelectorAll('.er-renouv').forEach((p, i) => { if (S.materiel[i]) p.textContent = matRenouvText(S.materiel[i]); });
+  if (cm) { cm.value = (S.chevauxParMois > 0) ? S.chevauxParMois : ''; cm.oninput = (e) => { S.chevauxParMois = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); refreshCadHint(); refreshRenouv(); }; }
+  if (cf) { cf.value = String(S.chevauxParMoisFenetre || 0); cf.onchange = (e) => { S.chevauxParMoisFenetre = parseInt(e.target.value, 10) || 0; saveSettings(); refreshCadHint(); refreshRenouv(); }; }
+  refreshCadHint();
   $('materielEmpty').style.display = S.materiel.length ? 'none' : 'block';
   S.materiel.forEach((m, i) => {
     const el = document.createElement('div'); el.className = 'edit-row'; el.dataset.idx = i;
