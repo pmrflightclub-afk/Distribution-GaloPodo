@@ -440,6 +440,14 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 
 .badge-noir { background: #c0392b; color: #fff; }
 
+/* Stats → Clientèle : tuiles de dénombrement */
+.cl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+.cl-tile { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 8px; text-align: center; }
+.cl-tile.cl-ok { border-color: #2e9e5b; }
+.cl-tile.cl-bad { border-color: #c0392b; }
+.cl-num { font-size: 1.5rem; font-weight: 800; color: var(--strong); }
+.cl-lbl { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+
 /* Formulaire (anamnèse / mail) : intitulé de référence encadré + réponse en dessous, avec espace */
 .anam-list { padding: 2px 0; }
 .anam-item { margin-bottom: 12px; }

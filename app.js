@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.108';
+const APP_VERSION = '1.1.109';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.109', date: '2026-07-09',
+    ajouts: [
+      'Stats : nouveau sous-onglet « Clientèle ». Il compte les clients (total / actifs / inactifs / liste noire), les chevaux (total / actifs / inactifs / liste noire) et les adresses de chevaux répertoriées (total / actives / inactives / liste noire).',
+    ],
+  },
   {
     version: '1.1.108', date: '2026-07-09',
     ajouts: [
@@ -3627,7 +3633,8 @@ function showStats(sub) {
   window.scrollTo(0, 0);
 }
 function renderStatsSub(sub) {
-  if (sub === 'chevaux') renderChevauxSuivi();
+  if (sub === 'clientele') renderClienteleStats();
+  else if (sub === 'chevaux') renderChevauxSuivi();
   else if (sub === 'vehcheval') renderVehiculeCheval();
   else if (sub === 'trajet') renderTrajetTemps();
   else if (sub === 'travail') renderTravail();
@@ -3636,6 +3643,23 @@ function renderStatsSub(sub) {
   else if (sub === 'graph') renderGraphiques();
   else if (sub === 'annul') renderStatsAnnul();
   else renderVehiculePanel();
+}
+// Stats → Clientèle : dénombrement clients / chevaux / adresses par statut.
+function renderClienteleStats() {
+  const box = $('clienteleStats'); if (!box) return;
+  const cAct = clients.filter(isClientActif).length, cNoir = clients.filter(isClientNoir).length, cInact = clients.filter((c) => c.actif === false && !c.blacklist).length;
+  let hTot = 0, hAct = 0, hInact = 0, hNoir = 0;
+  clients.forEach((c) => (c.chevaux || []).forEach((h) => { hTot++; if (h.blacklist) hNoir++; else if (h.actif === false) hInact++; else hAct++; }));
+  const addrs = chevalAddresses();
+  const aNoir = addrs.filter((e) => addrStatusOf(e.addr) === 'noir').length, aInact = addrs.filter((e) => addrStatusOf(e.addr) === 'inactif').length, aAct = addrs.filter((e) => addrStatusOf(e.addr) === 'actif').length;
+  const tile = (lbl, val, cls) => `<div class="cl-tile${cls ? ' ' + cls : ''}"><div class="cl-num">${val}</div><div class="cl-lbl">${lbl}</div></div>`;
+  box.innerHTML = `
+    <h3 class="rsub">Clients</h3>
+    <div class="cl-grid">${tile('Total', clients.length)}${tile('Actifs', cAct, 'cl-ok')}${tile('Inactifs', cInact)}${tile('Liste noire', cNoir, 'cl-bad')}</div>
+    <h3 class="rsub">Chevaux</h3>
+    <div class="cl-grid">${tile('Total', hTot)}${tile('Actifs', hAct, 'cl-ok')}${tile('Inactifs', hInact)}${tile('Liste noire', hNoir, 'cl-bad')}</div>
+    <h3 class="rsub">Adresses chevaux</h3>
+    <div class="cl-grid">${tile('Répertoriées', addrs.length)}${tile('Actives', aAct, 'cl-ok')}${tile('Inactives', aInact)}${tile('Liste noire', aNoir, 'cl-bad')}</div>`;
 }
 // Point d'entrée depuis l'onglet Stats : affiche le sous-onglet courant.
 function renderStats() { showStats(currentSsub); }
