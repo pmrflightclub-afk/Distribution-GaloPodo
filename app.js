@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.125';
+const APP_VERSION = '1.1.126';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.126', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule : tous les frais liés à un même entretien se regroupent bien sous lui (correction quand un lien pointait vers un entretien devenu introuvable — par ex. après une restauration de sauvegarde). Le regroupement est réappliqué au démarrage.',
+      'Si un frais reste séparé, vérifiez son champ « Lié à l\'entretien » : il doit pointer vers le même entretien que les autres.',
+    ],
+  },
   {
     version: '1.1.125', date: '2026-07-09',
     ajouts: [
@@ -1018,6 +1025,7 @@ const DEFAULTS = {
 const _hadSettings = localStorage.getItem('ftr.settings') != null; // 1er lancement ? (pour la config usine)
 let S = Object.assign({}, DEFAULTS, LS.get('ftr.settings', {}));
 S.frais = Array.isArray(S.frais) ? S.frais : [];
+normalizeFraisOrder(); // au démarrage : groupe les frais liés sous leur entretien et répare les liens périmés
 S.materiel = Array.isArray(S.materiel) ? S.materiel : [];
 S.articlesCatalogue = Array.isArray(S.articlesCatalogue) ? S.articlesCatalogue : [];
 S.amortissement = Object.assign({ achatHT: 0, dureeVieKm: 0 }, S.amortissement || {});
@@ -4758,14 +4766,18 @@ function renderFinanceCheval() {
     el.innerHTML = h; box.appendChild(el);
   });
 }
-// Range chaque frais lié (enfant) juste après son entretien (parent) dans S.frais. Renvoie true si l'ordre a changé.
+// Range chaque frais lié (enfant) juste après son entretien (parent) dans S.frais. Répare les liens périmés. Renvoie true si quelque chose a changé.
 function normalizeFraisOrder() {
-  const frais = S.frais || []; const out = []; const placed = new Set();
+  const frais = S.frais || [];
+  // Auto-réparation : un enfant dont le parent n'existe plus (ou n'est pas récurrent) redevient indépendant (sinon il resterait « lié » et coincé en bas).
+  let healed = false;
+  frais.forEach((f) => { if (f.parentId) { const p = frais.find((x) => x.id === f.parentId); if (!p || p.nature !== 'recurrent') { f.parentId = null; healed = true; } } });
+  const out = []; const placed = new Set();
   frais.forEach((f) => { if (f.parentId) return; if (placed.has(f.id)) return; out.push(f); placed.add(f.id); frais.forEach((c) => { if (c.parentId === f.id && !placed.has(c.id)) { out.push(c); placed.add(c.id); } }); });
-  frais.forEach((f) => { if (!placed.has(f.id)) { out.push(f); placed.add(f.id); } }); // enfants orphelins / indépendants restants
-  const changed = out.some((f, i) => frais[i] !== f);
-  if (changed) S.frais = out;
-  return changed;
+  frais.forEach((f) => { if (!placed.has(f.id)) { out.push(f); placed.add(f.id); } });
+  const reordered = out.some((f, i) => frais[i] !== f);
+  if (reordered) S.frais = out;
+  return healed || reordered;
 }
 function renderFraisVehicule() {
   if (normalizeFraisOrder()) saveSettings();
