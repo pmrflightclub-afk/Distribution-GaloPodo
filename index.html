@@ -49,7 +49,7 @@
   <main id="tab-accueil" class="tab-panel active">
     <div class="actions two">
       <button class="btn" id="btnVehicule">📋 Déclarer un événement</button>
-      <button class="btn" data-goto="reglages" data-rsub="calcul">❓ Comment ça marche</button>
+      <button class="btn" id="btnHelp" data-goto="reglages" data-rsub="calcul">❓ Comment ça marche</button>
     </div>
     <div class="actions"><button class="btn primary block big" id="btnNewTour">➕ Créer une tournée</button></div>
     <div class="card changelog-card hidden" id="homeChangelog"></div>
@@ -64,6 +64,12 @@
       <p class="hint">Tournées dont le jour est passé sans clôture. <b>Démarrée</b> → finalisez les arrêts restants. <b>Jamais démarrée</b> → reportez chaque client à une nouvelle date, ou supprimez la tournée.</p>
       <div id="homeBlockingList" class="list"></div>
     </section>
+    <section class="card" id="homeTrajetCard">
+      <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
+      <p class="hint">La tournée du jour puis chaque arrêt, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
+      <div id="homeTrajet" class="list"></div>
+      <p class="empty" id="homeTrajetEmpty">Aucune tournée aujourd'hui.</p>
+    </section>
     <section class="card hidden" id="homeRdvAPrendre">
       <h2>📅 Rendez-vous à prendre</h2>
       <p class="hint">Chevaux actifs sans rendez-vous à venir : reportés à replacer, ignorés lors d'un RDV, ou jamais planifiés. Touchez un cheval pour la liste complète et les actions.</p>
@@ -73,12 +79,6 @@
       <h2>📷 Compte rendu photo</h2>
       <p class="hint">Chevaux dont une planche photo est à faire. « Créer la planche » ouvre une planche préremplie (cheval, client, date). Le cheval disparaît une fois la planche générée.</p>
       <div id="homeComptePhotoList" class="list"></div>
-    </section>
-    <section class="card">
-      <h2>Trajet du jour <span class="live-dot" title="Tournée d'aujourd'hui">●</span></h2>
-      <p class="hint">La tournée du jour puis chaque arrêt, dans l'ordre : ouvrir dans Waze ou copier le SMS.</p>
-      <div id="homeTrajet" class="list"></div>
-      <p class="empty" id="homeTrajetEmpty">Aucune tournée aujourd'hui.</p>
     </section>
     <section class="card">
       <h2>À venir</h2>

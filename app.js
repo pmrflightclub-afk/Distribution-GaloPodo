@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.117';
+const APP_VERSION = '1.1.118';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.118', date: '2026-07-09',
+    ajouts: [
+      'Accueil réorganisé : « Trajet du jour » remonte juste sous « Tournées dépassées » (après Créer une tournée / Message de version / Statut véhicule / Tournées dépassées). Ordre : Créer une tournée · version · véhicule · dépassées · Trajet du jour · Rendez-vous à prendre · Compte rendu photo · À venir.',
+      'S\'il n\'y a pas de tournée aujourd\'hui, la section « Trajet du jour » s\'affiche en version réduite (compacte) ; en version normale dès qu\'il y a une tournée du jour.',
+      'Le bouton « ❓ Comment ça marche » n\'apparaît qu\'une seule fois : au premier clic, il vous amène à la page « Calcul » puis disparaît définitivement.',
+    ],
+  },
   {
     version: '1.1.117', date: '2026-07-09',
     ajouts: [
@@ -5955,6 +5963,7 @@ function renderBlockingArrets() {
 function renderHomeTrajet() {
   const box = $('homeTrajet'); if (!box) return; box.innerHTML = '';
   const todays = [...tournees].filter((t) => statusOf(t) === 'active' && !isOverdue(t)).sort((a, b) => (a.date || '').localeCompare(b.date || '')); // du jour ; les dépassées (jour passé) vont dans la section dédiée
+  const card = $('homeTrajetCard'); if (card) card.classList.toggle('min', todays.length === 0); // minimisé s'il n'y a pas de tournée du jour
   // Agenda privé du jour (événements perso récupérés du calendrier) — en tête du Trajet du jour.
   const priv = privateEventsForDay(todayStr());
   if (priv.length) {
@@ -7081,6 +7090,8 @@ window.addEventListener('DOMContentLoaded', () => {
   const avTop = $('appVerTop'); if (avTop) avTop.textContent = 'v' + APP_VERSION;
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
   document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => { showTab(b.dataset.goto); if (b.dataset.gsub) showGestion(b.dataset.gsub); if (b.dataset.rsub) showReglages(b.dataset.rsub); }));
+  // « Comment ça marche » : visible une seule fois — au 1er clic, on va sur Calcul et le bouton disparaît définitivement.
+  { const bh = $('btnHelp'); if (bh) { const hideHelp = () => { bh.style.display = 'none'; const dec = $('btnVehicule'); if (dec) dec.classList.add('block'); const wrap = bh.parentElement; if (wrap) wrap.classList.remove('two'); }; if (S.helpSeen) hideHelp(); else bh.addEventListener('click', () => { S.helpSeen = true; saveSettings(); hideHelp(); }); } }
   document.querySelectorAll('#gestionSub .subtab').forEach((b) => b.addEventListener('click', () => showGestion(b.dataset.gsub)));
   document.querySelectorAll('#reglagesSub .subtab').forEach((b) => b.addEventListener('click', () => showReglages(b.dataset.rsub)));
   document.querySelectorAll('#comptaSub .subtab').forEach((b) => b.addEventListener('click', () => showCompta(b.dataset.csub)));
