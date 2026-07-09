@@ -65,6 +65,11 @@
       <div class="actions"><button class="btn primary block" id="homeVehiculeBtn">🚗 Déclarer le statut véhicule (km compteur)</button></div>
       <div id="homeFraisEchus" class="list"></div>
     </section>
+    <section class="card blocking-card hidden" id="homeRappels">
+      <h2>🔔 Rappels du mois</h2>
+      <p class="hint">Échéances récurrentes à faire (dépôt caisse, salaire, cotisations, TVA, provision…). « ✓ Fait » les masque jusqu'à la prochaine échéance. Réglage : Gestion → Rappels.</p>
+      <div id="homeRappelsList" class="list"></div>
+    </section>
     <section class="card blocking-card hidden" id="homeBlocking">
       <h2>⚠ Tournées dépassées</h2>
       <p class="hint">Tournées dont le jour est passé sans clôture. <b>Démarrée</b> → finalisez les arrêts restants. <b>Jamais démarrée</b> → reportez chaque client à une nouvelle date, ou supprimez la tournée.</p>
@@ -311,6 +316,7 @@
         <button class="subtab" data-gsub="materiel">Frais matériel</button>
         <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
         <button class="subtab" data-gsub="statut">Statut véhicule</button>
+        <button class="subtab" data-gsub="rappels">Rappels</button>
         <button class="subtab" data-gsub="planche">Planche contact</button>
         <button class="subtab" data-gsub="contactmail">Contact mail</button>
         <button class="subtab" data-gsub="sms">SMS</button>
@@ -465,6 +471,16 @@
         <p class="hint">Postes/éléments remplacés (inactivés, hors calcul du tarif) — pour la traçabilité.</p>
         <div id="statutRemplaces" class="list"></div>
         <p class="empty" id="statutRemplacesEmpty">Aucun remplacement enregistré.</p>
+      </section>
+    </div>
+
+    <div id="gsub-rappels" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Rappels récurrents</h2><button class="btn small" id="btnAddRappel">+ Ajouter</button></div>
+        <p class="hint">Échéances que le pro doit penser à faire chaque période (dépôt caisse, salaire, cotisations, TVA, provision…). Chaque rappel s'active/se désactive individuellement ; les rappels dus apparaissent sur l'Accueil (« 🔔 Rappels du mois ») avec un bouton « ✓ Fait » jusqu'à la prochaine échéance.</p>
+        <div id="rappelsList" class="edit-list"></div>
+        <p class="empty" id="rappelsEmpty">Aucun rappel.</p>
+        <div class="actions" style="margin-top:12px"><button class="btn small danger block" id="btnResetRappels">♻ Réinitialiser la liste de base</button></div>
       </section>
     </div>
 

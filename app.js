@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.137';
+const APP_VERSION = '1.1.138';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.138', date: '2026-07-09',
+    ajouts: [
+      'Nouveaux rappels récurrents du pro (Gestion → Rappels) : dépôt caisse, salaire, cotisations sociales (INASTI), TVA, provision — fournis de base et chacun activable, éditable ou supprimable (fréquence mensuelle / trimestrielle / annuelle, jour, montant indicatif).',
+      'Accueil → « 🔔 Rappels du mois » : les rappels dont l\'échéance est passée s\'affichent avec un bouton « ✓ Fait » (qui les masque jusqu\'à la prochaine échéance). Le rappel « Dépôt caisse » propose un bouton « 💶 Caisse » qui ouvre directement la clôture de caisse liquide.',
+      'Vous pouvez ajouter vos propres rappels et réinitialiser la liste de base à tout moment.',
+    ],
+  },
   {
     version: '1.1.137', date: '2026-07-09',
     ajouts: [
@@ -1114,6 +1122,7 @@ S.frais = Array.isArray(S.frais) ? S.frais : [];
 if (!Array.isArray(S.fraisJournal)) S.fraisJournal = []; // journal des frais réels (factures d'achat) : { id, date, km, fraisId, poste, montant } — pour la stat « provision vs réel »
 // Cycle de vie des frais (v1.1.137) : statut actif/échu/remplacé + report d'échéance (km ajoutés au seuil, n'affecte pas la provision) + chaînage historique.
 S.frais.forEach((f) => { if (!f.statut) f.statut = 'actif'; if (typeof f.kmReport !== 'number') f.kmReport = 0; });
+if (!Array.isArray(S.rappels)) S.rappels = mkRappels(); // échéancier des rappels récurrents du pro (liste de base, éditable)
 normalizeFraisOrder(); // au démarrage : groupe les frais liés sous leur entretien et répare les liens périmés
 S.materiel = Array.isArray(S.materiel) ? S.materiel : [];
 S.articlesCatalogue = Array.isArray(S.articlesCatalogue) ? S.articlesCatalogue : [];
@@ -1267,6 +1276,17 @@ const FRAIS_REF = [
 ];
 const mkMat = () => MATERIEL_REF.map((m) => ({ id: uid(), libelle: m.libelle, montantHT: m.montantHT, nbChevaux: m.nbChevaux }));
 // Frais par défaut organisés en TYPES : un poste principal + ses éléments liés (réinitialisés en refaisant le type).
+// Liste de base des rappels récurrents du pro (échéancier). Chacun activable/éditable/supprimable.
+// freq: 'mensuel' (jour) | 'trimestriel' (moisAnchor + jour → 4 mois espacés de 3) | 'annuel' (mois + jour). dernierFait = clé 'YYYY-MM' de la dernière occurrence cochée.
+function mkRappels() {
+  return [
+    { id: uid(), type: 'depot', libelle: '💶 Dépôt caisse', actif: true, freq: 'mensuel', jour: 10, montant: 0, dernierFait: '' },
+    { id: uid(), type: 'salaire', libelle: '👤 Salaire', actif: true, freq: 'mensuel', jour: 25, montant: 0, dernierFait: '' },
+    { id: uid(), type: 'cotisation', libelle: '🏛 Cotisations sociales (INASTI)', actif: true, freq: 'trimestriel', moisAnchor: 3, jour: 20, montant: 0, dernierFait: '' },
+    { id: uid(), type: 'tva', libelle: '🧾 TVA (déclaration / paiement)', actif: true, freq: 'trimestriel', moisAnchor: 1, jour: 20, montant: 0, dernierFait: '' },
+    { id: uid(), type: 'provision', libelle: '📊 Provision (mise de côté)', actif: true, freq: 'mensuel', jour: 1, montant: 0, dernierFait: '' },
+  ];
+}
 function mkFrais() {
   const out = [];
   const addType = (head, children) => { const h = Object.assign({ id: uid(), kmDebut: 0, statut: 'actif', kmReport: 0 }, head); out.push(h); (children || []).forEach((c) => out.push(Object.assign({ id: uid(), kmDebut: 0, statut: 'actif', kmReport: 0, parentId: h.id }, c))); };
@@ -2140,6 +2160,7 @@ function showGestion(sub) {
   if (currentGsub === 'materiel') renderMateriel();
   if (currentGsub === 'vehicule') renderFraisVehicule();
   if (currentGsub === 'statut') renderStatutVehiculePage();
+  if (currentGsub === 'rappels') renderRappels();
   if (currentGsub === 'planche') renderPlancheConfig();
   if (currentGsub === 'contactmail') renderContactMail();
   if (currentGsub === 'sms') renderSMS();
@@ -7129,6 +7150,40 @@ function modalRDV(t, arret, cid, onDone) {
   };
   render();
 }
+// ===== Rappels récurrents du pro (échéancier : dépôt caisse, salaire, cotisations, TVA, provision…) =====
+const freqLabel = (f) => ({ mensuel: 'mensuel', trimestriel: 'trimestriel', annuel: 'annuel' }[f] || f);
+const clampDay = (d) => Math.min(28, Math.max(1, Math.round(d || 1))); // 28 = borne sûre (tous les mois)
+// Mois (1-12) où le rappel se déclenche selon sa fréquence.
+function rappelFiringMonths(r) {
+  if (r.freq === 'annuel') return [Math.min(12, Math.max(1, r.mois || 1))];
+  if (r.freq === 'trimestriel') { const a = ((r.moisAnchor || 1) - 1) % 3; return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter((m) => (m - 1) % 3 === a); }
+  return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]; // mensuel
+}
+const rappelDate = (r, y, m) => y + '-' + String(m).padStart(2, '0') + '-' + String(clampDay(r.jour)).padStart(2, '0');
+// Occurrence courante = la plus récente échéance <= aujourd'hui. Renvoie { date, key:'YYYY-MM' } ou null (pas encore due).
+function rappelCurrentOcc(r, todayS) {
+  const today = todayS || todayStr(); const ty = Number(today.slice(0, 4)); const months = rappelFiringMonths(r);
+  let best = null;
+  [ty, ty - 1].forEach((y) => months.forEach((m) => { const d = rappelDate(r, y, m); if (d <= today && (!best || d > best.date)) best = { date: d, key: y + '-' + String(m).padStart(2, '0') }; }));
+  return best;
+}
+function rappelDue(r, todayS) { if (!r || !r.actif) return false; const occ = rappelCurrentOcc(r, todayS); return !!occ && (r.dernierFait || '') < occ.key; }
+function markRappelDone(r) { const occ = rappelCurrentOcc(r); if (occ) { r.dernierFait = occ.key; saveSettings(); } }
+// Carte Accueil « Rappels du mois » : rappels dus (échéance passée, pas encore cochés pour l'occurrence courante).
+function renderHomeRappels() {
+  const card = $('homeRappels'); if (!card) return;
+  const due = (S.rappels || []).filter((r) => rappelDue(r));
+  card.classList.toggle('hidden', !due.length);
+  const box = $('homeRappelsList'); if (!box) return; box.innerHTML = '';
+  due.forEach((r) => {
+    const occ = rappelCurrentOcc(r);
+    const el = document.createElement('div'); el.className = 'list-item stack-act';
+    el.innerHTML = `<div class="li-main"><b>${esc(r.libelle || 'Rappel')}</b><span class="li-sub">échéance ${occ ? esc(fmtDateFr(occ.date)) : ''}${r.montant > 0 ? ' · ' + eur(r.montant) : ''} · ${freqLabel(r.freq)}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-fait>✓ Fait</button>${r.type === 'depot' ? '<button class="btn small" data-caisse>💶 Caisse</button>' : ''}</div>`;
+    el.querySelector('[data-fait]').addEventListener('click', () => { markRappelDone(r); renderHome(); });
+    const cb = el.querySelector('[data-caisse]'); if (cb) cb.addEventListener('click', () => { if (typeof modalRebaseLiquide === 'function') modalRebaseLiquide(); });
+    box.appendChild(el);
+  });
+}
 function renderHome() {
   autoCloseOverdueTours(); // vérifie à chaque affichage de l'Accueil
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
@@ -7136,11 +7191,48 @@ function renderHome() {
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((t) => box.appendChild(tourListItem(t, true))); };
   renderHomeChangelog();
   renderVehiculeStatut();
+  renderHomeRappels();
   renderBlockingArrets();
   renderHomeTrajet();
   renderRdvAPrendre();
   renderComptePhoto();
   fill('homeUpcoming', 'homeUpcomingEmpty', upcoming);
+}
+// Résumé du planning d'un rappel (fréquence + jour + mois concernés + dernière échéance).
+function rappelSchedText(r) {
+  const months = rappelFiringMonths(r).map((m) => new Date('2000-' + String(m).padStart(2, '0') + '-01T00:00:00').toLocaleDateString('fr-FR', { month: 'short' }));
+  const occ = rappelCurrentOcc(r);
+  return `${freqLabel(r.freq)} · le ${clampDay(r.jour)} (${months.join(', ')})${occ ? ' · dernière échéance ' + fmtDateFr(occ.date) + (rappelDue(r) ? ' — à faire' : ' ✔') : ''}`;
+}
+// Page Gestion → Rappels : configuration de l'échéancier (activer, fréquence, jour, montant, ajouter/supprimer/réinitialiser).
+function renderRappels() {
+  const addBtn = $('btnAddRappel'); if (addBtn) addBtn.onclick = () => { S.rappels.push({ id: uid(), type: 'autre', libelle: 'Nouveau rappel', actif: true, freq: 'mensuel', jour: 1, montant: 0, dernierFait: '' }); saveSettings(); renderRappels(); renderHome(); };
+  const resetBtn = $('btnResetRappels'); if (resetBtn) resetBtn.onclick = () => { if (!confirm('Réinitialiser la liste des rappels à la base par défaut ? Vos rappels personnalisés seront perdus.')) return; S.rappels = mkRappels(); saveSettings(); renderRappels(); renderHome(); };
+  const box = $('rappelsList'); if (!box) return; box.innerHTML = '';
+  if ($('rappelsEmpty')) $('rappelsEmpty').style.display = (S.rappels && S.rappels.length) ? 'none' : 'block';
+  (S.rappels || []).forEach((r) => {
+    const el = document.createElement('div'); el.className = 'edit-row' + (r.actif ? '' : ' frais-off');
+    el.innerHTML = `<div class="er-top"><label class="chk2" style="margin:0"><input type="checkbox" data-k="actif" ${r.actif ? 'checked' : ''}/> actif</label>
+        <input class="grow er-title" data-k="libelle" value="${esc(r.libelle || '')}" placeholder="Libellé du rappel"/>
+        <button class="a-del" data-del title="Supprimer">✕</button></div>
+      <div class="er-grid">
+        <label>Fréquence<select data-k="freq"><option value="mensuel"${r.freq === 'mensuel' ? ' selected' : ''}>Mensuel</option><option value="trimestriel"${r.freq === 'trimestriel' ? ' selected' : ''}>Trimestriel</option><option value="annuel"${r.freq === 'annuel' ? ' selected' : ''}>Annuel</option></select></label>
+        <label>Jour<input data-k="jour" type="number" min="1" max="28" value="${clampDay(r.jour)}"/></label>
+        ${r.freq === 'annuel' ? `<label>Mois (1-12)<input data-k="mois" type="number" min="1" max="12" value="${r.mois || 1}"/></label>` : ''}
+        ${r.freq === 'trimestriel' ? `<label>Mois de départ (1-12)<input data-k="moisAnchor" type="number" min="1" max="12" value="${r.moisAnchor || 1}"/></label>` : ''}
+        <label>Montant indicatif<input data-k="montant" type="number" min="0" step="1" value="${r.montant || ''}"/></label>
+      </div>
+      <p class="hint">${esc(rappelSchedText(r))}</p>`;
+    el.querySelector('[data-k="actif"]').addEventListener('change', (e) => { r.actif = e.target.checked; saveSettings(); renderRappels(); renderHome(); });
+    el.querySelector('[data-k="libelle"]').addEventListener('input', (e) => { r.libelle = e.target.value; saveSettings(); });
+    el.querySelector('[data-k="freq"]').addEventListener('change', (e) => { r.freq = e.target.value; saveSettings(); renderRappels(); });
+    el.querySelector('[data-k="jour"]').addEventListener('change', (e) => { r.jour = clampDay(parseNum(e.target.value)); saveSettings(); renderRappels(); });
+    { const me = el.querySelector('[data-k="mois"]'); if (me) me.addEventListener('change', (e) => { r.mois = Math.min(12, Math.max(1, Math.round(parseNum(e.target.value) || 1))); saveSettings(); renderRappels(); }); }
+    { const ma = el.querySelector('[data-k="moisAnchor"]'); if (ma) ma.addEventListener('change', (e) => { r.moisAnchor = Math.min(12, Math.max(1, Math.round(parseNum(e.target.value) || 1))); saveSettings(); renderRappels(); }); }
+    el.querySelector('[data-k="montant"]').addEventListener('change', (e) => { r.montant = Math.max(0, parseNum(e.target.value) || 0); saveSettings(); renderHome(); });
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce rappel ?')) return; S.rappels = S.rappels.filter((x) => x.id !== r.id); saveSettings(); renderRappels(); renderHome(); });
+    box.appendChild(el);
+  });
 }
 // Élément échu (Contrôle véhicule, fusionné dans « Statut véhicule ») : dépassement + actions « Changement fait » (note de frais) et « Repousser ».
 function fraisEchuItemEl(f) {
