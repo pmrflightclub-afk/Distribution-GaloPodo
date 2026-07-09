@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.132';
+const APP_VERSION = '1.1.133';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.133', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule — provision vs réel (étape 2/3) : chaque « Refaire » enregistre le coût réel (facture d\'achat) dans un journal.',
+      'Stats → Utilisation véhicule : nouvelle section « 💶 Provision vs réel (charges véhicule) ». Elle compare, par type et au total (avec sélecteur d\'année), les provisions facturées aux clients (base €/km × km) et les frais réels payés → écart en vert (surplus) ou rouge (vous facturez trop peu). Objectif : ne pas travailler à perte.',
+    ],
+  },
   {
     version: '1.1.132', date: '2026-07-09',
     ajouts: [
@@ -1068,6 +1075,7 @@ const DEFAULTS = {
 const _hadSettings = localStorage.getItem('ftr.settings') != null; // 1er lancement ? (pour la config usine)
 let S = Object.assign({}, DEFAULTS, LS.get('ftr.settings', {}));
 S.frais = Array.isArray(S.frais) ? S.frais : [];
+if (!Array.isArray(S.fraisJournal)) S.fraisJournal = []; // journal des frais réels (factures d'achat) : { id, date, km, fraisId, poste, montant } — pour la stat « provision vs réel »
 normalizeFraisOrder(); // au démarrage : groupe les frais liés sous leur entretien et répare les liens périmés
 S.materiel = Array.isArray(S.materiel) ? S.materiel : [];
 S.articlesCatalogue = Array.isArray(S.articlesCatalogue) ? S.articlesCatalogue : [];
@@ -3841,6 +3849,42 @@ function renderVehiculePanel() {
   if ($('tCarb')) $('tCarb').textContent = eurkm(fuelPerKmHT()) + ' HT';
   if ($('tTournee')) $('tTournee').textContent = eurkm(tarifHT('tournee')) + ' HT';
   renderVehiculePieces();
+  renderProvisionVsReel();
+}
+// Tête de type d'un frais (lui-même s'il est top-level, sinon son parent).
+function fraisTypeHeadId(fid) { const f = (S.frais || []).find((x) => x.id === fid); return f ? (f.parentId || f.id) : fid; }
+// Provision facturée (base €/km × km de la période) vs coût réel (journal) — global et par type.
+function provisionVsReel(monthsSet) {
+  const inRange = (d) => !monthsSet || monthsSet.has((d || '').slice(0, 7));
+  const kmPeriode = allTours().reduce((s, t) => s + ((t.result && inRange(t.date)) ? (t.result.totalKm || 0) : 0), 0);
+  const heads = (S.frais || []).filter((f) => !f.parentId);
+  const rows = heads.map((h) => {
+    const groupe = [h].concat((S.frais || []).filter((x) => x.parentId === h.id));
+    const rate = groupe.reduce((s, f) => s + (fraisActif(f) ? fraisContribHT(f) : 0), 0);
+    const provision = rate * kmPeriode;
+    const reel = (S.fraisJournal || []).filter((j) => inRange(j.date) && fraisTypeHeadId(j.fraisId) === h.id).reduce((s, j) => s + (j.montant || 0), 0);
+    return { poste: h.poste || 'Type', provision, reel, ecart: provision - reel };
+  }).filter((r) => r.provision > 0.005 || r.reel > 0.005);
+  const amortProv = amortContribHT() * kmPeriode;
+  const totProv = rows.reduce((s, r) => s + r.provision, 0) + amortProv;
+  const totReel = rows.reduce((s, r) => s + r.reel, 0);
+  return { kmPeriode, rows, amortProv, totProv, totReel, ecart: totProv - totReel };
+}
+let pvrYear = ''; // '' = toutes années
+function renderProvisionVsReel() {
+  const sel = $('pvrPeriod'), box = $('pvrBox'); if (!box) return;
+  const years = [...new Set(allTours().map((t) => (t.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  if (sel && !sel._pvrw) { sel._pvrw = true; sel.addEventListener('change', () => { pvrYear = sel.value; renderProvisionVsReel(); }); }
+  if (sel) sel.innerHTML = '<option value="">Toutes les années</option>' + years.map((y) => `<option value="${y}"${y === pvrYear ? ' selected' : ''}>Année ${y}</option>`).join('');
+  const monthsSet = pvrYear ? new Set(Array.from({ length: 12 }, (_, m) => pvrYear + '-' + String(m + 1).padStart(2, '0'))) : null;
+  const d = provisionVsReel(monthsSet);
+  const line = (lbl, prov, reel, ecart, strong) => `<div class="inv-line"${strong ? ' style="font-weight:700;border-top:1px solid var(--line)"' : ''}><span>${esc(lbl)}</span><span>prov. ${eur(prov)} · réel ${eur(reel)} · <b style="color:${ecart >= 0 ? '#2e9e5b' : '#c0392b'}">${ecart >= 0 ? '+' : ''}${eur(ecart)}</b></span></div>`;
+  let h = `<p class="hint">Km facturés sur la période : <b>${km(d.kmPeriode)}</b>.</p>`;
+  if (d.amortProv > 0.005) h += `<div class="inv-line"><span>Amortissement véhicule</span><span>prov. ${eur(d.amortProv)} · réel — · <b style="color:#2e9e5b">provision</b></span></div>`;
+  d.rows.forEach((r) => { h += line(r.poste, r.provision, r.reel, r.ecart); });
+  if (!d.rows.length && d.amortProv <= 0.005) h += '<p class="empty">Aucune donnée sur la période.</p>';
+  h += line('TOTAL véhicule', d.totProv, d.totReel, d.ecart, true);
+  box.innerHTML = h;
 }
 // Classe un nombre de mois dans une tranche : 1ʳᵉ dont max==null (et plus) ou months < max.
 function trancheOf(tranches, months) { if (months == null) return null; for (const t of (tranches || [])) { if (t.max == null || months < t.max) return t.label; } const l = (tranches || [])[(tranches || []).length - 1]; return l ? l.label : null; }
@@ -4946,8 +4990,10 @@ function modalFraisMigration() {
 // Enregistre le km + la date du dernier entretien pour un ensemble de frais (récurrents et/ou exceptionnels).
 function markFraisDone(ids, kmVal, dateVal) {
   const idset = new Set(ids);
-  (S.frais || []).forEach((f) => { if (f.parentId && idset.has(f.parentId)) idset.add(f.id); }); // un entretien réinitialise aussi ses frais liés (Pièces, Réparation…)
-  (S.frais || []).forEach((f) => { if (idset.has(f.id)) { f.kmDebut = Math.max(0, Math.round(kmVal || 0)); f.date = dateVal || todayStr(); } });
+  (S.frais || []).forEach((f) => { if (f.parentId && idset.has(f.parentId)) idset.add(f.id); }); // refaire un type réinitialise aussi ses éléments liés
+  if (!Array.isArray(S.fraisJournal)) S.fraisJournal = [];
+  const dt = dateVal || todayStr(), kmv = Math.max(0, Math.round(kmVal || 0));
+  (S.frais || []).forEach((f) => { if (idset.has(f.id)) { f.kmDebut = kmv; f.date = dt; if ((f.montantHT || 0) > 0) S.fraisJournal.push({ id: uid(), date: dt, km: kmv, fraisId: f.id, poste: f.poste || 'Frais', montant: f.montantHT || 0 }); } }); // journal : coût réel de cet événement (facture d'achat)
   saveSettings();
 }
 // « Entretien fait » : km + date du dernier entretien d'un frais, en cochant les autres frais faits en même temps (groupe mémorisable).
