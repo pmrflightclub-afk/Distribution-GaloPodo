@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.131';
+const APP_VERSION = '1.1.132';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.132', date: '2026-07-09',
+    ajouts: [
+      'Frais véhicule — Types (étape 1/3) : chaque frais est un « type » (Entretien, Pneus, Freins…). Un type peut regrouper des éléments (ex. Entretien + Pièces + Réparation ; Pneus + Montage & équilibrage). Champ « Lié au type » sur chaque frais pour le rattacher (ou le laisser type à part entière).',
+      'Bouton « 🔄 Refaire ce type » : remet à zéro le poste principal ET tous ses éléments d\'un coup (même km/date). Bouton « ＋ Élément » pour ajouter un poste dans un type.',
+      'On peut lier n\'importe quel poste à n\'importe quel type (plus seulement à « Entretien »). Étapes suivantes : journal des frais réels + stat « provision vs réel », puis assistant de migration.',
+    ],
+  },
   {
     version: '1.1.131', date: '2026-07-09',
     ajouts: [
@@ -4806,7 +4814,7 @@ function normalizeFraisOrder() {
   const frais = S.frais || [];
   // Auto-réparation : un enfant dont le parent n'existe plus (ou n'est pas récurrent) redevient indépendant (sinon il resterait « lié » et coincé en bas).
   let healed = false;
-  frais.forEach((f) => { if (f.parentId) { const p = frais.find((x) => x.id === f.parentId); if (!p || p.nature !== 'recurrent') { f.parentId = null; healed = true; } } });
+  frais.forEach((f) => { if (f.parentId) { const p = frais.find((x) => x.id === f.parentId); if (!p || p.parentId) { f.parentId = null; healed = true; } } }); // le parent doit exister et être une tête de type (pas lui-même un élément lié)
   const out = []; const placed = new Set();
   frais.forEach((f) => { if (f.parentId) return; if (placed.has(f.id)) return; out.push(f); placed.add(f.id); frais.forEach((c) => { if (c.parentId === f.id && !placed.has(c.id)) { out.push(c); placed.add(c.id); } }); });
   frais.forEach((f) => { if (!placed.has(f.id)) { out.push(f); placed.add(f.id); } });
@@ -4817,7 +4825,7 @@ function normalizeFraisOrder() {
 // Texte de la jauge d'un frais. Calcul principal = prochain entretien à (km dernier entretien + intervalle) — sans l'odomètre.
 // L'odomètre actuel ne sert qu'à signaler « ⚠ à renouveler » (dépassé).
 function fraisJaugeText(f) {
-  if (f.parentId) { const p = (S.frais || []).find((x) => x.id === f.parentId); return `🔗 lié à « ${p ? p.poste : '?'} » — réinitialisé avec l'entretien${f.date ? ' · dernier ' + fmtDateFr(f.date) : ''}`; }
+  if (f.parentId) { const p = (S.frais || []).find((x) => x.id === f.parentId); return `🔗 élément du type « ${p ? p.poste : '?'} » — réinitialisé en refaisant ce type${f.date ? ' · dernier ' + fmtDateFr(f.date) : ''}`; }
   const kd = f.kmDebut || 0, interval = f.kmPrevus || 0, nat = f.nature === 'recurrent' ? 'récurrent' : 'exceptionnel';
   if (!interval) return `${nat} · renseignez l'intervalle (km prévus)`;
   if (!kd) return `${nat} · renseignez le km du dernier entretien / achat`;
@@ -4836,8 +4844,8 @@ function renderFraisVehicule() {
   S.frais.forEach((f, i) => {
     const isChild = !!f.parentId;
     const parent = isChild ? S.frais.find((x) => x.id === f.parentId) : null;
-    const children = f.nature === 'recurrent' ? S.frais.filter((x) => x.parentId === f.id) : [];
-    const recurrents = S.frais.filter((x) => x.nature === 'recurrent');
+    const children = !isChild ? S.frais.filter((x) => x.parentId === f.id) : []; // tout poste de tête (type) peut avoir des éléments liés
+    const typeHeads = S.frais.filter((x) => !x.parentId && x.id !== f.id); // têtes de type auxquelles se lier
     const epuise = f.nature === 'exceptionnel' && !isChild && !fraisActif(f); // épuisé → inactif : ne contribue plus à la base véhicule
     const jauge = esc(fraisJaugeText(f));
     const el = document.createElement('div'); el.className = 'edit-row' + (epuise ? ' frais-off' : '') + (isChild ? ' frais-child' : ''); el.dataset.idx = i;
@@ -4850,12 +4858,12 @@ function renderFraisVehicule() {
         <label>Montant<input data-k="montantHT" type="number" step="1" min="0" value="${f.montantHT || ''}"/></label>
         <label>Km prévus (intervalle)<input data-k="kmPrevus" type="number" step="1000" min="0" value="${f.kmPrevus || ''}"/></label>
         ${isChild ? '' : `<label>${f.nature === 'recurrent' ? 'Km dernier entretien' : "Km d'achat / installation"}<input data-k="kmDebut" type="number" step="1000" min="0" value="${f.kmDebut || ''}"/></label>`}
-        ${f.nature === 'exceptionnel' ? `<label>Lié à l'entretien<select data-k="parentId"><option value="">— indépendant</option>${recurrents.map((p) => `<option value="${p.id}"${f.parentId === p.id ? ' selected' : ''}>${esc(p.poste || 'Récurrent')}</option>`).join('')}</select></label>` : `<label>Groupe<input data-k="groupe" list="fraisGrpList" value="${esc(f.groupe || '')}" placeholder="Freins, Pneus…"/></label>`}
+        ${!children.length ? `<label>Lié au type<select data-k="parentId"><option value="">— type à part entière</option>${typeHeads.map((p) => `<option value="${p.id}"${f.parentId === p.id ? ' selected' : ''}>${esc(p.poste || 'Type')}</option>`).join('')}</select></label>` : ''}
         <label>Contribution<input data-ro="contrib" readonly/></label>
       </div>
       <p class="hint er-jauge">${jauge}</p>
-      ${children.length ? `<p class="hint">🔗 Inclut (réinitialisés avec cet entretien) : <b>${children.map((c) => esc(c.poste || 'Frais')).join(', ')}</b>.</p>` : ''}
-      ${isChild ? '' : '<div class="er-renew"><button class="btn small" data-done>✅ Entretien fait (km + date)</button></div>'}`;
+      ${children.length ? `<p class="hint">🔗 Éléments du type (réinitialisés en refaisant ce type) : <b>${children.map((c) => esc(c.poste || 'Frais')).join(', ')}</b>.</p>` : ''}
+      ${isChild ? '' : `<div class="er-renew"><button class="btn small" data-done>${children.length ? '🔄 Refaire ce type (remet à zéro)' : '✅ Fait (km + date)'}</button><button class="btn small" data-add-elem>＋ Élément</button></div>`}`;
     el.querySelector('[data-k="nature"]').value = f.nature;
     const ro = el.querySelector('[data-ro="contrib"]');
     const montEl = el.querySelector('[data-k="montantHT"]'), kmEl = el.querySelector('[data-k="kmPrevus"]'), kmDebEl = el.querySelector('[data-k="kmDebut"]');
@@ -4869,10 +4877,10 @@ function renderFraisVehicule() {
     ro.value = fmtNum(fraisContribHT(f), 3); fitSize(ro);
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
     { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; if (f.date) { const rel = (S.odoReleves || []).find((r) => r && r.date === f.date && typeof r.km === 'number'); if (rel) f.kmDebut = rel.km; else { const est = Math.round(estOdoAt(f.date)); if (est > 0) f.kmDebut = est; } } /* km repris d'un relevé de même date, sinon estimé (relevés + tournées) à cette date */ syncChildren(); saveSettings(); renderFraisVehicule(); }); }
-    { const ge = el.querySelector('[data-k="groupe"]'); if (ge) ge.addEventListener('input', (e) => { f.groupe = e.target.value.trim(); saveSettings(); }); }
     { const pe = el.querySelector('[data-k="parentId"]'); if (pe) pe.addEventListener('change', (e) => { f.parentId = e.target.value || null; if (f.parentId) { const p = S.frais.find((x) => x.id === f.parentId); if (p) { f.kmDebut = p.kmDebut || 0; f.date = p.date || ''; } } saveSettings(); renderFraisVehicule(); }); }
     { const db = el.querySelector('[data-done]'); if (db) db.addEventListener('click', () => modalFraisDone(f)); }
-    el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; if (f.nature === 'recurrent') f.parentId = null; if (f.nature === 'exceptionnel' && !f.kmDebut) f.kmDebut = odometer(); saveSettings(); renderFraisVehicule(); });
+    { const ae = el.querySelector('[data-add-elem]'); if (ae) ae.addEventListener('click', () => { S.frais.push({ id: uid(), poste: 'Nouvel élément', nature: 'exceptionnel', montantHT: 0, kmPrevus: f.kmPrevus || 0, kmDebut: f.kmDebut || 0, date: f.date || '', parentId: f.id }); saveSettings(); renderFraisVehicule(); }); }
+    el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; saveSettings(); renderFraisVehicule(); });
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== f.id); (S.frais || []).forEach((x) => { if (x.parentId === f.id) x.parentId = null; }); saveSettings(); renderFraisVehicule(); });
     box.appendChild(el);
   });
@@ -4950,7 +4958,7 @@ function modalFraisDone(f) {
   openModal(`<div class="modal-head"><b>✅ Entretien fait — ${esc(f.poste || 'Frais')}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Enregistre le kilométrage et la date du dernier entretien de ce frais. Le compteur « à renouveler » repart de ce point.</p>
     <div class="row"><label class="grow">${f.nature === 'recurrent' ? 'Km au dernier entretien' : "Km d'achat / remplacement"}<input type="number" id="fdKm" step="1" min="0" inputmode="numeric" value="${Math.round(odometer())}"/></label><label class="grow">Date<input type="date" id="fdDate" value="${todayStr()}" max="${todayStr()}"/></label></div>
-    ${linked.length ? `<p class="hint">🔗 Réinitialisés automatiquement avec cet entretien : <b>${linked.map((x) => esc(x.poste || 'Frais')).join(', ')}</b>.</p>` : ''}
+    ${linked.length ? `<p class="hint">🔗 Éléments du type réinitialisés automatiquement : <b>${linked.map((x) => esc(x.poste || 'Frais')).join(', ')}</b>.</p>` : ''}
     ${others.length ? `<p class="hint">Autres frais faits <b>en même temps</b> (même km / date) :</p><div id="fdOthers" style="max-height:30vh;overflow:auto"></div><label class="chk2"><input type="checkbox" id="fdRemember" ${pre.size ? 'checked' : ''}/> 🔗 Se souvenir de ce regroupement</label>` : ''}
     <div class="actions"><button class="btn primary block" id="fdOk">Enregistrer</button></div>`);
   $('mX').addEventListener('click', closeModal);
