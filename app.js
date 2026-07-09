@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.110';
+const APP_VERSION = '1.1.111';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.111', date: '2026-07-09',
+    ajouts: [
+      'Envoi par email des impayés et notes de crédit : dans Compta → Impayés et Compta → Notes de crédit, un bouton « 📧 Email » génère un PDF (uniquement les données de ce client) et ouvre le partage de votre téléphone → choisissez Gmail, le PDF est déjà joint. L\'adresse du client est rappelée dans le texte du mail.',
+      'Une fois envoyé, le bouton passe en grisé avec ✓ et la date d\'envoi s\'affiche. La régularisation d\'un impayé et le remboursement d\'une note de crédit restent à confirmer manuellement (l\'élément quitte alors la liste « en attente » mais reste dans l\'historique).',
+      'Astuce : le partage avec pièce jointe fonctionne surtout sur téléphone/tablette (partage natif). Sur ordinateur, le PDF est téléchargé.',
+    ],
+  },
   {
     version: '1.1.110', date: '2026-07-09',
     ajouts: [
@@ -4245,6 +4253,56 @@ function comptaData(ym) {
 }
 // Génère le PDF via l'impression du navigateur, dans le document courant (compatible PWA installée,
 // contrairement à window.open('_blank') qui est bloqué / ferme l'app sur mobile).
+// ================= PDF (généré dans l'app) + partage natif (email avec pièce jointe) =================
+// Octets Latin-1 d'une chaîne (les PDF texte n'utilisent que des caractères ≤ 255).
+function latin1Bytes(s) { const a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 0xff; return a; }
+// Ramène tout caractère > 255 à un équivalent ASCII simple (le PDF Helvetica/WinAnsi ne gère que Latin-1).
+function pdfText(s) { return String(s == null ? '' : s).replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/€/g, 'EUR').replace(/[^\x00-\xFF]/g, '?').replace(/([\\()])/g, '\\$1'); }
+// Assemble un PDF (objets = corps sérialisés, 1-indexés) → chaîne Latin-1 (xref au bon offset d'octets car tous les caractères sont ≤ 255).
+function buildPdfString(objs) {
+  let pdf = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n'; const offsets = [];
+  objs.forEach((o, i) => { offsets.push(pdf.length); pdf += (i + 1) + ' 0 obj\n' + o + '\nendobj\n'; });
+  const xref = pdf.length;
+  pdf += 'xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n';
+  offsets.forEach((off) => { pdf += String(off).padStart(10, '0') + ' 00000 n \n'; });
+  pdf += 'trailer\n<</Size ' + (objs.length + 1) + '/Root 1 0 R>>\nstartxref\n' + xref + '\n%%EOF';
+  return pdf;
+}
+// PDF texte A4 portrait (Helvetica). lines = [{text, size?, bold?, gap?} | 'texte'].
+function pdfFromText(lines) {
+  const W = 595, H = 842, left = 56; let y = H - 64;
+  let content = 'BT\n';
+  (lines || []).forEach((ln) => {
+    const t = (typeof ln === 'string') ? { text: ln } : (ln || {});
+    const size = t.size || 12, gap = (t.gap != null) ? t.gap : size + 7;
+    if (t.text != null && t.text !== '') { content += '/F' + (t.bold ? '2' : '1') + ' ' + size + ' Tf\n1 0 0 1 ' + left + ' ' + Math.round(y) + ' Tm\n(' + pdfText(t.text) + ') Tj\n'; }
+    y -= gap;
+  });
+  content += 'ET';
+  const objs = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/MediaBox[0 0 ' + W + ' ' + H + ']/Contents 4 0 R/Resources<</Font<</F1 5 0 R/F2 6 0 R>>>>>>',
+    '<</Length ' + latin1Bytes(content).length + '>>\nstream\n' + content + '\nendstream',
+    '<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>',
+    '<</Type/Font/Subtype/Type1/BaseFont/Helvetica-Bold/Encoding/WinAnsiEncoding>>',
+  ];
+  return new Blob([latin1Bytes(buildPdfString(objs))], { type: 'application/pdf' });
+}
+// Partage natif d'un fichier (email avec pièce jointe via la feuille de partage). Repli : téléchargement.
+// Renvoie true si le partage/téléchargement a eu lieu (→ marquer « envoyé »), false si annulé.
+async function shareDoc(blob, filename, title, text) {
+  try {
+    const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: title || filename, text: text || '' });
+      return true;
+    }
+  } catch (e) { if (e && e.name === 'AbortError') return false; /* sinon : repli téléchargement */ }
+  try { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); return true; } catch (e) { alert('Impossible de générer le fichier.'); return false; }
+}
+// Texte du mail (destinataire non préréglable via le partage natif → on le rappelle dans le corps).
+function mailBodyFor(client, docLabel) { return `Bonjour${client && fullName(client) ? ' ' + fullName(client) : ''},\n\nVeuillez trouver ci-joint : ${docLabel}.\n\nBien à vous.${client && client.email ? '\n\n(Destinataire : ' + client.email + ')' : ''}`; }
 function printHtml(title, bodyHtml) {
   let pa = document.getElementById('printArea');
   if (!pa) { pa = document.createElement('div'); pa.id = 'printArea'; document.body.appendChild(pa); }
@@ -4281,8 +4339,10 @@ function renderComptaImpayes() {
   if ($('impayesRegulEmpty')) $('impayesRegulEmpty').style.display = regularises.length ? 'none' : 'block';
   if ($('impayesAttenteTot')) $('impayesAttenteTot').textContent = totA > 0.005 ? 'Total en attente : ' + eur(totA) + ' TTC' : '';
   enAttente.forEach(({ c, im }) => {
-    const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">en attente</span></span></div><div class="li-act"><b>${eur(im.ttc)}</b></div>`;
+    const el = document.createElement('div'); el.className = 'list-item stack-act';
+    const sent = im.sentAt ? ' · <span class="badge">📧 envoyé le ' + esc(fmtDateFr(im.sentAt)) + '</span>' : '';
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b> <b class="li-amount">${eur(im.ttc)}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">en attente</span>${sent}</span></div><div class="li-act li-act-col"><button class="btn small${im.sentAt ? ' done' : ' primary'}" data-mail>📧 Email${im.sentAt ? ' ✓' : ''}</button></div>`;
+    el.querySelector('[data-mail]').addEventListener('click', () => { if (!c.email && !confirm('Ce client n\'a pas d\'adresse email en fiche. Continuer quand même (vous choisirez le destinataire dans le mail) ?')) return; sendClientDoc(c, impayePdfBlob(c, im), 'impaye-' + norm(fullName(c)).replace(/\s+/g, '-') + '.pdf', "facture d'impayé", () => { im.sentAt = todayStr(); saveClients(); renderComptaImpayes(); }); });
     attente.appendChild(el);
   });
   regularises.forEach(({ c, im }) => {
@@ -4303,8 +4363,11 @@ function renderComptaNC() {
   if ($('ncDoneEmpty')) $('ncDoneEmpty').style.display = fait.length ? 'none' : 'block';
   if ($('ncTot')) $('ncTot').innerHTML = enAtt.length ? `À rembourser (virement) : <b>${eur(totAtt)}</b>` : '';
   const row = (n, isDone) => {
-    const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>Note de crédit · ${esc(n.clientNom)}</b><span class="li-sub">🐴 ${esc(n.chevalNom)} · RDV du ${esc(fmtDateFr(n.tourDate))} · émise le ${esc(fmtDateFr(n.date))} · motif ${n.motif === 'pro' ? 'pro' : 'client'}${n.rembourse ? ' · remboursée le ' + esc(fmtDateFr(n.rembourseAt)) : ''}</span></div><div class="li-act"><b>${eur(n.montantTTC)}</b> <button class="btn small" data-pdf>🖨 PDF</button>${isDone ? '' : ' <button class="btn small primary" data-rmb>✓ Remboursée</button>'}</div>`;
+    const el = document.createElement('div'); el.className = 'list-item stack-act';
+    const sent = n.sentAt ? ' · <span class="badge">📧 envoyé le ' + esc(fmtDateFr(n.sentAt)) + '</span>' : '';
+    el.innerHTML = `<div class="li-main"><b>Note de crédit · ${esc(n.clientNom)}</b> <b class="li-amount">${eur(n.montantTTC)}</b><span class="li-sub">🐴 ${esc(n.chevalNom)} · RDV du ${esc(fmtDateFr(n.tourDate))} · émise le ${esc(fmtDateFr(n.date))} · motif ${n.motif === 'pro' ? 'pro' : 'client'}${n.rembourse ? ' · remboursée le ' + esc(fmtDateFr(n.rembourseAt)) : ''}${sent}</span></div><div class="li-act li-act-col"><button class="btn small${n.sentAt ? ' done' : ' primary'}" data-mail>📧 Email${n.sentAt ? ' ✓' : ''}</button><button class="btn small" data-pdf>🖨 PDF</button>${isDone ? '' : ' <button class="btn small" data-rmb>✓ Remboursée</button>'}</div>`;
+    const cli = clients.find((x) => x.id === n.clientId);
+    el.querySelector('[data-mail]').addEventListener('click', () => { if (!(cli && cli.email) && !confirm('Ce client n\'a pas d\'adresse email en fiche. Continuer quand même ?')) return; sendClientDoc(cli, ncPdfBlob(n), 'note-credit-' + norm(n.clientNom).replace(/\s+/g, '-') + '.pdf', 'note de crédit', () => { n.sentAt = todayStr(); saveSettings(); renderComptaNC(); }); });
     el.querySelector('[data-pdf]').addEventListener('click', () => creditNotePdf(n));
     const rb = el.querySelector('[data-rmb]'); if (rb) rb.addEventListener('click', () => { if (!confirm('Marquer cette note de crédit comme remboursée (virement) ? Elle sera figée.')) return; n.rembourse = true; n.rembourseAt = todayStr(); saveSettings(); renderComptaNC(); });
     return el;
@@ -4321,6 +4384,38 @@ function creditNotePdf(n) {
     <table><thead><tr><th>Libellé</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody><tr><td>Avoir (annulation de prestation)</td><td>${eur(ht)}</td><td>${eur(n.montantTTC - ht)}</td><td>${eur(n.montantTTC)}</td></tr></tbody></table>
     <h2 style="margin-top:12px">Montant à rembourser par virement : ${eur(n.montantTTC)} TTC</h2>`);
+}
+// PDF (Blob) d'une facture d'impayé — ne contient QUE les données de ce client (confidentialité).
+function impayePdfBlob(c, im) {
+  const r = rate(), ht = im.ttc / (1 + r);
+  return pdfFromText([
+    { text: "Facture d'impayé", size: 20, bold: true, gap: 30 },
+    { text: fullName(c) + (c.societe ? ' - ' + c.societe : ''), size: 13, bold: true, gap: 18 },
+    { text: addrStr(c.addr), size: 11, gap: 24 },
+    { text: 'Impayé du ' + fmtDateFr(im.date), size: 12, gap: 26 },
+    { text: 'Montant HT : ' + eur(ht), gap: 16 },
+    { text: 'TVA : ' + eur(im.ttc - ht), gap: 16 },
+    { text: 'Montant dû TTC : ' + eur(im.ttc), size: 14, bold: true, gap: 26 },
+    { text: 'Merci de régulariser ce montant.', size: 11 },
+  ]);
+}
+// PDF (Blob) d'une note de crédit — ne contient QUE les données de ce client (confidentialité).
+function ncPdfBlob(n) {
+  const r = rate(), ht = n.montantTTC / (1 + r);
+  return pdfFromText([
+    { text: 'Note de crédit (avoir)', size: 20, bold: true, gap: 30 },
+    { text: n.clientNom, size: 13, bold: true, gap: 18 },
+    { text: 'Emise le ' + fmtDateFr(n.date), size: 11, gap: 24 },
+    { text: 'Annulation du RDV du ' + fmtDateFr(n.tourDate) + ' - cheval ' + n.chevalNom, size: 12, gap: 26 },
+    { text: 'Avoir HT : ' + eur(ht), gap: 16 },
+    { text: 'TVA : ' + eur(n.montantTTC - ht), gap: 16 },
+    { text: 'Montant a rembourser TTC : ' + eur(n.montantTTC), size: 14, bold: true },
+  ]);
+}
+// Partage un document client par email (pièce jointe), puis exécute onSent() si l'envoi a bien été lancé.
+async function sendClientDoc(client, blob, filename, docLabel, onSent) {
+  const ok = await shareDoc(blob, filename, docLabel, mailBodyFor(client, docLabel));
+  if (ok && onSent) onSent();
 }
 // HTML des 3 sections d'UN mois. archived (ym < mois courant) = démarches disponibles.
 function comptaSectionsHtml(ym) {
