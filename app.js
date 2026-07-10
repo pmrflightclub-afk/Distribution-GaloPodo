@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.20';
+const APP_VERSION = '1.2.21';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.21', date: '2026-07-11',
+    corrections: [
+      'Assistant de vérification : les adresses propres à un cheval (quand le cheval a sa propre adresse, différente du client) sont désormais aussi vérifiées et complétées (rue, code postal, localité), puis géocodées automatiquement.',
+    ],
+  },
   {
     version: '1.2.20', date: '2026-07-11',
     ajouts: [
@@ -7714,6 +7720,13 @@ function scanClient(c) {
     if (!h.dateNaissance) hf.push({ label: 'Date de naissance', type: 'date', get: () => '', set: (v) => h.dateNaissance = v });
     if (!h.datePriseEnCharge) hf.push({ label: 'Date de prise en charge', type: 'date', get: () => '', set: (v) => h.datePriseEnCharge = v });
     if (!h.discipline) hf.push({ label: 'Discipline / usage', get: () => '', set: (v) => h.discipline = v });
+    // Adresse PROPRE au cheval : seulement quand elle est spécifique (≠ client/société) → alors elle doit être complète.
+    if ((h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client')) === 'specifique') {
+      const had = toAddr(h.addr);
+      if (!had.rue) hf.push({ label: 'Adresse propre — rue + n°', get: () => '', set: (v) => { h.addr = toAddr(h.addr); h.addr.rue = v; h.addr.lat = null; h.addr.lon = null; } });
+      if (!had.cp) hf.push({ label: 'Adresse propre — code postal', get: () => '', set: (v) => { h.addr = toAddr(h.addr); h.addr.cp = v; h.addr.lat = null; h.addr.lon = null; } });
+      if (!had.localite) hf.push({ label: 'Adresse propre — localité', get: () => '', set: (v) => { h.addr = toAddr(h.addr); h.addr.localite = v; h.addr.lat = null; h.addr.lon = null; } });
+    }
     if (hf.length) chevaux.push({ cheval: h, fields: hf });
   });
   return (cf.length || chevaux.length) ? { client: c, state: clientState(c), clientFields: cf, chevaux } : null;
@@ -7754,7 +7767,11 @@ function assistFicheStep(entry, i, total, next, isAdresse) {
   $('asSave').addEventListener('click', () => {
     inputs.forEach(({ f, id }) => { const v = ($(id) || {}).value; if (v != null && String(v).trim() !== '') f.set(String(v).trim()); });
     if (isAdresse) { saveSettings(); const a = entry.adresse; if (addrStr(a.addr).trim() && !a.addr.lat) geocode(a.addr).then((g) => { a.addr.lat = g.lat; a.addr.lon = g.lon; saveSettings(); }).catch(() => {}); }
-    else { saveClients(); const c = entry.client; if (addrStr(c.addr).trim() && !c.addr.lat) geocode(c.addr).then((g) => { c.addr.lat = g.lat; c.addr.lon = g.lon; saveClients(); }).catch(() => {}); }
+    else {
+      saveClients(); const c = entry.client;
+      if (addrStr(c.addr).trim() && !c.addr.lat) geocode(c.addr).then((g) => { c.addr.lat = g.lat; c.addr.lon = g.lon; saveClients(); }).catch(() => {});
+      (c.chevaux || []).forEach((h) => { if ((h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client')) === 'specifique' && addrStr(h.addr).trim() && !h.addr.lat) geocode(h.addr).then((g) => { h.addr.lat = g.lat; h.addr.lon = g.lon; saveClients(); }).catch(() => {}); }); // géocode aussi les adresses propres de chevaux complétées
+    }
     next();
   });
 }
