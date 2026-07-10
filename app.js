@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.17';
+const APP_VERSION = '1.2.18';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.18', date: '2026-07-10',
+    ajouts: [
+      'Tournée : la case « 2ᵉ RDV — suivi rapproché » est déplacée dans l\'en-tête du client (entre RDV/Paiement et Réduction), avec une case PAR CHEVAL concerné — elle n\'apparaît que si fourbure / NPAS / infection est coché pour ce cheval.',
+      'Listes de tournées (Accueil + Tournées) : la date de la tournée s\'affiche dans la couleur de l\'app ; la mention « À venir » est retirée du titre (redondante avec la section) ; une tournée clôturée affiche en rouge « il y a N j / N sem ».',
+      'Programmer le suivi (RDV) : les options « ne pas replacer » et « date différente » sont empilées l\'une au-dessus de l\'autre ; la section « suivi pathologique » est indentée sous le cheval ; l\'alerte « déjà un RDV » ignore la tournée ouverte et ne regarde qu\'à partir du lendemain de sa date.',
+    ],
+  },
   {
     version: '1.2.17', date: '2026-07-10',
     ajouts: [
@@ -3070,20 +3078,23 @@ function modalTourArrivee() {
 
 // ================= TOURNÉES =================
 // Compte à rebours avant une tournée à venir : « J-n » (moins de 7 jours) ou « n sem » (7 jours et plus).
-function tourCountdownLabel(date) {
-  if (!date) return '';
+// Écart d'une tournée à aujourd'hui : à venir → « J-n / n sem » (vert) ; clôturée/passée → « il y a n j / n sem » (rouge).
+function tourEta(date, st) {
+  if (!date) return null;
   const p = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, (m || 1) - 1, d || 1); };
   const n = Math.round((p(date) - p(todayStr())) / 86400000);
-  if (n <= 0) return '';
-  return n < 7 ? 'J-' + n : Math.round(n / 7) + ' sem';
+  if (st === 'avenir' && n > 0) return { text: n < 7 ? 'J-' + n : Math.round(n / 7) + ' sem', cls: 'td-eta' };
+  if (st === 'cloturee') { const a = Math.abs(n); return { text: a < 1 ? "aujourd'hui" : 'il y a ' + (a < 7 ? a + ' j' : Math.round(a / 7) + ' sem'), cls: 'td-eta td-past' }; }
+  return null;
 }
 function tourListItem(t, showBadge) {
   const st = statusOf(t);
   const el = document.createElement('div'); el.className = 'list-item clickable';
-  const titre = fmtDateFr(t.date) + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : '');
+  const titre = `<span class="tour-date">${fmtDateFr(t.date)}</span>` + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''); // date en couleur des boutons (accent)
   const clientsLine = (t.arrets || []).map((a) => labelFor(a)).filter(Boolean).join(' · '); // noms de clients par arrêt
-  const eta = st === 'avenir' ? tourCountdownLabel(t.date) : ''; // « J-n » / « n sem » (vert) pour les tournées à venir
-  el.innerHTML = `<div class="li-main"><b>${titre}${showBadge ? ' · ' + STATUS_LBL[st] : ''}${eta ? ' <span class="td-eta">' + eta + '</span>' : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
+  const badge = (showBadge && st !== 'avenir') ? ' · ' + STATUS_LBL[st] : ''; // « À venir » retiré (redondant avec la section À venir)
+  const eta = tourEta(t.date, st); const etaHtml = eta ? ` <span class="${eta.cls}">${esc(eta.text)}</span>` : '';
+  el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
@@ -3627,11 +3638,22 @@ function renderEditorArrets(locked) {
     // UN BLOC COMPLET PAR CLIENT : actes → actions (paiement/RDV/prêt/planche + heure client) → articles → facture. Les clients ne sont plus mélangés.
     a.clients.forEach((cl) => {
       const m = (R && R.parClient) ? R.parClient.find((x) => x.clientId === cl.clientId) : null;
+      // Cases « 2ᵉ RDV — suivi rapproché » (une PAR CHEVAL en pathologie), affichées dans l'en-tête client entre RDV/Paiement et Réduction.
+      const suiviRowsInner = (clObj) => {
+        const cli = clients.find((x) => x.id === clObj.clientId);
+        const rows = (clObj.chevaux || []).filter((cv) => !chevalCancelled(cv) && (cv.parage || cv.visite) && (cv.fourbure || cv.npas || cv.infection)).map((cv) => {
+          const fi = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(cv.nom)) : null;
+          if (!fi) return '';
+          const s = fi.suiviPatho || null, on = !!(s && s.actif);
+          return `<div class="ac-suivi-row"><label class="ch-opt"><input type="checkbox" data-psact="${cv.id}"${on ? ' checked' : ''}/> 🐴 ${esc(cv.nom)}</label>${on ? ` <span class="ch-patho-rec">tous les <input type="number" data-psval="${cv.id}" min="1" max="4" value="${Math.min(4, Math.max(1, s.valeur || 1))}"/> <select data-psunit="${cv.id}"><option value="jours"${s.unite !== 'semaines' ? ' selected' : ''}>jour(s)</option><option value="semaines"${s.unite === 'semaines' ? ' selected' : ''}>semaine(s)</option></select></span>` : ''}</div>`;
+        }).filter(Boolean);
+        return rows.length ? `<div class="ac-suivi-head">🔁 2ᵉ RDV — suivi rapproché</div>${rows.join('')}` : '';
+      };
       // ===== En-tête du client EN TÊTE : nom · TTC · heure du client · Paiement/RDV/Prêt/Planche · réduction =====
       {
         const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '';
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); }
@@ -3640,6 +3662,14 @@ function renderEditorArrets(locked) {
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
           actBar.querySelector('[data-cplanche]').addEventListener('click', () => modalArretPlanche(currentTour, a, cl.clientId));
           { const rd = actBar.querySelector('[data-creduc]'); if (rd) rd.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); }); }
+          // Cases « 2ᵉ RDV » (une par cheval en pathologie) : activation + récurrence, portées par la FICHE cheval. Délégation (réinjectées à la bascule pathologie).
+          actBar.addEventListener('change', (e) => {
+            const t2 = e.target; if (!(t2.matches && t2.matches('[data-psact],[data-psval],[data-psunit]'))) return;
+            const cli = clients.find((x) => x.id === cl.clientId); const findFi = (cvid) => { const cvo = (cl.chevaux || []).find((x) => x.id === cvid); return (cli && cvo) ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(cvo.nom)) : null; };
+            if (t2.matches('[data-psact]')) { const fi = findFi(t2.dataset.psact); if (!fi) return; if (t2.checked) fi.suiviPatho = Object.assign({ unite: 'semaines', valeur: 1 }, fi.suiviPatho || {}, { actif: true }); else if (fi.suiviPatho) fi.suiviPatho.actif = false; saveClients(); const sv = actBar.querySelector('.ac-suivi'); if (sv) sv.innerHTML = suiviRowsInner(cl); }
+            else if (t2.matches('[data-psval]')) { const fi = findFi(t2.dataset.psval); if (!fi) return; fi.suiviPatho = Object.assign({ unite: 'semaines', actif: true }, fi.suiviPatho || {}, { valeur: Math.min(4, Math.max(1, parseInt(t2.value, 10) || 1)) }); saveClients(); }
+            else if (t2.matches('[data-psunit]')) { const fi = findFi(t2.dataset.psunit); if (!fi) return; fi.suiviPatho = Object.assign({ valeur: 1, actif: true }, fi.suiviPatho || {}, { unite: t2.value }); saveClients(); }
+          });
         }
       }
       // ===== Actes des chevaux (édition uniquement si tournée non clôturée) =====
@@ -3662,12 +3692,6 @@ function renderEditorArrets(locked) {
         if (S.infectionHT > 0) pathoCols.push({ key: 'infection', label: 'Infection' });
         const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
         const rr0 = rate();
-        // Bloc « 2ᵉ RDV — suivi rapproché » : présent SEULEMENT si fourbure/NPAS/infection coché (réinjecté en place par refreshChips, sans re-render → menu ＋Actes non refermé).
-        const pathoSuiviInner = (cvv, fi, ppi) => {
-          if (!fi || !cvv || !(cvv.fourbure || cvv.npas || cvv.infection)) return '';
-          const s = fi.suiviPatho || null, on = !!(s && s.actif);
-          return `<label class="ch-opt"><input type="checkbox" data-psact="${ppi}"${on ? ' checked' : ''}/> 🔁 2ᵉ RDV — suivi rapproché</label>${on ? ` <span class="ch-patho-rec">tous les <input type="number" data-psval="${ppi}" min="1" max="4" value="${Math.min(4, Math.max(1, s.valeur || 1))}"/> <select data-psunit="${ppi}"><option value="jours"${s.unite !== 'semaines' ? ' selected' : ''}>jour(s)</option><option value="semaines"${s.unite === 'semaines' ? ' selected' : ''}>semaine(s)</option></select></span>` : ''}`;
-        };
         h += '<div class="ch-list">';
         pool.forEach((ph, pi) => {
           const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite));
@@ -3693,8 +3717,7 @@ function renderEditorArrets(locked) {
           opts += ck('data-supp="difficile"', cv && cv.difficile, 'Cheval difficile', !acte);
           const dp = dernierParageInfo(cl.clientId, ph.nom, currentTour.date); // temps écoulé depuis le dernier parage/visite (tournées clôturées)
           const pInfo = dp ? ` <span class="td-eta" title="Dernier parage/visite : ${esc(fmtDateFr(dp.date))}">⏱ ${dp.days < 7 ? dp.days + ' j' : Math.round(dp.days / 7) + ' sem'}</span>` : '';
-          const pathoSuiviHtml = (acte && !cancelled && fiche) ? `<div class="ch-patho">${pathoSuiviInner(cv, fiche, pi)}</div>` : ''; // conteneur présent dès pris-en-charge ; contenu = vide sauf si pathologie cochée
-          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>${pathoSuiviHtml}`}</div>`;
+          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
         });
         h += '</div>';
         // Prestation visite choisie (affichée sous le tableau, modifiable) — par cheval dont la case Visite est cochée.
@@ -3707,14 +3730,14 @@ function renderEditorArrets(locked) {
           const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(pool[pi].nom)) : null;
           const chips = [];
           if (cv && !cancelled) { if (cv.parage) chips.push('Parage'); if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); } if (hasPlancheTodo(cl.clientId, pool[pi].nom, currentTour.date)) chips.push('📷 Photo'); pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); }); if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : '')); if (fiche && fiche.lourd && acte) chips.push('⚖ Lourd (auto)'); }
-          const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>'; const pb = row.querySelector('.ch-patho'); if (pb) pb.innerHTML = pathoSuiviInner(cv, fiche, pi); } // ch-patho suit la bascule pathologie sans re-render
+          const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>'; }
         };
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
           const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.key;
           cv[key] = e.target.checked;
           // Parage (dé)coché : re-render complet (change l'état pris-en-charge → active/désactive pathologies/difficile) ; efface le reste si plus de parage NI visite.
           if (key === 'parage') { if (!e.target.checked && !cv.visite) { cv.fourbure = false; cv.npas = false; cv.infection = false; cv.difficile = false; cv.lourd = false; } recomputeMoney(); renderEditorArrets(locked); return; }
-          recomputeMoney(); refreshChips(+inp.dataset.pi); // pathologie → maj des chips sans fermer le menu
+          recomputeMoney(); refreshChips(+inp.dataset.pi); const sv = el.querySelector('.ac-suivi[data-cid="' + cl.clientId + '"]'); if (sv) sv.innerHTML = suiviRowsInner(cl); // pathologie → maj chips + case « 2ᵉ RDV » de l'en-tête, sans fermer le menu
         }));
         wrap.querySelectorAll('[data-photo]').forEach((inp) => inp.addEventListener('change', (e) => {
           const ph = pool[+inp.dataset.pi];
@@ -3736,15 +3759,6 @@ function renderEditorArrets(locked) {
           if (!e.target.checked) { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; saveTournees(); recomputeMoney(); refreshChips(+inp.dataset.pi); return; }
           modalSupplement(ph.nom, cv, key, () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // saisie montant HT + éligibilité remise
         }));
-        // Suivi pathologique (2ᵉ RDV rapproché) : activation + récurrence, portées par la FICHE cheval (persistent d'une tournée à l'autre).
-        const ficheOf = (pi) => cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(pool[pi].nom)) : null;
-        // Suivi pathologique : délégation (les contrôles sont réinjectés par refreshChips quand on coche une pathologie → les écouteurs directs ne survivraient pas).
-        wrap.addEventListener('change', (e) => {
-          const el = e.target;
-          if (el.matches('[data-psact]')) { const pi = +el.dataset.psact, fi = ficheOf(pi); if (!fi) return; if (el.checked) fi.suiviPatho = Object.assign({ unite: 'semaines', valeur: 1 }, fi.suiviPatho || {}, { actif: true }); else if (fi.suiviPatho) fi.suiviPatho.actif = false; saveClients(); const row = wrap.querySelectorAll('.ch-row')[pi], pb = row && row.querySelector('.ch-patho'); if (pb) pb.innerHTML = pathoSuiviInner(cvOf(pool[pi]), fi, pi); }
-          else if (el.matches('[data-psval]')) { const pi = +el.dataset.psval, fi = ficheOf(pi); if (!fi) return; fi.suiviPatho = Object.assign({ unite: 'semaines', actif: true }, fi.suiviPatho || {}, { valeur: Math.min(4, Math.max(1, parseInt(el.value, 10) || 1)) }); saveClients(); }
-          else if (el.matches('[data-psunit]')) { const pi = +el.dataset.psunit, fi = ficheOf(pi); if (!fi) return; fi.suiviPatho = Object.assign({ valeur: 1, actif: true }, fi.suiviPatho || {}, { unite: el.value }); saveClients(); }
-        });
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); scheduleCalPush(currentTour); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture ; annulation/report → maj Google (retire l'évènement du client entièrement annulé)
         el.appendChild(wrap);
       } // fin des actes (édition uniquement si tournée non clôturée)
@@ -8463,21 +8477,24 @@ function proposedPathoDate(baseDate, sp) {
   const n = Math.min(4, Math.max(1, (sp && sp.valeur) || 1));
   return addDaysStr(baseDate || todayStr(), (sp && sp.unite === 'semaines') ? n * 7 : n);
 }
-// RDV à venir (dès DEMAIN — le jour même est ignoré) d'un cheval, à moins de 5 semaines d'une date donnée → alerte « déjà un RDV » (informative).
-function chevalRdvConflicts(clientId, chevalId, newDate) {
-  const tomorrow = addDaysStr(todayStr(), 1);
+// RDV à venir d'un cheval, à moins de 5 semaines d'une date donnée → alerte « déjà un RDV » (informative).
+// fromDate = date de référence (tournée ouverte) : on ne regarde qu'à partir du LENDEMAIN (le RDV du jour de la tournée est ignoré).
+// excludeTourId = la tournée d'où l'on prend le RDV (à ne jamais compter comme doublon).
+function chevalRdvConflicts(clientId, chevalId, newDate, fromDate, excludeTourId) {
+  const start = addDaysStr(fromDate || todayStr(), 1);
   const p = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, (m || 1) - 1, d || 1); };
   const out = [];
   allTours().forEach((t) => {
-    if (statusOf(t) === 'cloturee' || !t.date || t.date < tomorrow) return;
+    if (excludeTourId && t.id === excludeTourId) return; // la tournée ouverte elle-même n'est pas un doublon
+    if (statusOf(t) === 'cloturee' || !t.date || t.date < start) return;
     if (newDate && t.date === newDate) return; // la date visée elle-même n'est pas un « doublon »
     if (newDate && Math.abs(p(t.date) - p(newDate)) > 35 * 86400000) return; // hors fenêtre de 5 semaines
     (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; (cl.chevaux || []).forEach((cv) => { if (cv.id === chevalId && !chevalCancelled(cv)) out.push(t.date); }); }));
   });
   return [...new Set(out)].sort();
 }
-function chevalRdvWarnHtml(clientId, chevalId, newDate) {
-  const c = chevalRdvConflicts(clientId, chevalId, newDate);
+function chevalRdvWarnHtml(clientId, chevalId, newDate, fromDate, excludeTourId) {
+  const c = chevalRdvConflicts(clientId, chevalId, newDate, fromDate, excludeTourId);
   return c.length ? `<div class="rdv-warn">⚠ Ce cheval a déjà un RDV le ${c.map((d) => esc(fmtDateFr(d))).join(', ')} (moins de 5 semaines).</div>` : '';
 }
 // Aperçu d'une journée : arrêts déjà prévus (toutes tournées) + agenda privé.
@@ -8529,8 +8546,8 @@ function modalRDV(t, arret, cid, onDone) {
         inner += `<label class="rdv-ch-opt"><input type="checkbox" data-ign ${en.ignore ? 'checked' : ''}/> ne pas replacer le parage</label>`;
         if (!en.ignore) {
           inner += `<label class="rdv-ch-opt"><input type="checkbox" data-sep ${en.sep ? 'checked' : ''}/> date différente</label>`;
-          if (en.sep) inner += `<div class="rdv-dh"><label>Date du parage<input type="date" data-date value="${en.date}"/></label><label>Heure<input type="time" data-heure value="${en.heure}"/></label></div><p class="hint" data-prev></p>` + chevalRdvWarnHtml(client.id, en.id, en.date);
-          else inner += `<p class="hint">→ sur le RDV commun</p>` + chevalRdvWarnHtml(client.id, en.id, common.date);
+          if (en.sep) inner += `<div class="rdv-dh"><label>Date du parage<input type="date" data-date value="${en.date}"/></label><label>Heure<input type="time" data-heure value="${en.heure}"/></label></div><p class="hint" data-prev></p>` + chevalRdvWarnHtml(client.id, en.id, en.date, t.date, t.id);
+          else inner += `<p class="hint">→ sur le RDV commun</p>` + chevalRdvWarnHtml(client.id, en.id, common.date, t.date, t.id);
         }
       }
       // --- Suivi pathologique (2ᵉ RDV) : statut Maintenir / Arrêter décidé ici, après paiement ---
@@ -8538,7 +8555,7 @@ function modalRDV(t, arret, cid, onDone) {
         inner += `<div class="rdv-patho"><b>🔁 Suivi pathologique</b>
           <label class="rdv-ch-opt"><input type="radio" name="ps${en.id}" data-psstat value="maintenir" ${en.pathoStatus === 'maintenir' ? 'checked' : ''}/> Maintenir</label>
           <label class="rdv-ch-opt"><input type="radio" name="ps${en.id}" data-psstat value="arreter" ${en.pathoStatus === 'arreter' ? 'checked' : ''}/> Arrêter</label>`;
-        if (en.pathoStatus === 'maintenir') inner += `<div class="rdv-dh"><label>Date du 2ᵉ RDV<input type="date" data-psdate value="${en.pathoDate}"/></label><label>Heure<input type="time" data-psheure value="${en.pathoHeure}"/></label></div><p class="hint" data-psprev></p>` + chevalRdvWarnHtml(client.id, en.id, en.pathoDate);
+        if (en.pathoStatus === 'maintenir') inner += `<div class="rdv-dh"><label>Date du 2ᵉ RDV<input type="date" data-psdate value="${en.pathoDate}"/></label><label>Heure<input type="time" data-psheure value="${en.pathoHeure}"/></label></div><p class="hint" data-psprev></p>` + chevalRdvWarnHtml(client.id, en.id, en.pathoDate, t.date, t.id);
         inner += `</div>`;
       }
       wrap.innerHTML = inner;
