@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.147';
+const APP_VERSION = '1.1.148';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.148', date: '2026-07-10',
+    corrections: [
+      'Contact mail : correction du pré-remplissage de la fiche client depuis le formulaire d\'anamnèse. Le formulaire dont les étiquettes sont en gras (« *nom*, *prénom*… ») avec la réponse en dessous est de nouveau reconnu (nom, prénom, téléphone, adresse, cheval, race…), y compris pour les mails déjà importés. La partie « réponse citée » en bas du mail (formulaire vierge d\'origine) n\'écrase plus les réponses.',
+    ],
+  },
   {
     version: '1.1.147', date: '2026-07-10',
     ajouts: [
@@ -5663,19 +5669,38 @@ function modalTourArticle(existing, opts) {
 
 // ================= CONTACT MAIL (Gmail) — récupération + parsing du formulaire « prise de contact » =================
 // Parse un mail « prise de contact » (étiquettes « Label : valeur »). Renvoie un dictionnaire { labelNormalisé: valeur }. Testé sur le modèle réel.
+// Normalise une étiquette pour la comparaison : minuscule, apostrophes, RETIRE les astérisques (formulaire en gras *label*) et les parenthèses, espaces réduits.
+const cleanLabel = (s) => String(s == null ? '' : s).toLowerCase().replace(/[’‘`]/g, "'").replace(/\*/g, '').replace(/\([^)]*\)/g, '').replace(/[:：]\s*$/, '').replace(/\s+/g, ' ').trim();
 function parseContactMail(text) {
-  const fields = {}; const lines = (text || '').split(/\r?\n/);
-  const normLabel = (s) => s.toLowerCase().replace(/[’‘`]/g, "'").replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
-  let cur = null;
-  lines.forEach((line) => {
-    const idx = line.indexOf(':');
-    if (idx > 0 && idx < 80) { const lab = normLabel(line.slice(0, idx)); if (lab && lab.length <= 60) { fields[lab] = line.slice(idx + 1).trim(); cur = lab; return; } }
-    if (!line.trim()) { cur = null; return; }
-    if (cur) fields[cur] = (fields[cur] ? fields[cur] + ' ' : '') + line.trim();
+  const fields = {};
+  const lines = (text || '').split(/\r?\n/);
+  let cur = null, stopped = false;
+  const isReplyHeader = (t) => /(a\s+écrit|wrote)\s*:?\s*$/i.test(t) || /^\s*-{2,}.*(message|original).*-{2,}\s*$/i.test(t) || /^(le|on)\s+[\wàâäéèêëîïôöûüç.]+\s+\d{1,2}\b/i.test(t); // « Le <jour> <date> … » = début de la réponse citée (parfois coupé sur 2 lignes)
+  lines.forEach((raw) => {
+    if (stopped) return;
+    if (/^\s*>/.test(raw)) { stopped = true; return; } // début de la partie CITÉE → tout ce qui suit est le formulaire vierge renvoyé
+    const t = raw.trim();
+    if (isReplyHeader(t)) { stopped = true; return; } // « le <date>, X a écrit : » → idem
+    if (!t) { cur = null; return; }
+    // 1) « étiquette : valeur » sur la même ligne (hors lignes en gras)
+    const idx = t.indexOf(':');
+    if (idx > 0 && idx < 80 && !/^\*/.test(t)) { const lab = cleanLabel(t.slice(0, idx)); if (lab && lab.length <= 60) { fields[lab] = t.slice(idx + 1).trim(); cur = lab; return; } }
+    // 2) ligne en GRAS (commence par *) = étiquette (réponse sur la/les lignes suivantes) ; si trop longue = instruction → ignorée
+    if (/^\*/.test(t)) { const lab = cleanLabel(t); if (lab && lab.length <= 60) { if (!(lab in fields)) fields[lab] = ''; cur = lab; } else cur = null; return; }
+    // 3) sinon : valeur (continuation) du champ courant
+    if (cur) { const val = t.replace(/^—\s*\(non renseign[ée]+\)\s*$/i, '').trim(); if (val) fields[cur] = (fields[cur] ? fields[cur] + ' ' : '') + val; }
   });
   return fields;
 }
-const mailField = (f, ...labels) => { for (const l of labels) { const n = l.toLowerCase().replace(/[’‘`]/g, "'").replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim(); if (f && f[n] != null && f[n] !== '') return f[n]; } return ''; };
+// Lit un champ du formulaire : normalise AUSSI les clés stockées (répare les anciens champs à clé « *label* »).
+const mailField = (f, ...labels) => {
+  if (!f) return '';
+  const byClean = {}; Object.keys(f).forEach((k) => { const ck = cleanLabel(k); if (f[k] != null && f[k] !== '' && byClean[ck] == null) byClean[ck] = f[k]; });
+  for (const l of labels) { const n = cleanLabel(l); if (byClean[n] != null && byClean[n] !== '') return byClean[n]; }
+  return '';
+};
+// Champs d'un mail : re-parse le corps avec le parseur courant (répare les mails déjà importés), repli sur les champs figés.
+function mailFieldsOf(m) { const f = parseContactMail((m && m.body) || ''); return Object.keys(f).length ? f : ((m && m.fields) || {}); }
 const mailExtractEmail = (from) => { const m = /<([^>]+)>/.exec(from || ''); return (m ? m[1] : (from || '')).trim(); };
 function gmailHeader(msg, name) { const h = (msg && msg.payload && msg.payload.headers) || []; const x = h.find((y) => (y.name || '').toLowerCase() === name.toLowerCase()); return x ? x.value : ''; }
 function b64urlDecode(data) { try { let s = (data || '').replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const bin = atob(s); try { return decodeURIComponent(escape(bin)); } catch { return bin; } } catch { return ''; } }
@@ -5754,7 +5779,7 @@ function mailIsSelf(m) { return !!(S.mailExcludeSelf !== false && S.mailSelf && 
 // Catch fiable même si le mail a été envoyé depuis une autre adresse/alias (contrairement à mailIsSelf).
 function mailIsBlankForm(m) {
   if (S.mailExcludeSelf === false) return false;
-  const f = (m && m.fields) || {};
+  const f = mailFieldsOf(m); // clés propres (re-parse) pour la détection du modèle vierge
   const hasLabel = ('nom du cheval' in f) || ("adresse de l'écurie" in f) || ('race' in f && 'age' in f);
   if (!hasLabel) return false;
   return !(mailField(f, 'Nom du cheval') || mailField(f, 'Nom') || mailField(f, 'Prénom') || mailField(f, 'Numéro de téléphone'));
@@ -5810,7 +5835,7 @@ function parseDateLoose(s) {
 // « Créer le client » depuis un mail : ouvre la fiche client pré-remplie + 1 cheval (anamnèse = formulaire complet).
 // status : 'normal' (défaut) · 'inactif' (client + chevaux inactifs) · 'noir' (client en liste noire, chevaux inactifs). Les infos sont toujours importées.
 function createClientFromMail(m, status) {
-  const f = m.fields || {};
+  const f = mailFieldsOf(m); // re-parse le corps (répare les anciens mails à clés « *label* »)
   const prefill = {
     prenom: mailField(f, 'Prénom'), nom: mailField(f, 'Nom'),
     societe: mailField(f, "Nom de l'entreprise"), tvaNum: mailField(f, 'Numéro de TVA', 'N° de TVA'),
