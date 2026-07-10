@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.144';
+const APP_VERSION = '1.1.145';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.145', date: '2026-07-10',
+    ajouts: [
+      'Facture par cheval : deux nouvelles cases « Difficile » et « Lourd » par cheval dans l\'arrêt (disponibles dès que Parage ou Visite est coché). Cocher ouvre une modale pour saisir le montant HT (TTC calculé automatiquement) avec une case « éligible aux remises » (activée par défaut).',
+      'Gestion → Articles : nouveaux tarifs par défaut « Cheval difficile » et « Cheval lourd » (proposés dans la modale, modifiables cheval par cheval).',
+      'Ces suppléments sont facturés comme des lignes normales : ils apparaissent dans la facture, les statistiques, l\'analyse par cheval et la comptabilité, et sont pris en compte dans le manque à gagner d\'une annulation.',
+    ],
+  },
   {
     version: '1.1.144', date: '2026-07-10',
     ajouts: [
@@ -1209,6 +1217,8 @@ if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
 if (typeof S.npasHT !== 'number') S.npasHT = 0;
+if (typeof S.difficileHT !== 'number') S.difficileHT = 0; // tarif par défaut « cheval difficile » (surchargeable par cheval)
+if (typeof S.lourdHT !== 'number') S.lourdHT = 0; // tarif par défaut « cheval lourd »
 if (typeof S.infectionHT !== 'number') S.infectionHT = 0;
 S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
 if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; // { 'YYYY-MM': { liquide, virement, facture } }
@@ -2705,6 +2715,7 @@ function chevalWouldBeLines(cv) {
   if (cv.parage && S.parage && S.parage.prixHT > 0) lines.push({ libelle: 'Parage et équilibrage', ttc: S.parage.prixHT * (1 + (S.parage.tvaPct || 0) / 100) });
   const baseMat = baseMateriel(); if (cv.parage && baseMat > 0) lines.push({ libelle: 'Matériel', ttc: baseMat * (1 + r) });
   [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([k, l, p]) => { if (cv[k] && p > 0) lines.push({ libelle: l, ttc: p * (1 + r) }); });
+  [['difficile', 'Cheval difficile'], ['lourd', 'Cheval lourd']].forEach(([k, l]) => { if (cv[k]) { const p = (cv[k + 'HT'] != null && cv[k + 'HT'] !== '') ? +cv[k + 'HT'] : (S[k + 'HT'] || 0); if (p > 0) lines.push({ libelle: l, ttc: p * (1 + r) }); } });
   if (cv.visite && cv.visiteArtId) { const av = (S.articlesCatalogue || []).find((x) => x.id === cv.visiteArtId); if (av) lines.push({ libelle: av.libelle, ttc: (av.prixHT || 0) * (1 + (av.tvaPct || 0) / 100) }); }
   return lines;
 }
@@ -3221,7 +3232,8 @@ function renderEditorArrets(locked) {
         if (S.infectionHT > 0) pathoCols.push({ key: 'infection', label: 'Infection' });
         // Prestations « visite » du catalogue (case Visite par cheval → modale de choix).
         const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
-        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Parage</th><th>Visite</th>${pathoCols.map((c) => '<th>' + c.label + '</th>').join('')}</tr></thead><tbody>`;
+        const suppCols = [{ key: 'difficile', label: 'Difficile' }, { key: 'lourd', label: 'Lourd' }]; // suppléments à montant saisi (modale)
+        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Parage</th><th>Visite</th>${pathoCols.map((c) => '<th>' + c.label + '</th>').join('')}${suppCols.map((c) => '<th>' + c.label + '</th>').join('')}</tr></thead><tbody>`;
         pool.forEach((ph, pi) => {
           const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite)); // parage OU visite = cheval pris en charge
           const tag = cancelled ? ` <span class="badge badge-cancel">${cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé'}</span>` : '';
@@ -3229,6 +3241,7 @@ function renderEditorArrets(locked) {
           h += `<td><input type="checkbox" data-key="parage" data-pi="${pi}" ${cv && cv.parage ? 'checked' : ''}${cancelled ? ' disabled' : ''}/></td>`;
           h += `<td><input type="checkbox" data-vis data-pi="${pi}" ${cv && cv.visite ? 'checked' : ''}${(cancelled || !visArts.length) ? ' disabled' : ''}/></td>`;
           h += pathoCols.map((c) => `<td><input type="checkbox" data-key="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${acte ? '' : ' disabled'}/></td>`).join('');
+          h += suppCols.map((c) => `<td><input type="checkbox" data-supp="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${acte ? '' : ' disabled'}/></td>`).join('');
           h += '</tr>';
         });
         h += '</tbody></table>';
@@ -3242,18 +3255,23 @@ function renderEditorArrets(locked) {
           const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.key;
           cv[key] = e.target.checked;
           // Parage (dé)coché : recharge la grille (verrouille/déverrouille les pathologies) ; si plus de parage NI visite → efface les pathologies.
-          if (key === 'parage') { if (!e.target.checked && !cv.visite) { cv.fourbure = false; cv.npas = false; cv.infection = false; } recomputeMoney(); renderEditorArrets(locked); return; }
+          if (key === 'parage') { if (!e.target.checked && !cv.visite) { cv.fourbure = false; cv.npas = false; cv.infection = false; cv.difficile = false; cv.lourd = false; } recomputeMoney(); renderEditorArrets(locked); return; }
           recomputeMoney();
         }));
         wrap.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => {
           const pi = +inp.dataset.pi, ph = pool[pi], cv = ensureCv(ph);
           cv.visite = e.target.checked;
-          if (!cv.visite) { cv.visiteArtId = null; if (!cv.parage) { cv.fourbure = false; cv.npas = false; cv.infection = false; } saveTournees(); recomputeMoney(); renderEditorArrets(locked); return; }
+          if (!cv.visite) { cv.visiteArtId = null; if (!cv.parage) { cv.fourbure = false; cv.npas = false; cv.infection = false; cv.difficile = false; cv.lourd = false; } saveTournees(); recomputeMoney(); renderEditorArrets(locked); return; }
           if (visArts.length === 1) { cv.visiteArtId = visArts[0].id; saveTournees(); recomputeMoney(); renderEditorArrets(locked); return; } // une seule prestation → pas de modale
           saveTournees();
           modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // ouvre la modale de choix
         }));
         wrap.querySelectorAll('[data-vispick]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.vispick], cv = ensureCv(ph); modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); }));
+        wrap.querySelectorAll('[data-supp]').forEach((inp) => inp.addEventListener('change', (e) => {
+          const ph = pool[+inp.dataset.pi], cv = ensureCv(ph), key = inp.dataset.supp;
+          if (!e.target.checked) { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; saveTournees(); recomputeMoney(); return; }
+          modalSupplement(ph.nom, cv, key, () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // saisie montant HT + éligibilité remise
+        }));
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
         el.appendChild(wrap);
       });
@@ -3456,6 +3474,15 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
           [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([key, lbl, prix]) => {
             if (c[key] && prix > 0) { const rr = stdRate, off = !!c[key + 'Offert']; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: off ? 0 : prix, tva: off ? 0 : prix * rr, ttc: off ? 0 : prix * (1 + rr), patho: true, offert: off, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += off ? 0 : prix; m.tvaArt += off ? 0 : prix * rr; }
           });
+          // Suppléments par cheval « Cheval difficile » / « Cheval lourd » : montant HT propre (sinon tarif par défaut). Éligibilité remise réglable par cheval (défaut oui).
+          [['difficile', 'Cheval difficile', S.difficileHT], ['lourd', 'Cheval lourd', S.lourdHT]].forEach(([key, lbl, defPrix]) => {
+            if (!c[key]) return;
+            const prix = (c[key + 'HT'] != null && c[key + 'HT'] !== '') ? +c[key + 'HT'] : (defPrix || 0);
+            if (!(prix > 0)) return;
+            const rr = stdRate, off = !!c[key + 'Offert'], remisable = c[key + 'Remise'] !== false;
+            m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: off ? 0 : prix, tva: off ? 0 : prix * rr, ttc: off ? 0 : prix * (1 + rr), supplement: key, offert: off, remiseOff: !remisable, remiseProduit: remisable, remiseLiquide: remisable });
+            m.htArt += off ? 0 : prix; m.tvaArt += off ? 0 : prix * rr;
+          });
         }
       });
     });
@@ -3520,7 +3547,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalBilled).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert })) })),
+    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalBilled).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile, lourd: !!c.lourd, difficileHT: c.difficileHT, lourdHT: c.lourdHT, difficileRemise: c.difficileRemise, lourdRemise: c.lourdRemise, difficileOffert: !!c.difficileOffert, lourdOffert: !!c.lourdOffert })) })),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
@@ -6842,6 +6869,23 @@ function createCreditNote(clientId, tour, cv, motif, note) {
 }
 // Annuler / reporter le RDV d'un cheval. opts : { cv, clientId, tour, paid, locked, onDone }.
 // RDV payé → une note de crédit (à rembourser par virement) est créée en plus. Période compta validée → bloqué.
+// Saisie d'un supplément par cheval (« difficile »/« lourd ») : montant HT → TTC live + éligibilité remise. Annuler = décoche (revient à l'état précédent).
+function modalSupplement(nom, cv, key, onDone) {
+  const lbl = key === 'lourd' ? 'Cheval lourd' : 'Cheval difficile';
+  const was = !!cv[key];
+  const def = (cv[key + 'HT'] != null && cv[key + 'HT'] !== '') ? cv[key + 'HT'] : (S[key + 'HT'] || 0);
+  const remise0 = cv[key + 'Remise'] !== false;
+  openModal(`<div class="modal-head"><b>${lbl} — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Montant facturé pour ce cheval (surcharge le tarif par défaut de Gestion → Articles).</p>
+    <label>Montant HT<input type="number" id="spHT" step="0.01" min="0" inputmode="decimal" value="${def || ''}"/></label>
+    <p class="hint" id="spTtc"></p>
+    <label class="chk2"><input type="checkbox" id="spRem" ${remise0 ? 'checked' : ''}/> Éligible aux remises (client / liquide)</label>
+    <div class="actions"><button class="btn primary block" id="spOk">Valider</button></div>`);
+  const upd = () => { const p = parseFloat($('spHT').value) || 0; const r = rate(); $('spTtc').innerHTML = p > 0 ? `TTC : <b>${eur(p * (1 + r))}</b> (TVA ${S.tvaRate}%)` : ''; };
+  upd(); $('spHT').addEventListener('input', upd);
+  $('mX').addEventListener('click', () => { cv[key] = was; closeModal(); onDone(); }); // annulé → état précédent
+  $('spOk').addEventListener('click', () => { const p = Math.max(0, parseFloat($('spHT').value) || 0); if (!(p > 0)) { alert('Saisissez un montant HT.'); return; } cv[key] = true; cv[key + 'HT'] = p; cv[key + 'Remise'] = $('spRem').checked; closeModal(); onDone(); });
+}
 function modalCancelRdv(nom, opts) {
   const cv = opts.cv;
   if (opts.locked) {
@@ -7653,11 +7697,12 @@ function bindSettings() {
   wS('setVitesse', 'vitesseKmh', 'km/h', 0);
   wA('setAchat', 'achatHT', '€ HT', 0); wA('setDureeVie', 'dureeVieKm', 'km', 0);
   wS('setFourbure', 'fourbureHT', '€ HT', 2); wS('setNpas', 'npasHT', '€ HT', 2); wS('setInfection', 'infectionHT', '€ HT', 2);
+  wS('setDifficile', 'difficileHT', '€ HT', 2); wS('setLourd', 'lourdHT', '€ HT', 2);
   wP('setParagePrix', 'prixHT', '€ HT', 2); wP('setParageTva', 'tvaPct', '%', 1);
   if ($('setReducLiquide')) { $('setReducLiquide').value = (S.reducLiquide != null ? S.reducLiquide : 20); $('setReducLiquide').addEventListener('input', (e) => { const v = parseInt(e.target.value, 10); S.reducLiquide = (!isNaN(v) && v >= 0) ? v : 0; saveSettings(); }); }
   _settingsPaints = paints;
   // Champs calculés (lecture seule) : unité affichée dans le champ.
-  [['setPrixPleinHT', '€/L HT'], ['setAchatTTC', '€ TTC'], ['setAmortHT', '€/km HT'], ['setAmortTTC', '€/km TTC'], ['setForfaitTTC', '€ TTC'], ['setSeuilTarif', '€/km HT'], ['setSeuilDepHT', '€ HT'], ['setSeuilDepTTC', '€ TTC'], ['setFourbureTtc', '€ TTC'], ['setNpasTtc', '€ TTC'], ['setInfectionTtc', '€ TTC'], ['setParageTtc', '€ TTC'], ['setPrixHeureTtc', '€ TTC'], ['setTempsKmRo', '€/km']].forEach(([id, u]) => makeReadout($(id), u));
+  [['setPrixPleinHT', '€/L HT'], ['setAchatTTC', '€ TTC'], ['setAmortHT', '€/km HT'], ['setAmortTTC', '€/km TTC'], ['setForfaitTTC', '€ TTC'], ['setSeuilTarif', '€/km HT'], ['setSeuilDepHT', '€ HT'], ['setSeuilDepTTC', '€ TTC'], ['setFourbureTtc', '€ TTC'], ['setNpasTtc', '€ TTC'], ['setInfectionTtc', '€ TTC'], ['setDifficileTtc', '€ TTC'], ['setLourdTtc', '€ TTC'], ['setParageTtc', '€ TTC'], ['setPrixHeureTtc', '€ TTC'], ['setTempsKmRo', '€/km']].forEach(([id, u]) => makeReadout($(id), u));
   if ($('setSeuilType')) { $('setSeuilType').value = S.seuilTarifType; $('setSeuilType').addEventListener('change', (e) => { S.seuilTarifType = e.target.value; saveSettings(); }); }
   updateReadouts();
   if ($('setNavApp')) { $('setNavApp').value = S.navApp; $('setNavApp').addEventListener('change', (e) => { S.navApp = e.target.value === 'gmaps' ? 'gmaps' : 'waze'; saveSettings(); if ($('tab-accueil').classList.contains('active')) renderHome(); }); }
@@ -7801,6 +7846,7 @@ function updateReadouts() {
   put('setSeuilTarif', tarif, 3);
   put('setSeuilDepHT', dep, 2); put('setSeuilDepTTC', ttc(dep), 2);
   put('setFourbureTtc', ttc(S.fourbureHT), 2); put('setNpasTtc', ttc(S.npasHT), 2); put('setInfectionTtc', ttc(S.infectionHT), 2);
+  put('setDifficileTtc', ttc(S.difficileHT), 2); put('setLourdTtc', ttc(S.lourdHT), 2);
   put('setParageTtc', S.parage.prixHT * (1 + (S.parage.tvaPct || 0) / 100), 2);
   put('setPrixHeureTtc', ttc(S.prixHeure), 2); put('setTempsKmRo', tempsPerKm(), 3);
 }

@@ -372,6 +372,18 @@
         <p class="hint">Montants forfaitaires ajoutés au matériel d'un cheval quand la case est cochée (seulement si « Parage/Équil. » est coché).</p>
       </section>
       <section class="card">
+        <h2>Suppléments par cheval (tarif par défaut)</h2>
+        <div class="row">
+          <label class="grow">Cheval difficile<input type="number" id="setDifficile" step="0.01" min="0" /></label>
+          <label class="grow">Difficile<input id="setDifficileTtc" /></label>
+        </div>
+        <div class="row">
+          <label class="grow">Cheval lourd<input type="number" id="setLourd" step="0.01" min="0" /></label>
+          <label class="grow">Lourd<input id="setLourdTtc" /></label>
+        </div>
+        <p class="hint">Tarif proposé par défaut dans la modale « Difficile »/« Lourd » de l'arrêt (le montant reste modifiable cheval par cheval). Les cases sont disponibles dès que Parage ou Visite est coché.</p>
+      </section>
+      <section class="card">
         <h2>Parage &amp; équilibrage (article auto)</h2>
         <div class="row">
           <label class="grow">TVA<input type="number" id="setParageTva" step="0.1" min="0" /></label>
