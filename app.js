@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.19';
+const APP_VERSION = '1.2.20';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.20', date: '2026-07-11',
+    ajouts: [
+      'Nouveau « 🔍 Assistant de vérification » (Déclarer un événement) : passe en revue les champs vides, en deux modes — « Clients & chevaux, adresses » et « Tournées ».',
+      'Une modale de détection récapitule ce qui est trouvé (clients actifs / inactifs / liste noire avec le nombre de chevaux, adresses ; tournées à venir / clôturées) avec une case par catégorie à inclure ou non.',
+      'La revue enchaîne ensuite une modale par élément (un client avec ses chevaux, une adresse, une tournée) : « Enregistrer » sauvegarde et passe au suivant, « Passer » ignore. Rien n\'est bloquant.',
+      'Sur une tournée clôturée, l\'assistant ne complète que les statistiques (heure, temps de route, consultation, retour) — jamais la facture.',
+    ],
+  },
   {
     version: '1.2.19', date: '2026-07-11',
     corrections: [
@@ -7657,12 +7666,13 @@ function recoverTour(t) {
 }
 // Panneau de complétion d'une tournée récupérée : heure de RDV + temps de route réel par arrêt,
 // durée de consultation par cheval, temps de retour. Ces données alimentent le Temps de travail et le Temps de trajet.
-function modalRecoverStats(t) {
-  openModal(`<div class="modal-head"><b>📊 Compléter — ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Renseignez les données manquantes de cette ancienne tournée pour des statistiques complètes : l'heure de RDV et le temps de route réel de chaque arrêt, la durée de consultation de chaque cheval/visite, et le temps de retour. Le départ se calcule depuis le 1ᵉʳ RDV moins la route.</p>
+function modalRecoverStats(t, opts) {
+  const prog = opts ? ` — ${opts.i + 1}/${opts.total}` : '';
+  openModal(`<div class="modal-head"><b>📊 Compléter — ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}${prog}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Renseignez les données manquantes de cette tournée pour des statistiques complètes : l'heure de RDV et le temps de route réel de chaque arrêt, la durée de consultation de chaque cheval/visite, et le temps de retour. ${statusOf(t) === 'cloturee' ? '<b>Tournée clôturée : seules les statistiques sont mises à jour, jamais la facture.</b>' : ''}</p>
     <div id="recBody"></div>
     <label>Temps de retour réel (min)<input type="number" min="0" step="1" id="recReturn" value="${typeof t.returnRealMin === 'number' ? t.returnRealMin : ''}" placeholder="retour → domicile"/></label>
-    <div class="actions"><button class="btn primary block" id="recSave">Enregistrer</button></div>`);
+    <div class="actions${opts ? ' two' : ''}">${opts ? '<button class="btn" id="recSkip">Passer</button>' : ''}<button class="btn primary${opts ? '' : ' block'}" id="recSave">Enregistrer</button></div>`);
   const body = $('recBody');
   (t.arrets || []).forEach((a, i) => {
     const wrap = document.createElement('div'); wrap.className = 'inv-client';
@@ -7673,16 +7683,137 @@ function modalRecoverStats(t) {
     wrap.innerHTML = h; body.appendChild(wrap);
   });
   $('mX').addEventListener('click', closeModal);
+  if (opts && $('recSkip')) $('recSkip').addEventListener('click', () => opts.onNext());
   $('recSave').addEventListener('click', () => {
     const numOrNull = (v) => { v = (v || '').toString().trim(); return v === '' ? null : Math.max(0, Math.round(parseNum(v))); };
     body.querySelectorAll('[data-heure]').forEach((inp) => { t.arrets[+inp.dataset.heure].heure = inp.value || ''; });
     body.querySelectorAll('[data-route]').forEach((inp) => { const a = t.arrets[+inp.dataset.route]; const v = numOrNull(inp.value); if (v == null) delete a.realMin; else a.realMin = v; });
     body.querySelectorAll('[data-consult]').forEach((inp) => { const [i, j, k] = inp.dataset.consult.split('.').map(Number); const cv = t.arrets[i] && t.arrets[i].clients[j] && t.arrets[i].clients[j].chevaux[k]; if (!cv) return; const v = numOrNull(inp.value); if (v == null) delete cv.consultMin; else cv.consultMin = v; });
     const rr = numOrNull($('recReturn').value); if (rr == null) delete t.returnRealMin; else t.returnRealMin = rr;
-    persistTourAnywhere(t);
-    closeModal(); renderHome();
+    persistTourAnywhere(t); // stats uniquement (persistTourAnywhere ne recalcule jamais la facture d'une tournée figée)
     if (currentTour && currentTour.id === t.id) { currentTour = JSON.parse(JSON.stringify(t)); }
+    if (opts && opts.onNext) opts.onNext(); else { closeModal(); renderHome(); }
   });
+}
+// ======================= Assistant de vérification (complétion des champs vides, non bloquant) =======================
+function clientState(c) { return isClientNoir(c) ? 'noir' : (c.actif === false ? 'inactif' : 'actif'); }
+// Champs vides « fonctionnels » d'un client + ses chevaux (ceux qui servent à quelque chose dans l'app). Renvoie null si complet.
+function scanClient(c) {
+  const cf = [];
+  if (!c.email) cf.push({ label: 'E-mail', type: 'email', get: () => c.email || '', set: (v) => c.email = v });
+  if (!c.tel) cf.push({ label: 'Téléphone', type: 'tel', get: () => c.tel || '', set: (v) => c.tel = v });
+  const ad = toAddr(c.addr);
+  if (!ad.rue) cf.push({ label: 'Adresse (rue + n°)', get: () => '', set: (v) => { c.addr = toAddr(c.addr); c.addr.rue = v; c.addr.lat = null; c.addr.lon = null; } });
+  if (!ad.cp) cf.push({ label: 'Code postal', get: () => '', set: (v) => { c.addr = toAddr(c.addr); c.addr.cp = v; c.addr.lat = null; c.addr.lon = null; } });
+  if (!ad.localite) cf.push({ label: 'Localité', get: () => '', set: (v) => { c.addr = toAddr(c.addr); c.addr.localite = v; c.addr.lat = null; c.addr.lon = null; } });
+  if (c.assujettiTva && !c.tvaNum) cf.push({ label: 'N° de TVA (société assujettie)', get: () => '', set: (v) => c.tvaNum = v });
+  const chevaux = [];
+  (c.chevaux || []).forEach((h) => {
+    const hf = [];
+    if (!h.race) hf.push({ label: 'Race', get: () => '', set: (v) => h.race = v });
+    if (!h.dateNaissance) hf.push({ label: 'Date de naissance', type: 'date', get: () => '', set: (v) => h.dateNaissance = v });
+    if (!h.datePriseEnCharge) hf.push({ label: 'Date de prise en charge', type: 'date', get: () => '', set: (v) => h.datePriseEnCharge = v });
+    if (!h.discipline) hf.push({ label: 'Discipline / usage', get: () => '', set: (v) => h.discipline = v });
+    if (hf.length) chevaux.push({ cheval: h, fields: hf });
+  });
+  return (cf.length || chevaux.length) ? { client: c, state: clientState(c), clientFields: cf, chevaux } : null;
+}
+// Champs vides d'une adresse / écurie (tous requis : nom + adresse complète).
+function scanAdresse(a) {
+  const f = []; const ad = toAddr(a.addr);
+  if (!a.nom) f.push({ label: 'Nom de l\'adresse', get: () => a.nom || '', set: (v) => a.nom = v });
+  if (!ad.rue) f.push({ label: 'Rue + n°', get: () => '', set: (v) => { a.addr = toAddr(a.addr); a.addr.rue = v; a.addr.lat = null; a.addr.lon = null; } });
+  if (!ad.cp) f.push({ label: 'Code postal', get: () => '', set: (v) => { a.addr = toAddr(a.addr); a.addr.cp = v; a.addr.lat = null; a.addr.lon = null; } });
+  if (!ad.localite) f.push({ label: 'Localité', get: () => '', set: (v) => { a.addr = toAddr(a.addr); a.addr.localite = v; a.addr.lat = null; a.addr.lon = null; } });
+  return f.length ? { adresse: a, fields: f } : null;
+}
+// Nb de champs de STATS manquants d'une tournée (heure/route par arrêt, consultation par cheval fait, retour).
+function tourMissingStats(t) {
+  let n = 0;
+  (t.arrets || []).forEach((a) => { if (!arretHeure(a)) n++; if (typeof a.realMin !== 'number') n++; (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv) && typeof cv.consultMin !== 'number') n++; })); });
+  if (typeof t.returnRealMin !== 'number') n++;
+  return n;
+}
+// Étape « fiche » (client OU adresse) : modale avec les champs vides éditables + Enregistrer (sauve + suivant) / Passer.
+function assistFicheStep(entry, i, total, next, isAdresse) {
+  const title = isAdresse ? ('📍 ' + (esc(entry.adresse.nom) || 'Adresse')) : ('👤 ' + esc(fullName(entry.client)) + (entry.client.societe ? ' — ' + esc(entry.client.societe) : ''));
+  const badge = isAdresse ? '' : ` <span class="badge">${entry.state}</span>`;
+  openModal(`<div class="modal-head"><b>🔍 Vérification ${i + 1}/${total}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">${title}${badge} — complétez ce que vous voulez (rien n'est obligatoire).</p>
+    <div id="asBody"></div>
+    <div class="actions two"><button class="btn" id="asSkip">Passer</button><button class="btn primary" id="asSave">Enregistrer</button></div>`);
+  const body = $('asBody'); const inputs = [];
+  const addField = (f) => { const id = 'asf' + inputs.length; const lab = document.createElement('label'); lab.innerHTML = `${esc(f.label)}<input type="${f.type || 'text'}" id="${id}" value="${esc((f.get ? f.get() : '') || '')}"/>`; body.appendChild(lab); inputs.push({ f, id }); };
+  if (isAdresse) { entry.fields.forEach(addField); }
+  else {
+    entry.clientFields.forEach(addField);
+    entry.chevaux.forEach((cm) => { const hd = document.createElement('div'); hd.className = 'form-sec-h sub'; hd.textContent = '🐴 ' + cm.cheval.nom; body.appendChild(hd); cm.fields.forEach(addField); });
+  }
+  $('mX').addEventListener('click', closeModal);
+  $('asSkip').addEventListener('click', next);
+  $('asSave').addEventListener('click', () => {
+    inputs.forEach(({ f, id }) => { const v = ($(id) || {}).value; if (v != null && String(v).trim() !== '') f.set(String(v).trim()); });
+    if (isAdresse) { saveSettings(); const a = entry.adresse; if (addrStr(a.addr).trim() && !a.addr.lat) geocode(a.addr).then((g) => { a.addr.lat = g.lat; a.addr.lon = g.lon; saveSettings(); }).catch(() => {}); }
+    else { saveClients(); const c = entry.client; if (addrStr(c.addr).trim() && !c.addr.lat) geocode(c.addr).then((g) => { c.addr.lat = g.lat; c.addr.lon = g.lon; saveClients(); }).catch(() => {}); }
+    next();
+  });
+}
+function runAssistantWizard(steps, idx) {
+  if (idx >= steps.length) { closeModal(); alert('✅ Revue terminée — ' + steps.length + ' élément(s) passé(s) en revue.'); renderHome(); return; }
+  steps[idx].open(idx, steps.length, () => runAssistantWizard(steps, idx + 1));
+}
+// Récap détection « Clients & chevaux, adresses » : cases par catégorie (actifs → inactifs → liste noire, + adresses) puis revue.
+function assistScanFiches() {
+  const all = clients.map(scanClient).filter(Boolean);
+  const cats = { actif: all.filter((e) => e.state === 'actif'), inactif: all.filter((e) => e.state === 'inactif'), noir: all.filter((e) => e.state === 'noir') };
+  const adr = (S.adresses || []).map(scanAdresse).filter(Boolean);
+  const chevCount = (arr) => arr.reduce((s, e) => s + e.chevaux.length, 0);
+  const sel = { actif: cats.actif.length > 0, inactif: false, noir: false, adr: adr.length > 0 };
+  openModal(`<div class="modal-head"><b>🔍 Détection — Clients & adresses</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Éléments avec des champs vides fonctionnels. Cochez les catégories à passer en revue (ordre : actifs, puis inactifs, puis liste noire, puis adresses).</p>
+    <label class="chk2"><input type="checkbox" data-c="actif" ${sel.actif ? 'checked' : ''}${cats.actif.length ? '' : ' disabled'}/> Clients actifs : <b>${cats.actif.length}</b>${chevCount(cats.actif) ? ' · ' + chevCount(cats.actif) + ' cheval(aux)' : ''}</label>
+    <label class="chk2"><input type="checkbox" data-c="inactif" ${sel.inactif ? 'checked' : ''}${cats.inactif.length ? '' : ' disabled'}/> Clients inactifs : <b>${cats.inactif.length}</b>${chevCount(cats.inactif) ? ' · ' + chevCount(cats.inactif) + ' cheval(aux)' : ''}</label>
+    <label class="chk2"><input type="checkbox" data-c="noir" ${sel.noir ? 'checked' : ''}${cats.noir.length ? '' : ' disabled'}/> Clients liste noire : <b>${cats.noir.length}</b>${chevCount(cats.noir) ? ' · ' + chevCount(cats.noir) + ' cheval(aux)' : ''}</label>
+    <label class="chk2"><input type="checkbox" data-c="adr" ${sel.adr ? 'checked' : ''}${adr.length ? '' : ' disabled'}/> Adresses / écuries : <b>${adr.length}</b></label>
+    <div class="actions"><button class="btn primary block" id="asStart">Démarrer la revue</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  document.querySelectorAll('[data-c]').forEach((cb) => cb.addEventListener('change', (e) => { sel[e.target.dataset.c] = e.target.checked; }));
+  $('asStart').addEventListener('click', () => {
+    const steps = [];
+    ['actif', 'inactif', 'noir'].forEach((st) => { if (sel[st]) cats[st].forEach((entry) => steps.push({ open: (i, tot, next) => assistFicheStep(entry, i, tot, next, false) })); });
+    if (sel.adr) adr.forEach((entry) => steps.push({ open: (i, tot, next) => assistFicheStep(entry, i, tot, next, true) }));
+    if (!steps.length) { alert('Aucun élément à revoir dans les catégories cochées.'); return; }
+    runAssistantWizard(steps, 0);
+  });
+}
+// Récap détection « Tournées » : actives/à venir (défaut) et clôturées/passées (option), stats manquantes.
+function assistScanTournees() {
+  const actives = allTours().filter((t) => statusOf(t) !== 'cloturee' && tourMissingStats(t)).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const cloturees = allTours().filter((t) => statusOf(t) === 'cloturee' && tourMissingStats(t)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const sel = { act: actives.length > 0, clo: false };
+  openModal(`<div class="modal-head"><b>🔍 Détection — Tournées</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Tournées avec des statistiques manquantes (heure, temps de route, consultation, retour). Les clôturées ne mettent à jour que les stats, jamais la facture.</p>
+    <label class="chk2"><input type="checkbox" data-t="act" ${sel.act ? 'checked' : ''}${actives.length ? '' : ' disabled'}/> Tournées à venir / du jour : <b>${actives.length}</b></label>
+    <label class="chk2"><input type="checkbox" data-t="clo" ${sel.clo ? 'checked' : ''}${cloturees.length ? '' : ' disabled'}/> Tournées clôturées (passées) : <b>${cloturees.length}</b></label>
+    <div class="actions"><button class="btn primary block" id="asStart">Démarrer la revue</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  document.querySelectorAll('[data-t]').forEach((cb) => cb.addEventListener('change', (e) => { sel[e.target.dataset.t] = e.target.checked; }));
+  $('asStart').addEventListener('click', () => {
+    const steps = [];
+    if (sel.act) actives.forEach((t) => steps.push({ open: (i, tot, next) => modalRecoverStats(t, { i, total: tot, onNext: next }) }));
+    if (sel.clo) cloturees.forEach((t) => steps.push({ open: (i, tot, next) => modalRecoverStats(t, { i, total: tot, onNext: next }) }));
+    if (!steps.length) { alert('Aucune tournée à revoir dans les catégories cochées.'); return; }
+    runAssistantWizard(steps, 0);
+  });
+}
+function modalAssistant() {
+  openModal(`<div class="modal-head"><b>🔍 Assistant de vérification</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Passe en revue les champs vides et vous laisse les compléter, un élément après l'autre. Rien n'est obligatoire — vous pouvez « Passer » n'importe quel élément.</p>
+    <div class="actions"><button class="btn primary block" id="asFiches">👥 Clients & chevaux, adresses</button></div>
+    <div class="actions"><button class="btn block" id="asTours">🚗 Tournées (statistiques)</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  $('asFiches').addEventListener('click', assistScanFiches);
+  $('asTours').addEventListener('click', assistScanTournees);
 }
 // Reporte TOUS les chevaux (non déjà annulés) d'une tournée → ils rejoignent « Replacer un RDV ».
 function reportAllTour(t) {
@@ -8988,6 +9119,7 @@ function modalVehicule() {
   openModal(`<div class="modal-head"><b>📋 Déclarer un événement</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Que voulez-vous faire ?</p>
     <div class="actions"><button class="btn primary block" id="vClient">👤 Créer un client</button></div>
+    <div class="actions"><button class="btn block" id="vAssist">🔍 Assistant de vérification (champs manquants)</button></div>
     <div class="actions"><button class="btn block" id="vRoute">🗺 Calculer un trajet (départ → arrivée)</button></div>
     <div class="actions"><button class="btn block" id="vPlanche">🖼 Planche de contact (photos)</button></div>
     <div class="actions"><button class="btn block" id="vPlein">⛽ Valider un plein (prix du carburant)</button></div>
@@ -9004,6 +9136,7 @@ function modalVehicule() {
     <p class="status" id="vUpdateStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
   $('vClient').addEventListener('click', () => { closeModal(); editClient(null); });
+  $('vAssist').addEventListener('click', () => { closeModal(); modalAssistant(); });
   $('vRoute').addEventListener('click', () => { closeModal(); modalRouteCalc(); });
   $('vPlanche').addEventListener('click', () => { closeModal(); if (typeof modalPlancheCreate === 'function') modalPlancheCreate('contact', { allowTourPick: true }); else { showTab('gestion'); showGestion('planche'); } });
   $('vStatut').addEventListener('click', () => { closeModal(); modalStatutVehicule(); });
