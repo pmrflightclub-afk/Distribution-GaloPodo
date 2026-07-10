@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.11';
+const APP_VERSION = '1.2.12';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.12', date: '2026-07-10',
+    corrections: [
+      'Éditeur de tournée : le montant TTC affiché à côté du nom du client (en-tête d\'arrêt) tient maintenant compte de l\'arrondi de l\'encaissement liquide (montant décimal rectifié). Il affiche exactement le même total que la facture répartition et se met à jour automatiquement à chaque changement d\'actes, d\'articles, de réduction ou de mode de paiement.',
+      'En-tête d\'arrêt : le bouton « 📷 Planche » a désormais la même hauteur que « ＋ Prêt », et le champ heure 🕘 est aligné avec les deux boutons.',
+    ],
+  },
   {
     version: '1.2.11', date: '2026-07-10',
     ajouts: [
@@ -3528,7 +3535,7 @@ function renderEditorArrets(locked) {
       {
         const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '';
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name">👤 <b>${esc(clientName(cl.clientId))}</b>${m ? ' · ' + eur(m.totalTTC) + ' TTC' : ''}</div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); }
@@ -3908,6 +3915,16 @@ function persistCurrentTour() {
   saveTournees();
 }
 // Recalcul ARGENT uniquement (types/tarifs/TVA/seuil/répartition) — instantané, réutilise la géométrie.
+// Met à jour, SANS re-render complet (garde le menu « ＋ Actes » ouvert), le montant TTC affiché à côté de
+// chaque nom de client dans l'en-tête d'arrêt — même base que la facture répartition (total + arrondi caisse liquide).
+function refreshClientHeadTotals() {
+  const R = currentTour && currentTour.result; if (!R) return;
+  document.querySelectorAll('.a-client-hd .ac-name[data-cid]').forEach((nameEl) => {
+    const cid = nameEl.dataset.cid, span = nameEl.querySelector('.ac-ttc'); if (!span) return;
+    const m = (R.parClient || []).find((x) => x.clientId === cid);
+    span.textContent = m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cid])) + ' TTC' : '';
+  });
+}
 function recomputeMoney() {
   const R = currentTour && currentTour.result;
   if (!R || !R.rows || R.rows.length !== currentTour.arrets.length) { if (currentTour && currentTour.arrets && currentTour.arrets.length) scheduleGeoRecalc(); return; } // géométrie absente/périmée → recalcul complet différé (la réduction/l'article sera alors reflété)
@@ -3921,6 +3938,7 @@ function recomputeMoney() {
   currentTour.result.routeGeo = geo || [];
   persistCurrentTour();
   renderResultUI(currentTour.result);
+  refreshClientHeadTotals(); // en-tête client toujours aligné sur la facture (arrondi liquide inclus)
 }
 
 // Recalcule (sans API) durée + montants d'une tournée à partir de sa géométrie mémorisée.
