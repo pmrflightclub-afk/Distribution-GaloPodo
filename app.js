@@ -11,10 +11,23 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.2', date: '2026-07-10',
+    ajouts: [
+      'Compta → Journal / Comptes : journal des entrées/sorties, surveillance des soldes par compte (alerte si négatif) et « Livre des comptes » (détail par compte → sous-comptes). Chaque écriture a un statut (à encoder → en attente → encodé). Les virements de sortie portent une communication structurée 580000 + lettre du compte + n° d\'opération.',
+      'Réconciliation automatique : virer une provision (Compta → Provisions) inscrit directement la sortie correspondante au Journal, avec sa communication. Boutons « Sortie / Entrée » ajoutés dans « Déclarer un événement ».',
+      'Gestion → Charges : factures d\'achat récurrentes (comptable, assurance véhicule, RC pro, frais bancaires…) ou ponctuelles, avec fréquence + date anniversaire. « 💸 Payer » une charge due l\'inscrit comme sortie au Journal, rattachée à son compte/sous-compte.',
+      'Compta → Répartition : découpage en pourcentage du CA figé (main d\'œuvre / matériel / déplacement) vers les sous-comptes, avec contrôle du total à 100 %.',
+    ],
+    corrections: [
+      'Manque à gagner (annulations) : le supplément « cheval lourd » est repris depuis la fiche cheval.',
+      'Contact mail : la date de la demande (date du mail) est enregistrée sur le cheval (distincte de la date de prise en charge).',
+    ],
+  },
   {
     version: '1.2.1', date: '2026-07-10',
     ajouts: [
@@ -1300,6 +1313,14 @@ if (!Array.isArray(S.fiscalParams.inasti) || !S.fiscalParams.inasti.length) S.fi
 if (!Array.isArray(S.fiscalParams.ipp) || !S.fiscalParams.ipp.length) S.fiscalParams.ipp = [{ plafond: 15820, taux: 25 }, { plafond: 27920, taux: 40 }, { plafond: 48320, taux: 45 }, { plafond: null, taux: 50 }];
 if (!Array.isArray(S.provisions)) S.provisions = mkProvisions(S.comptes, S.sousComptes); // { id, libelle, base, compteId, sousCompteId, actif, override(null|nb), tvaDeductible, statut, clearedThrough('YYYY-MM') }
 S.provisions.forEach((p) => { if (!p.statut) p.statut = 'a_provisionner'; if (typeof p.clearedThrough !== 'string') p.clearedThrough = ''; });
+// F-c : journal analytique (entrées/sorties datées) + n° d'opération incrémental pour la communication de virement.
+if (!Array.isArray(S.journal)) S.journal = []; // { id, date, sens('entree'|'sortie'), montant, compteId, sousCompteId, libelle, communication, opNum, statut('a_encoder'|'en_attente'|'encode'), provisionId, source('provision'|'charge'|'manuel') }
+if (typeof S.opCounter !== 'number') S.opCounter = 0;
+// F-e : factures d'achat / charges récurrentes (comptable, assurance véhicule, RC pro…).
+if (!Array.isArray(S.chargesAchat)) S.chargesAchat = []; // { id, libelle, montant, freq('ponctuel'|'mensuel'|'trimestriel'|'annuel'), jour, mois, moisAnchor, date(ponctuel), compteId, sousCompteId, actif, dernierPaye('YYYY-MM'), paye }
+// F-d : répartition analytique du CA figé vers les sous-comptes (par base : main d'œuvre / matériel / véhicule).
+if (!S.analyticAlloc || typeof S.analyticAlloc !== 'object') S.analyticAlloc = mkAnalyticAlloc(S.sousComptes);
+['mainOeuvre', 'materiel', 'vehicule'].forEach((k) => { if (!Array.isArray(S.analyticAlloc[k])) S.analyticAlloc[k] = []; });
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
 // Régime TVA : '' (NEUTRE, non choisi → force la config initiale) | 'normal' (assujetti) | 'franchise' (franchise en base → TVA 0 % + mention légale).
@@ -1465,6 +1486,15 @@ function mkProvisions(comptes, sousComptes) {
     mk('Impôt sur les sociétés', 'isoc', 'Provision IPP'), // affiché seulement en forme « société »
     mk('Impôt sur dividendes', 'precompte', 'Provision IPP'), // idem
   ];
+}
+// F-d : allocation par défaut du CA figé vers les sous-comptes (éditable). Liens par nom de sous-compte seedé.
+function mkAnalyticAlloc(sousComptes) {
+  const id = (nom) => { const s = (sousComptes || []).find((x) => x.nom === nom); return s ? s.id : null; };
+  return {
+    mainOeuvre: [{ sousCompteId: id('Salaire net'), pct: 50 }, { sousCompteId: id('Cotisations sociales (INASTI)'), pct: 20 }, { sousCompteId: id('Provision IPP'), pct: 15 }, { sousCompteId: id('Réserve entreprise'), pct: 15 }],
+    materiel: [{ sousCompteId: id('Renouvellement matériel / outillage'), pct: 70 }, { sousCompteId: id('Consommables'), pct: 30 }],
+    vehicule: [{ sousCompteId: id('Amortissement véhicule'), pct: 60 }, { sousCompteId: id('Entretien / pneus / freins'), pct: 40 }],
+  };
 }
 function mkFrais() {
   const out = [];
@@ -2374,6 +2404,7 @@ function showGestion(sub) {
   if (currentGsub === 'statut') renderStatutVehiculePage();
   if (currentGsub === 'rappels') renderRappels();
   if (currentGsub === 'comptes') renderComptes();
+  if (currentGsub === 'charges') renderCharges();
   if (currentGsub === 'planche') renderPlancheConfig();
   if (currentGsub === 'contactmail') renderContactMail();
   if (currentGsub === 'sms') renderSMS();
@@ -2565,7 +2596,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     if (prefill.email) w.email = prefill.email; if (prefill.tel) w.tel = prefill.tel;
     if (prefill.rue || prefill.cpVille) { const cpm = (prefill.cpVille || '').match(/\d{4,5}/); const loc = (prefill.cpVille || '').replace(/\d{4,5}/, '').replace(/[,]/g, ' ').replace(/\s+/g, ' ').trim(); w.addr = Object.assign(emptyAddr(), { rue: prefill.rue || '', cp: cpm ? cpm[0] : '', localite: loc }); }
     const chOff = prefill.status === 'inactif' || prefill.status === 'noir'; // client inactif/liste noire → chevaux importés inactifs
-    if (prefill.cheval && (prefill.cheval.nom || prefill.cheval.anamnese)) { (w.chevaux = w.chevaux || []).push({ id: uid(), nom: prefill.cheval.nom || '', dateNaissance: prefill.cheval.dateNaissance || '', race: prefill.cheval.race || '', anamnese: prefill.cheval.anamnese || null, actif: !chOff, addrSource: 'client', addr: emptyAddr() }); }
+    if (prefill.cheval && (prefill.cheval.nom || prefill.cheval.anamnese)) { (w.chevaux = w.chevaux || []).push({ id: uid(), nom: prefill.cheval.nom || '', dateNaissance: prefill.cheval.dateNaissance || '', race: prefill.cheval.race || '', anamnese: prefill.cheval.anamnese || null, dateDemandeSuivi: prefill.cheval.dateDemandeSuivi || '', actif: !chOff, addrSource: 'client', addr: emptyAddr() }); }
     if (prefill.status === 'inactif') w.actif = false;
     else if (prefill.status === 'noir') { w.blacklist = true; w.actif = false; }
   }
@@ -2618,6 +2649,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
         <label>Date de naissance<input type="date" data-naiss value="${h.dateNaissance || ''}"/></label>
         <label>Race<input type="text" data-race value="${esc(h.race || '')}" placeholder="Race (facultatif)"/></label>
         <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
+        ${h.dateDemandeSuivi ? `<label>Date de la demande de suivi (issue du mail)<input type="date" data-dds value="${h.dateDemandeSuivi}"/></label>` : ''}
         <label class="chk2"><input type="checkbox" data-lourd ${h.lourd ? 'checked' : ''}/> Cheval lourd (supplément appliqué automatiquement à chaque tournée)</label>
         ${h.lourd ? `<label>Montant du supplément « lourd » (HT, vide = tarif par défaut)<input type="number" data-lourdht step="0.01" min="0" value="${h.lourdHT != null ? h.lourdHT : ''}" placeholder="défaut : ${fmtNum(S.lourdHT || 0, 2)} € HT"/></label>` : ''}
         ${h.anamnese ? '<button class="btn small" data-anam>📄 Formulaire (anamnèse)</button>' : ''}
@@ -2638,6 +2670,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       row.querySelector('[data-race]').addEventListener('input', (e) => { h.race = e.target.value; saveDraft(); });
       { const ab = row.querySelector('[data-anam]'); if (ab) ab.addEventListener('click', () => modalAnamnese(h)); }
       row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
+      { const dd = row.querySelector('[data-dds]'); if (dd) dd.addEventListener('change', (e) => { h.dateDemandeSuivi = e.target.value || ''; saveDraft(); }); }
       row.querySelector('[data-lourd]').addEventListener('change', (e) => { h.lourd = e.target.checked; if (!e.target.checked) delete h.lourdHT; renderCh(); saveDraft(); });
       { const lh = row.querySelector('[data-lourdht]'); if (lh) lh.addEventListener('input', (e) => { const v = parseFloat(e.target.value); h.lourdHT = (e.target.value === '' || isNaN(v)) ? null : Math.max(0, v); saveDraft(); }); }
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
@@ -2838,22 +2871,28 @@ function showTournees(sub) {
   window.scrollTo(0, 0);
 }
 // Somme des lignes qu'un cheval AURAIT été facturé (manque à gagner d'une annulation), au tarif courant.
-function chevalWouldBeLines(cv) {
+// Lignes « ce que le cheval aurait rapporté » (manque à gagner d'une annulation). Le « lourd » est une propriété de la FICHE
+// cheval (depuis 1.1.149) → lu via clientId ; « difficile » reste porté par le cheval de la tournée (cv). Repli sur cv.lourd (ancien).
+function chevalWouldBeLines(cv, clientId) {
   const lines = []; const r = rate();
   if (cv.parage && S.parage && S.parage.prixHT > 0) lines.push({ libelle: 'Parage et équilibrage', ttc: S.parage.prixHT * (1 + (S.parage.tvaPct || 0) / 100) });
   const baseMat = baseMateriel(); if (cv.parage && baseMat > 0) lines.push({ libelle: 'Matériel', ttc: baseMat * (1 + r) });
   [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([k, l, p]) => { if (cv[k] && p > 0) lines.push({ libelle: l, ttc: p * (1 + r) }); });
-  [['difficile', 'Cheval difficile'], ['lourd', 'Cheval lourd']].forEach(([k, l]) => { if (cv[k]) { const p = (cv[k + 'HT'] != null && cv[k + 'HT'] !== '') ? +cv[k + 'HT'] : (S[k + 'HT'] || 0); if (p > 0) lines.push({ libelle: l, ttc: p * (1 + r) }); } });
+  if (cv.difficile) { const p = (cv.difficileHT != null && cv.difficileHT !== '') ? +cv.difficileHT : (S.difficileHT || 0); if (p > 0) lines.push({ libelle: 'Cheval difficile', ttc: p * (1 + r) }); }
+  const fiche = clientId ? findChevalObj(clientId, cv.nom) : null;
+  const lourdOn = fiche ? !!fiche.lourd : !!cv.lourd; // « lourd » vient de la fiche (auto), repli sur l'ancien flag de tournée
+  const lourdHT = fiche ? fiche.lourdHT : cv.lourdHT;
+  if (lourdOn) { const p = (lourdHT != null && lourdHT !== '') ? +lourdHT : (S.lourdHT || 0); if (p > 0) lines.push({ libelle: 'Cheval lourd', ttc: p * (1 + r) }); }
   if (cv.visite && cv.visiteArtId) { const av = (S.articlesCatalogue || []).find((x) => x.id === cv.visiteArtId); if (av) lines.push({ libelle: av.libelle, ttc: (av.prixHT || 0) * (1 + (av.tvaPct || 0) / 100) }); }
   return lines;
 }
-const chevalWouldBeTTC = (cv) => chevalWouldBeLines(cv).reduce((s, l) => s + l.ttc, 0);
+const chevalWouldBeTTC = (cv, clientId) => chevalWouldBeLines(cv, clientId).reduce((s, l) => s + l.ttc, 0);
 // Toutes les annulations/reports (scan des tournées).
 function allCancellations() {
   const out = [];
   allTours().forEach((t) => (t.arrets || []).forEach((a, ai) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => {
     if (!chevalCancelled(cv)) return;
-    out.push({ tour: t, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', at: cv.cancel.at, date: t.date, replaced: !!cv.cancel.replacedTourId, ttc: chevalWouldBeTTC(cv) });
+    out.push({ tour: t, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', at: cv.cancel.at, date: t.date, replaced: !!cv.cancel.replacedTourId, ttc: chevalWouldBeTTC(cv, cl.clientId) });
   }))));
   return out.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
 }
@@ -4561,7 +4600,7 @@ function renderStatsAnnul() {
     Object.values(byClient).sort((a, b) => b.ttc - a.ttc).forEach((cl) => { html += `<div class="inv-client"><div class="inv-head"><span>${esc(cl.nom)}</span><span class="inv-amt">${eur(cl.ttc)}</span></div>` + cl.items.map((c) => `<div class="fin-cheval"><span>🐴 ${esc(c.cheval)} · ${esc(fmtDateFr(c.date))} · ${c.status === 'reporte' ? 'reporté' : 'annulé'} (${c.reason === 'pro' ? 'pro' : 'client'})</span><span>${eur(c.ttc)}</span></div>`).join('') + '</div>'; });
     const byCheval = {}; list.forEach((c) => { const k = c.clientId + '|' + norm(c.cheval); (byCheval[k] = byCheval[k] || { nom: c.cheval, client: c.clientNom, ttc: 0, items: [] }).ttc += c.ttc; byCheval[k].items.push(c); });
     html += '<h3 class="rsub">Manque à gagner par cheval (détail)</h3>';
-    Object.values(byCheval).sort((a, b) => b.ttc - a.ttc).forEach((cv) => { html += `<div class="inv-client"><div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.ttc)}</span></div>` + cv.items.map((c) => chevalWouldBeLines(c.cv).map((l) => `<div class="fin-detail"><span>${esc(fmtDateFr(c.date))} · ${esc(l.libelle)}</span><span>${eur(l.ttc)}</span></div>`).join('')).join('') + '</div>'; });
+    Object.values(byCheval).sort((a, b) => b.ttc - a.ttc).forEach((cv) => { html += `<div class="inv-client"><div class="inv-head"><span>🐴 ${esc(cv.nom)} <span class="li-sub">— ${esc(cv.client)}</span></span><span class="inv-amt">${eur(cv.ttc)}</span></div>` + cv.items.map((c) => chevalWouldBeLines(c.cv, c.clientId).map((l) => `<div class="fin-detail"><span>${esc(fmtDateFr(c.date))} · ${esc(l.libelle)}</span><span>${eur(l.ttc)}</span></div>`).join('')).join('') + '</div>'; });
     const gMonths = [...new Set(list.map((c) => (c.date || '').slice(0, 7)))].sort();
     const barItems = gMonths.map((m) => ({ label: shortMonthLabel(m), v: list.filter((c) => (c.date || '').slice(0, 7) === m).reduce((s, c) => s + c.ttc, 0) }));
     html += gBlock('Manque à gagner par mois', gBars(barItems, (d) => d.v, (v) => eur(v), '#e0912f', barItems.length <= 6));
@@ -4951,7 +4990,13 @@ const provisionDue = (p) => provisionActive(p) && p.statut === 'a_provisionner' 
 function markProvisionDone(p) { p.statut = 'provisionne'; saveSettings(); }
 function unmarkProvision(p) { p.statut = 'a_provisionner'; saveSettings(); }
 // « Viré » : clôt le cycle d'accumulation (avance clearedThrough au dernier mois figé) et repart à zéro pour le cycle suivant.
-function markProvisionVire(p) { p.clearedThrough = latestEncodedYm(); p.statut = 'a_provisionner'; saveSettings(); }
+function markProvisionVire(p) {
+  const montant = provisionComputed(p); // AVANT d'avancer clearedThrough (le montant dépend de la fenêtre)
+  p.clearedThrough = latestEncodedYm(); p.statut = 'a_provisionner';
+  // Réconciliation auto : le virement de la provision est inscrit au journal (sortie) avec sa communication.
+  if (montant > 0.005) { const e = addJournalEntry({ sens: 'sortie', montant, compteId: p.compteId, sousCompteId: p.sousCompteId, libelle: 'Provision virée — ' + (p.libelle || ''), provisionId: p.id, source: 'provision' }); p.lastJournalId = e.id; }
+  saveSettings();
+}
 const PROV_BASE_LABEL = { tva: 'TVA', vehicule: 'Véhicule', materiel: 'Matériel', social: 'Social', ipp: 'IPP', isoc: 'ISoc', precompte: 'Précompte', manuel: 'Manuel' };
 // Carte Accueil sobre « 💼 Provisions » : provisions dues (1 aperçu + « +N voir la liste »).
 function renderHomeProvisions() {
@@ -5108,6 +5153,184 @@ function renderProvParams(societe) {
   bind('fpIsBas', 'isFrBas', 100); bind('fpIsHaut', 'isFrHaut', 100); bind('fpIsPlaf', 'isFrPlafond'); bind('fpPfu', 'pfuDividendes', 100);
   { const vl = $('fpVL'); if (vl) vl.addEventListener('change', (e) => { fp.versementLiberatoire = e.target.checked; refresh(); }); }
 }
+// ================= F-c : journal analytique / sorties / communications / réconciliation / surveillance / Livre des comptes =================
+const compteLettre = (id) => { const c = (S.comptes || []).find((x) => x.id === id); return c ? (c.lettre || '?') : '?'; };
+const sousCompteNom = (id) => { const s = (S.sousComptes || []).find((x) => x.id === id); return s ? s.nom : '—'; };
+const compteTypeLabel = (t) => ({ principal: 'compte courant', epargne: 'épargne', client: 'compte client' }[t] || (t || ''));
+const JOURNAL_STATUTS = { a_encoder: 'à encoder', en_attente: 'en attente', encode: 'encodé' };
+const JOURNAL_STATUT_ORDER = ['a_encoder', 'en_attente', 'encode'];
+// Communication structurée de virement = 580000 + lettre du compte (A/B/C) + n° d'opération.
+function mkCommunication(compteId, opNum) { return '580000 ' + compteLettre(compteId) + ' ' + String(opNum || 0).padStart(4, '0'); }
+function nextOpNum() { S.opCounter = (S.opCounter || 0) + 1; return S.opCounter; }
+// Solde d'un compte = Σ entrées − Σ sorties (journal).
+function compteSolde(compteId) { let s = 0; (S.journal || []).forEach((j) => { if (j.compteId === compteId) s += (j.sens === 'entree' ? 1 : -1) * (j.montant || 0); }); return s; }
+function addJournalEntry(e) {
+  const sens = e.sens === 'entree' ? 'entree' : 'sortie';
+  const opNum = sens === 'sortie' ? nextOpNum() : 0;
+  const entry = Object.assign({ id: uid(), date: todayStr(), montant: 0, compteId: (comptesActifs()[0] || {}).id || null, sousCompteId: null, libelle: '', statut: 'a_encoder', provisionId: null, source: 'manuel' }, e, { sens, opNum });
+  entry.communication = sens === 'sortie' ? mkCommunication(entry.compteId, opNum) : (e.communication || '');
+  S.journal.push(entry); saveSettings(); return entry;
+}
+// Modale de saisie / édition d'une écriture (entrée ou sortie). prefill = { sens, … } ou une écriture existante (avec id) à éditer.
+function modalJournalEntry(prefill) {
+  const editing = prefill && prefill.id ? prefill : null;
+  const e = editing || Object.assign({ sens: 'sortie', date: todayStr(), montant: 0, compteId: (comptesActifs()[0] || {}).id || null, sousCompteId: null, libelle: '', statut: 'a_encoder', source: 'manuel' }, prefill || {});
+  const render = () => {
+    const cptOpts = (S.comptes || []).map((c) => `<option value="${c.id}"${c.id === e.compteId ? ' selected' : ''}>${esc(c.nom)} (${esc(c.lettre || '—')})</option>`).join('');
+    const scOpts = '<option value="">— sous-compte —</option>' + (S.sousComptes || []).map((s) => `<option value="${s.id}"${s.id === e.sousCompteId ? ' selected' : ''}>${esc(s.famille + ' · ' + s.nom)}</option>`).join('');
+    const comm = e.sens === 'sortie' ? (editing ? (e.communication || mkCommunication(e.compteId, e.opNum)) : ('580000 ' + compteLettre(e.compteId) + ' (n° attribué à la validation)')) : '';
+    openModal(`<div class="modal-head"><b>${editing ? 'Modifier' : 'Nouvelle'} écriture</b><button class="x" id="mX">✕</button></div>
+      <div class="row"><label class="grow">Type<select id="jeSens"><option value="sortie"${e.sens === 'sortie' ? ' selected' : ''}>Sortie (virement sortant)</option><option value="entree"${e.sens === 'entree' ? ' selected' : ''}>Entrée</option></select></label>
+        <label class="grow">Date<input type="date" id="jeDate" value="${e.date || todayStr()}"/></label></div>
+      <div class="row"><label class="grow">Montant (€)<input type="number" id="jeMontant" step="0.01" min="0" value="${e.montant || ''}"/></label>
+        <label class="grow">Statut<select id="jeStatut">${JOURNAL_STATUT_ORDER.map((k) => `<option value="${k}"${e.statut === k ? ' selected' : ''}>${JOURNAL_STATUTS[k]}</option>`).join('')}</select></label></div>
+      <div class="row"><label class="grow">Compte<select id="jeCompte">${cptOpts}</select></label>
+        <label class="grow">Sous-compte<select id="jeSousCompte">${scOpts}</select></label></div>
+      <label>Libellé<input type="text" id="jeLib" value="${esc(e.libelle || '')}" placeholder="Ex : provision TVA T2, achat consommables…"/></label>
+      ${e.sens === 'sortie' ? `<p class="hint">Communication de virement : <b id="jeComm">${esc(comm)}</b>${editing ? ' <button class="btn small" id="jeCopy">📋 Copier</button>' : ''}</p>` : ''}
+      <div class="actions"><button class="btn block primary" id="jeOk">${editing ? 'Enregistrer' : 'Ajouter'}</button></div>`);
+    $('mX').addEventListener('click', closeModal);
+    $('jeSens').addEventListener('change', (ev) => { e.sens = ev.target.value; render(); });
+    $('jeDate').addEventListener('change', (ev) => { e.date = ev.target.value || todayStr(); });
+    $('jeMontant').addEventListener('input', (ev) => { e.montant = Math.max(0, parseNum(ev.target.value) || 0); });
+    $('jeStatut').addEventListener('change', (ev) => { e.statut = ev.target.value; });
+    $('jeCompte').addEventListener('change', (ev) => { e.compteId = ev.target.value; if (editing && e.sens === 'sortie') e.communication = mkCommunication(e.compteId, e.opNum); render(); });
+    $('jeSousCompte').addEventListener('change', (ev) => { e.sousCompteId = ev.target.value || null; });
+    $('jeLib').addEventListener('input', (ev) => { e.libelle = ev.target.value; });
+    { const cp = $('jeCopy'); if (cp) cp.addEventListener('click', () => { try { navigator.clipboard.writeText(e.communication || ''); cp.textContent = '✓ Copié'; } catch { /* */ } }); }
+    $('jeOk').addEventListener('click', () => {
+      if (!(e.montant > 0)) { alert('Saisissez un montant.'); return; }
+      if (editing) { if (e.sens === 'sortie' && !e.communication) e.communication = mkCommunication(e.compteId, e.opNum); saveSettings(); }
+      else addJournalEntry({ sens: e.sens, date: e.date, montant: e.montant, compteId: e.compteId, sousCompteId: e.sousCompteId, libelle: e.libelle, statut: e.statut, source: 'manuel' });
+      closeModal(); renderJournal(); renderHome();
+    });
+  };
+  render();
+}
+// Page Compta → Journal : surveillance des soldes + Livre des comptes + journal chronologique.
+function renderJournal() {
+  const box = $('journalBody'); if (!box) return;
+  const J = (S.journal || []).slice();
+  const comptes = S.comptes || [];
+  let surv = '<section class="card"><h2>🩺 Surveillance des comptes</h2>';
+  if (!comptes.length) surv += '<p class="hint">Aucun compte déclaré (Gestion → Comptes).</p>';
+  else surv += '<div class="list">' + comptes.map((c) => { const s = compteSolde(c.id); const neg = s < -0.005; return `<div class="list-item"><div class="li-main"><b>${esc(c.nom)}</b> <span class="badge">${esc(c.lettre || '—')}</span><span class="li-sub">${esc(compteTypeLabel(c.type))}</span></div><div class="li-act"><b style="color:${neg ? '#c0392b' : 'inherit'}">${eur(s)}</b>${neg ? ' <span class="badge" style="background:#fdecec;color:#8a1f1f">⚠ négatif</span>' : ''}</div></div>`; }).join('') + '</div>';
+  surv += '</section>';
+  let livre = '<section class="card"><h2>📚 Livre des comptes</h2>';
+  if (!J.length) livre += '<p class="hint">Aucune écriture pour l\'instant.</p>';
+  comptes.forEach((c) => {
+    const items = J.filter((j) => j.compteId === c.id);
+    if (!items.length) return;
+    livre += `<h3 class="rsub">${esc(c.nom)} (${esc(c.lettre || '—')}) · solde ${eur(compteSolde(c.id))}</h3>`;
+    const bySc = {};
+    items.forEach((j) => { (bySc[j.sousCompteId || '—'] = bySc[j.sousCompteId || '—'] || []).push(j); });
+    Object.keys(bySc).forEach((scId) => {
+      const arr = bySc[scId];
+      const tot = arr.reduce((s, j) => s + (j.sens === 'entree' ? 1 : -1) * (j.montant || 0), 0);
+      livre += `<div class="inv-line"><span><b>${esc(scId === '—' ? 'Sans sous-compte' : sousCompteNom(scId))}</b></span><span>${eur(tot)}</span></div>`;
+      arr.sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach((j) => { livre += `<div class="fin-detail"><span>${esc(fmtDateFr(j.date))} · ${j.sens === 'entree' ? '➕' : '➖'} ${esc(j.libelle || '')} <span class="badge">${JOURNAL_STATUTS[j.statut] || ''}</span></span><span>${eur((j.sens === 'entree' ? 1 : -1) * (j.montant || 0))}</span></div>`; });
+    });
+  });
+  livre += '</section>';
+  box.innerHTML = surv + livre + '<section class="card"><h2>🧾 Journal</h2><div class="actions two" style="margin-bottom:8px"><button class="btn small" id="jAddSortie">➖ Sortie (virement)</button><button class="btn small" id="jAddEntree">➕ Entrée</button></div><div id="journalList" class="list"></div></section>';
+  $('jAddSortie').addEventListener('click', () => modalJournalEntry({ sens: 'sortie' }));
+  $('jAddEntree').addEventListener('click', () => modalJournalEntry({ sens: 'entree' }));
+  const jl = $('journalList');
+  if (!J.length) { jl.innerHTML = '<p class="empty">Aucune écriture.</p>'; return; }
+  J.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.opNum || 0) - (a.opNum || 0)).forEach((j) => {
+    const el = document.createElement('div'); el.className = 'edit-row';
+    const signed = (j.sens === 'entree' ? 1 : -1) * (j.montant || 0);
+    el.innerHTML = `<div class="er-top"><b class="grow">${esc(fmtDateFr(j.date))} · ${esc(j.libelle || (j.sens === 'entree' ? 'Entrée' : 'Sortie'))}</b><b>${eur(signed)}</b></div>
+      <p class="hint" style="margin:2px 0">${esc(compteNom(j.compteId))} (${esc(compteLettre(j.compteId))}) · ${esc(j.sousCompteId ? sousCompteNom(j.sousCompteId) : 'sans sous-compte')}${j.provisionId ? ' · 🔗 provision' : ''}${j.sens === 'sortie' && j.communication ? ' · comm. <b>' + esc(j.communication) + '</b>' : ''}</p>
+      <div class="li-act li-act-col"><span class="badge">${JOURNAL_STATUTS[j.statut] || j.statut}</span><button class="btn small" data-cycle>${j.statut === 'encode' ? '↩ à encoder' : (j.statut === 'a_encoder' ? '→ en attente' : '✓ encodé')}</button><button class="btn small" data-edit>Éditer</button><button class="btn small danger" data-del>✕</button></div>`;
+    el.querySelector('[data-cycle]').addEventListener('click', () => { const i = JOURNAL_STATUT_ORDER.indexOf(j.statut); j.statut = JOURNAL_STATUT_ORDER[(i + 1) % JOURNAL_STATUT_ORDER.length]; saveSettings(); renderJournal(); });
+    el.querySelector('[data-edit]').addEventListener('click', () => modalJournalEntry(j));
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer cette écriture ?')) return; S.journal = S.journal.filter((x) => x.id !== j.id); saveSettings(); renderJournal(); renderHome(); });
+    jl.appendChild(el);
+  });
+}
+// ===== F-e : factures d'achat / charges récurrentes (réutilise la logique d'échéance des rappels) =====
+function chargeOcc(ch) { if (ch.freq === 'ponctuel') return ch.date ? { date: ch.date, key: ch.date } : null; return rappelCurrentOcc(ch); }
+function chargeDue(ch) { if (!ch || !ch.actif) return false; if (ch.freq === 'ponctuel') return !ch.paye && !!ch.date && ch.date <= todayStr(); const occ = rappelCurrentOcc(ch); return !!occ && (ch.dernierPaye || '') < occ.key; }
+// Marquer une charge « payée » → inscrit une SORTIE au journal (F-c) + avance l'échéance.
+function payCharge(ch) {
+  const occ = chargeOcc(ch);
+  if (ch.montant > 0) addJournalEntry({ sens: 'sortie', date: (occ && occ.date) || todayStr(), montant: ch.montant, compteId: ch.compteId, sousCompteId: ch.sousCompteId, libelle: 'Charge — ' + (ch.libelle || ''), source: 'charge' });
+  if (ch.freq === 'ponctuel') ch.paye = true; else if (occ) ch.dernierPaye = occ.key;
+  saveSettings();
+}
+function renderCharges() {
+  const add = $('btnAddCharge'); if (add) add.onclick = () => { S.chargesAchat.push({ id: uid(), libelle: 'Nouvelle charge', montant: 0, freq: 'annuel', jour: 1, mois: 1, moisAnchor: 1, date: '', compteId: (comptesActifs()[0] || {}).id || null, sousCompteId: null, actif: true, dernierPaye: '', paye: false }); saveSettings(); renderCharges(); };
+  const box = $('chargesList'); if (!box) return; box.innerHTML = '';
+  if ($('chargesEmpty')) $('chargesEmpty').style.display = (S.chargesAchat && S.chargesAchat.length) ? 'none' : 'block';
+  const cptOpts = (sel) => (S.comptes || []).map((c) => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.nom)}</option>`).join('');
+  const scOpts = (sel) => '<option value="">— sous-compte —</option>' + (S.sousComptes || []).map((s) => `<option value="${s.id}"${s.id === sel ? ' selected' : ''}>${esc(s.famille + ' · ' + s.nom)}</option>`).join('');
+  (S.chargesAchat || []).forEach((ch) => {
+    const due = chargeDue(ch); const occ = chargeOcc(ch);
+    const el = document.createElement('div'); el.className = 'edit-row' + (ch.actif ? '' : ' frais-off');
+    el.innerHTML = `<div class="er-top"><label class="chk2" style="margin:0"><input type="checkbox" data-k="actif" ${ch.actif ? 'checked' : ''}/> actif</label>
+        <input class="grow er-title" data-k="libelle" value="${esc(ch.libelle || '')}" placeholder="Comptable, assurance véhicule, RC pro…"/>
+        <button class="a-del" data-del title="Supprimer">✕</button></div>
+      <div class="er-grid">
+        <label>Montant (€)<input data-k="montant" type="number" min="0" step="0.01" value="${ch.montant || ''}"/></label>
+        <label>Fréquence<select data-k="freq"><option value="ponctuel"${ch.freq === 'ponctuel' ? ' selected' : ''}>Ponctuel</option><option value="mensuel"${ch.freq === 'mensuel' ? ' selected' : ''}>Mensuel</option><option value="trimestriel"${ch.freq === 'trimestriel' ? ' selected' : ''}>Trimestriel</option><option value="annuel"${ch.freq === 'annuel' ? ' selected' : ''}>Annuel</option></select></label>
+        ${ch.freq === 'ponctuel' ? `<label>Date<input data-k="date" type="date" value="${ch.date || ''}"/></label>` : `<label>Jour<input data-k="jour" type="number" min="1" max="28" value="${clampDay(ch.jour)}"/></label>`}
+        ${ch.freq === 'annuel' ? `<label>Mois (anniversaire)<input data-k="mois" type="number" min="1" max="12" value="${ch.mois || 1}"/></label>` : ''}
+        ${ch.freq === 'trimestriel' ? `<label>Mois de départ<input data-k="moisAnchor" type="number" min="1" max="12" value="${ch.moisAnchor || 1}"/></label>` : ''}
+        <label>Compte<select data-k="compteId">${cptOpts(ch.compteId)}</select></label>
+        <label>Sous-compte<select data-k="sousCompteId">${scOpts(ch.sousCompteId)}</select></label>
+      </div>
+      <p class="hint" style="margin:2px 0">${occ ? 'Échéance ' + esc(fmtDateFr(occ.date)) : 'Aucune échéance'}${due ? ' · <b style="color:#c0392b">à payer</b>' : (ch.freq === 'ponctuel' && ch.paye ? ' · payé ✔' : '')}</p>
+      ${due ? '<div class="li-act"><button class="btn small primary" data-pay>💸 Payer (→ journal)</button></div>' : ''}`;
+    const wire = (k, ev, fn) => { const n = el.querySelector('[data-k="' + k + '"]'); if (n) n.addEventListener(ev, fn); };
+    wire('actif', 'change', (e) => { ch.actif = e.target.checked; saveSettings(); renderCharges(); });
+    wire('libelle', 'input', (e) => { ch.libelle = e.target.value; saveSettings(); });
+    wire('montant', 'change', (e) => { ch.montant = Math.max(0, parseNum(e.target.value) || 0); saveSettings(); renderCharges(); });
+    wire('freq', 'change', (e) => { ch.freq = e.target.value; saveSettings(); renderCharges(); });
+    wire('date', 'change', (e) => { ch.date = e.target.value || ''; ch.paye = false; saveSettings(); renderCharges(); });
+    wire('jour', 'change', (e) => { ch.jour = clampDay(parseNum(e.target.value)); saveSettings(); renderCharges(); });
+    wire('mois', 'change', (e) => { ch.mois = Math.min(12, Math.max(1, Math.round(parseNum(e.target.value) || 1))); saveSettings(); renderCharges(); });
+    wire('moisAnchor', 'change', (e) => { ch.moisAnchor = Math.min(12, Math.max(1, Math.round(parseNum(e.target.value) || 1))); saveSettings(); renderCharges(); });
+    wire('compteId', 'change', (e) => { ch.compteId = e.target.value || null; saveSettings(); });
+    wire('sousCompteId', 'change', (e) => { ch.sousCompteId = e.target.value || null; saveSettings(); });
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer cette charge ?')) return; S.chargesAchat = S.chargesAchat.filter((x) => x.id !== ch.id); saveSettings(); renderCharges(); });
+    { const pb = el.querySelector('[data-pay]'); if (pb) pb.addEventListener('click', () => { payCharge(ch); renderCharges(); renderHome(); }); }
+    box.appendChild(el);
+  });
+}
+// ===== F-d : répartition analytique (découpage % du CA figé vers les sous-comptes) =====
+const ALLOC_BASES = [
+  { key: 'mainOeuvre', label: 'CA main d\'œuvre', field: 'mainOeuvreHT', hint: 'parage/visite/pathologies/difficile/lourd' },
+  { key: 'materiel', label: 'Matériel refacturé', field: 'materielHT', hint: 'renouvellement/consommables' },
+  { key: 'vehicule', label: 'Déplacement refacturé', field: 'deplacementHT', hint: 'amortissement/entretien véhicule' },
+];
+function renderRepartition() {
+  const box = $('repartitionBody'); if (!box) return;
+  const months = provisionMonths();
+  if (!months.length) { box.innerHTML = '<section class="card"><h2>🧮 Répartition analytique</h2><p class="hint">Aucun mois comptable <b>encodé</b>. La répartition se calcule uniquement sur les mois figés (Compta → Déclaration compta).</p></section>'; return; }
+  const tot = analyticBases('');
+  let html = `<section class="card"><h2>🧮 Répartition analytique</h2><p class="hint">Découpage du CA <b>figé</b> (${months.length} mois encodé(s)) vers les sous-comptes. Base verrouillée (mois encodés seulement) ; ajustez les pourcentages d'allocation par catégorie de revenu.</p></section>`;
+  ALLOC_BASES.forEach((b) => { html += `<section class="card"><h3 class="rsub">${esc(b.label)} — ${eur(tot[b.field])} <span class="li-sub">(${esc(b.hint)})</span></h3><div id="alloc-${b.key}"></div><div class="actions" style="margin-top:6px"><button class="btn small" data-addalloc="${b.key}">＋ Ligne</button></div><p class="hint" id="allocsum-${b.key}"></p></section>`; });
+  box.innerHTML = html;
+  ALLOC_BASES.forEach((b) => renderAllocRows(b.key, tot[b.field]));
+  box.querySelectorAll('[data-addalloc]').forEach((btn) => btn.addEventListener('click', () => { const k = btn.dataset.addalloc; S.analyticAlloc[k].push({ sousCompteId: null, pct: 0 }); saveSettings(); renderRepartition(); }));
+}
+function renderAllocRows(key, montant) {
+  const wrap = $('alloc-' + key); if (!wrap) return; wrap.innerHTML = '';
+  const rows = S.analyticAlloc[key] || [];
+  const scOpts = (sel) => '<option value="">— sous-compte —</option>' + (S.sousComptes || []).map((s) => `<option value="${s.id}"${s.id === sel ? ' selected' : ''}>${esc(s.famille + ' · ' + s.nom)}</option>`).join('');
+  let sum = 0;
+  rows.forEach((a) => {
+    sum += (a.pct || 0);
+    const el = document.createElement('div'); el.className = 'row'; el.style.alignItems = 'flex-end';
+    el.innerHTML = `<label class="grow">Sous-compte<select data-al-sc>${scOpts(a.sousCompteId)}</select></label><label style="max-width:84px">%<input type="number" min="0" max="100" step="1" data-al-pct value="${a.pct || ''}"/></label><span class="li-sub" style="min-width:74px;text-align:right;padding-bottom:8px">${eur((montant * (a.pct || 0)) / 100)}</span><button class="a-del" data-al-del title="Supprimer">✕</button>`;
+    el.querySelector('[data-al-sc]').addEventListener('change', (e) => { a.sousCompteId = e.target.value || null; saveSettings(); });
+    el.querySelector('[data-al-pct]').addEventListener('change', (e) => { a.pct = Math.max(0, Math.min(100, parseNum(e.target.value) || 0)); saveSettings(); renderRepartition(); });
+    el.querySelector('[data-al-del]').addEventListener('click', () => { S.analyticAlloc[key] = rows.filter((x) => x !== a); saveSettings(); renderRepartition(); });
+    wrap.appendChild(el);
+  });
+  const sel = $('allocsum-' + key); if (sel) sel.innerHTML = `Total alloué : <b style="color:${Math.abs(sum - 100) > 0.5 ? '#c0392b' : 'inherit'}">${fmtNum(sum, 0)}%</b>${Math.abs(sum - 100) > 0.5 ? ' — devrait faire 100%' : ' ✔'}`;
+}
 // Génère le PDF via l'impression du navigateur, dans le document courant (compatible PWA installée,
 // contrairement à window.open('_blank') qui est bloqué / ferme l'app sur mobile).
 // ================= PDF (généré dans l'app) + partage natif (email avec pièce jointe) =================
@@ -5251,7 +5474,7 @@ function showCompta(sub) {
   const cb = document.querySelector('#comptaSub .subtab[data-csub="' + currentCsub + '"]'), cl = document.querySelector('#comptaSub .subnav-label');
   if (cb && cl) cl.textContent = cb.textContent;
   if ($('comptaSub')) $('comptaSub').classList.remove('open');
-  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else if (currentCsub === 'nc') renderComptaNC(); else if (currentCsub === 'avenir') renderComptaAvenir(); else if (currentCsub === 'provisions') renderProvisions(); else renderComptaMois();
+  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else if (currentCsub === 'nc') renderComptaNC(); else if (currentCsub === 'avenir') renderComptaAvenir(); else if (currentCsub === 'provisions') renderProvisions(); else if (currentCsub === 'journal') renderJournal(); else if (currentCsub === 'repartition') renderRepartition(); else renderComptaMois();
   window.scrollTo(0, 0);
 }
 // Sous-onglet Compta « Impayés » : tous les impayés clients, séparés « en attente » / « régularisés » (paiement reçu).
@@ -6229,6 +6452,12 @@ function parseDateLoose(s) {
   return '';
 }
 // « Créer le client » depuis un mail : ouvre la fiche client pré-remplie + 1 cheval (anamnèse = formulaire complet).
+// Date du mail (RFC-2822 → 'YYYY-MM-DD' local) = date de la demande de suivi. '' si absente/invalide.
+function mailDateYmd(m) {
+  if (!m || !m.date) return '';
+  const d = new Date(m.date); if (isNaN(d.getTime())) return '';
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
 // status : 'normal' (défaut) · 'inactif' (client + chevaux inactifs) · 'noir' (client en liste noire, chevaux inactifs). Les infos sont toujours importées.
 function createClientFromMail(m, status) {
   const f = mailFieldsOf(m); // re-parse le corps (répare les anciens mails à clés « *label* »)
@@ -6237,7 +6466,7 @@ function createClientFromMail(m, status) {
     societe: mailField(f, "Nom de l'entreprise"), tvaNum: mailField(f, 'Numéro de TVA', 'N° de TVA'),
     email: m.from || '', tel: mailField(f, 'Numéro de téléphone'),
     rue: mailField(f, 'Votre adresse (domicile) N° et rue', 'Adresse de facturation'), cpVille: mailField(f, 'Code postal et localité'),
-    cheval: { nom: mailField(f, 'Nom du cheval'), dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f },
+    cheval: { nom: mailField(f, 'Nom du cheval'), dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f, dateDemandeSuivi: mailDateYmd(m) },
     status: status || 'normal',
   };
   editClient(null, (saved) => { m.status = 'client'; m.clientId = saved && saved.id; m.chevalNom = prefill.cheval.nom; saveSettings(); if (currentGsub === 'contactmail') renderContactMail(); }, null, prefill);
@@ -6264,10 +6493,12 @@ function modalUpdateClientFields(m, c) {
   if (loc) add('Localité', c.addr && c.addr.localite, loc, (v) => { c.addr = toAddr(c.addr); c.addr.localite = v; c.addr.lat = null; c.addr.lon = null; });
   const chNom = mailField(f, 'Nom du cheval');
   const chObj = chNom ? (c.chevaux || []).find((h) => norm(h.nom) === norm(chNom)) : null;
-  if (chNom && !chObj) all.push({ label: 'Ajouter le cheval « ' + chNom + ' »', cur: '', val: chNom, on: true, apply: () => { (c.chevaux = c.chevaux || []).push({ id: uid(), nom: chNom, dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f, addrSource: 'client', addr: emptyAddr() }); } });
+  const dds = mailDateYmd(m);
+  if (chNom && !chObj) all.push({ label: 'Ajouter le cheval « ' + chNom + ' »', cur: '', val: chNom, on: true, apply: () => { (c.chevaux = c.chevaux || []).push({ id: uid(), nom: chNom, dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f, dateDemandeSuivi: dds, addrSource: 'client', addr: emptyAddr() }); } });
   else if (chObj) {
     add('🐴 ' + chNom + ' — Naissance', chObj.dateNaissance, parseDateLoose(mailField(f, 'Date de naissance')), (v) => chObj.dateNaissance = v);
     add('🐴 ' + chNom + ' — Race', chObj.race, mailField(f, 'Race'), (v) => chObj.race = v);
+    add('🐴 ' + chNom + ' — Date de la demande de suivi', chObj.dateDemandeSuivi, dds, (v) => chObj.dateDemandeSuivi = v);
     all.push({ label: '🐴 ' + chNom + ' — ranger le formulaire (anamnèse)', cur: '', val: 'formulaire', on: !chObj.anamnese, apply: () => chObj.anamnese = f });
   }
   if (!all.length) { alert('Rien de nouveau à mettre à jour pour ' + fullName(c) + '.'); return; }
@@ -7298,7 +7529,7 @@ function comptaLocked(tour, clientId) {
 function chevalInvoicedTTC(tour, clientId, cv) {
   const R = tour && tour.result;
   const m = R && R.parClient && R.parClient.find((x) => x.clientId === clientId);
-  if (!m) return chevalWouldBeTTC(cv);
+  if (!m) return chevalWouldBeTTC(cv, clientId);
   const nn = norm(cv.nom); let ttc = 0;
   (m.articles || []).forEach((a) => {
     if (a.impaye) return;
@@ -8146,6 +8377,8 @@ function modalVehicule() {
     <div class="actions"><button class="btn block" id="vConso">🚗 Corriger la consommation</button></div>
     <div class="actions"><button class="btn block" id="vMat">🧰 Frais de matériel</button></div>
     <div class="actions"><button class="btn block" id="vFrais">🧾 Frais véhicule (entretien, achat…)</button></div>
+    <div class="actions two"><button class="btn block" id="vSortie">➖ Sortie / virement (compta)</button><button class="btn block" id="vEntree">➕ Entrée (compta)</button></div>
+    <div class="actions"><button class="btn block" id="vCharge">🧾 Charge / facture d'achat</button></div>
     <div class="actions"><button class="btn block" id="vStatut">🚗 Statut véhicule (relevé compteur)</button></div>
     <div class="actions"><button class="btn block" id="vSync">🔄 Synchroniser (Google Drive)</button></div>
     <p class="status" id="vSyncStatus"></p>
@@ -8159,6 +8392,9 @@ function modalVehicule() {
   $('vPlein').addEventListener('click', modalPlein);
   $('vConso').addEventListener('click', modalConso);
   $('vFrais').addEventListener('click', () => { closeModal(); modalNoteFrais(); });
+  $('vSortie').addEventListener('click', () => { closeModal(); modalJournalEntry({ sens: 'sortie' }); });
+  $('vEntree').addEventListener('click', () => { closeModal(); modalJournalEntry({ sens: 'entree' }); });
+  $('vCharge').addEventListener('click', () => { closeModal(); showTab('gestion'); showGestion('charges'); });
   $('vMat').addEventListener('click', () => { closeModal(); showTab('gestion'); showGestion('materiel'); });
   // Synchro manuelle immédiate (interactive : peut demander la connexion Google si besoin), puis recharge l'app à jour.
   $('vSync').addEventListener('click', () => { const s = $('vSyncStatus'); if (S.syncMode !== 'drive') { s.className = 'status err'; s.textContent = 'Activez « Synchro Drive » dans Réglages → Synchro (le mode fichier est actif).'; return; } if (!S.googleClientId) { s.className = 'status err'; s.textContent = 'Renseignez d\'abord votre ID client Google dans Réglages → Synchro.'; return; } googleSync(true, s, true); });

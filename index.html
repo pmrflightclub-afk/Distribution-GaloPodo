@@ -247,6 +247,8 @@
         <button class="subtab active" data-csub="mois">Mois en cours</button>
         <button class="subtab" data-csub="impayes">Impayés</button>
         <button class="subtab" data-csub="provisions">Provisions</button>
+        <button class="subtab" data-csub="journal">Journal / Comptes</button>
+        <button class="subtab" data-csub="repartition">Répartition</button>
         <button class="subtab" data-csub="nc">Notes de crédit</button>
         <button class="subtab" data-csub="decl">Déclaration compta</button>
       </div>
@@ -304,6 +306,14 @@
       <div id="provisionsBody"></div>
     </div>
 
+    <div id="csub-journal" class="subpanel">
+      <div id="journalBody"></div>
+    </div>
+
+    <div id="csub-repartition" class="subpanel">
+      <div id="repartitionBody"></div>
+    </div>
+
     <div id="csub-nc" class="subpanel">
       <section class="card">
         <h2>Notes de crédit</h2>
@@ -333,6 +343,7 @@
         <button class="subtab" data-gsub="statut">Statut véhicule</button>
         <button class="subtab" data-gsub="rappels">Rappels</button>
         <button class="subtab" data-gsub="comptes">Comptes</button>
+        <button class="subtab" data-gsub="charges">Charges</button>
         <button class="subtab" data-gsub="planche">Planche contact</button>
         <button class="subtab" data-gsub="contactmail">Contact mail</button>
         <button class="subtab" data-gsub="sms">SMS</button>
@@ -517,6 +528,15 @@
         <div id="sousComptesList" class="edit-list"></div>
         <p class="empty" id="sousComptesEmpty">Aucun sous-compte.</p>
         <div class="actions" style="margin-top:12px"><button class="btn small danger block" id="btnResetSousComptes">♻ Réinitialiser la liste de base</button></div>
+      </section>
+    </div>
+
+    <div id="gsub-charges" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Charges / factures d'achat</h2><button class="btn small" id="btnAddCharge">+ Ajouter</button></div>
+        <p class="hint">Charges récurrentes (comptable, assurance véhicule, RC pro, frais bancaires, télécom…) ou ponctuelles, avec fréquence + date anniversaire. Quand une charge est due, « 💸 Payer » l'inscrit comme <b>sortie</b> au Journal (Compta → Journal / Comptes), rattachée à son compte et sous-compte.</p>
+        <div id="chargesList" class="edit-list"></div>
+        <p class="empty" id="chargesEmpty">Aucune charge.</p>
       </section>
     </div>
 
