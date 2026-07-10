@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.145';
+const APP_VERSION = '1.1.146';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.146', date: '2026-07-10',
+    ajouts: [
+      'Planche de contact : sous chaque photo, deux listes déroulantes « membre » et « angle » pour la placer sans avoir à la faire glisser (pratique sur téléphone). Le glisser-déposer reste possible.',
+      'Planche de contact : la page « Cheval » n\'est plus incluse par défaut. Une case « ➕ Ajouter la page Cheval » permet de l\'ajouter à la création si vous en avez besoin.',
+    ],
+  },
   {
     version: '1.1.145', date: '2026-07-10',
     ajouts: [
@@ -6094,6 +6101,8 @@ function modalPlancheCreate(type, prefill) {
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
   plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
+  // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
+  if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
   const chNames = [], clNames = [];
   clients.forEach((c) => { const n = fullName(c); if (n) clNames.push(n); (c.chevaux || []).forEach((h) => { if (h.nom) chNames.push(h.nom); }); });
   const uniq = (a) => Array.from(new Set(a));
@@ -6108,6 +6117,7 @@ function modalPlancheCreate(type, prefill) {
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>
         ${type === 'contact' ? `<label>Type de planche (stade)<select id="plCstade"><option value="">(aucun)</option>${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
+        ${type === 'contact' && plCreate.hasChevalPage ? `<label class="chk2"><input type="checkbox" id="plCchevalPage" ${plCreate.chevalPageOn ? 'checked' : ''}/> ➕ Ajouter la page « Cheval »</label>` : ''}
         <label>Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
       </section>
       <section class="card">
@@ -6137,6 +6147,7 @@ function modalPlancheCreate(type, prefill) {
   $('plCdate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } }); // ouvre l'agenda au clic (comme la date de tournée)
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; });
+  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); plRenderPot(); plRenderGrid(); });
   $('plCimport').onclick = () => $('plCfiles').click();
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
@@ -6176,10 +6187,18 @@ function plRenderPot() {
     const t = document.createElement('div');
     t.className = 'pl-thumb' + (plCreate.sel === ph.id ? ' sel' : '') + (placed.has(ph.id) ? ' placed' : '');
     t.setAttribute('draggable', 'true');
+    let assign = '';
+    if (plCreate.type === 'contact') { // placement par listes (membre + angle) — pratique sur mobile, sans glisser
+      const rowOpts = []; (plCreate.pages || []).forEach((pg, pi) => (pg.membres || []).forEach((mb, ri) => rowOpts.push({ v: pi + ':' + ri, label: (plCreate.pages.length > 1 ? 'P' + (pi + 1) + ' · ' : '') + mb })));
+      const pk = Object.keys(plCreate.cells).find((k) => plCreate.cells[k] === ph.id) || '';
+      let selMb = '', selAng = ''; if (pk) { const pp = pk.split('_'); selMb = pp[0] + ':' + pp[1]; selAng = pp[2]; }
+      assign = `<div class="pl-th-assign"><select class="pl-th-mb"><option value="">— membre —</option>${rowOpts.map((o) => `<option value="${o.v}"${o.v === selMb ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select><select class="pl-th-ang"><option value="">— angle —</option>${(plCreate.angles || []).map((a, ci) => `<option value="${ci}"${String(ci) === selAng ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></div>`;
+    }
     t.innerHTML = `${ph.url ? `<img src="${ph.url}" alt=""/>` : '<div class="pl-th-load">…</div>'}<button class="pl-th-x" title="Retirer">✕</button>`
-      + `<div class="pl-th-meta"><input type="date" value="${esc(ph.date)}" class="pl-th-date" title="Date de la photo (EXIF par défaut)"/><button type="button" class="pl-th-setdate" title="Mettre la date de la planche">= planche</button></div>`;
+      + `<div class="pl-th-meta"><input type="date" value="${esc(ph.date)}" class="pl-th-date" title="Date de la photo (EXIF par défaut)"/><button type="button" class="pl-th-setdate" title="Mettre la date de la planche">= planche</button></div>${assign}`;
     t.addEventListener('dragstart', () => { plCreate.sel = ph.id; });
-    t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
+    t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta') || ev.target.closest('.pl-th-assign')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
+    { const mb = t.querySelector('.pl-th-mb'), ang = t.querySelector('.pl-th-ang'); if (mb && ang) { const applyAssign = () => { Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); if (mb.value && ang.value !== '') { const pr = mb.value.split(':'); plCreate.cells[pr[0] + '_' + pr[1] + '_' + ang.value] = ph.id; } plRenderPot(); plRenderGrid(); }; mb.addEventListener('change', applyAssign); ang.addEventListener('change', applyAssign); } }
     t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
     t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; plRenderPot(); });
     t.querySelector('.pl-th-date').addEventListener('click', (ev) => { if (ev.target.showPicker) { try { ev.target.showPicker(); } catch { } } }); // agenda au clic
