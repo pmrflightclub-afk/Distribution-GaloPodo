@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.6';
+const APP_VERSION = '1.2.7';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.7', date: '2026-07-10',
+    ajouts: [
+      'Éditeur de tournée — arrêt à plusieurs clients : chaque client a désormais son bloc complet et distinct (actes → ses actions → ses articles → sa facture), au lieu de tout mélanger. Actions individuelles par client : 🕘 heure du client (liée à son agenda), 💶 Paiement individuel, 📅 RDV, ＋ Prêt, 📷 Planche. Le déplacement (Waze / Route / Étape) et l\'heure d\'arrêt restent au niveau de l\'arrêt.',
+    ],
+    corrections: [
+      'Menu « ＋ Actes » : les cases à cocher sont alignées proprement à gauche, en colonne.',
+    ],
+  },
   {
     version: '1.2.6', date: '2026-07-10',
     ajouts: [
@@ -1832,7 +1841,8 @@ async function agendaAutoSync(allowAcquire) {
 let _calTimer = null;
 function scheduleCalPush(t) { if (!S.calPush || !S.googleClientId || !t) return; clearTimeout(_calTimer); const id = t.id; _calTimer = setTimeout(() => { const tt = allTours().find((x) => x.id === id); if (tt) pushTourToCalendar(tt, { interactive: false }); }, 1500); } // débattu : évite de spammer l'API à chaque frappe
 // Heure de RDV d'un client sur une tournée = la plus tôt de ses arrêts.
-function clientRdvHeure(t, clientId) { let best = ''; (t.arrets || []).forEach((a) => { if ((a.clients || []).some((cl) => cl.clientId === clientId)) { const h = arretHeure(a); if (h && (!best || h < best)) best = h; } }); return best; }
+// Heure de RDV d'un client (pour l'agenda) : heure PROPRE au client dans l'arrêt (cl.heure) si définie, sinon heure de l'arrêt.
+function clientRdvHeure(t, clientId) { let best = ''; (t.arrets || []).forEach((a) => { (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; const h = cl.heure || arretHeure(a); if (h && (!best || h < best)) best = h; }); }); return best; }
 // Lieu d'un client sur une tournée : 1er arrêt où il figure.
 function clientTourAddr(t, clientId) { for (const a of (t.arrets || [])) { if ((a.clients || []).some((cl) => cl.clientId === clientId)) return addrStr(a.addr); } return ''; }
 // Clients « facturables » d'une tournée (≥1 cheval fait), dédupliqués.
@@ -3436,22 +3446,15 @@ function renderEditorArrets(locked) {
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
     const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
     // Heure de RDV de l'arrêt (1 par arrêt), Waze, Route (grisé ✓ si temps réel encodé), RDV (grisé ✓ si suivant programmé), Paiement.
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ' <button class="btn small" data-etape title="Itinéraire de l\'arrêt précédent vers cet arrêt">🧭 Étape</button>' : ''} <button class="btn small${payDone ? ' done' : ''}" data-pay>💶 Paiement${payDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small" data-add-pret>＋ Prêt</button></span>`}`;
+    // Barre d'arrêt : heure d'arrêt + déplacement (Waze / Route / Étape) — communs à l'adresse. Paiement / RDV / Prêt / Planche sont PAR CLIENT (plus bas).
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de l'arrêt (générale)">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ' <button class="btn small" data-etape title="Itinéraire de l\'arrêt précédent vers cet arrêt">🧭 Étape</button>' : ''}</span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
       { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const prev = currentTour.arrets[i - 1]; if (!prev || !addrStr(prev.addr).trim()) { alert('Pas d\'arrêt précédent défini.'); return; } openMapsRoute(addrQuery(prev.addr), addrQuery(a.addr)); }); } // étape = arrêt précédent → arrêt courant
-      nav.querySelector('[data-pay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets())); // classer le paiement pour la Compta
-      const rdvB = nav.querySelector('[data-rdv]'); if (rdvB) rdvB.addEventListener('click', () => { const cid = (a.clients && a.clients[0]) ? a.clients[0].clientId : null; if (cid) modalRDV(currentTour, a, cid, () => renderEditorArrets()); });
-      const prB = nav.querySelector('[data-add-pret]'); if (prB) prB.addEventListener('click', () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, currentTour); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, currentTour) }))); });
       const ah = nav.querySelector('[data-aheure]'); if (ah) ah.addEventListener('change', (e) => { a.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = ah.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!a.heure); if (i === 0 && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } });
     }
     el.appendChild(nav);
-    // Bouton planche / compte rendu photo — disponible même sur une tournée clôturée (récupère cheval/client/date).
-    const pb = document.createElement('div'); pb.className = 'a-planche';
-    pb.innerHTML = '<button class="btn small" data-planche>📷 Planche / compte rendu</button>';
-    pb.querySelector('[data-planche]').addEventListener('click', () => modalArretPlanche(currentTour, a));
-    el.appendChild(pb);
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
@@ -3470,9 +3473,12 @@ function renderEditorArrets(locked) {
       const rh = el.querySelector('[data-reduc-h]');
       if (rh) rh.addEventListener('input', (e) => { currentTour.reductions[single.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
     }
-    if (!locked) {
-      if (!currentTour.reductions) currentTour.reductions = {};
-      a.clients.forEach((cl) => {
+    const R = currentTour.result;
+    if (!currentTour.reductions) currentTour.reductions = {};
+    // UN BLOC COMPLET PAR CLIENT : actes → actions (paiement/RDV/prêt/planche + heure client) → articles → facture. Les clients ne sont plus mélangés.
+    a.clients.forEach((cl) => {
+      const m = (R && R.parClient) ? R.parClient.find((x) => x.clientId === cl.clientId) : null;
+      if (!locked) {
         const cObj = clients.find((x) => x.id === cl.clientId);
         const arretAddrN = norm(addrStr(a.addr));
         // Présence : TOUS les chevaux ACTIFS du client à l'adresse de cet arrêt (repli sur les chevaux déjà enregistrés).
@@ -3561,73 +3567,80 @@ function renderEditorArrets(locked) {
         }));
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
         el.appendChild(wrap);
-      });
-    }
-    // ----- Articles de cet arrêt (couplés au client de l'arrêt) -----
-    const artWrap = document.createElement('div'); artWrap.className = 'a-articles';
-    const arts = articlesForArret(a);
-    artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<span><button class="btn small" data-add-art>+ Article</button></span>'}</div>`;
-    const alist = document.createElement('div'); alist.className = 'list';
-    // Case « Remise » (à cocher) = la réduction client s'applique à cette ligne. Cochée par défaut.
-    const remiseChkHtml = (off, dis) => locked ? '' : `<label class="chk2 art-remise" title="${dis ? 'Remise produit désactivée (catalogue) — ligne non remisable manuellement' : 'La réduction client s\'applique à cette ligne'}"><input type="checkbox" data-remise ${off ? '' : 'checked'}${dis ? ' disabled' : ''}/> Remise</label>`;
-    // Case « Offrir » = cette prestation est offerte (montant mis à 0).
-    const offrirChkHtml = (on) => locked ? '' : `<label class="chk2 art-offert" title="Offrir cette prestation (montant mis à 0)"><input type="checkbox" data-offert ${on ? 'checked' : ''}/> Offrir</label>`;
-    // Lignes d'acte PAR CHEVAL (dans l'ordre des cases : Parage · Visite · Fourbure · NPAS · Infection), avec Remise (si applicable) + Offrir (par cheval).
-    if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {};
-    const acteRate = (S.tvaRate || 0) / 100;
-    a.clients.forEach((cl) => {
+      } // fin des actes (édition uniquement si tournée non clôturée)
+
+      // ----- Actions du client : heure client (agenda) + Paiement / RDV / Prêt / Planche (individuels) -----
+      const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId);
+      const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
+      actBar.innerHTML = `<div class="ac-name">👤 <b>${esc(clientName(cl.clientId))}</b>${m ? ' · ' + eur(m.totalTTC) + ' TTC' : ''}</div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button> <button class="btn small" data-crdv>📅 RDV</button> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div>`}`;
+      el.appendChild(actBar);
+      if (!locked) {
+        { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); }); }
+        actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), null, cl.clientId));
+        actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
+        actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
+        actBar.querySelector('[data-cplanche]').addEventListener('click', () => modalArretPlanche(currentTour, a, cl.clientId));
+      }
+
+      // ----- Articles de CE client (actes auto par cheval + articles manuels) -----
+      const remiseChkHtml = (off, dis) => locked ? '' : `<label class="chk2 art-remise" title="${dis ? 'Remise produit désactivée (catalogue)' : 'La réduction client s\'applique à cette ligne'}"><input type="checkbox" data-remise ${off ? '' : 'checked'}${dis ? ' disabled' : ''}/> Remise</label>`;
+      const offrirChkHtml = (on) => locked ? '' : `<label class="chk2 art-offert" title="Offrir cette prestation (montant mis à 0)"><input type="checkbox" data-offert ${on ? 'checked' : ''}/> Offrir</label>`;
+      if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {};
+      const acteRate = (S.tvaRate || 0) / 100;
+      const artWrap = document.createElement('div'); artWrap.className = 'a-articles';
+      artWrap.innerHTML = `<div class="a-art-head"><span>🧾 Articles</span>${locked ? '' : '<span><button class="btn small" data-add-art>+ Article</button></span>'}</div>`;
+      const alist = document.createElement('div'); alist.className = 'list';
       (cl.chevaux || []).filter(chevalPresent).forEach((c) => {
         const items = [];
         if (c.parage && S.parage && S.parage.prixHT > 0) items.push({ key: 'parage', lbl: 'Parage et équilibrage', unit: S.parage.prixHT, tva: (S.parage.tvaPct || 0) / 100, remise: true });
         if (c.visite && c.visiteArtId) { const av = (S.articlesCatalogue || []).find((x) => x.id === c.visiteArtId); if (av) items.push({ key: 'visite', lbl: av.libelle, unit: av.prixHT || 0, tva: (av.tvaPct || 0) / 100, remise: false }); }
         [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([k, l, p]) => { if (c[k] && p > 0) items.push({ key: k, lbl: l, unit: p, tva: acteRate, remise: false }); });
         items.forEach((it) => {
-          const off = !!c[it.key + 'Offert'];
-          const ttcv = it.unit * (1 + it.tva);
+          const off = !!c[it.key + 'Offert'], ttcv = it.unit * (1 + it.tva);
           const row = document.createElement('div'); row.className = 'list-item' + (off ? ' art-off' : '');
           const remiseHtml = it.remise ? remiseChkHtml(!!currentTour.parageRemiseOff[cl.clientId]) : '';
-          row.innerHTML = `<div class="li-main"><b>${esc(it.lbl)}</b><span class="li-sub">${esc(clientName(cl.clientId))} · 🐴 ${esc(c.nom)} · ${off ? '<b>offert</b>' : eur(ttcv) + ' TTC'} · <i>auto</i></span></div><div class="li-act">${remiseHtml}${offrirChkHtml(off)}</div>`;
+          row.innerHTML = `<div class="li-main"><b>${esc(it.lbl)}</b><span class="li-sub">🐴 ${esc(c.nom)} · ${off ? '<b>offert</b>' : eur(ttcv) + ' TTC'} · <i>auto</i></span></div><div class="li-act">${remiseHtml}${offrirChkHtml(off)}</div>`;
           if (it.remise) { const rc = row.querySelector('[data-remise]'); if (rc) rc.addEventListener('change', (e) => { if (!currentTour.parageRemiseOff) currentTour.parageRemiseOff = {}; if (e.target.checked) delete currentTour.parageRemiseOff[cl.clientId]; else currentTour.parageRemiseOff[cl.clientId] = true; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); }
           const oc = row.querySelector('[data-offert]'); if (oc) oc.addEventListener('change', (e) => { c[it.key + 'Offert'] = e.target.checked; saveTournees(); recomputeMoney(); renderEditorArrets(locked); });
           alist.appendChild(row);
         });
       });
-    });
-    arts.forEach((art) => {
-      const rr = (art.tvaPct || 0) / 100, qte = Math.max(1, (art.chevalNoms || []).length || 1), ttcv = (art.prixHT || 0) * qte * (1 + rr);
-      const row = document.createElement('div'); row.className = 'list-item';
-      const chn = (art.chevalNoms || []).join(', ');
-      const remiseChk = art.impaye ? '' : remiseChkHtml(!!art.remiseOff, art.remiseProduit === false); // impayé jamais remisé ; verrouillé si « remise produit » off au catalogue
-      const offrirChk = art.impaye ? '' : offrirChkHtml(!!art.offert);
-      const artOff = !art.impaye && !!art.offert;
-      row.className = 'list-item' + (artOff ? ' art-off' : '');
-      row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">${esc(clientName(art.clientId))} · ×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${artOff ? '<b>offert</b>' : eur(ttcv) + ' TTC'}</span></div>${locked ? '' : `<div class="li-act">${remiseChk}${offrirChk}<button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>`}`;
-      if (!locked) {
-        const oc = row.querySelector('[data-offert]'); if (oc) oc.addEventListener('change', (e) => { art.offert = e.target.checked; saveTournees(); recomputeMoney(); renderEditorArrets(locked); });
-        const rc = row.querySelector('[data-remise]'); if (rc) rc.addEventListener('change', (e) => { art.remiseOff = !e.target.checked; saveTournees(); recomputeMoney(); });
-        row.querySelector('[data-e]').addEventListener('click', () => modalTourArticle(art, { arret: a }));
-        row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; if (art.impaye && art.impayeId) uncollectImpaye(art.impayeId); currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
+      articlesForArret(a, cl.clientId).forEach((art) => {
+        const rr = (art.tvaPct || 0) / 100, qte = Math.max(1, (art.chevalNoms || []).length || 1), ttcv = (art.prixHT || 0) * qte * (1 + rr);
+        const chn = (art.chevalNoms || []).join(', ');
+        const remiseChk = art.impaye ? '' : remiseChkHtml(!!art.remiseOff, art.remiseProduit === false);
+        const offrirChk = art.impaye ? '' : offrirChkHtml(!!art.offert);
+        const artOff = !art.impaye && !!art.offert;
+        const row = document.createElement('div'); row.className = 'list-item' + (artOff ? ' art-off' : '');
+        row.innerHTML = `<div class="li-main"><b>${esc(art.libelle)}</b><span class="li-sub">×${qte}${chn ? ' · 🐴 ' + esc(chn) : ''} · ${artOff ? '<b>offert</b>' : eur(ttcv) + ' TTC'}</span></div>${locked ? '' : `<div class="li-act">${remiseChk}${offrirChk}<button class="btn small" data-e>Éditer</button> <button class="btn small danger" data-d>✕</button></div>`}`;
+        if (!locked) {
+          const oc = row.querySelector('[data-offert]'); if (oc) oc.addEventListener('change', (e) => { art.offert = e.target.checked; saveTournees(); recomputeMoney(); renderEditorArrets(locked); });
+          const rc = row.querySelector('[data-remise]'); if (rc) rc.addEventListener('change', (e) => { art.remiseOff = !e.target.checked; saveTournees(); recomputeMoney(); });
+          row.querySelector('[data-e]').addEventListener('click', () => modalTourArticle(art, { arret: a }));
+          row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; if (art.impaye && art.impayeId) uncollectImpaye(art.impayeId); currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
+        }
+        alist.appendChild(row);
+      });
+      if (!alist.children.length) alist.innerHTML = '<p class="hint">Aucun article.</p>';
+      artWrap.appendChild(alist);
+      if (!locked) { const ab = artWrap.querySelector('[data-add-art]'); if (ab) ab.addEventListener('click', () => modalTourArticle(null, { arret: a, clientId: cl.clientId })); }
+      el.appendChild(artWrap);
+
+      // ----- Prêts en cours de ce client (hors facture) -----
+      const cObjP = clients.find((x) => x.id === cl.clientId), prets = (cObjP && cObjP.prets) || [];
+      if (prets.length) {
+        const pretBox = document.createElement('div'); pretBox.className = 'a-prets';
+        pretBox.innerHTML = '<div class="a-art-head"><span>🎁 Prêts en cours</span></div>' + prets.map((pr) => `<div class="list-item" data-pretid="${pr.id}"><div class="li-main"><b>🎁 ${esc(pr.text)}</b><span class="li-sub">prêté le ${esc(fmtDateFr(pr.date))}</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-pret-keep>Maintenir</button> <button class="btn small danger" data-pret-back>Récupéré</button></div>'}</div>`).join('');
+        el.appendChild(pretBox);
+        if (!locked) {
+          pretBox.querySelectorAll('[data-pret-back]').forEach((b) => b.addEventListener('click', () => { const row = b.closest('[data-pretid]'); if (cObjP) { cObjP.prets = (cObjP.prets || []).filter((p) => p.id !== row.dataset.pretid); saveClients(); } renderEditorArrets(locked); }));
+          pretBox.querySelectorAll('[data-pret-keep]').forEach((b) => b.addEventListener('click', () => { b.textContent = 'Maintenu ✓'; setTimeout(() => { b.textContent = 'Maintenir'; }, 1200); }));
+        }
       }
-      alist.appendChild(row);
-    });
-    if (!alist.children.length) alist.innerHTML = '<p class="hint">Aucun article pour cet arrêt.</p>';
-    artWrap.appendChild(alist);
-    if (!locked) { const ab = artWrap.querySelector('[data-add-art]'); if (ab) ab.addEventListener('click', () => modalTourArticle(null, { arret: a, clientId: a.clients.length === 1 ? a.clients[0].clientId : undefined })); }
-    el.appendChild(artWrap);
-    // ----- Prêts en cours du/des client(s) (mémoire par client, hors facture) : affichés SOUS les articles -----
-    let pretHtml = '';
-    a.clients.forEach((cl) => { const c = clients.find((x) => x.id === cl.clientId); (c && c.prets || []).forEach((pr) => { pretHtml += `<div class="list-item" data-pretcid="${cl.clientId}" data-pretid="${pr.id}"><div class="li-main"><b>🎁 ${esc(pr.text)}</b><span class="li-sub">${esc(clientName(cl.clientId))} · prêté le ${esc(fmtDateFr(pr.date))}</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-pret-keep>Maintenir</button> <button class="btn small danger" data-pret-back>Récupéré</button></div>'}</div>`; }); });
-    if (pretHtml) {
-      const pretBox = document.createElement('div'); pretBox.className = 'a-prets';
-      pretBox.innerHTML = '<div class="a-art-head"><span>🎁 Prêts en cours</span></div>' + pretHtml;
-      el.appendChild(pretBox);
-      if (!locked) {
-        pretBox.querySelectorAll('[data-pret-back]').forEach((b) => b.addEventListener('click', () => { const row = b.closest('[data-pretcid]'); const c = clients.find((x) => x.id === row.dataset.pretcid); if (c) { c.prets = (c.prets || []).filter((p) => p.id !== row.dataset.pretid); saveClients(); } renderEditorArrets(locked); })); // récupéré → mémoire effacée
-        pretBox.querySelectorAll('[data-pret-keep]').forEach((b) => b.addEventListener('click', () => { b.textContent = 'Maintenu ✓'; setTimeout(() => { b.textContent = 'Maintenir'; }, 1200); })); // maintenu → reste lié au client (aucune donnée à changer)
-      }
-    }
-    // Répartition facture par client, fusionnée sous l'arrêt (remplie par renderArretInvoices).
-    const invBox = document.createElement('div'); invBox.className = 'a-invoices'; invBox.dataset.aidx = i; el.appendChild(invBox);
+
+      // ----- Facture (répartition) de CE client — remplie par renderArretInvoices -----
+      const invBox = document.createElement('div'); invBox.className = 'a-invoices'; invBox.dataset.aidx = i; invBox.dataset.cid = cl.clientId; el.appendChild(invBox);
+    }); // fin a.clients.forEach — un bloc complet par client
     box.appendChild(el);
   });
   if (!locked) enableDrag(box);
@@ -3974,22 +3987,14 @@ async function calcTour(silent) {
 
 // Répartition facture FUSIONNÉE dans l'éditeur : le bloc de chaque client s'affiche juste sous son arrêt.
 // Un client présent à plusieurs arrêts (adresses différentes) : sa facture (agrégée) n'apparaît qu'une fois, sous son 1ᵉʳ arrêt.
+// Remplit chaque bloc facture PAR CLIENT (une boîte .a-invoices par client, identifiée par data-cid).
 function renderArretInvoices() {
   if (!currentTour) return;
-  const R = currentTour.result;
-  const pays = currentTour.payments || {};
-  const shown = new Set();
+  const R = currentTour.result; const pays = currentTour.payments || {};
   document.querySelectorAll('#edArrets .a-invoices').forEach((box) => {
-    box.innerHTML = '';
-    const i = +box.dataset.aidx; const a = currentTour.arrets[i]; if (!a) return;
-    if (!R || !R.parClient) return;
-    (a.clients || []).forEach((cl) => {
-      if (shown.has(cl.clientId)) return;
-      const m = R.parClient.find((x) => x.clientId === cl.clientId); if (!m) return;
-      shown.add(cl.clientId);
-      const div = document.createElement('div'); div.className = 'inv-client'; div.innerHTML = clientInvoiceHtml(m, pays[m.clientId]);
-      box.appendChild(div);
-    });
+    const cid = box.dataset.cid; if (!cid) { box.innerHTML = ''; return; }
+    const m = (R && R.parClient) ? R.parClient.find((x) => x.clientId === cid) : null;
+    box.innerHTML = m ? `<div class="inv-client">${clientInvoiceHtml(m, pays[cid])}</div>` : '';
   });
 }
 // Rendu : tuiles (haut) + factures fusionnées sous chaque arrêt + total général (bloc bas).
@@ -6348,8 +6353,9 @@ function arretClientChevaux(arret, clientId) {
   return cl ? (cl.chevaux || []).map((c) => ({ id: c.id, nom: c.nom })) : [];
 }
 // Articles rattachés à un arrêt (par le client + au moins un cheval présent à l'arrêt).
-function articlesForArret(arret) {
+function articlesForArret(arret, clientId) {
   return (currentTour.articles || []).filter((art) => {
+    if (clientId && art.clientId !== clientId) return false; // filtrage par client (blocs par client dans l'éditeur)
     const cl = (arret.clients || []).find((x) => x.clientId === art.clientId);
     if (!cl) return false;
     if (art.impaye) { const first = (currentTour.arrets || []).find((a2) => (a2.clients || []).some((x) => x.clientId === art.clientId)); return first === arret; } // impayé : sous le 1ᵉʳ arrêt du client
@@ -7528,9 +7534,9 @@ const plancheTodoKey = (clientId, chevalNom, date) => clientId + '|' + norm(chev
 const hasPlancheTodo = (clientId, chevalNom, date) => (S.plancheTodo || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) === plancheTodoKey(clientId, chevalNom, date));
 function removePlancheTodo(clientId, chevalNom, date) { const k = plancheTodoKey(clientId, chevalNom, date); S.plancheTodo = (S.plancheTodo || []).filter((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) !== k); saveSettings(); }
 // Depuis un arrêt (tournée ouverte OU clôturée) : créer une planche préremplie pour un cheval, ou l'ajouter au « Compte rendu photo ».
-function modalArretPlanche(t, a) {
+function modalArretPlanche(t, a, onlyClientId) {
   const rows = [];
-  (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalCancelled(cv)) return; rows.push({ cl, cv }); }));
+  (a.clients || []).forEach((cl) => { if (onlyClientId && cl.clientId !== onlyClientId) return; (cl.chevaux || []).forEach((cv) => { if (chevalCancelled(cv)) return; rows.push({ cl, cv }); }); });
   if (!rows.length) { alert('Aucun cheval sur cet arrêt.'); return; }
   openModal(`<div class="modal-head"><b>📷 Planche / compte rendu photo</b><button class="x" id="mX">✕</button></div>
     <p class="hint">RDV du ${esc(fmtDateFr(t.date))}. Créez une planche de contact préremplie (nom du cheval, client et date repris automatiquement), ou ajoutez le cheval au « Compte rendu photo » de l'Accueil pour le faire plus tard.</p>
@@ -8047,8 +8053,8 @@ function modalAdjustArrondi(t, list, msg) {
 }
 // Paiement d'un arrêt (par client) : liquide / virement + facture ? + (si liquide) montant réel payé (arrondi caisse).
 // onCommit (optionnel) : appelé UNIQUEMENT quand le paiement est enregistré et valide (sert à clôturer l'arrêt).
-function modalPayment(t, arret, after, onCommit) {
-  const clientsAt = (arret.clients || []).map((cl) => cl.clientId);
+function modalPayment(t, arret, after, onCommit, onlyClientId) {
+  const clientsAt = onlyClientId ? [onlyClientId] : (arret.clients || []).map((cl) => cl.clientId);
   if (!clientsAt.length) { if (after) after(); return; }
   if (!t.payments) t.payments = {};
   const paySnapshot = JSON.parse(JSON.stringify(t.payments)); // pour restaurer si l'utilisateur annule (les bascules de méthode modifient les totaux en direct)

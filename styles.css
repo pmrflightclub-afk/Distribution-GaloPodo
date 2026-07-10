@@ -298,14 +298,21 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .ch-top-act { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .ch-menu > summary { list-style: none; cursor: pointer; display: inline-block; }
 .ch-menu > summary::-webkit-details-marker { display: none; }
-.ch-opts { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
-.ch-opt { display: flex; align-items: center; gap: 8px; font-size: .95rem; }
+.ch-opts { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 6px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
+/* Cases à cocher des actes : case de taille fixe, alignée en haut-gauche → colonne propre, libellés alignés verticalement même s'ils reviennent à la ligne. */
+.ch-opt { display: flex; align-items: flex-start; gap: 8px; font-size: .95rem; text-align: left; width: 100%; }
+.ch-opt input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; margin: 1px 0 0; }
 .ch-opt-off { opacity: .45; }
 .ch-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .ch-chip { font-size: .72rem; background: var(--accent); color: var(--accent-ink); padding: 1px 8px; border-radius: 999px; }
-.a-invoices { margin-top: 10px; }
+.a-invoices { margin-top: 6px; }
 .a-invoices .inv-client { border-top: 2px solid var(--accent); }
 .a-invoices:empty { display: none; }
+/* En-tête d'un bloc CLIENT dans un arrêt (multi-clients) : nom + actions individuelles (heure/paiement/RDV/prêt/planche). */
+.a-client-hd { margin-top: 12px; border-top: 2px solid var(--accent); padding-top: 8px; }
+.ac-name { font-size: .95rem; font-weight: 700; color: var(--strong); margin-bottom: 6px; }
+.ac-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ac-acts > .btn, .ac-acts > .a-heure { flex: 0 1 auto; min-width: 0; }
 .reduc-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: .85rem; }
 .reduc-row input { margin: 0; }
 .a-reduc-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: .8rem; color: var(--muted); }
