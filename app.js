@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.143';
+const APP_VERSION = '1.1.144';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.144', date: '2026-07-10',
+    ajouts: [
+      'Tournée — le bouton « Annuler / reporter » d\'un cheval est maintenant un vrai bouton visible (⊘ Annuler / ✎ Gérer), plus une petite annotation.',
+      'Annulation d\'un cheval : le paiement du client doit désormais être validé AVANT d\'annuler (l\'app propose d\'ouvrir le paiement si besoin) — une note de crédit est alors créée.',
+      'Report d\'un cheval : aucun paiement à valider, mais un champ « Montant TTC à facturer à la prochaine visite » (facultatif). Le montant est mémorisé et ajouté automatiquement à la prochaine tournée du client.',
+    ],
+  },
   {
     version: '1.1.143', date: '2026-07-10',
     ajouts: [
@@ -3217,7 +3225,7 @@ function renderEditorArrets(locked) {
         pool.forEach((ph, pi) => {
           const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite)); // parage OU visite = cheval pris en charge
           const tag = cancelled ? ` <span class="badge badge-cancel">${cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé'}</span>` : '';
-          h += `<tr${cancelled ? ' class="ch-cancel"' : ''}><td>🐴 ${esc(ph.nom)}${tag} <button type="button" class="mini-x" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter ce RDV'}">${cancelled ? '✎' : '⊘'}</button></td>`;
+          h += `<tr${cancelled ? ' class="ch-cancel"' : ''}><td>🐴 ${esc(ph.nom)}${tag} <button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter ce RDV'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button></td>`;
           h += `<td><input type="checkbox" data-key="parage" data-pi="${pi}" ${cv && cv.parage ? 'checked' : ''}${cancelled ? ' disabled' : ''}/></td>`;
           h += `<td><input type="checkbox" data-vis data-pi="${pi}" ${cv && cv.visite ? 'checked' : ''}${(cancelled || !visArts.length) ? ' disabled' : ''}/></td>`;
           h += pathoCols.map((c) => `<td><input type="checkbox" data-key="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${acte ? '' : ' disabled'}/></td>`).join('');
@@ -3246,7 +3254,7 @@ function renderEditorArrets(locked) {
           modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // ouvre la modale de choix
         }));
         wrap.querySelectorAll('[data-vispick]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.vispick], cv = ensureCv(ph); modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); }));
-        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
+        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
         el.appendChild(wrap);
       });
     }
@@ -6862,18 +6870,34 @@ function modalCancelRdv(nom, opts) {
   }
   let status = 'annule', reason = 'client';
   openModal(`<div class="modal-head"><b>Annuler / reporter — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Le RDV de ce cheval est retiré de la facture et des stats. Les autres clients et le calcul de la tournée ne changent pas.${opts.paid ? ' <b>Ce RDV a été payé → une note de crédit (à rembourser par virement) sera créée.</b>' : ''}</p>
+    <p class="hint">Le RDV de ce cheval est retiré de la facture et des stats. Les autres clients et le calcul de la tournée ne changent pas.</p>
     <label>Type</label><div class="seg" id="cxStatus"><button type="button" class="seg-btn on" data-st="annule">Annulé</button><button type="button" class="seg-btn" data-st="reporte">Reporté</button></div>
     <label>Motif</label><div class="seg" id="cxReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
     <label>Note (facultatif)<input type="text" id="cxNote" placeholder="ex. absent, cheval malade…" /></label>
+    <div id="cxReportBox" style="display:none"><label>Montant TTC à facturer à la prochaine visite (facultatif)<input type="number" id="cxMontant" step="0.01" min="0" inputmode="decimal"/></label><p class="hint">Mémorisé et ajouté automatiquement à la prochaine tournée de ce client.</p></div>
+    <p class="hint" id="cxNote2"></p>
     <div class="actions"><button class="btn primary block" id="cxOk">Confirmer</button></div>`);
   $('mX').addEventListener('click', closeModal);
-  document.querySelectorAll('#cxStatus .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxStatus .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); status = b.dataset.st; }));
+  const refreshMode = () => {
+    const rep = status === 'reporte';
+    if ($('cxReportBox')) $('cxReportBox').style.display = rep ? '' : 'none';
+    if ($('cxNote2')) { const issue = clientPaiementIssue(opts.tour, opts.clientId);
+      $('cxNote2').innerHTML = rep ? '↩ Report : aucun paiement à valider ; le RDV part dans « Rendez-vous à prendre ».'
+        : (issue ? '⚠ <b>Annulation</b> : le paiement du client doit d\'abord être validé (' + esc(issue) + ').'
+          : '✔ Paiement validé → une <b>note de crédit</b> (à rembourser) sera créée pour ce RDV.'); }
+  };
+  document.querySelectorAll('#cxStatus .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxStatus .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); status = b.dataset.st; refreshMode(); }));
   document.querySelectorAll('#cxReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
+  refreshMode();
   $('cxOk').addEventListener('click', () => {
     const note = $('cxNote').value.trim();
+    if (status === 'annule') { // ANNULATION : paiement du client OBLIGATOIRE d'abord
+      const issue = clientPaiementIssue(opts.tour, opts.clientId);
+      if (issue) { if (confirm('Avant d\'annuler ce client, son paiement doit être validé (' + issue + '). Ouvrir le paiement maintenant ?') && opts.arret) { closeModal(); modalPayment(opts.tour, opts.arret, () => modalCancelRdv(nom, opts)); } return; }
+    }
     cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
-    if (opts.paid) { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note); cv.cancel.credited = true; } // RDV payé : facture figée conservée + note de crédit ; le cheval reste facturé (chevalBilled) pour éviter la double réduction du CA
+    if (status === 'annule' && clientPaiementDone(opts.tour, opts.clientId)) { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note); cv.cancel.credited = true; } // RDV payé : facture figée + note de crédit ; le cheval reste facturé (chevalBilled) pour éviter la double réduction du CA
+    if (status === 'reporte') { const mt = Math.max(0, parseFloat(($('cxMontant') || {}).value) || 0); if (mt > 0.005) { const c = clients.find((x) => x.id === opts.clientId); if (c) { if (!Array.isArray(c.impayes)) c.impayes = []; c.impayes.push({ id: uid(), sourceTourId: opts.tour.id, date: opts.tour.date, ttc: mt, collected: false, collectedTourId: null, reporte: true }); saveClients(); } } } // montant à facturer à la prochaine visite (réinjecté auto)
     closeModal(); opts.onDone();
   });
 }
