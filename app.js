@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.149';
+const APP_VERSION = '1.1.150';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.150', date: '2026-07-10',
+    ajouts: [
+      'Nouveau (base de la compta analytique) : Gestion → Comptes. Déclarez vos comptes bancaires (courant, épargne, client…) avec un type et une lettre pour la communication de virement, et gérez les sous-comptes analytiques (salaire, cotisations, TVA, réserve…) répartis en 6 familles et rattachés à un compte. Liste de base fournie et réinitialisable.',
+    ],
+  },
   {
     version: '1.1.149', date: '2026-07-10',
     ajouts: [
@@ -1204,6 +1210,8 @@ if (!Array.isArray(S.fraisJournal)) S.fraisJournal = []; // journal des frais r�
 // Cycle de vie des frais (v1.1.137) : statut actif/échu/remplacé + report d'échéance (km ajoutés au seuil, n'affecte pas la provision) + chaînage historique.
 S.frais.forEach((f) => { if (!f.statut) f.statut = 'actif'; if (typeof f.kmReport !== 'number') f.kmReport = 0; });
 if (!Array.isArray(S.rappels)) S.rappels = mkRappels(); // échéancier des rappels récurrents du pro (liste de base, éditable)
+if (!Array.isArray(S.comptes)) S.comptes = mkComptes(); // F-a : comptes bancaires déclarés
+if (!Array.isArray(S.sousComptes)) S.sousComptes = mkSousComptes(S.comptes); // F-a : sous-comptes analytiques
 normalizeFraisOrder(); // au démarrage : groupe les frais liés sous leur entretien et répare les liens périmés
 S.materiel = Array.isArray(S.materiel) ? S.materiel : [];
 S.articlesCatalogue = Array.isArray(S.articlesCatalogue) ? S.articlesCatalogue : [];
@@ -1370,6 +1378,26 @@ function mkRappels() {
     { id: uid(), type: 'tva', libelle: '🧾 TVA (déclaration / paiement)', actif: true, freq: 'trimestriel', moisAnchor: 1, jour: 20, montant: 0, dernierFait: '', paiement: true },
     { id: uid(), type: 'provision', libelle: '📊 Provision (mise de côté)', actif: true, freq: 'mensuel', jour: 1, montant: 0, dernierFait: '' },
   ];
+}
+// F-a : comptes bancaires (physiques) + sous-comptes analytiques (répartition). lettre = base de la communication structurée (580000+lettre+n° opération).
+function mkComptes() {
+  return [
+    { id: uid(), nom: 'Compte courant', type: 'principal', actif: true, lettre: 'A', iban: '' },
+    { id: uid(), nom: 'Épargne provisions', type: 'epargne', actif: true, lettre: 'B', iban: '' },
+  ];
+}
+const SOUS_COMPTE_FAMILLES = { A: 'Rémunération & social', B: 'Impôts & taxes', C: 'Véhicule', D: 'Matériel', E: 'Charges externes', F: 'Réserves' };
+function mkSousComptes(comptes) {
+  const cid = ((comptes || []).find((c) => c.type === 'epargne') || (comptes || [])[0] || {}).id || null;
+  const base = [
+    ['Salaire net', 'A'], ['Cotisations sociales (INASTI)', 'A'], ['PLCI / pension', 'A'], ['Assurance revenu garanti', 'A'],
+    ['Provision IPP', 'B'], ['TVA à reverser', 'B'], ['Taxes communales / provinciales', 'B'],
+    ['Amortissement véhicule', 'C'], ['Entretien / pneus / freins', 'C'], ['Assurance véhicule', 'C'], ['Taxe de circulation', 'C'],
+    ['Renouvellement matériel / outillage', 'D'], ['Consommables', 'D'],
+    ['Comptable', 'E'], ['Assurance RC pro', 'E'], ['Frais bancaires', 'E'], ['Téléphone / internet / logiciels', 'E'], ['Formation', 'E'], ['Marketing / site', 'E'],
+    ['Réserve entreprise', 'F'], ['Vacances / congés', 'F'], ['Réserve gros investissement', 'F'],
+  ];
+  return base.map(([nom, famille]) => ({ id: uid(), nom, famille, compteId: cid, actif: true }));
 }
 function mkFrais() {
   const out = [];
@@ -2278,6 +2306,7 @@ function showGestion(sub) {
   if (currentGsub === 'vehicule') renderFraisVehicule();
   if (currentGsub === 'statut') renderStatutVehiculePage();
   if (currentGsub === 'rappels') renderRappels();
+  if (currentGsub === 'comptes') renderComptes();
   if (currentGsub === 'planche') renderPlancheConfig();
   if (currentGsub === 'contactmail') renderContactMail();
   if (currentGsub === 'sms') renderSMS();
@@ -7525,6 +7554,51 @@ function renderRappels() {
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce rappel ?')) return; S.rappels = S.rappels.filter((x) => x.id !== r.id); saveSettings(); renderRappels(); renderHome(); });
     box.appendChild(el);
   });
+}
+// ===== F-a : Comptes bancaires + sous-comptes analytiques =====
+const comptesActifs = () => (S.comptes || []).filter((c) => c.actif);
+const compteNom = (id) => { const c = (S.comptes || []).find((x) => x.id === id); return c ? c.nom : '—'; };
+function renderComptes() {
+  const addB = $('btnAddCompte'); if (addB) addB.onclick = () => { S.comptes.push({ id: uid(), nom: 'Nouveau compte', type: 'epargne', actif: true, lettre: '', iban: '' }); saveSettings(); renderComptes(); };
+  const addS = $('btnAddSousCompte'); if (addS) addS.onclick = () => { S.sousComptes.push({ id: uid(), nom: 'Nouveau sous-compte', famille: 'F', compteId: (comptesActifs()[0] || {}).id || null, actif: true }); saveSettings(); renderComptes(); };
+  const rs = $('btnResetSousComptes'); if (rs) rs.onclick = () => { if (!confirm('Réinitialiser les sous-comptes à la liste de base ?')) return; S.sousComptes = mkSousComptes(S.comptes); saveSettings(); renderComptes(); };
+  const box = $('comptesList');
+  if (box) {
+    box.innerHTML = ''; if ($('comptesEmpty')) $('comptesEmpty').style.display = S.comptes.length ? 'none' : 'block';
+    S.comptes.forEach((c) => {
+      const el = document.createElement('div'); el.className = 'edit-row' + (c.actif ? '' : ' frais-off');
+      el.innerHTML = `<div class="er-top"><label class="chk2" style="margin:0"><input type="checkbox" data-k="actif" ${c.actif ? 'checked' : ''}/> actif</label><input class="grow er-title" data-k="nom" value="${esc(c.nom || '')}" placeholder="Nom du compte"/><button class="a-del" data-del title="Supprimer">✕</button></div>
+        <div class="er-grid"><label>Type<select data-k="type"><option value="principal"${c.type === 'principal' ? ' selected' : ''}>Principal (courant)</option><option value="epargne"${c.type === 'epargne' ? ' selected' : ''}>Épargne (provisions)</option><option value="client"${c.type === 'client' ? ' selected' : ''}>Client (tiers)</option></select></label><label>Lettre (communication)<input data-k="lettre" maxlength="2" value="${esc(c.lettre || '')}" placeholder="A"/></label><label>IBAN (facultatif)<input data-k="iban" value="${esc(c.iban || '')}" placeholder="BE.."/></label></div>`;
+      el.querySelector('[data-k="actif"]').addEventListener('change', (e) => { c.actif = e.target.checked; saveSettings(); renderComptes(); });
+      el.querySelector('[data-k="nom"]').addEventListener('input', (e) => { c.nom = e.target.value; saveSettings(); });
+      el.querySelector('[data-k="type"]').addEventListener('change', (e) => { c.type = e.target.value; saveSettings(); });
+      el.querySelector('[data-k="lettre"]').addEventListener('input', (e) => { c.lettre = e.target.value.toUpperCase().slice(0, 2); saveSettings(); });
+      el.querySelector('[data-k="iban"]').addEventListener('input', (e) => { c.iban = e.target.value; saveSettings(); });
+      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce compte ?')) return; S.comptes = S.comptes.filter((x) => x.id !== c.id); (S.sousComptes || []).forEach((s) => { if (s.compteId === c.id) s.compteId = null; }); saveSettings(); renderComptes(); });
+      box.appendChild(el);
+    });
+  }
+  const sbox = $('sousComptesList');
+  if (sbox) {
+    sbox.innerHTML = ''; if ($('sousComptesEmpty')) $('sousComptesEmpty').style.display = (S.sousComptes && S.sousComptes.length) ? 'none' : 'block';
+    const famOpts = (sel) => Object.keys(SOUS_COMPTE_FAMILLES).map((k) => `<option value="${k}"${k === sel ? ' selected' : ''}>${k} · ${esc(SOUS_COMPTE_FAMILLES[k])}</option>`).join('');
+    const cptOpts = (sel) => '<option value="">— compte —</option>' + (S.comptes || []).map((c) => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.nom)}</option>`).join('');
+    Object.keys(SOUS_COMPTE_FAMILLES).forEach((fam) => {
+      const items = (S.sousComptes || []).filter((s) => s.famille === fam); if (!items.length) return;
+      const hd = document.createElement('h3'); hd.className = 'rsub'; hd.style.margin = '10px 0 4px'; hd.textContent = fam + ' · ' + SOUS_COMPTE_FAMILLES[fam]; sbox.appendChild(hd);
+      items.forEach((s) => {
+        const el = document.createElement('div'); el.className = 'edit-row' + (s.actif ? '' : ' frais-off');
+        el.innerHTML = `<div class="er-top"><label class="chk2" style="margin:0"><input type="checkbox" data-k="actif" ${s.actif ? 'checked' : ''}/> actif</label><input class="grow er-title" data-k="nom" value="${esc(s.nom || '')}" placeholder="Nom du sous-compte"/><button class="a-del" data-del title="Supprimer">✕</button></div>
+          <div class="er-grid"><label>Famille<select data-k="famille">${famOpts(s.famille)}</select></label><label>Compte<select data-k="compteId">${cptOpts(s.compteId)}</select></label></div>`;
+        el.querySelector('[data-k="actif"]').addEventListener('change', (e) => { s.actif = e.target.checked; saveSettings(); renderComptes(); });
+        el.querySelector('[data-k="nom"]').addEventListener('input', (e) => { s.nom = e.target.value; saveSettings(); });
+        el.querySelector('[data-k="famille"]').addEventListener('change', (e) => { s.famille = e.target.value; saveSettings(); renderComptes(); });
+        el.querySelector('[data-k="compteId"]').addEventListener('change', (e) => { s.compteId = e.target.value || null; saveSettings(); });
+        el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce sous-compte ?')) return; S.sousComptes = S.sousComptes.filter((x) => x.id !== s.id); saveSettings(); renderComptes(); });
+        sbox.appendChild(el);
+      });
+    });
+  }
 }
 // Élément échu (Contrôle véhicule, fusionné dans « Statut véhicule ») : dépassement + actions « Changement fait » (note de frais) et « Repousser ».
 function fraisEchuItemEl(f) {

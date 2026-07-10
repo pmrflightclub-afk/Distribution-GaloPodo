@@ -317,6 +317,7 @@
         <button class="subtab" data-gsub="vehicule">Frais véhicule</button>
         <button class="subtab" data-gsub="statut">Statut véhicule</button>
         <button class="subtab" data-gsub="rappels">Rappels</button>
+        <button class="subtab" data-gsub="comptes">Comptes</button>
         <button class="subtab" data-gsub="planche">Planche contact</button>
         <button class="subtab" data-gsub="contactmail">Contact mail</button>
         <button class="subtab" data-gsub="sms">SMS</button>
@@ -485,6 +486,22 @@
         <p class="hint">Postes/éléments remplacés (inactivés, hors calcul du tarif) — pour la traçabilité.</p>
         <div id="statutRemplaces" class="list"></div>
         <p class="empty" id="statutRemplacesEmpty">Aucun remplacement enregistré.</p>
+      </section>
+    </div>
+
+    <div id="gsub-comptes" class="subpanel">
+      <section class="card">
+        <div class="card-head"><h2>Comptes bancaires</h2><button class="btn small" id="btnAddCompte">+ Ajouter</button></div>
+        <p class="hint">Déclarez vos comptes (courant, épargne provisions, compte clients…). La <b>lettre</b> sert de base à la communication structurée des virements de dispatch (580000 + lettre + n° d'opération). Seuls les comptes actifs sont proposés comme destination des provisions.</p>
+        <div id="comptesList" class="edit-list"></div>
+        <p class="empty" id="comptesEmpty">Aucun compte.</p>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Sous-comptes analytiques</h2><button class="btn small" id="btnAddSousCompte">+ Ajouter</button></div>
+        <p class="hint">Ventilation analytique : chaque sous-compte (salaire, cotisations, TVA, réserve…) appartient à une famille et est rattaché à un compte bancaire. Utilisés par les provisions et la répartition du chiffre d'affaires.</p>
+        <div id="sousComptesList" class="edit-list"></div>
+        <p class="empty" id="sousComptesEmpty">Aucun sous-compte.</p>
+        <div class="actions" style="margin-top:12px"><button class="btn small danger block" id="btnResetSousComptes">♻ Réinitialiser la liste de base</button></div>
       </section>
     </div>
 
