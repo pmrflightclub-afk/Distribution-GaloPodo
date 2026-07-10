@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.16';
+const APP_VERSION = '1.2.17';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.17', date: '2026-07-10',
+    ajouts: [
+      'Agenda de l\'app : il n\'affiche plus que les rendez-vous à venir (aujourd\'hui et après). Les tournées passées/clôturées et les chevaux annulés ou reportés en sortent automatiquement — l\'historique reste dans Tournées et Stats. L\'agenda privé passé est également masqué.',
+      'Prise de RDV : la date ET l\'heure sont désormais obligatoires (Programmer le suivi, Rendez-vous à prendre, 2ᵉ RDV pathologique, et clôture) — même sans la synchro Google. L\'heure de chaque client structure les arrêts.',
+      'Push Google automatique : un nouveau RDV validé dans l\'app est poussé tout de suite dans Google Agenda (si l\'option est activée). Annuler, reporter ou retirer un client retire aussi son évènement Google.',
+      'Sécurité de l\'agenda Google : l\'app ne supprime QUE les évènements qu\'elle a elle-même créés (vérification d\'une signature avant toute suppression) — jamais un de vos évènements personnels. Les évènements d\'agenda privé ne sont jamais poussés ni supprimés.',
+      'Récupération d\'agenda : un évènement déjà présent dans l\'agenda de l\'app (tournée à venir, même client/date) est signalé « ✓ déjà dans l\'agenda app » pour éviter les doublons.',
+    ],
+  },
   {
     version: '1.2.16', date: '2026-07-10',
     corrections: [
@@ -1921,6 +1931,22 @@ function clientTourAddr(t, clientId) { for (const a of (t.arrets || [])) { if ((
 function tourBillableClients(t) { const seen = new Set(), out = []; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (seen.has(cl.clientId)) return; if (!(cl.chevaux || []).some(chevalBilled)) return; seen.add(cl.clientId); out.push(cl.clientId); })); return out; }
 // Clients facturables sans heure de RDV (bloque la clôture quand la synchro Agenda est active).
 function calMissingHeure(t) { return tourBillableClients(t).filter((cid) => !clientRdvHeure(t, cid)).map((cid) => clientName(cid)); }
+// Suppression SÛRE d'un évènement Google : on le LIT d'abord et on ne supprime QUE s'il porte la signature galopodo=1
+// (posée à la création). Jamais un évènement créé par l'utilisateur. Renvoie 'deleted' | 'gone' | 'foreign' | 'skip'.
+async function safeDeleteEvent(token, evId) {
+  if (!evId) return 'gone';
+  const base = 'https://www.googleapis.com/calendar/v3/calendars/primary/events/' + encodeURIComponent(evId);
+  try {
+    const g = await fetch(base, { headers: { Authorization: 'Bearer ' + token } });
+    if (g.status === 404 || g.status === 410) return 'gone';           // déjà absent
+    if (!g.ok) return 'skip';                                          // incertain → on ne touche à rien
+    const j = await g.json();
+    const sig = j.extendedProperties && j.extendedProperties.private && j.extendedProperties.private.galopodo;
+    if (sig !== '1') return 'foreign';                                 // SÉCURITÉ : pas un évènement de l'app → jamais supprimé
+    const d = await fetch(base, { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
+    return (d.ok || d.status === 404 || d.status === 410) ? 'deleted' : 'skip';
+  } catch { return 'skip'; }
+}
 // Crée / met à jour 1 évènement Google par client (heure obligatoire), et supprime ceux qui n'ont plus lieu.
 async function pushTourToCalendar(t, opts) {
   opts = opts || {};
@@ -1943,8 +1969,10 @@ async function pushTourToCalendar(t, opts) {
   }
   for (const key of Object.keys(S.calPushed)) {
     if (!key.startsWith(t.id + ':')) continue;
-    if (wantedIds.has(key.slice(t.id.length + 1))) continue;
-    try { const r = await req('DELETE', '/' + encodeURIComponent(S.calPushed[key])); if (r.ok || r.status === 404 || r.status === 410) { delete S.calPushed[key]; nDel++; } } catch { /* réessai plus tard */ }
+    if (wantedIds.has(key.slice(t.id.length + 1))) continue;                   // client retiré/annulé → son évènement Google (créé par l'app) est retiré
+    const res = await safeDeleteEvent(token, S.calPushed[key]);
+    if (res === 'deleted' || res === 'gone') { delete S.calPushed[key]; nDel++; }
+    else if (res === 'foreign') { delete S.calPushed[key]; }                   // pas à nous : on cesse de le suivre, sans jamais le supprimer
   }
   saveSettings();
   setSt('ok', `Agenda Google à jour : ${nOk} RDV${nDel ? ', ' + nDel + ' retiré(s)' : ''}.`);
@@ -1955,7 +1983,7 @@ async function deleteTourCalendar(tourId) {
   if (!keys.length) return;
   if (!S.googleClientId || !gTokenValid(GSCOPE_CAL)) { keys.forEach((k) => delete S.calPushed[k]); saveSettings(); return; }
   let token; try { token = await googleToken(false, GSCOPE_CAL); } catch { return; }
-  for (const k of keys) { try { await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events/' + encodeURIComponent(S.calPushed[k]), { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } }); } catch { /* ignore */ } delete S.calPushed[k]; }
+  for (const k of keys) { const res = await safeDeleteEvent(token, S.calPushed[k]); if (res !== 'skip') delete S.calPushed[k]; } // supprime seulement les évts de l'app ; garde en file ce qui est incertain
   saveSettings();
 }
 // Croise un événement (titre + lieu + description) avec la base clients : nom, prénom, société ET noms de chevaux.
@@ -2581,10 +2609,16 @@ function privateEventsForDay(day) {
   return Object.keys(S.agendaPrive || {}).map((id) => Object.assign({ id }, S.agendaPrive[id])).filter((x) => x.day === day).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
 }
 // Tous les rendez-vous d'un jour (agenda privé + chevaux/clients des tournées), triés par heure (sans heure en dernier).
+// Agenda FORWARD-ONLY : aujourd'hui + à venir uniquement (le passé n'est pas un historique — voir Tournées/Stats).
+// Exclut les tournées clôturées/passées, l'agenda privé passé, et les clients dont tous les chevaux sont annulés/reportés.
 function dayAgendaEntries(day) {
   const out = [];
+  if (day && day < todayStr()) return out; // passé masqué (y compris agenda privé)
   privateEventsForDay(day).forEach((p) => out.push({ heure: eventHeure(p), type: 'prive', label: p.title || '(privé)' }));
-  allTours().forEach((t) => { if (t.date !== day) return; (t.arrets || []).forEach((a) => { const hh = arretHeure(a); (a.clients || []).forEach((cl) => out.push({ heure: hh, type: 'tour', label: clientLabel(cl.clientId) })); }); });
+  allTours().forEach((t) => {
+    if (t.date !== day || statusOf(t) === 'cloturee') return; // tournées clôturées/passées exclues de l'agenda
+    (t.arrets || []).forEach((a) => { const hh = arretHeure(a); (a.clients || []).forEach((cl) => { if (!(cl.chevaux || []).some((cv) => !chevalCancelled(cv))) return; out.push({ heure: hh, type: 'tour', label: clientLabel(cl.clientId) }); }); }); // client entièrement annulé/reporté → retiré de l'agenda
+  });
   return out.sort((x, y) => (x.heure || '~').localeCompare(y.heure || '~'));
 }
 // Décale un mois 'YYYY-MM' de delta mois.
@@ -2678,7 +2712,10 @@ function agendaItemRow(ev) {
   const linkTxt = match ? '≈ ' + esc(fullName(match)) + ' (proposé)' : '⚠ client inconnu → création';
   const mailTxt = mailMatches.length ? ' · <span class="td-eta">✉ formulaire reçu</span>' : '';
   const mailBtn = mailMatches.length ? ' <button class="btn small" data-cmail>👤 Créer (fiche mail)</button>' : '';
-  el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}${mailTxt}</span></div>
+  // Cet évènement correspond-il déjà à un RDV de l'agenda app (tournée à venir, ce client à cette date) ? → évite un ré-import en double.
+  const alreadyPlanned = !!(match && ev.day && allTours().some((t) => t.date === ev.day && statusOf(t) !== 'cloturee' && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === match.id))));
+  const planTxt = alreadyPlanned ? ' · <span class="td-eta">✓ déjà dans l\'agenda app</span>' : '';
+  el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}${mailTxt}${planTxt}</span></div>
     <div class="li-act li-act-col"><button class="btn small primary" data-rec>Récupérer</button>${mailBtn} <button class="btn small" data-prive>Agenda privé</button> <button class="btn small" data-inact>Inactif</button></div>`;
   if (mailMatches.length) { const b = el.querySelector('[data-cmail]'); if (b) b.addEventListener('click', () => { b.disabled = true; createClientFromMail(mailMatches[0], 'normal'); }); } // fiche pré-remplie depuis le formulaire reçu
   el.querySelector('[data-rec]').addEventListener('click', () => recuperateEvent(ev));
@@ -3572,7 +3609,7 @@ function renderEditorArrets(locked) {
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
-      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; currentTour.arrets.splice(i, 1); renderEditorArrets(locked); scheduleGeoRecalc(); });
+      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; currentTour.arrets.splice(i, 1); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); }); // retrait arrêt → maj Google (retire les évènements des clients retirés)
       // N° d'ordre saisi : déplace l'arrêt à la position demandée ; les autres se renumérotent tout seuls.
       const ord = el.querySelector('[data-order]');
       if (ord) ord.addEventListener('change', (e) => {
@@ -3708,7 +3745,7 @@ function renderEditorArrets(locked) {
           else if (el.matches('[data-psval]')) { const pi = +el.dataset.psval, fi = ficheOf(pi); if (!fi) return; fi.suiviPatho = Object.assign({ unite: 'semaines', actif: true }, fi.suiviPatho || {}, { valeur: Math.min(4, Math.max(1, parseInt(el.value, 10) || 1)) }); saveClients(); }
           else if (el.matches('[data-psunit]')) { const pi = +el.dataset.psunit, fi = ficheOf(pi); if (!fi) return; fi.suiviPatho = Object.assign({ valeur: 1, actif: true }, fi.suiviPatho || {}, { unite: el.value }); saveClients(); }
         });
-        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
+        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); scheduleCalPush(currentTour); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture ; annulation/report → maj Google (retire l'évènement du client entièrement annulé)
         el.appendChild(wrap);
       } // fin des actes (édition uniquement si tournée non clôturée)
 
@@ -7700,16 +7737,17 @@ function modalRdvAPrendre() {
 function modalAssignRdvCheval(client, cheval, reportedItems) {
   const proposed = proposedRdvDate(todayStr());
   openModal(`<div class="modal-head"><b>📅 RDV — 🐴 ${esc(cheval.nom)}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Client : <b>${esc(fullName(client))}</b>. Choisissez la date du prochain RDV pour ce cheval.</p>
-    <label>Date du RDV<input type="date" id="arCvDate" value="${proposed}"/></label>
+    <p class="hint">Client : <b>${esc(fullName(client))}</b>. Choisissez la <b>date et l'heure</b> du prochain RDV pour ce cheval (obligatoires).</p>
+    <div class="rdv-dh"><label>Date du RDV<input type="date" id="arCvDate" value="${proposed}"/></label><label>Heure<input type="time" id="arCvHeure" value=""/></label></div>
     <p class="hint" id="arCvPrev"></p>
     <div class="actions"><button class="btn primary block" id="arCvOk">Enregistrer le RDV</button></div>`);
   $('mX').addEventListener('click', closeModal);
   const prev = () => { const d = $('arCvDate').value; const pv = rdvDayPreview(d); $('arCvPrev').innerHTML = d ? `<b>${fmtDateFr(d)}</b> — arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}` + chevalRdvWarnHtml(client.id, cheval.id, d) : ''; };
   $('arCvDate').addEventListener('change', prev); prev();
   $('arCvOk').addEventListener('click', () => {
-    const d = $('arCvDate').value; if (!d) { closeModal(); return; }
-    const res = scheduleClientOnDate(d, client, [cheval]);
+    const d = $('arCvDate').value, heure = ($('arCvHeure') || {}).value || '';
+    if (!d || !heure) { alert('⏰ La date ET l\'heure du RDV sont obligatoires.'); return; }
+    const res = scheduleClientOnDate(d, client, [cheval], heure, 'parage');
     if (reportedItems && reportedItems.length && res && res.tour) { reportedItems.forEach((it) => { if (it.cv && it.cv.cancel) it.cv.cancel.replacedTourId = res.tour.id; }); saveTournees(); saveArchive(); } // sort ces reports de la file « Replacer » (Annulations : marqués « replacé »)
     closeModal(); renderHome();
   });
@@ -8417,6 +8455,7 @@ function scheduleClientOnDate(date, client, chevalObjs, heure, rdvType) {
   if (rdvType) { const ids = new Set((chevalObjs || []).map((h) => h.id)); (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== client.id) return; (cl.chevaux || []).forEach((cv) => { if (ids.has(cv.id)) cv.rdvType = rdvType; }); })); }
   if (heure) setChevalHeure(t, client.id, chevalObjs, heure);
   t.result = null; saveTournees();
+  scheduleCalPush(t); // push automatique vers Google Agenda à la validation du RDV (no-op si l'option n'est pas activée)
   return { tour: t, created };
 }
 // Date proposée pour le 2ᵉ RDV « suivi pathologique » : baseDate + N jours ou N semaines (récurrence portée par la fiche cheval).
@@ -8458,26 +8497,27 @@ function modalRDV(t, arret, cid, onDone) {
   const pool = chevalPool.length ? chevalPool : activeChevaux(client);
   const proposed = proposedRdvDate(t.date || todayStr());
   if (!pool.length) { alert('Aucun cheval à replacer pour ce client.'); if (onDone) onDone(); return; }
-  const common = { date: proposed }; // date du RDV commun (chevaux « même RDV » parage)
+  const common = { date: proposed, heure: '' }; // date + heure du RDV commun (chevaux « même RDV » parage)
   const entries = pool.map((h) => {
     const cvCur = ((arrCl && arrCl.chevaux) || []).find((x) => x.id === h.id) || {};
     const curType = cvCur.rdvType === 'patho' ? 'patho' : 'parage'; // nature de l'occurrence courante (comment ce cheval a été programmé)
     const fiche = (client.chevaux || []).find((x) => norm(x.nom) === norm(h.nom));
     const sp = (fiche && fiche.suiviPatho && fiche.suiviPatho.actif) ? fiche.suiviPatho : null;
     return { id: h.id, nom: h.nom, fiche, curType, hasPatho: !!sp,
-      ignore: curType === 'patho', sep: false, date: proposed, // parage : ignoré par défaut si l'occurrence courante est un RDV pathologique
-      pathoStatus: sp ? 'maintenir' : null, pathoDate: sp ? proposedPathoDate(t.date || todayStr(), sp) : '' };
+      ignore: curType === 'patho', sep: false, date: proposed, heure: '', // parage : ignoré par défaut si l'occurrence courante est un RDV pathologique
+      pathoStatus: sp ? 'maintenir' : null, pathoDate: sp ? proposedPathoDate(t.date || todayStr(), sp) : '', pathoHeure: '' };
   });
   const previewHtml = (d) => { const pv = rdvDayPreview(d); return `<b>${d ? fmtDateFr(d) : '—'}</b> — Arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}`; };
   const render = () => {
     openModal(`<div class="modal-head"><b>📅 Programmer le suivi (RDV)</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">Client : <b>${esc(fullName(client))}</b>. Le prochain <b>parage</b> est par défaut sur le RDV commun (« date différente » / « ne pas replacer » par cheval). Les chevaux en <b>suivi pathologique</b> ont un 2ᵉ RDV rapproché à part (Maintenir / Arrêter).</p>
-      <div class="card" style="margin-bottom:8px"><label>Date du RDV commun (parage)<input type="date" id="rdvCommon" value="${common.date}"/></label><p class="hint" id="rdvCommonPrev"></p></div>
+      <p class="hint">Client : <b>${esc(fullName(client))}</b>. Le prochain <b>parage</b> est par défaut sur le RDV commun (« date différente » / « ne pas replacer » par cheval). Les chevaux en <b>suivi pathologique</b> ont un 2ᵉ RDV rapproché à part (Maintenir / Arrêter). <b>Date et heure obligatoires.</b></p>
+      <div class="card" style="margin-bottom:8px"><div class="rdv-dh"><label>Date du RDV commun (parage)<input type="date" id="rdvCommon" value="${common.date}"/></label><label>Heure<input type="time" id="rdvCommonHeure" value="${common.heure}"/></label></div><p class="hint" id="rdvCommonPrev"></p></div>
       <div id="rdvChevaux"></div>
       <div class="actions"><button class="btn primary block" id="rdvOk">Enregistrer les RDV</button></div>`);
     $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
     const cp = $('rdvCommonPrev'); if (cp) cp.innerHTML = previewHtml(common.date);
     $('rdvCommon').addEventListener('change', (e) => { common.date = e.target.value; render(); });
+    { const ch = $('rdvCommonHeure'); if (ch) ch.addEventListener('change', (e) => { common.heure = e.target.value; }); }
     const box = $('rdvChevaux');
     entries.forEach((en) => {
       const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.curType !== 'patho' && en.ignore ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
@@ -8489,7 +8529,7 @@ function modalRDV(t, arret, cid, onDone) {
         inner += `<label class="rdv-ch-opt"><input type="checkbox" data-ign ${en.ignore ? 'checked' : ''}/> ne pas replacer le parage</label>`;
         if (!en.ignore) {
           inner += `<label class="rdv-ch-opt"><input type="checkbox" data-sep ${en.sep ? 'checked' : ''}/> date différente</label>`;
-          if (en.sep) inner += `<label>Date du parage<input type="date" data-date value="${en.date}"/></label><p class="hint" data-prev></p>` + chevalRdvWarnHtml(client.id, en.id, en.date);
+          if (en.sep) inner += `<div class="rdv-dh"><label>Date du parage<input type="date" data-date value="${en.date}"/></label><label>Heure<input type="time" data-heure value="${en.heure}"/></label></div><p class="hint" data-prev></p>` + chevalRdvWarnHtml(client.id, en.id, en.date);
           else inner += `<p class="hint">→ sur le RDV commun</p>` + chevalRdvWarnHtml(client.id, en.id, common.date);
         }
       }
@@ -8498,7 +8538,7 @@ function modalRDV(t, arret, cid, onDone) {
         inner += `<div class="rdv-patho"><b>🔁 Suivi pathologique</b>
           <label class="rdv-ch-opt"><input type="radio" name="ps${en.id}" data-psstat value="maintenir" ${en.pathoStatus === 'maintenir' ? 'checked' : ''}/> Maintenir</label>
           <label class="rdv-ch-opt"><input type="radio" name="ps${en.id}" data-psstat value="arreter" ${en.pathoStatus === 'arreter' ? 'checked' : ''}/> Arrêter</label>`;
-        if (en.pathoStatus === 'maintenir') inner += `<label>Date du 2ᵉ RDV<input type="date" data-psdate value="${en.pathoDate}"/></label><p class="hint" data-psprev></p>` + chevalRdvWarnHtml(client.id, en.id, en.pathoDate);
+        if (en.pathoStatus === 'maintenir') inner += `<div class="rdv-dh"><label>Date du 2ᵉ RDV<input type="date" data-psdate value="${en.pathoDate}"/></label><label>Heure<input type="time" data-psheure value="${en.pathoHeure}"/></label></div><p class="hint" data-psprev></p>` + chevalRdvWarnHtml(client.id, en.id, en.pathoDate);
         inner += `</div>`;
       }
       wrap.innerHTML = inner;
@@ -8509,19 +8549,25 @@ function modalRDV(t, arret, cid, onDone) {
       wrap.querySelectorAll('[data-psstat]').forEach((r) => r.addEventListener('change', (e) => { en.pathoStatus = e.target.value; render(); }));
       const pdt = wrap.querySelector('[data-psdate]'), pprev = wrap.querySelector('[data-psprev]');
       if (pdt) { if (pprev) pprev.innerHTML = previewHtml(pdt.value); pdt.addEventListener('change', (e) => { en.pathoDate = e.target.value; render(); }); }
+      const hhI = wrap.querySelector('[data-heure]'); if (hhI) hhI.addEventListener('change', (e) => { en.heure = e.target.value; });
+      const pshI = wrap.querySelector('[data-psheure]'); if (pshI) pshI.addEventListener('change', (e) => { en.pathoHeure = e.target.value; });
       box.appendChild(wrap);
     });
     $('rdvOk').addEventListener('click', () => {
+      // Parage : regroupement par date (commune/séparée) → 1 heure par date (même client, même date = même arrêt = même heure).
+      const byDate = {}; // date -> { ids:[], heure }
+      entries.forEach((en) => { if (en.curType === 'patho' || en.ignore) return; const d = en.sep ? en.date : common.date; const hh = en.sep ? en.heure : common.heure; if (!d) return; const g = byDate[d] = byDate[d] || { ids: [], heure: '' }; g.ids.push(en.id); if (!g.heure && hh) g.heure = hh; });
+      // Heure OBLIGATOIRE pour CHAQUE RDV (parage + patho maintenu), même si la synchro Google est désactivée.
+      const missParage = Object.keys(byDate).some((d) => !byDate[d].heure);
+      const missPatho = entries.some((en) => en.hasPatho && en.pathoStatus === 'maintenir' && en.pathoDate && !en.pathoHeure);
+      if (missParage || missPatho) { alert('⏰ L\'heure de RDV est obligatoire pour chaque rendez-vous (parage et/ou suivi pathologique).'); return; }
       let scheduled = false;
-      // Parage : regroupement par date commune/séparée (occurrences « parage » non ignorées seulement).
-      const byDate = {};
-      entries.forEach((en) => { if (en.curType === 'patho' || en.ignore) return; const d = en.sep ? en.date : common.date; if (!d) return; (byDate[d] = byDate[d] || []).push(en.id); });
-      Object.keys(byDate).forEach((d) => { const chevalObjs = (client.chevaux || []).filter((h) => byDate[d].includes(h.id)); if (chevalObjs.length) { scheduleClientOnDate(d, client, chevalObjs, null, 'parage'); scheduled = true; } });
+      Object.keys(byDate).forEach((d) => { const g = byDate[d]; const chevalObjs = (client.chevaux || []).filter((h) => g.ids.includes(h.id)); if (chevalObjs.length) { scheduleClientOnDate(d, client, chevalObjs, g.heure, 'parage'); scheduled = true; } });
       // Suivi pathologique : 2ᵉ RDV (Maintenir) ou arrêt du suivi (statut porté par la fiche cheval).
       entries.forEach((en) => {
         if (!en.hasPatho) return;
         if (en.pathoStatus === 'arreter') { if (en.fiche && en.fiche.suiviPatho) { en.fiche.suiviPatho.actif = false; saveClients(); } return; }
-        if (en.pathoStatus === 'maintenir' && en.pathoDate) { const h = (client.chevaux || []).find((x) => x.id === en.id); if (h) { scheduleClientOnDate(en.pathoDate, client, [h], null, 'patho'); scheduled = true; } }
+        if (en.pathoStatus === 'maintenir' && en.pathoDate && en.pathoHeure) { const h = (client.chevaux || []).find((x) => x.id === en.id); if (h) { scheduleClientOnDate(en.pathoDate, client, [h], en.pathoHeure, 'patho'); scheduled = true; } }
       });
       if (scheduled && arret) { arret.rdvDone = true; saveTournees(); } // marque l'arrêt : RDV suivant programmé
       closeModal(); if (onDone) onDone();
@@ -9349,7 +9395,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!currentTour || currentTour.closed) return;
     const blk = tourFinalizeBlock(currentTour);
     if (blk.length) { alert('🔒 Clôture bloquée — finalisez chaque arrêt dans « Trajet du jour » (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; }
-    if (S.calPush) { const miss = calMissingHeure(currentTour); if (miss.length) { alert('🕘 Synchro Agenda Google active : l\'heure de RDV est obligatoire.\n\nRenseignez l\'heure de : ' + miss.join(', ') + '\n(dans l\'arrêt « Heure de RDV », ou Trajet du jour → ⚡ Agir → Heure RDV.)'); return; } }
+    { const miss = calMissingHeure(currentTour); if (miss.length) { alert('🕘 L\'heure de RDV est obligatoire pour chaque client.\n\nRenseignez l\'heure de : ' + miss.join(', ') + '\n(dans l\'arrêt « Heure de RDV », ou Trajet du jour → ⚡ Agir → Heure RDV.)'); return; } } // heure obligatoire à la clôture, synchro Google active ou non
     if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
     currentTour.closed = true;
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
