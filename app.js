@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.146';
+const APP_VERSION = '1.1.147';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.147', date: '2026-07-10',
+    ajouts: [
+      'Rappels : nouvelle option « Suivi du paiement (2 statuts) » activable par rappel. Quand elle est active, le rappel se valide en deux temps sur l\'Accueil : « ✓ Fait » (action, ex. déclaration / dépôt) puis « 💶 Payé ». Il ne disparaît qu\'une fois les deux validés.',
+      'Par défaut, ce double statut est activé sur « TVA » (déclarer + payer), « Dépôt caisse » et « Cotisations sociales ».',
+    ],
+  },
   {
     version: '1.1.146', date: '2026-07-10',
     ajouts: [
@@ -1343,10 +1350,10 @@ const mkMat = () => MATERIEL_REF.map((m) => ({ id: uid(), libelle: m.libelle, mo
 // freq: 'mensuel' (jour) | 'trimestriel' (moisAnchor + jour → 4 mois espacés de 3) | 'annuel' (mois + jour). dernierFait = clé 'YYYY-MM' de la dernière occurrence cochée.
 function mkRappels() {
   return [
-    { id: uid(), type: 'depot', libelle: '💶 Dépôt caisse', actif: true, freq: 'mensuel', jour: 10, montant: 0, dernierFait: '' },
+    { id: uid(), type: 'depot', libelle: '💶 Dépôt caisse', actif: true, freq: 'mensuel', jour: 10, montant: 0, dernierFait: '', paiement: true },
     { id: uid(), type: 'salaire', libelle: '👤 Salaire', actif: true, freq: 'mensuel', jour: 25, montant: 0, dernierFait: '' },
-    { id: uid(), type: 'cotisation', libelle: '🏛 Cotisations sociales (INASTI)', actif: true, freq: 'trimestriel', moisAnchor: 3, jour: 20, montant: 0, dernierFait: '' },
-    { id: uid(), type: 'tva', libelle: '🧾 TVA (déclaration / paiement)', actif: true, freq: 'trimestriel', moisAnchor: 1, jour: 20, montant: 0, dernierFait: '' },
+    { id: uid(), type: 'cotisation', libelle: '🏛 Cotisations sociales (INASTI)', actif: true, freq: 'trimestriel', moisAnchor: 3, jour: 20, montant: 0, dernierFait: '', paiement: true },
+    { id: uid(), type: 'tva', libelle: '🧾 TVA (déclaration / paiement)', actif: true, freq: 'trimestriel', moisAnchor: 1, jour: 20, montant: 0, dernierFait: '', paiement: true },
     { id: uid(), type: 'provision', libelle: '📊 Provision (mise de côté)', actif: true, freq: 'mensuel', jour: 1, montant: 0, dernierFait: '' },
   ];
 }
@@ -7373,8 +7380,11 @@ function rappelCurrentOcc(r, todayS) {
   [ty, ty - 1].forEach((y) => months.forEach((m) => { const d = rappelDate(r, y, m); if (d <= today && (!best || d > best.date)) best = { date: d, key: y + '-' + String(m).padStart(2, '0') }; }));
   return best;
 }
-function rappelDue(r, todayS) { if (!r || !r.actif) return false; const occ = rappelCurrentOcc(r, todayS); return !!occ && (r.dernierFait || '') < occ.key; }
+function rappelActionDue(r, todayS) { const occ = rappelCurrentOcc(r, todayS); return !!occ && (r.dernierFait || '') < occ.key; }
+function rappelPayDue(r, todayS) { if (!r || !r.paiement) return false; const occ = rappelCurrentOcc(r, todayS); return !!occ && (r.dernierPaye || '') < occ.key; }
+function rappelDue(r, todayS) { if (!r || !r.actif) return false; return rappelActionDue(r, todayS) || rappelPayDue(r, todayS); }
 function markRappelDone(r) { const occ = rappelCurrentOcc(r); if (occ) { r.dernierFait = occ.key; saveSettings(); } }
+function markRappelPaye(r) { const occ = rappelCurrentOcc(r); if (occ) { r.dernierPaye = occ.key; saveSettings(); } }
 // Carte Accueil « Rappels du mois » : rappels dus (échéance passée, pas encore cochés pour l'occurrence courante).
 function renderHomeRappels() {
   const card = $('homeRappels'); if (!card) return;
@@ -7383,9 +7393,16 @@ function renderHomeRappels() {
   const box = $('homeRappelsList'); if (!box) return; box.innerHTML = '';
   due.forEach((r) => {
     const occ = rappelCurrentOcc(r);
+    const aDue = rappelActionDue(r), pDue = rappelPayDue(r);
+    let acts = '';
+    if (aDue) acts += '<button class="btn small primary" data-fait>✓ Fait</button>';
+    else if (r.paiement) acts += '<span class="badge">✓ fait</span>';
+    if (pDue) acts += '<button class="btn small primary" data-paye>💶 Payé</button>';
+    if (r.type === 'depot' && aDue) acts += '<button class="btn small" data-caisse>💶 Caisse</button>';
     const el = document.createElement('div'); el.className = 'list-item stack-act';
-    el.innerHTML = `<div class="li-main"><b>${esc(r.libelle || 'Rappel')}</b><span class="li-sub">échéance ${occ ? esc(fmtDateFr(occ.date)) : ''}${r.montant > 0 ? ' · ' + eur(r.montant) : ''} · ${freqLabel(r.freq)}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-fait>✓ Fait</button>${r.type === 'depot' ? '<button class="btn small" data-caisse>💶 Caisse</button>' : ''}</div>`;
-    el.querySelector('[data-fait]').addEventListener('click', () => { markRappelDone(r); renderHome(); });
+    el.innerHTML = `<div class="li-main"><b>${esc(r.libelle || 'Rappel')}</b><span class="li-sub">échéance ${occ ? esc(fmtDateFr(occ.date)) : ''}${r.montant > 0 ? ' · ' + eur(r.montant) : ''} · ${freqLabel(r.freq)}${r.paiement ? ' · action + paiement' : ''}</span></div><div class="li-act li-act-col">${acts}</div>`;
+    const bf = el.querySelector('[data-fait]'); if (bf) bf.addEventListener('click', () => { markRappelDone(r); renderHome(); });
+    const bp = el.querySelector('[data-paye]'); if (bp) bp.addEventListener('click', () => { markRappelPaye(r); renderHome(); });
     const cb = el.querySelector('[data-caisse]'); if (cb) cb.addEventListener('click', () => { if (typeof modalRebaseLiquide === 'function') modalRebaseLiquide(); });
     box.appendChild(el);
   });
@@ -7428,6 +7445,7 @@ function renderRappels() {
         ${r.freq === 'trimestriel' ? `<label>Mois de départ (1-12)<input data-k="moisAnchor" type="number" min="1" max="12" value="${r.moisAnchor || 1}"/></label>` : ''}
         <label>Montant indicatif<input data-k="montant" type="number" min="0" step="1" value="${r.montant || ''}"/></label>
       </div>
+      <label class="chk2"><input type="checkbox" data-k="paiement" ${r.paiement ? 'checked' : ''}/> Suivi du paiement (2 statuts : « fait » + « payé »)</label>
       <p class="hint">${esc(rappelSchedText(r))}</p>`;
     el.querySelector('[data-k="actif"]').addEventListener('change', (e) => { r.actif = e.target.checked; saveSettings(); renderRappels(); renderHome(); });
     el.querySelector('[data-k="libelle"]').addEventListener('input', (e) => { r.libelle = e.target.value; saveSettings(); });
@@ -7436,6 +7454,7 @@ function renderRappels() {
     { const me = el.querySelector('[data-k="mois"]'); if (me) me.addEventListener('change', (e) => { r.mois = Math.min(12, Math.max(1, Math.round(parseNum(e.target.value) || 1))); saveSettings(); renderRappels(); }); }
     { const ma = el.querySelector('[data-k="moisAnchor"]'); if (ma) ma.addEventListener('change', (e) => { r.moisAnchor = Math.min(12, Math.max(1, Math.round(parseNum(e.target.value) || 1))); saveSettings(); renderRappels(); }); }
     el.querySelector('[data-k="montant"]').addEventListener('change', (e) => { r.montant = Math.max(0, parseNum(e.target.value) || 0); saveSettings(); renderHome(); });
+    el.querySelector('[data-k="paiement"]').addEventListener('change', (e) => { r.paiement = e.target.checked; saveSettings(); renderHome(); });
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce rappel ?')) return; S.rappels = S.rappels.filter((x) => x.id !== r.id); saveSettings(); renderRappels(); renderHome(); });
     box.appendChild(el);
   });
