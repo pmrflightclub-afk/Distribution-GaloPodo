@@ -99,6 +99,11 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .cm-status.none { color: var(--muted); font-style: italic; }
 .cm-filters { gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
 .cm-filters select, .cm-filters input { flex: 1 1 160px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: .9rem; }
+.rdv-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); border: 1px solid var(--warn); border-radius: 8px; padding: 4px 8px; font-size: .8rem; font-weight: 600; margin: 6px 0 0; }
+.rdv-patho { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 6px; }
+.ch-patho { margin-top: 4px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: .82rem; }
+.ch-patho-rec input[type=number] { width: 48px; padding: 2px 4px; }
+.ch-patho-rec select { padding: 2px 4px; }
 .list-item.clickable { cursor: pointer; }
 .list-item.clickable:hover { border-color: var(--accent); }
 .list-item.clickable:active { background: var(--card); }

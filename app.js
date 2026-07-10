@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.14';
+const APP_VERSION = '1.2.15';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.15', date: '2026-07-10',
+    ajouts: [
+      'Suivi pathologique (fourbure / NPAS / infection) : dans la carte d\'un cheval pris en charge, une case « 🔁 2ᵉ RDV — suivi rapproché » active un second rendez-vous avec une récurrence propre (tous les 1 à 4 jours OU semaines), EN PLUS du suivi de parage à 5 semaines. Le réglage est mémorisé sur la fiche du cheval.',
+      'Programmer le suivi (RDV) : les chevaux en suivi pathologique ont un 2ᵉ RDV rapproché distinct, avec un statut « Maintenir » (reprogramme l\'occurrence suivante) ou « Arrêter » (fin du suivi). À un RDV pathologique, le parage n\'est pas reprogrammé (il garde son propre cycle).',
+      'Prise de RDV et récupération d\'agenda : indication visuelle (⚠) quand un cheval a déjà un rendez-vous à venir (dès le lendemain) à moins de 5 semaines. Le RDV du jour même est ignoré. Informatif, non bloquant.',
+    ],
+  },
   {
     version: '1.2.14', date: '2026-07-10',
     ajouts: [
@@ -2646,7 +2654,7 @@ function attachEventToTour(ev, client) {
 // puis rattache l'événement à la tournée du jour.
 function recuperateEvent(ev) {
   const matches = matchClientsForEvent(ev);
-  const attach = (client) => { const r = attachEventToTour(ev, client); closeModal(); const st = $('agendaStatus'); if (st) { st.className = 'status ok'; st.textContent = (r.created ? 'Tournée créée' : 'Ajouté à la tournée') + ' du ' + (ev.day ? fmtDateFr(ev.day) : '') + ' → ' + fullName(client) + '.'; } };
+  const attach = (client) => { const r = attachEventToTour(ev, client); closeModal(); const st = $('agendaStatus'); if (st) { const conflits = (activeChevaux(client) || []).filter((h) => chevalRdvConflicts(client.id, h.id, ev.day).length).map((h) => h.nom); st.className = conflits.length ? 'status warn' : 'status ok'; st.textContent = (r.created ? 'Tournée créée' : 'Ajouté à la tournée') + ' du ' + (ev.day ? fmtDateFr(ev.day) : '') + ' → ' + fullName(client) + '.' + (conflits.length ? ' ⚠ RDV déjà prévu (moins de 5 sem) pour : ' + conflits.join(', ') + '.' : ''); } };
   let h = `<div class="modal-head"><b>Récupérer l'événement</b><button class="x" id="mX">✕</button></div>
     <p class="hint">« ${esc(ev.title)} »${ev.day ? ' · ' + esc(fmtDateFr(ev.day)) : ''}${ev.location ? ' · 📍 ' + esc(ev.location) : ''}</p>`;
   h += matches.length ? '<h2 style="font-size:.9rem">Client connu proposé</h2><div id="recMatches"></div>' : '<p class="hint">Aucun client connu ne correspond à cet événement.</p>';
@@ -3635,7 +3643,9 @@ function renderEditorArrets(locked) {
           opts += ck('data-supp="difficile"', cv && cv.difficile, 'Cheval difficile', !acte);
           const dp = dernierParageInfo(cl.clientId, ph.nom, currentTour.date); // temps écoulé depuis le dernier parage/visite (tournées clôturées)
           const pInfo = dp ? ` <span class="td-eta" title="Dernier parage/visite : ${esc(fmtDateFr(dp.date))}">⏱ ${dp.days < 7 ? dp.days + ' j' : Math.round(dp.days / 7) + ' sem'}</span>` : '';
-          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
+          const sp = fiche ? (fiche.suiviPatho || null) : null; const spOn = !!(sp && sp.actif); // suivi pathologique (2ᵉ RDV rapproché) porté par la FICHE cheval
+          const pathoSuiviHtml = (acte && !cancelled && fiche) ? `<div class="ch-patho"><label class="ch-opt"><input type="checkbox" data-psact="${pi}" ${spOn ? 'checked' : ''}/> 🔁 2ᵉ RDV — suivi rapproché (fourbure / NPAS / infection)</label>${spOn ? ` <span class="ch-patho-rec">tous les <input type="number" data-psval="${pi}" min="1" max="4" value="${Math.min(4, Math.max(1, sp.valeur || 1))}"/> <select data-psunit="${pi}"><option value="jours"${sp.unite !== 'semaines' ? ' selected' : ''}>jour(s)</option><option value="semaines"${sp.unite === 'semaines' ? ' selected' : ''}>semaine(s)</option></select></span>` : ''}</div>` : '';
+          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>${pathoSuiviHtml}`}</div>`;
         });
         h += '</div>';
         // Prestation visite choisie (affichée sous le tableau, modifiable) — par cheval dont la case Visite est cochée.
@@ -3676,6 +3686,22 @@ function renderEditorArrets(locked) {
           const ph = pool[+inp.dataset.pi], cv = ensureCv(ph), key = inp.dataset.supp;
           if (!e.target.checked) { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; saveTournees(); recomputeMoney(); refreshChips(+inp.dataset.pi); return; }
           modalSupplement(ph.nom, cv, key, () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // saisie montant HT + éligibilité remise
+        }));
+        // Suivi pathologique (2ᵉ RDV rapproché) : activation + récurrence, portées par la FICHE cheval (persistent d'une tournée à l'autre).
+        const ficheOf = (pi) => cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(pool[pi].nom)) : null;
+        wrap.querySelectorAll('[data-psact]').forEach((inp) => inp.addEventListener('change', (e) => {
+          const fi = ficheOf(+inp.dataset.psact); if (!fi) return;
+          if (e.target.checked) fi.suiviPatho = Object.assign({ unite: 'semaines', valeur: 1 }, fi.suiviPatho || {}, { actif: true });
+          else if (fi.suiviPatho) fi.suiviPatho.actif = false;
+          saveClients(); renderEditorArrets(locked);
+        }));
+        wrap.querySelectorAll('[data-psval]').forEach((inp) => inp.addEventListener('change', (e) => {
+          const fi = ficheOf(+inp.dataset.psval); if (!fi) return;
+          fi.suiviPatho = Object.assign({ unite: 'semaines', actif: true }, fi.suiviPatho || {}, { valeur: Math.min(4, Math.max(1, parseInt(e.target.value, 10) || 1)) }); saveClients();
+        }));
+        wrap.querySelectorAll('[data-psunit]').forEach((sel) => sel.addEventListener('change', (e) => {
+          const fi = ficheOf(+sel.dataset.psunit); if (!fi) return;
+          fi.suiviPatho = Object.assign({ valeur: 1, actif: true }, fi.suiviPatho || {}, { unite: e.target.value }); saveClients();
         }));
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
         el.appendChild(wrap);
@@ -7674,7 +7700,7 @@ function modalAssignRdvCheval(client, cheval, reportedItems) {
     <p class="hint" id="arCvPrev"></p>
     <div class="actions"><button class="btn primary block" id="arCvOk">Enregistrer le RDV</button></div>`);
   $('mX').addEventListener('click', closeModal);
-  const prev = () => { const d = $('arCvDate').value; const pv = rdvDayPreview(d); $('arCvPrev').innerHTML = d ? `<b>${fmtDateFr(d)}</b> — arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}` : ''; };
+  const prev = () => { const d = $('arCvDate').value; const pv = rdvDayPreview(d); $('arCvPrev').innerHTML = d ? `<b>${fmtDateFr(d)}</b> — arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}` + chevalRdvWarnHtml(client.id, cheval.id, d) : ''; };
   $('arCvDate').addEventListener('change', prev); prev();
   $('arCvOk').addEventListener('click', () => {
     const d = $('arCvDate').value; if (!d) { closeModal(); return; }
@@ -8375,16 +8401,40 @@ function setChevalHeure(t, clientId, chevalObjs, heure) {
   (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; a.heure = heure; (cl.chevaux || []).forEach((cv) => { if (ids.has(cv.id)) cv.heure = heure; }); }));
 }
 // Planifie un client (avec des chevaux) sur une date : crée la tournée du jour si absente (en cours/à venir), sinon complète l'existante.
-function scheduleClientOnDate(date, client, chevalObjs, heure) {
+// rdvType (optionnel) : 'parage' (défaut) ou 'patho' → tague les chevaux planifiés pour savoir, à l'occurrence suivante, quel suivi reproposer.
+function scheduleClientOnDate(date, client, chevalObjs, heure, rdvType) {
   let t = tournees.find((x) => x.date === date && statusOf(x) !== 'cloturee');
   let created = false;
   if (!t) { t = { id: uid(), date, nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, payments: {}, result: null, createdAt: Date.now() }; tournees.push(t); created = true; }
   const prev = currentTour; currentTour = t;
   addClientToTour(client, chevalObjs);
   currentTour = prev;
+  if (rdvType) { const ids = new Set((chevalObjs || []).map((h) => h.id)); (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== client.id) return; (cl.chevaux || []).forEach((cv) => { if (ids.has(cv.id)) cv.rdvType = rdvType; }); })); }
   if (heure) setChevalHeure(t, client.id, chevalObjs, heure);
   t.result = null; saveTournees();
   return { tour: t, created };
+}
+// Date proposée pour le 2ᵉ RDV « suivi pathologique » : baseDate + N jours ou N semaines (récurrence portée par la fiche cheval).
+function proposedPathoDate(baseDate, sp) {
+  const n = Math.min(4, Math.max(1, (sp && sp.valeur) || 1));
+  return addDaysStr(baseDate || todayStr(), (sp && sp.unite === 'semaines') ? n * 7 : n);
+}
+// RDV à venir (dès DEMAIN — le jour même est ignoré) d'un cheval, à moins de 5 semaines d'une date donnée → alerte « déjà un RDV » (informative).
+function chevalRdvConflicts(clientId, chevalId, newDate) {
+  const tomorrow = addDaysStr(todayStr(), 1);
+  const p = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, (m || 1) - 1, d || 1); };
+  const out = [];
+  allTours().forEach((t) => {
+    if (statusOf(t) === 'cloturee' || !t.date || t.date < tomorrow) return;
+    if (newDate && t.date === newDate) return; // la date visée elle-même n'est pas un « doublon »
+    if (newDate && Math.abs(p(t.date) - p(newDate)) > 35 * 86400000) return; // hors fenêtre de 5 semaines
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; (cl.chevaux || []).forEach((cv) => { if (cv.id === chevalId && !chevalCancelled(cv)) out.push(t.date); }); }));
+  });
+  return [...new Set(out)].sort();
+}
+function chevalRdvWarnHtml(clientId, chevalId, newDate) {
+  const c = chevalRdvConflicts(clientId, chevalId, newDate);
+  return c.length ? `<div class="rdv-warn">⚠ Ce cheval a déjà un RDV le ${c.map((d) => esc(fmtDateFr(d))).join(', ')} (moins de 5 semaines).</div>` : '';
 }
 // Aperçu d'une journée : arrêts déjà prévus (toutes tournées) + agenda privé.
 function rdvDayPreview(date) {
@@ -8403,42 +8453,70 @@ function modalRDV(t, arret, cid, onDone) {
   const pool = chevalPool.length ? chevalPool : activeChevaux(client);
   const proposed = proposedRdvDate(t.date || todayStr());
   if (!pool.length) { alert('Aucun cheval à replacer pour ce client.'); if (onDone) onDone(); return; }
-  const common = { date: proposed }; // date du RDV commun (chevaux « même RDV »)
-  const entries = pool.map((h) => ({ id: h.id, nom: h.nom, ignore: false, sep: false, date: proposed }));
+  const common = { date: proposed }; // date du RDV commun (chevaux « même RDV » parage)
+  const entries = pool.map((h) => {
+    const cvCur = ((arrCl && arrCl.chevaux) || []).find((x) => x.id === h.id) || {};
+    const curType = cvCur.rdvType === 'patho' ? 'patho' : 'parage'; // nature de l'occurrence courante (comment ce cheval a été programmé)
+    const fiche = (client.chevaux || []).find((x) => norm(x.nom) === norm(h.nom));
+    const sp = (fiche && fiche.suiviPatho && fiche.suiviPatho.actif) ? fiche.suiviPatho : null;
+    return { id: h.id, nom: h.nom, fiche, curType, hasPatho: !!sp,
+      ignore: curType === 'patho', sep: false, date: proposed, // parage : ignoré par défaut si l'occurrence courante est un RDV pathologique
+      pathoStatus: sp ? 'maintenir' : null, pathoDate: sp ? proposedPathoDate(t.date || todayStr(), sp) : '' };
+  });
   const previewHtml = (d) => { const pv = rdvDayPreview(d); return `<b>${d ? fmtDateFr(d) : '—'}</b> — Arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}`; };
   const render = () => {
     openModal(`<div class="modal-head"><b>📅 Programmer le suivi (RDV)</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">Client : <b>${esc(fullName(client))}</b>. Par défaut, tous les chevaux sont replacés sur le <b>même RDV</b>. Cochez « date différente » pour placer un cheval un autre jour, ou « ne pas replacer » pour l'ignorer.</p>
-      <div class="card" style="margin-bottom:8px"><label>Date du RDV commun<input type="date" id="rdvCommon" value="${common.date}"/></label><p class="hint" id="rdvCommonPrev"></p></div>
+      <p class="hint">Client : <b>${esc(fullName(client))}</b>. Le prochain <b>parage</b> est par défaut sur le RDV commun (« date différente » / « ne pas replacer » par cheval). Les chevaux en <b>suivi pathologique</b> ont un 2ᵉ RDV rapproché à part (Maintenir / Arrêter).</p>
+      <div class="card" style="margin-bottom:8px"><label>Date du RDV commun (parage)<input type="date" id="rdvCommon" value="${common.date}"/></label><p class="hint" id="rdvCommonPrev"></p></div>
       <div id="rdvChevaux"></div>
       <div class="actions"><button class="btn primary block" id="rdvOk">Enregistrer les RDV</button></div>`);
     $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
-    const cp = $('rdvCommonPrev'); const upCommon = () => { if (cp) cp.innerHTML = previewHtml(common.date); };
-    $('rdvCommon').addEventListener('change', (e) => { common.date = e.target.value; upCommon(); });
-    upCommon();
+    const cp = $('rdvCommonPrev'); if (cp) cp.innerHTML = previewHtml(common.date);
+    $('rdvCommon').addEventListener('change', (e) => { common.date = e.target.value; render(); });
     const box = $('rdvChevaux');
     entries.forEach((en) => {
-      const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.ignore ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
-      let inner = `<div class="rdv-ch-head"><b>🐴 ${esc(en.nom)}</b><label class="rdv-ch-opt"><input type="checkbox" data-ign ${en.ignore ? 'checked' : ''}/> ne pas replacer</label></div>`;
-      if (!en.ignore) {
-        inner += `<label class="rdv-ch-opt"><input type="checkbox" data-sep ${en.sep ? 'checked' : ''}/> date différente</label>`;
-        if (en.sep) inner += `<label>Date du RDV<input type="date" data-date value="${en.date}"/></label><p class="hint" data-prev></p>`;
-        else inner += `<p class="hint">→ sur le RDV commun</p>`;
+      const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.curType !== 'patho' && en.ignore ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
+      let inner = `<div class="rdv-ch-head"><b>🐴 ${esc(en.nom)}</b>${en.curType === 'patho' ? ' <span class="badge">RDV patho</span>' : ''}</div>`;
+      // --- Parage (prochain suivi normal) ---
+      if (en.curType === 'patho') {
+        inner += `<p class="hint">RDV pathologique effectué : le <b>parage</b> suit son propre cycle et n'est pas reprogrammé ici.</p>`;
+      } else {
+        inner += `<label class="rdv-ch-opt"><input type="checkbox" data-ign ${en.ignore ? 'checked' : ''}/> ne pas replacer le parage</label>`;
+        if (!en.ignore) {
+          inner += `<label class="rdv-ch-opt"><input type="checkbox" data-sep ${en.sep ? 'checked' : ''}/> date différente</label>`;
+          if (en.sep) inner += `<label>Date du parage<input type="date" data-date value="${en.date}"/></label><p class="hint" data-prev></p>` + chevalRdvWarnHtml(client.id, en.id, en.date);
+          else inner += `<p class="hint">→ sur le RDV commun</p>` + chevalRdvWarnHtml(client.id, en.id, common.date);
+        }
+      }
+      // --- Suivi pathologique (2ᵉ RDV) : statut Maintenir / Arrêter décidé ici, après paiement ---
+      if (en.hasPatho) {
+        inner += `<div class="rdv-patho"><b>🔁 Suivi pathologique</b>
+          <label class="rdv-ch-opt"><input type="radio" name="ps${en.id}" data-psstat value="maintenir" ${en.pathoStatus === 'maintenir' ? 'checked' : ''}/> Maintenir</label>
+          <label class="rdv-ch-opt"><input type="radio" name="ps${en.id}" data-psstat value="arreter" ${en.pathoStatus === 'arreter' ? 'checked' : ''}/> Arrêter</label>`;
+        if (en.pathoStatus === 'maintenir') inner += `<label>Date du 2ᵉ RDV<input type="date" data-psdate value="${en.pathoDate}"/></label><p class="hint" data-psprev></p>` + chevalRdvWarnHtml(client.id, en.id, en.pathoDate);
+        inner += `</div>`;
       }
       wrap.innerHTML = inner;
-      wrap.querySelector('[data-ign]').addEventListener('change', (e) => { en.ignore = e.target.checked; render(); });
+      const ign = wrap.querySelector('[data-ign]'); if (ign) ign.addEventListener('change', (e) => { en.ignore = e.target.checked; render(); });
       const sep = wrap.querySelector('[data-sep]'); if (sep) sep.addEventListener('change', (e) => { en.sep = e.target.checked; render(); });
       const dt = wrap.querySelector('[data-date]'), prev = wrap.querySelector('[data-prev]');
-      if (dt) { const up = () => { if (prev) prev.innerHTML = previewHtml(dt.value); }; dt.addEventListener('change', (e) => { en.date = e.target.value; up(); }); up(); }
+      if (dt) { if (prev) prev.innerHTML = previewHtml(dt.value); dt.addEventListener('change', (e) => { en.date = e.target.value; render(); }); }
+      wrap.querySelectorAll('[data-psstat]').forEach((r) => r.addEventListener('change', (e) => { en.pathoStatus = e.target.value; render(); }));
+      const pdt = wrap.querySelector('[data-psdate]'), pprev = wrap.querySelector('[data-psprev]');
+      if (pdt) { if (pprev) pprev.innerHTML = previewHtml(pdt.value); pdt.addEventListener('change', (e) => { en.pathoDate = e.target.value; render(); }); }
       box.appendChild(wrap);
     });
     $('rdvOk').addEventListener('click', () => {
-      const byDate = {};
-      entries.forEach((en) => { if (en.ignore) return; const d = en.sep ? en.date : common.date; if (!d) return; (byDate[d] = byDate[d] || []).push(en.id); });
       let scheduled = false;
-      Object.keys(byDate).forEach((d) => {
-        const chevalObjs = (client.chevaux || []).filter((h) => byDate[d].includes(h.id));
-        if (chevalObjs.length) { scheduleClientOnDate(d, client, chevalObjs); scheduled = true; }
+      // Parage : regroupement par date commune/séparée (occurrences « parage » non ignorées seulement).
+      const byDate = {};
+      entries.forEach((en) => { if (en.curType === 'patho' || en.ignore) return; const d = en.sep ? en.date : common.date; if (!d) return; (byDate[d] = byDate[d] || []).push(en.id); });
+      Object.keys(byDate).forEach((d) => { const chevalObjs = (client.chevaux || []).filter((h) => byDate[d].includes(h.id)); if (chevalObjs.length) { scheduleClientOnDate(d, client, chevalObjs, null, 'parage'); scheduled = true; } });
+      // Suivi pathologique : 2ᵉ RDV (Maintenir) ou arrêt du suivi (statut porté par la fiche cheval).
+      entries.forEach((en) => {
+        if (!en.hasPatho) return;
+        if (en.pathoStatus === 'arreter') { if (en.fiche && en.fiche.suiviPatho) { en.fiche.suiviPatho.actif = false; saveClients(); } return; }
+        if (en.pathoStatus === 'maintenir' && en.pathoDate) { const h = (client.chevaux || []).find((x) => x.id === en.id); if (h) { scheduleClientOnDate(en.pathoDate, client, [h], null, 'patho'); scheduled = true; } }
       });
       if (scheduled && arret) { arret.rdvDone = true; saveTournees(); } // marque l'arrêt : RDV suivant programmé
       closeModal(); if (onDone) onDone();
