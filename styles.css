@@ -423,19 +423,23 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .cl-entry.cl-read { opacity: .58; }
 
 /* Création de planche de contact (photos gardées en mémoire uniquement) */
-.pl-pot { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
-.pl-thumb { position: relative; width: 92px; border: 2px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--card); cursor: pointer; }
-.pl-thumb.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
-.pl-thumb img { display: block; width: 100%; height: 66px; object-fit: cover; }
-.pl-thumb .pl-th-load { height: 66px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 1.2rem; }
-.pl-thumb .pl-th-x { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border: 0; border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; font-size: .74rem; line-height: 1; cursor: pointer; }
-.pl-thumb.placed::after { content: '✓'; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: .7rem; display: flex; align-items: center; justify-content: center; }
-.pl-th-meta { display: flex; flex-direction: column; gap: 1px; padding: 3px 3px 4px; }
-.pl-th-meta .pl-th-date { font-size: .6rem; padding: 1px 2px; width: 100%; }
-.pl-th-jour { display: flex; align-items: center; gap: 3px; font-size: .62rem; color: var(--muted); }
-.pl-th-setdate { font-size: .58rem; padding: 2px 3px; width: 100%; border: 1px solid var(--line); border-radius: 5px; background: var(--card); color: var(--muted); cursor: pointer; }
-.pl-th-assign { display: flex; flex-direction: column; gap: 2px; padding: 0 3px 4px; }
-.pl-th-assign select { font-size: .58rem; padding: 2px; width: 100%; }
+/* Pot photos : UNE image par ligne, pleine largeur, grande ; date + 2 menus (membre/angle) dessous, agrandis. */
+.pl-pot { display: flex; flex-direction: column; gap: 14px; margin: 6px 0 2px; }
+.pl-thumb { position: relative; width: 100%; border: 2px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); cursor: pointer; }
+.pl-thumb.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent); }
+.pl-thumb img { display: block; width: 100%; height: auto; max-height: 58vh; object-fit: contain; background: #f4f4f4; }
+.pl-thumb .pl-th-load { height: 180px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 1.4rem; }
+.pl-thumb .pl-th-x { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; }
+.pl-thumb.placed::after { content: '✓'; position: absolute; top: 6px; left: 6px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: .95rem; display: flex; align-items: center; justify-content: center; }
+.pl-th-meta { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 8px 10px 4px; }
+.pl-th-meta .pl-th-date { font-size: .9rem; padding: 7px; flex: 1 1 auto; }
+.pl-th-jour { display: flex; align-items: center; gap: 3px; font-size: .8rem; color: var(--muted); }
+.pl-th-setdate { font-size: .82rem; padding: 7px 10px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--muted); cursor: pointer; }
+.pl-th-assign { display: flex; flex-direction: row; gap: 8px; padding: 0 10px 10px; }
+.pl-th-assign select { font-size: 1rem; padding: 9px; width: 100%; }
+/* Champ « Note (bas de page) » : titre au-dessus, textarea pleine largeur en dessous (au lieu d'être collé à droite du titre). */
+.pl-note-field { display: flex; flex-direction: column; align-items: stretch; }
+.pl-note-field textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 5px; resize: vertical; }
 .ac-nom { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .ac-nom input { flex: 1; min-width: 0; font-size: .8rem; padding: 2px 5px; }
 .pl-grid-wrap { overflow-x: auto; margin: 8px 0; }

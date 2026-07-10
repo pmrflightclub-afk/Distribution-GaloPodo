@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.3';
+const APP_VERSION = '1.2.4';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.4', date: '2026-07-10',
+    corrections: [
+      'Planches — « Générer le PDF » : le PDF ne contient plus l\'interface de l\'application. Il produit désormais directement la planche propre (en-tête, grille, pied de page) et la télécharge. Fini les pages parasites avec le pot de photos / l\'aperçu.',
+      'Le pot de photos à dispatcher affiche maintenant UNE image par ligne, en grand (pleine largeur), avec les deux menus (membre / angle) agrandis en dessous. On fait défiler vers le bas pour les photos suivantes. Le « toucher pour sélectionner puis placer dans la grille » est conservé.',
+      'Le champ « Note (bas de page) » passe sous son titre, sur toute la largeur (au lieu d\'être collé à droite du titre).',
+    ],
+    ajouts: [
+      'Planche de contact : plus de case « parage/ferrage ». Le champ « durée du cycle précédent » (semaines, obligatoire) apparaît automatiquement selon le type de planche (stade) choisi — parage, ferrage ou déferrage.',
+    ],
+  },
   {
     version: '1.2.3', date: '2026-07-10',
     ajouts: [
@@ -6800,7 +6811,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', parageFerrage: false, dureeCycleSem: 0, photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', dureeCycleSem: 0, photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -6819,9 +6830,8 @@ function modalPlancheCreate(type, prefill) {
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>
         ${type === 'contact' ? `<label>Type de planche (stade)<select id="plCstade"><option value="">(aucun)</option>${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
         ${type === 'contact' && plCreate.hasChevalPage ? `<label class="chk2"><input type="checkbox" id="plCchevalPage" ${plCreate.chevalPageOn ? 'checked' : ''}/> ➕ Ajouter la page « Cheval »</label>` : ''}
-        <label class="chk2"><input type="checkbox" id="plCparage" ${plCreate.parageFerrage ? 'checked' : ''}/> 🐴 Planche de parage / ferrage (durée du cycle obligatoire)</label>
-        <label id="plCcycleWrap" style="${plCreate.parageFerrage ? '' : 'display:none'}">Durée du cycle précédent (semaines)<input type="number" id="plCcycle" min="1" step="1" value="${plCreate.dureeCycleSem || ''}" placeholder="ex : 7"/></label>
-        <label>Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
+        <label id="plCcycleWrap" style="${plancheStadeCareNeeded(plCreate.stade) ? '' : 'display:none'}">Durée du cycle précédent (semaines) — <b>obligatoire</b><input type="number" id="plCcycle" min="1" step="1" value="${plCreate.dureeCycleSem || ''}" placeholder="ex : 7"/></label>
+        <label class="pl-note-field">Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
       </section>
       <section class="card">
         <div class="card-head"><h3 class="rsub" style="margin:0">Photos</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCdateAll">📅 Tout dater à la planche</button><button class="btn small" id="plCimport">＋ Importer des photos</button></div></div>
@@ -6849,14 +6859,24 @@ function modalPlancheCreate(type, prefill) {
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
   $('plCdate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } }); // ouvre l'agenda au clic (comme la date de tournée)
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
-  if ($('plCparage')) $('plCparage').addEventListener('change', (e) => { plCreate.parageFerrage = e.target.checked; const w = $('plCcycleWrap'); if (w) w.style.display = e.target.checked ? '' : 'none'; });
   if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
-  if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; });
+  if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; const w = $('plCcycleWrap'); if (w) w.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; }); // le champ « durée du cycle » suit le stade (parage/ferrage/déferrage)
   if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); plRenderPot(); plRenderGrid(); });
   $('plCimport').onclick = () => $('plCfiles').click();
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
-  $('plCpdf').onclick = planchePrint;
+  // « Générer le PDF » = PDF propre (moteur canvas, en-tête/grille/pied) téléchargé. N'utilise PLUS window.print (qui imprimait l'interface de l'app).
+  $('plCpdf').onclick = async () => {
+    if (plancheCycleMissing(plCreate)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines) avant de générer.'); return; }
+    if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo n\'est placée dans la grille. Générer quand même la planche (vide) ?')) return;
+    const btn = $('plCpdf'); const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Génération…';
+    try {
+      const blob = await planchePdfBlob();
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = plancheBaseName(plCreate) + '.pdf'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+      plancheTodoDone(plCreate);
+    } catch (e) { alert('Impossible de générer la planche.'); }
+    if ($('plCpdf')) { btn.disabled = false; btn.textContent = old; }
+  };
   $('plCmail').onclick = async () => {
     if (plancheCycleMissing(plCreate)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines) avant d\'envoyer.'); return; }
     if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo placée. Envoyer quand même la planche (vide) ?')) return;
@@ -7028,8 +7048,10 @@ function plGeom(land, nCols, refRows) {
 // Nombre de lignes de référence (le plus grand parmi les pages) → cellules de taille FIXE d'une page/planche à l'autre.
 function plRefRows(st) { let m = 1; (st.pages || []).forEach((pg, pi) => { m = Math.max(m, plPageRows(pi).length); }); return m; }
 function plancheBaseName(st) { st = st || plCreate || {}; return ['planche', (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval'), st.date || todayStr(), (st.stade ? norm(st.stade).replace(/\s+/g, '-') : '')].filter(Boolean).join('-'); }
-// Vrai si la planche exige la durée du cycle précédent (parage/ferrage) mais qu'elle n'est pas renseignée → bloque la génération.
-function plancheCycleMissing(st) { return !!(st && st.parageFerrage && !(st.dureeCycleSem > 0)); }
+// La durée du cycle précédent est requise quand le STADE de la planche relève du parage / ferrage / déferrage.
+function plancheStadeCareNeeded(stade) { return /parage|ferr/.test(norm(stade || '')); }
+// Vrai si la planche exige la durée du cycle précédent (selon le stade) mais qu'elle n'est pas renseignée → bloque la génération.
+function plancheCycleMissing(st) { return !!(st && plancheStadeCareNeeded(st.stade) && !(st.dureeCycleSem > 0)); }
 // Génère le PDF de la planche via l'impression navigateur (l'OS choisit « Enregistrer en PDF »). Positionnement en mm (marges 0,5 mm), cellules fixes. Rien n'est stocké.
 function planchePrint() {
   if (!plCreate) return;
