@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.8';
+const APP_VERSION = '1.2.9';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.9', date: '2026-07-10',
+    corrections: [
+      'Arrêt à plusieurs clients : une seule heure PAR CLIENT (l\'heure de l\'arrêt = celle du 1ᵉʳ client). Fini l\'heure d\'arrêt en plus des heures clients. L\'heure d\'arrêt (à côté de Waze/Route) a été retirée.',
+      'Chaque client a un en-tête unique EN TÊTE de son bloc : nom · total TTC · 🕘 heure · Paiement · RDV · Prêt · Planche · Réduction articles, puis ses chevaux/actes, ses articles et sa facture. Le nom du client n\'apparaît plus en double.',
+    ],
+  },
   {
     version: '1.2.8', date: '2026-07-10',
     corrections: [
@@ -3443,7 +3450,6 @@ function renderEditorArrets(locked) {
         <div class="grow"><b>${esc(labelFor(a))}</b>${aFinal ? ' <span class="badge badge-lock">🔒 clôturé</span>' : ''}${addrNoir ? ' <span class="badge badge-noir">⛔ adresse liste noire</span>' : ''}<div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
         ${locked ? '' : '<button class="a-del" data-del title="Retirer">✕</button>'}
       </div>
-      ${(!locked && single) ? `<label class="a-reduc-row"><span>Réduction articles</span><span class="fu"><input type="number" data-reduc-h min="0" max="100" step="1" value="${currentTour.reductions && currentTour.reductions[single.clientId] || ''}" placeholder="0"/><span class="fu-unit">%</span></span></label>` : ''}
       <div class="a-grid"><label class="grow">Tarif appliqué<select data-type ${locked ? 'disabled' : ''}><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label></div>`;
     el.querySelector('[data-type]').value = a.type || 'tournee';
     // Temps trajet + (tournée non clôturée) Waze / Route / Paiement. Tournée clôturée = figée : aucun bouton (paiement se gère en Compta).
@@ -3451,14 +3457,12 @@ function renderEditorArrets(locked) {
     const estMin = legMins[i] != null ? Math.round(legMins[i]) : null;
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
     const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
-    // Heure de RDV de l'arrêt (1 par arrêt), Waze, Route (grisé ✓ si temps réel encodé), RDV (grisé ✓ si suivant programmé), Paiement.
-    // Barre d'arrêt : heure d'arrêt + déplacement (Waze / Route / Étape) — communs à l'adresse. Paiement / RDV / Prêt / Planche sont PAR CLIENT (plus bas).
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de l'arrêt (générale)">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ' <button class="btn small" data-etape title="Itinéraire de cet arrêt vers l\'arrêt suivant (ou le retour)">🧭 Étape</button>' : ''}</span>`}`;
+    // Barre d'arrêt : temps de trajet + déplacement (Waze / Route / Étape) — communs à l'adresse. L'HEURE est PAR CLIENT (l'heure d'arrêt = celle du 1ᵉʳ client). Paiement / RDV / Prêt / Planche aussi par client (plus bas).
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ' <button class="btn small" data-etape title="Itinéraire de cet arrêt vers l\'arrêt suivant (ou le retour)">🧭 Étape</button>' : ''}</span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
       { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const next = currentTour.arrets[i + 1]; const destAddr = next ? next.addr : ((currentTour.arrivee && addrStr(currentTour.arrivee).trim()) ? currentTour.arrivee : tourHome()); if (!destAddr || !addrStr(destAddr).trim()) { alert('Pas d\'arrêt suivant ni d\'arrivée définie.'); return; } openMapsRoute(addrQuery(a.addr), addrQuery(destAddr)); }); } // étape = arrêt courant → arrêt suivant (ou retour)
-      const ah = nav.querySelector('[data-aheure]'); if (ah) ah.addEventListener('change', (e) => { a.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = ah.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!a.heure); if (i === 0 && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } });
     }
     el.appendChild(nav);
     if (!locked) {
@@ -3476,14 +3480,28 @@ function renderEditorArrets(locked) {
         currentTour.arrets.splice(np, 0, moved);
         renderEditorArrets(locked); scheduleGeoRecalc();
       });
-      const rh = el.querySelector('[data-reduc-h]');
-      if (rh) rh.addEventListener('input', (e) => { currentTour.reductions[single.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
     }
     const R = currentTour.result;
     if (!currentTour.reductions) currentTour.reductions = {};
     // UN BLOC COMPLET PAR CLIENT : actes → actions (paiement/RDV/prêt/planche + heure client) → articles → facture. Les clients ne sont plus mélangés.
     a.clients.forEach((cl) => {
       const m = (R && R.parClient) ? R.parClient.find((x) => x.clientId === cl.clientId) : null;
+      // ===== En-tête du client EN TÊTE : nom · TTC · heure du client · Paiement/RDV/Prêt/Planche · réduction =====
+      {
+        const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '';
+        const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
+        actBar.innerHTML = `<div class="ac-name">👤 <b>${esc(clientName(cl.clientId))}</b>${m ? ' · ' + eur(m.totalTTC) + ' TTC' : ''}</div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button> <button class="btn small" data-crdv>📅 RDV</button> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><label class="reduc-row"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        el.appendChild(actBar);
+        if (!locked) {
+          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); }
+          actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), null, cl.clientId));
+          actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
+          actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
+          actBar.querySelector('[data-cplanche]').addEventListener('click', () => modalArretPlanche(currentTour, a, cl.clientId));
+          { const rd = actBar.querySelector('[data-creduc]'); if (rd) rd.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); }); }
+        }
+      }
+      // ===== Actes des chevaux (édition uniquement si tournée non clôturée) =====
       if (!locked) {
         const cObj = clients.find((x) => x.id === cl.clientId);
         const arretAddrN = norm(addrStr(a.addr));
@@ -3495,8 +3513,7 @@ function renderEditorArrets(locked) {
         const ensureCv = (ph) => { let cv = cvOf(ph); if (!cv) { cv = { id: ph.id, nom: ph.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '', present: true }; cl.chevaux.push(cv); } return cv; };
         const wrap = document.createElement('div'); wrap.className = 'a-patho';
         // Nom + réduction affichés ici SEULEMENT si plusieurs clients (sinon c'est dans l'en-tête de l'arrêt).
-        let h = single ? '' : `<div class="patho-client">${esc(clientName(cl.clientId))}</div>`;
-        if (!single) h += `<label class="reduc-row"><span class="grow">Réduction articles</span><input type="number" data-reduc step="1" min="0" max="100" value="${currentTour.reductions[cl.clientId] || ''}" placeholder="0" style="width:70px"/><span>%</span></label>`;
+        let h = ''; // nom + réduction sont désormais dans l'en-tête du client (au-dessus)
         // Actes des chevaux : un menu déroulant par cheval (mobile) + liste des actes actifs (chips). Parage OU Visite = cheval pris en charge.
         const pathoCols = [];
         if (S.fourbureHT > 0) pathoCols.push({ key: 'fourbure', label: 'Fourbure' });
@@ -3542,8 +3559,6 @@ function renderEditorArrets(locked) {
           if (cv && !cancelled) { if (cv.parage) chips.push('Parage'); if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); } if (hasPlancheTodo(cl.clientId, pool[pi].nom, currentTour.date)) chips.push('📷 Photo'); pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); }); if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : '')); if (fiche && fiche.lourd && acte) chips.push('⚖ Lourd (auto)'); }
           const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>'; }
         };
-        const rin = wrap.querySelector('[data-reduc]');
-        if (rin) rin.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
           const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.key;
           cv[key] = e.target.checked;
@@ -3574,19 +3589,6 @@ function renderEditorArrets(locked) {
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
         el.appendChild(wrap);
       } // fin des actes (édition uniquement si tournée non clôturée)
-
-      // ----- Actions du client : heure client (agenda) + Paiement / RDV / Prêt / Planche (individuels) -----
-      const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId);
-      const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-      actBar.innerHTML = `<div class="ac-name">👤 <b>${esc(clientName(cl.clientId))}</b>${m ? ' · ' + eur(m.totalTTC) + ' TTC' : ''}</div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button> <button class="btn small" data-crdv>📅 RDV</button> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div>`}`;
-      el.appendChild(actBar);
-      if (!locked) {
-        { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); }); }
-        actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), null, cl.clientId));
-        actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
-        actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
-        actBar.querySelector('[data-cplanche]').addEventListener('click', () => modalArretPlanche(currentTour, a, cl.clientId));
-      }
 
       // ----- Articles de CE client (actes auto par cheval + articles manuels) -----
       const remiseChkHtml = (off, dis) => locked ? '' : `<label class="chk2 art-remise" title="${dis ? 'Remise produit désactivée (catalogue)' : 'La réduction client s\'applique à cette ligne'}"><input type="checkbox" data-remise ${off ? '' : 'checked'}${dis ? ' disabled' : ''}/> Remise</label>`;
@@ -7363,10 +7365,12 @@ function legMinutesFor(t) {
   (t.arrets || []).forEach((a, i) => { const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; cum += seg * mpk; out.push(R && R.rows ? cum : null); });
   return out;
 }
-// Heure de RDV d'un arrêt : 1 par arrêt (a.heure) ; repli sur la plus tôt des heures par cheval (ancien modèle).
+// Heure de RDV d'un arrêt = heure du 1ᵉʳ client de l'arrêt (une heure par client) ; repli sur l'ancienne heure d'arrêt (a.heure) puis la plus tôt des heures par cheval.
 function arretHeure(a) {
+  const c0 = a && a.clients && a.clients[0];
+  if (c0 && c0.heure) return c0.heure;
   if (a && a.heure) return a.heure;
-  let best = ''; (a && a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (cv.heure && (!best || cv.heure < best)) best = cv.heure; }));
+  let best = ''; (a && a.clients || []).forEach((cl) => { if (cl.heure && (!best || cl.heure < best)) best = cl.heure; (cl.chevaux || []).forEach((cv) => { if (cv.heure && (!best || cv.heure < best)) best = cv.heure; }); });
   return best;
 }
 // Heure de départ estimée de la tournée = heure de RDV du 1er arrêt − temps de trajet (réel si encodé, sinon estimé) jusqu'à lui.
