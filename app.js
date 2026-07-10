@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.10';
+const APP_VERSION = '1.2.11';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.11', date: '2026-07-10',
+    ajouts: [
+      'Éditeur de tournée : l\'aide « Parage / Visite » est repliée par défaut (petite flèche ℹ️ pour la déplier) — l\'écran est plus compact pour chaque client/arrêt.',
+    ],
+    corrections: [
+      'En-tête client (arrêt) : boutons réordonnés — ligne 1 : Heure · Prêt · Planche ; ligne 2 : RDV · Paiement ; la Réduction articles passe seule en dessous, alignée à droite sans déborder.',
+      'Fiche client : présentation en sections claires (Contact & société avec « actif » · Paramètres politesse/liste noire · Adresse client · Société — informations légales). Fiche cheval : sections Identification · Détails · Adresse du cheval, avec « Reprendre une adresse connue » placé au-dessus du « Nom de l\'adresse ». Purement visuel — aucun changement de fonctionnement.',
+    ],
+  },
   {
     version: '1.2.10', date: '2026-07-10',
     ajouts: [
@@ -2722,20 +2732,29 @@ function editClient(existing, onSaved, prefillNom, prefill) {
   openModal(`
     <div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} client</b><button class="x" id="mX">✕</button></div>
     ${draft ? '<div class="draft-bar">✏️ Brouillon en cours restauré<button class="btn small" id="cDraftReset">Effacer le brouillon</button></div>' : ''}
-    <div class="row"><label style="flex:0 0 90px">Civilité<select id="cCivilite"><option value="">—</option><option value="Mr"${w.civilite === 'Mr' ? ' selected' : ''}>Mr</option><option value="Mme"${w.civilite === 'Mme' ? ' selected' : ''}>Mme</option></select></label><label class="grow">Prénom<input type="text" id="cPrenom" value="${esc(w.prenom || '')}" /></label><label class="grow">Nom<input type="text" id="cNom" value="${esc(w.nom)}" /></label></div>
-    <div class="row"><label class="grow">Email<input type="email" id="cEmail" value="${esc(w.email || '')}" placeholder="contact@exemple.be" /></label><label class="grow">Téléphone<input type="text" id="cTel" value="${esc(w.tel || '')}" /></label></div>
-    <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
-    <label class="chk2"><input type="checkbox" id="cPolitesse" ${w.politesse !== false ? 'checked' : ''}/> Politesse dans le SMS (Mr/Mme + nom ; sinon prénom)</label>
-    <label class="chk2"><input type="checkbox" id="cActif" ${w.actif !== false && !w.blacklist ? 'checked' : ''}/> Client actif</label>
-    <label class="chk2"><input type="checkbox" id="cNoir" ${w.blacklist ? 'checked' : ''}/> Liste noire (client refusé — non proposé pour les tournées)</label>
-    <h2 style="font-size:.9rem">Adresse du client</h2><div id="cAddr"></div>
-    <div id="cLegal">
-      <h2 style="font-size:.9rem">Informations légales</h2>
+    <div class="form-sec">
+      <div class="form-sec-h">Contact &amp; société</div>
+      <div class="row"><label style="flex:0 0 90px">Civilité<select id="cCivilite"><option value="">—</option><option value="Mr"${w.civilite === 'Mr' ? ' selected' : ''}>Mr</option><option value="Mme"${w.civilite === 'Mme' ? ' selected' : ''}>Mme</option></select></label><label class="grow">Prénom<input type="text" id="cPrenom" value="${esc(w.prenom || '')}" /></label><label class="grow">Nom<input type="text" id="cNom" value="${esc(w.nom)}" /></label></div>
+      <div class="row"><label class="grow">Email<input type="email" id="cEmail" value="${esc(w.email || '')}" placeholder="contact@exemple.be" /></label><label class="grow">Téléphone<input type="text" id="cTel" value="${esc(w.tel || '')}" /></label></div>
+      <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
+      <label class="chk2"><input type="checkbox" id="cActif" ${w.actif !== false && !w.blacklist ? 'checked' : ''}/> Client actif</label>
+    </div>
+    <div class="form-sec">
+      <div class="form-sec-h">Paramètres</div>
+      <label class="chk2"><input type="checkbox" id="cPolitesse" ${w.politesse !== false ? 'checked' : ''}/> Politesse dans le SMS (Mr/Mme + nom ; sinon prénom)</label>
+      <label class="chk2"><input type="checkbox" id="cNoir" ${w.blacklist ? 'checked' : ''}/> Liste noire (client refusé — non proposé pour les tournées)</label>
+    </div>
+    <div class="form-sec">
+      <div class="form-sec-h">Adresse du client</div>
+      <div id="cAddr"></div>
+    </div>
+    <div id="cLegal" class="form-sec">
+      <div class="form-sec-h">Société — informations légales</div>
       <p class="hint" id="cLegalHint">Renseignez d'abord la <b>Société</b> pour activer ces champs.</p>
       <label class="chk2"><input type="checkbox" id="cAssuj" ${w.assujettiTva ? 'checked' : ''}/> Assujetti à la TVA</label>
       <div class="row"><label class="grow">N° de TVA<input type="text" id="cTvaNum" value="${esc(w.tvaNum)}" placeholder="${S.pays === 'fr' ? 'FR12 345678901' : 'BE0123.456.789'}" /></label><label class="grow">${S.pays === 'fr' ? 'N° SIRET' : "N° d'entreprise"}<input type="text" id="cEntNum" value="${esc(w.entrepriseNum)}" /></label></div>
       <label class="chk2"><input type="checkbox" id="cSocMeme" ${w.societeMemeAdresse !== false ? 'checked' : ''}/> Société à l'adresse du client</label>
-      <div id="cSocAddrWrap" ${w.societeMemeAdresse !== false ? 'style="display:none"' : ''}><h3 style="font-size:.82rem;color:var(--muted);margin:8px 0 4px">Adresse de la société</h3><div id="cSocAddr"></div></div>
+      <div id="cSocAddrWrap" ${w.societeMemeAdresse !== false ? 'style="display:none"' : ''}><div class="form-sec-h sub">Adresse de la société</div><div id="cSocAddr"></div></div>
     </div>
     <div class="card-head"><h2 style="font-size:.9rem">Chevaux</h2><button class="btn small" id="cAddCheval">+ Cheval</button></div>
     <div id="cChevaux"></div>
@@ -2759,26 +2778,35 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     w.chevaux.forEach((h, i) => {
       h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = 'specifique';
       const row = document.createElement('div'); row.className = 'cheval';
-      row.innerHTML = `<div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><label class="chk2"><input type="checkbox" data-actif ${h.actif !== false ? 'checked' : ''}/> Actif</label><button class="a-del" data-del>✕</button></div>
+      row.innerHTML = `<div class="form-sub">
+        <div class="form-sub-h">Identification</div>
+        <div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><label class="chk2"><input type="checkbox" data-actif ${h.actif !== false ? 'checked' : ''}/> Actif</label><button class="a-del" data-del>✕</button></div>
         <label class="chk2 chk-wrap"><input type="checkbox" data-lourd ${h.lourd ? 'checked' : ''}/> Cheval lourd (supplément appliqué automatiquement à chaque tournée)</label>
         ${h.lourd ? `<label>Montant du supplément « lourd » (HT, vide = tarif par défaut)<input type="number" data-lourdht step="0.01" min="0" value="${h.lourdHT != null ? h.lourdHT : ''}" placeholder="défaut : ${fmtNum(S.lourdHT || 0, 2)} € HT"/></label>` : ''}
         <label class="chk2 chk-wrap"><input type="checkbox" data-bl ${h.blacklist ? 'checked' : ''}/> Liste noire (ne plus proposer de RDV)</label>
+        <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
+      </div>
+      <div class="form-sub">
+        <div class="form-sub-h">Détails</div>
         <label>Date de naissance<input type="date" data-naiss value="${h.dateNaissance || ''}"/></label>
         <label>Race<input type="text" data-race value="${esc(h.race || '')}" placeholder="Race (facultatif)"/></label>
-        <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
         ${h.dateDemandeSuivi ? `<label>Date de la demande de suivi (issue du mail)<input type="date" data-dds value="${h.dateDemandeSuivi}"/></label>` : ''}
         <label>Discipline / usage<input type="text" data-disc value="${esc(h.discipline || '')}" placeholder="loisir, sport, trait, élevage…"/></label>
         ${h.anamnese ? '<button class="btn small" data-anam>📄 Formulaire (anamnèse)</button>' : ''}
-        <label>Adresse du cheval<select data-src>
+      </div>
+      <div class="form-sub">
+        <div class="form-sub-h">Adresse du cheval</div>
+        <label>Type d'adresse<select data-src>
           <option value="client">Même adresse que le client</option>
           <option value="societe">Adresse de la société</option>
           <option value="specifique">Adresse spécifique</option>
         </select></label>
         ${h.addrSource === 'specifique'
-    ? `<label class="chk2 chk-wrap"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> Adresse privée (nom = nom du client)</label>${h.addrPrivee ? '' : `<label>Nom de l'adresse<input type="text" data-addrnom value="${esc(h.addrNom || '')}" placeholder="Écurie du Nord, pré de…"/></label>`}
-        <label>Reprendre une adresse connue<input type="text" data-addrfind list="chevAddrList" placeholder="Nom client / société / adresse déjà connue…"/></label>`
+    ? `<label class="chk2 chk-wrap"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> Adresse privée (nom = nom du client)</label>
+        <label>Reprendre une adresse connue<input type="text" data-addrfind list="chevAddrList" placeholder="Nom client / société / adresse déjà connue…"/></label>${h.addrPrivee ? '' : `<label>Nom de l'adresse<input type="text" data-addrnom value="${esc(h.addrNom || '')}" placeholder="Écurie du Nord, pré de…"/></label>`}`
     : `<p class="hint">Nom de l'adresse : <b>${esc(chevalAddrNom(w, h))}</b> (repris ${h.addrSource === 'societe' ? 'de la société' : 'du client'}).</p>`}
-        <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>`;
+        <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>
+      </div>`;
       row.querySelector('[data-src]').value = h.addrSource;
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
       row.querySelector('[data-actif]').addEventListener('change', (e) => { h.actif = e.target.checked; saveDraft(); });
@@ -3500,7 +3528,7 @@ function renderEditorArrets(locked) {
       {
         const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '';
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name">👤 <b>${esc(clientName(cl.clientId))}</b>${m ? ' · ' + eur(m.totalTTC) + ' TTC' : ''}</div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button> <button class="btn small" data-crdv>📅 RDV</button> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><label class="reduc-row"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name">👤 <b>${esc(clientName(cl.clientId))}</b>${m ? ' · ' + eur(m.totalTTC) + ' TTC' : ''}</div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); }
@@ -3559,7 +3587,7 @@ function renderEditorArrets(locked) {
         h += '</div>';
         // Prestation visite choisie (affichée sous le tableau, modifiable) — par cheval dont la case Visite est cochée.
         pool.forEach((ph, pi) => { const cv = cvOf(ph); if (cv && cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; h += `<div class="reduc-row"><span class="grow">🐴 ${esc(ph.nom)} — Visite : <b>${art ? esc(art.libelle) + ' (' + eur(art.prixHT) + ')' : '<i>à choisir</i>'}</b></span><button class="btn small" data-vispick="${pi}">${art ? 'Modifier' : 'Choisir'}</button></div>`; } });
-        h += `<p class="hint" style="margin-top:2px"><b>Parage</b> et <b>Visite</b> sont les 2 prestations qui rattachent un cheval à la tournée : un cheval sans parage ni visite n'est ni compté ni facturé. Fourbure / NPAS / Infection s'activent dès que Parage <b>ou</b> Visite est coché. « Visite » ouvre la liste des prestations « Visite » du catalogue et l'ajoute à la facture (section Articles), sans changer le tarif de déplacement de l'arrêt.</p>`;
+        h += `<details class="acte-help"><summary>ℹ️ Parage / Visite — aide</summary><p class="hint" style="margin-top:2px"><b>Parage</b> et <b>Visite</b> sont les 2 prestations qui rattachent un cheval à la tournée : un cheval sans parage ni visite n'est ni compté ni facturé. Fourbure / NPAS / Infection s'activent dès que Parage <b>ou</b> Visite est coché. « Visite » ouvre la liste des prestations « Visite » du catalogue et l'ajoute à la facture (section Articles), sans changer le tarif de déplacement de l'arrêt.</p></details>`;
         wrap.innerHTML = h;
         // Met à jour les « chips » (actes actifs) d'un cheval SANS re-render complet (garde le menu ＋Actes ouvert).
         const refreshChips = (pi) => {

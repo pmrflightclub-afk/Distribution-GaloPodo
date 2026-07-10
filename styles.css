@@ -355,6 +355,21 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .cp-item b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Section désactivée (ex. infos légales sans société) : grisée + inactive, texte lisible */
 .section-off { opacity: .5; pointer-events: none; }
+/* Sections internes des fiches (client) : encadré léger avec titre */
+.form-sec { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; background: var(--bg); }
+.form-sec-h { font-size: .78rem; font-weight: 700; color: var(--strong); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 8px; }
+.form-sec-h.sub { text-transform: none; letter-spacing: 0; font-size: .8rem; color: var(--muted); margin: 8px 0 4px; }
+/* Sous-sections internes des chevaux : simple séparateur pointillé dans la carte cheval */
+.form-sub { margin: 10px 0 0; padding-top: 10px; border-top: 1px dashed var(--line); }
+.form-sub:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.form-sub-h { font-size: .74rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; margin: 0 0 6px; }
+/* Aide « Parage / Visite » repliable (masquée par défaut) dans l'éditeur de tournée */
+.acte-help { margin-top: 4px; }
+.acte-help > summary { cursor: pointer; font-size: .8rem; color: var(--accent); list-style: revert; }
+.acte-help[open] > summary { margin-bottom: 2px; }
+/* Réduction articles : champ aligné à droite, sans déborder de la section */
+.a-client-hd .reduc-row.ac-reduc { justify-content: flex-end; flex-wrap: wrap; }
+.a-client-hd .reduc-row.ac-reduc input { flex: 0 0 auto; }
 /* Barre de brouillon (mémoire de saisie restaurée) */
 .draft-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #fde68a22; border: 1px solid var(--warn); color: var(--warn); border-radius: 10px; padding: 8px 12px; font-size: .82rem; font-weight: 700; margin-bottom: 10px; }
 .draft-bar .btn { flex: none; }
