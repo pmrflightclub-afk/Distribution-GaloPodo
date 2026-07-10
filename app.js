@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.150';
+const APP_VERSION = '1.2.1';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.1', date: '2026-07-10',
+    ajouts: [
+      'Configuration initiale obligatoire : au premier lancement, un écran demande votre pays, votre forme juridique et votre régime de TVA (assujetti ou franchise) avant de pouvoir utiliser l\'app. Une carte « ⚙️ Configuration requise » reste sur l\'accueil tant que ce n\'est pas fait.',
+      'Le pays et le régime de TVA se verrouillent dès votre première facturation (avant, ils restent corrigeables) — pour éviter toute incohérence légale sur les factures émises. La forme juridique et les taux restent ajustables. Une sauvegarde complète est téléchargée automatiquement au moment de valider (point de récupération) ; si des factures avec TVA existent déjà, l\'écran vous signale « vous étiez en Assujetti ».',
+      'Compta analytique — Compta → Provisions : calcul automatique des montants à mettre de côté (TVA à reverser, provision véhicule, provision matériel, cotisations sociales, impôts) à partir de vos mois comptables ENCODÉS (données figées). Trois bases : CA main d\'œuvre (parage/visite/pathologies/difficile/lourd), matériel refacturé, déplacement refacturé. Chaque provision a un statut (à provisionner → provisionné → viré) et un compte/sous-compte de destination ; l\'accumulation court jusqu\'au « Viré ». Carte d\'accueil « 💼 Provisions » sobre après « 🔔 Rappels du mois ».',
+      'Provisions multi-pays Belgique ET France. Belgique : personne physique (INASTI + IPP) ou société (ISoc + précompte). France : Micro-entrepreneur (cotisations en % du CA + IR au barème ou versement libératoire), Entreprise individuelle au réel (cotisations TNS + IR) ou Société à l\'IS (15/25 % + flat tax dividendes). La liste des formes s\'adapte au pays ; tous les taux/tranches sont éditables (⚙️ Paramètres fiscaux).',
+      'Régime de TVA « Franchise en base » : TVA forcée à 0 % partout (TTC = HT) + mention légale automatique sur chaque facture (France « TVA non applicable, art. 293 B du CGI » ; Belgique « Régime de la franchise – art. 56bis »). Les tournées déjà figées gardent leur TVA d\'origine.',
+      'Le champ « N° de TVA / SIRET » de la fiche client s\'adapte au pays configuré. Fiabilité multi-appareils : au démarrage, la mise à jour de l\'application est appliquée AVANT la synchronisation Google Drive.',
+    ],
+  },
   {
     version: '1.1.150', date: '2026-07-10',
     ajouts: [
@@ -1261,8 +1272,41 @@ if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; 
 if (!S.comptaRecu || typeof S.comptaRecu !== 'object') S.comptaRecu = {};       // { 'tourId:clientId': true } — paiement reçu (virement/facture)
 if (!S.comptaDemarche || typeof S.comptaDemarche !== 'object') S.comptaDemarche = {}; // { 'tourId:clientId': true } — démarche comptable effectuée (mois archivé)
 if (!Array.isArray(S.notesCredit)) S.notesCredit = []; // notes de crédit : { id, clientId, clientNom, tourId, tourDate, chevalNom, montantTTC, motif, note, date, rembourse, rembourseAt }
+// F-b : provisions analytiques (calculées sur les mois à démarche « encode » figée). Forme juridique + taux fiscaux paramétrables.
+// Valeurs possibles : BE physique|societe · FR micro|ei|societe_fr (validées/normalisées selon le pays dans renderProvisions).
+if (typeof S.formeJuridique !== 'string' || !S.formeJuridique) S.formeJuridique = (S.pays === 'fr') ? 'micro' : 'physique';
+if (!S.fiscalParams || typeof S.fiscalParams !== 'object') S.fiscalParams = {};
+S.fiscalParams = Object.assign({
+  // — Belgique —
+  inasti: [{ plafond: 74092, taux: 20.5 }, { plafond: 109170, taux: 14.16 }, { plafond: null, taux: 0 }], // cotisations sociales INASTI (dégressif, sur revenu net annuel)
+  ipp: [{ plafond: 15820, taux: 25 }, { plafond: 27920, taux: 40 }, { plafond: 48320, taux: 45 }, { plafond: null, taux: 50 }], // IPP progressif
+  isocBas: 20, isocHaut: 25, isocPlafond: 100000, remuMin: 45000, // ISoc BE : taux réduit 20 % ≤100k si rému dirigeant ≥ 45k, sinon 25 %
+  // — France —
+  microCotisPct: 21.2,   // cotisations sociales micro (BIC prestations de services artisanales)
+  microCFP: 0.3,         // contribution à la formation professionnelle
+  microAbattement: 50,   // abattement forfaitaire IR micro-BIC services
+  versementLiberatoire: false, microIRPct: 1.7, // option versement libératoire de l'IR (% du CA)
+  irFr: [{ plafond: 11497, taux: 0 }, { plafond: 29315, taux: 11 }, { plafond: 83823, taux: 30 }, { plafond: 180294, taux: 41 }, { plafond: null, taux: 45 }], // barème IR (progressif)
+  eiCotisPct: 45,        // cotisations TNS (entreprise individuelle au réel) ≈ 45 % du bénéfice
+  isFrBas: 15, isFrHaut: 25, isFrPlafond: 42500, // IS France : 15 % ≤ 42 500 € puis 25 %
+  pfuDividendes: 30,     // flat tax (PFU) sur dividendes FR
+  // — commun aux deux pays (sociétés) —
+  tauxProvVehicule: 100, // % du déplacement refacturé mis en provision véhicule (entretien/amortissement)
+  tauxProvMateriel: 100, // % du matériel refacturé mis en provision renouvellement matériel
+  remuDirigeant: 45000, precompteDiv: 30, dividendes: 0, // rémunération dirigeant annuelle, précompte/PFU sur dividendes
+}, S.fiscalParams);
+if (!Array.isArray(S.fiscalParams.irFr) || !S.fiscalParams.irFr.length) S.fiscalParams.irFr = [{ plafond: 11497, taux: 0 }, { plafond: 29315, taux: 11 }, { plafond: 83823, taux: 30 }, { plafond: 180294, taux: 41 }, { plafond: null, taux: 45 }];
+if (!Array.isArray(S.fiscalParams.inasti) || !S.fiscalParams.inasti.length) S.fiscalParams.inasti = [{ plafond: 74092, taux: 20.5 }, { plafond: 109170, taux: 14.16 }, { plafond: null, taux: 0 }];
+if (!Array.isArray(S.fiscalParams.ipp) || !S.fiscalParams.ipp.length) S.fiscalParams.ipp = [{ plafond: 15820, taux: 25 }, { plafond: 27920, taux: 40 }, { plafond: 48320, taux: 45 }, { plafond: null, taux: 50 }];
+if (!Array.isArray(S.provisions)) S.provisions = mkProvisions(S.comptes, S.sousComptes); // { id, libelle, base, compteId, sousCompteId, actif, override(null|nb), tvaDeductible, statut, clearedThrough('YYYY-MM') }
+S.provisions.forEach((p) => { if (!p.statut) p.statut = 'a_provisionner'; if (typeof p.clearedThrough !== 'string') p.clearedThrough = ''; });
 S.parage = Object.assign({ prixHT: 0, tvaPct: 21 }, S.parage || {});
 if (!S.pays) S.pays = 'be';
+// Régime TVA : '' (NEUTRE, non choisi → force la config initiale) | 'normal' (assujetti) | 'franchise' (franchise en base → TVA 0 % + mention légale).
+if (S.tvaRegime !== 'franchise' && S.tvaRegime !== 'normal') S.tvaRegime = '';
+// Paramétrage central obligatoire au 1ᵉʳ lancement (pays + forme juridique + régime TVA). Pays & régime FIGÉS après validation.
+if (typeof S.setupDone !== 'boolean') S.setupDone = false;
+if (typeof S.setupLocked !== 'boolean') S.setupLocked = false;
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (typeof S.googleClientId !== 'string') S.googleClientId = '';
 if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
@@ -1387,6 +1431,14 @@ function mkComptes() {
   ];
 }
 const SOUS_COMPTE_FAMILLES = { A: 'Rémunération & social', B: 'Impôts & taxes', C: 'Véhicule', D: 'Matériel', E: 'Charges externes', F: 'Réserves' };
+// F-b : formes juridiques disponibles selon le pays (provisions).
+const REGIMES = {
+  be: [{ id: 'physique', label: 'Personne physique (indépendant)' }, { id: 'societe', label: 'Société' }],
+  fr: [{ id: 'micro', label: 'Micro-entrepreneur (auto)' }, { id: 'ei', label: 'Entreprise individuelle (réel)' }, { id: 'societe_fr', label: 'Société (IS)' }],
+};
+const regimesForPays = () => REGIMES[S.pays] || REGIMES.be;
+const defaultFormeForPays = (pays) => (REGIMES[pays] || REGIMES.be)[0].id;
+const isSocieteForme = (f) => f === 'societe' || f === 'societe_fr';
 function mkSousComptes(comptes) {
   const cid = ((comptes || []).find((c) => c.type === 'epargne') || (comptes || [])[0] || {}).id || null;
   const base = [
@@ -1398,6 +1450,21 @@ function mkSousComptes(comptes) {
     ['Réserve entreprise', 'F'], ['Vacances / congés', 'F'], ['Réserve gros investissement', 'F'],
   ];
   return base.map(([nom, famille]) => ({ id: uid(), nom, famille, compteId: cid, actif: true }));
+}
+// F-b : provisions de base (auto). Rattachées au sous-compte analytique et au compte d'épargne par défaut.
+function mkProvisions(comptes, sousComptes) {
+  const epargne = ((comptes || []).find((c) => c.type === 'epargne') || (comptes || [])[0] || {}).id || null;
+  const scOf = (nom) => { const s = (sousComptes || []).find((x) => x.nom === nom); return s ? s.id : null; };
+  const mk = (libelle, base, scNom) => ({ id: uid(), libelle, base, compteId: epargne, sousCompteId: scOf(scNom), actif: true, override: null, tvaDeductible: 0, statut: 'a_provisionner', clearedThrough: '' });
+  return [
+    mk('TVA à reverser', 'tva', 'TVA à reverser'),
+    mk('Provision véhicule', 'vehicule', 'Amortissement véhicule'),
+    mk('Provision matériel', 'materiel', 'Renouvellement matériel / outillage'),
+    mk('Cotisations sociales', 'social', 'Cotisations sociales (INASTI)'),
+    mk('Impôt sur le revenu', 'ipp', 'Provision IPP'),
+    mk('Impôt sur les sociétés', 'isoc', 'Provision IPP'), // affiché seulement en forme « société »
+    mk('Impôt sur dividendes', 'precompte', 'Provision IPP'), // idem
+  ];
 }
 function mkFrais() {
   const out = [];
@@ -2009,7 +2076,7 @@ function haversineKm(a, b) {
   const s = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
 }
-const rate = () => (S.tvaRate || 0) / 100;
+const rate = () => (S.tvaRegime === 'franchise' ? 0 : (S.tvaRate || 0) / 100); // franchise en base → 0 % (non assujetti)
 const fuelPerKmHT = () => (S.consoL100 / 100) * S.prixPleinL / (1 + rate());
 // Odomètre = somme des km de toutes les tournées calculées (chaque tournée compte une fois).
 // ---- Odomètre RÉEL / ESTIMÉ ----
@@ -2521,7 +2588,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       <h2 style="font-size:.9rem">Informations légales</h2>
       <p class="hint" id="cLegalHint">Renseignez d'abord la <b>Société</b> pour activer ces champs.</p>
       <label class="chk2"><input type="checkbox" id="cAssuj" ${w.assujettiTva ? 'checked' : ''}/> Assujetti à la TVA</label>
-      <div class="row"><label class="grow">N° de TVA<input type="text" id="cTvaNum" value="${esc(w.tvaNum)}" placeholder="BE0123.456.789" /></label><label class="grow">N° d'entreprise / SIRET<input type="text" id="cEntNum" value="${esc(w.entrepriseNum)}" /></label></div>
+      <div class="row"><label class="grow">N° de TVA<input type="text" id="cTvaNum" value="${esc(w.tvaNum)}" placeholder="${S.pays === 'fr' ? 'FR12 345678901' : 'BE0123.456.789'}" /></label><label class="grow">${S.pays === 'fr' ? 'N° SIRET' : "N° d'entreprise"}<input type="text" id="cEntNum" value="${esc(w.entrepriseNum)}" /></label></div>
       <label class="chk2"><input type="checkbox" id="cSocMeme" ${w.societeMemeAdresse !== false ? 'checked' : ''}/> Société à l'adresse du client</label>
       <div id="cSocAddrWrap" ${w.societeMemeAdresse !== false ? 'style="display:none"' : ''}><h3 style="font-size:.82rem;color:var(--muted);margin:8px 0 4px">Adresse de la société</h3><div id="cSocAddr"></div></div>
     </div>
@@ -3530,7 +3597,10 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     }
     r.montantTTC = ttc(r.montantHT);
   });
-  const stdRate = rate();
+  const stdRate = rate(); // 0 en franchise (via rate())
+  const franchise = S.tvaRegime === 'franchise';
+  const pctRate = (pct) => franchise ? 0 : (pct || 0) / 100; // TVA effective d'une ligne (0 en franchise)
+  const effPct = (pct) => franchise ? 0 : (pct || 0);        // % TVA effectif STOCKÉ sur la ligne (pour l'affichage facture)
   const baseMat = baseMateriel();
   const cmap = {};
   const getC = (id, nom) => cmap[id] || (cmap[id] = { clientId: id, nom, deplacement: [], materiel: [], articles: [], htDep: 0, htMat: 0, htArt: 0, tvaArt: 0 });
@@ -3546,21 +3616,21 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
       cl.chevaux.forEach((c) => {
         // Parage & équilibrage (par cheval) → 1ʳᵉ ligne d'article (remisable). « Offrir » (c.parageOffert) → montant 0 (prixHT conservé pour les stats).
         if (c.parage && S.parage && S.parage.prixHT > 0) {
-          const rr = (S.parage.tvaPct || 0) / 100, off = !!c.parageOffert, unit = S.parage.prixHT;
-          m.articles.push({ libelle: 'Parage et équilibrage', chevaux: [c.nom], qte: 1, prixHT: unit, tvaPct: S.parage.tvaPct || 0, ht: off ? 0 : unit, tva: off ? 0 : unit * rr, ttc: off ? 0 : unit * (1 + rr), parage: true, offert: off, remiseOff: !!parageNoRemise[cl.clientId], remiseProduit: true, remiseLiquide: true });
+          const rr = pctRate(S.parage.tvaPct), off = !!c.parageOffert, unit = S.parage.prixHT;
+          m.articles.push({ libelle: 'Parage et équilibrage', chevaux: [c.nom], qte: 1, prixHT: unit, tvaPct: effPct(S.parage.tvaPct), ht: off ? 0 : unit, tva: off ? 0 : unit * rr, ttc: off ? 0 : unit * (1 + rr), parage: true, offert: off, remiseOff: !!parageNoRemise[cl.clientId], remiseProduit: true, remiseLiquide: true });
           m.htArt += off ? 0 : unit; m.tvaArt += off ? 0 : unit * rr;
         }
         // Visite par cheval (INDÉPENDANTE du parage) : article catalogue. « Offrir » (c.visiteOffert) → 0.
         if (c.visite && c.visiteArtId) {
           const av = (S.articlesCatalogue || []).find((x) => x.id === c.visiteArtId);
-          if (av) { const rr = (av.tvaPct || 0) / 100, off = !!c.visiteOffert, unit = av.prixHT || 0; m.articles.push({ libelle: av.libelle, chevaux: [c.nom], qte: 1, prixHT: unit, tvaPct: av.tvaPct || 0, ht: off ? 0 : unit, tva: off ? 0 : unit * rr, ttc: off ? 0 : unit * (1 + rr), visite: true, offert: off, remiseOff: false, remiseProduit: av.remiseProduit !== false, remiseLiquide: av.remiseLiquide !== false }); m.htArt += off ? 0 : unit; m.tvaArt += off ? 0 : unit * rr; }
+          if (av) { const rr = pctRate(av.tvaPct), off = !!c.visiteOffert, unit = av.prixHT || 0; m.articles.push({ libelle: av.libelle, chevaux: [c.nom], qte: 1, prixHT: unit, tvaPct: effPct(av.tvaPct), ht: off ? 0 : unit, tva: off ? 0 : unit * rr, ttc: off ? 0 : unit * (1 + rr), visite: true, offert: off, remiseOff: false, remiseProduit: av.remiseProduit !== false, remiseLiquide: av.remiseLiquide !== false }); m.htArt += off ? 0 : unit; m.tvaArt += off ? 0 : unit * rr; }
         }
         // Matériel consommable = base seule, facturé UNIQUEMENT avec un parage.
         if (c.parage && baseMat > 0) { m.materiel.push({ nom: c.nom, adresse: r.adresse, baseHT: baseMat, fourbure: false, npas: false, infection: false, ht: baseMat, ttc: baseMat * (1 + stdRate) }); m.htMat += baseMat; }
         // Fourbure / NPAS / Infection → lignes d'ARTICLE (par cheval). « Offrir » (c.<key>Offert) → 0.
         if (c.parage || c.visite) {
           [['fourbure', 'Fourbure', S.fourbureHT], ['npas', 'NPAS', S.npasHT], ['infection', 'Infection', S.infectionHT]].forEach(([key, lbl, prix]) => {
-            if (c[key] && prix > 0) { const rr = stdRate, off = !!c[key + 'Offert']; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: off ? 0 : prix, tva: off ? 0 : prix * rr, ttc: off ? 0 : prix * (1 + rr), patho: true, offert: off, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += off ? 0 : prix; m.tvaArt += off ? 0 : prix * rr; }
+            if (c[key] && prix > 0) { const rr = stdRate, off = !!c[key + 'Offert']; m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: effPct(S.tvaRate), ht: off ? 0 : prix, tva: off ? 0 : prix * rr, ttc: off ? 0 : prix * (1 + rr), patho: true, offert: off, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += off ? 0 : prix; m.tvaArt += off ? 0 : prix * rr; }
           });
           // Suppléments par cheval « Cheval difficile » / « Cheval lourd » : montant HT propre (sinon tarif par défaut). Éligibilité remise réglable par cheval (défaut oui).
           [['difficile', 'Cheval difficile', S.difficileHT], ['lourd', 'Cheval lourd', S.lourdHT]].forEach(([key, lbl, defPrix]) => {
@@ -3568,7 +3638,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
             const prix = (c[key + 'HT'] != null && c[key + 'HT'] !== '') ? +c[key + 'HT'] : (defPrix || 0);
             if (!(prix > 0)) return;
             const rr = stdRate, off = !!c[key + 'Offert'], remisable = c[key + 'Remise'] !== false;
-            m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: S.tvaRate, ht: off ? 0 : prix, tva: off ? 0 : prix * rr, ttc: off ? 0 : prix * (1 + rr), supplement: key, offert: off, remiseOff: !remisable, remiseProduit: remisable, remiseLiquide: remisable });
+            m.articles.push({ libelle: lbl, chevaux: [c.nom], qte: 1, prixHT: prix, tvaPct: effPct(S.tvaRate), ht: off ? 0 : prix, tva: off ? 0 : prix * rr, ttc: off ? 0 : prix * (1 + rr), supplement: key, offert: off, remiseOff: !remisable, remiseProduit: remisable, remiseLiquide: remisable });
             m.htArt += off ? 0 : prix; m.tvaArt += off ? 0 : prix * rr;
           });
         }
@@ -3589,9 +3659,9 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     if (!a.impaye && !noms.length) return; // toutes les cibles annulées → ligne retirée
     const qte = a.impaye ? 1 : noms.reduce((s, n) => s + (qByNom[n] || 1), 0);
     const off = !a.impaye && !!a.offert; // « Offrir » : ligne mise à 0 (prixHT conservé pour les stats)
-    const lineHT = off ? 0 : (a.prixHT || 0) * qte, rr = (a.tvaPct || 0) / 100;
+    const lineHT = off ? 0 : (a.prixHT || 0) * qte, rr = pctRate(a.tvaPct);
     const m = getC(a.clientId, clientName(a.clientId));
-    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, qtesByNom: a.impaye ? null : qByNom, prixHT: a.prixHT || 0, tvaPct: a.tvaPct || 0, ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, offert: off, remiseOff: !!(a.remiseOff || a.impaye), remiseProduit: a.impaye ? false : (a.remiseProduit !== false), remiseLiquide: a.impaye ? false : (a.remiseLiquide !== false) }); // impayé (créance) jamais remisé
+    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, qtesByNom: a.impaye ? null : qByNom, prixHT: a.prixHT || 0, tvaPct: effPct(a.tvaPct), ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, offert: off, remiseOff: !!(a.remiseOff || a.impaye), remiseProduit: a.impaye ? false : (a.remiseProduit !== false), remiseLiquide: a.impaye ? false : (a.remiseLiquide !== false) }); // impayé (créance) jamais remisé
     m.htArt += lineHT; m.tvaArt += lineHT * rr;
   });
   const parClient = Object.values(cmap).map((m) => {
@@ -3820,7 +3890,7 @@ function renderResultUI(R) {
   f.innerHTML = `<div class="inv-line"><span>Total HT</span><span>${eur(R.totalHT + arHT)}</span></div>
     <div class="inv-line"><span>TVA</span><span>${eur(R.totalTVA + arTVA)}</span></div>
     ${Math.abs(arTTC) >= 0.005 ? `<div class="inv-line" style="color:var(--warn)"><span>dont arrondi caisse (liquide)</span><span>${eur(arTTC)}</span></div>` : ''}
-    <div class="inv-line inv-total"><span>Total TTC</span><span>${eur(R.totalTTC + arTTC)}</span></div>`;
+    <div class="inv-line inv-total"><span>Total TTC</span><span>${eur(R.totalTTC + arTTC)}</span></div>${tvaMentionHtml()}`;
   box.appendChild(f);
 }
 
@@ -3856,6 +3926,12 @@ function partialPay(m, payment) {
   const reste = payImpaye(m, payment), recu = payRecu(m, payment), r = rate();
   return { paid: recu, paidHT: recu / (1 + r), reste, resteHT: reste / (1 + r), mode: payment.resteMode === 'virement' ? 'virement' : 'prochaine visite' };
 }
+// Mention légale de TVA (régime de franchise) à porter sur la facture, selon le pays. '' si assujetti normal.
+function tvaMentionText() {
+  if (S.tvaRegime !== 'franchise') return '';
+  return S.pays === 'fr' ? 'TVA non applicable, art. 293 B du CGI' : 'Régime de la franchise de la taxe — TVA non applicable (art. 56bis du Code de la TVA)';
+}
+function tvaMentionHtml() { const t = tvaMentionText(); return t ? `<p class="inv-mention" style="font-size:.85em;color:var(--muted);margin:4px 0 0"><i>${esc(t)}</i></p>` : ''; }
 function clientInvoiceHtml(m, payment) {
   const stdRate = rate();
   // Colonnes : Poste | Prix unitaire | Base HT (×quantité, remise incluse) | TVA | TTC.
@@ -3888,7 +3964,7 @@ function clientInvoiceHtml(m, payment) {
   return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(netTTC)} TTC</span></div>
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${row(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}</tfoot></table></div>`;
+    <tfoot>${row(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}</tfoot></table></div>${tvaMentionHtml()}`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
@@ -4737,10 +4813,18 @@ function comptaData(ym) {
   const r = rate();
   const liquideClients = [], virementClients = [], factureLiqClients = [], factureVirClients = [], aclasserClients = [];
   const posts = {}; const addPost = (lib, ht, tva, ttc) => { const p = posts[lib] = posts[lib] || { libelle: lib, ht: 0, tva: 0, ttc: 0 }; p.ht += ht; p.tva += tva; p.ttc += ttc; };
+  // F-b : décomposition analytique du CA figé du mois (toutes méthodes de paiement confondues, au mois « naturel » de la tournée).
+  // 3 bases de répartition : main d'œuvre (parage/visite/patho/difficile/lourd), matériel refacturé, déplacement refacturé + TVA collectée.
+  let baseMO = 0, baseMat = 0, baseDep = 0, tvaCol = 0;
   allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return;
     const tourYm = (t.date || '').slice(0, 7); // mois « naturel » (date de la tournée)
     t.result.parClient.forEach((m) => {
+      if (tourYm === ym) { // base analytique = CA figé du mois de la tournée, indépendamment du rattachement caisse
+        const depHT = (m.deplacement || []).reduce((s, l) => s + (l.partHT || 0), 0);
+        const matHT = m.htMat || 0;
+        baseMat += matHT; baseDep += depHT; baseMO += (m.totalHT || 0) - matHT - depHT; tvaCol += (m.totalTVA || 0);
+      }
       const p = (t.payments || {})[m.clientId];
       const method = p ? p.method : null; const fac = !!(p && p.facture);
       const mode = method === 'liquide' ? (fac ? 'facliq' : 'liquide') : method === 'virement' ? (fac ? 'facvir' : 'virement') : 'aclasser';
@@ -4775,10 +4859,254 @@ function comptaData(ym) {
   const ncMonth = (S.notesCredit || []).filter((n) => (n.date || '').startsWith(ym));
   const ncTTC = ncMonth.reduce((s, n) => s + (n.montantTTC || 0), 0);
   const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
+  // Les notes de crédit du mois réduisent la base analytique (extourne de CA) : imputées à la main d'œuvre + TVA collectée.
+  const ncHT = ncTTC / (1 + rr), ncTVA = ncTTC - ncHT;
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
     liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
     factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
-    notesCredit: ncMonth, notesCreditTotal };
+    notesCredit: ncMonth, notesCreditTotal,
+    baseMainOeuvreHT: Math.max(0, baseMO - ncHT), baseMaterielHT: baseMat, baseDeplacementHT: baseDep, tvaCollectee: Math.max(0, tvaCol - ncTVA) };
+}
+// ================= F-b : moteur de provisions analytiques =================
+// Garde-fou : l'analytique ne lit QUE les mois « figés » = démarche liquide encodée (S.comptaStatus[ym].liquide === 'encode').
+function provisionMonths() {
+  return Object.keys(S.comptaStatus || {}).filter((ym) => S.comptaStatus[ym] && S.comptaStatus[ym].liquide === 'encode').sort();
+}
+const latestEncodedYm = () => { const m = provisionMonths(); return m.length ? m[m.length - 1] : ''; };
+// Somme des 3 bases analytiques (+ TVA collectée) sur les mois figés strictement postérieurs à sinceYm ('' = tous) + nb de mois de la fenêtre.
+function analyticBases(sinceYm) {
+  let mo = 0, mat = 0, dep = 0, tva = 0, n = 0;
+  provisionMonths().forEach((ym) => { if (sinceYm && ym <= sinceYm) return; const d = comptaData(ym); mo += d.baseMainOeuvreHT; mat += d.baseMaterielHT; dep += d.baseDeplacementHT; tva += d.tvaCollectee; n++; });
+  return { mainOeuvreHT: mo, materielHT: mat, deplacementHT: dep, tvaCollectee: tva, months: n };
+}
+// Impôt cumulé par tranches [{plafond:Number|null, taux:%}] — dégressif INASTI et progressif IPP partagent cette forme.
+function progressiveTax(base, brackets) {
+  let tax = 0, prev = 0;
+  for (const b of (brackets || [])) { const cap = (b.plafond == null) ? Infinity : b.plafond; const amt = Math.max(0, Math.min(base, cap) - prev); tax += amt * ((b.taux || 0) / 100); prev = cap; if (base <= cap) break; }
+  return tax;
+}
+// Montant à provisionner d'une provision, sur sa fenêtre d'accumulation (mois figés depuis son dernier « viré »).
+function provisionComputed(p) {
+  if (!p) return 0;
+  if (p.override != null && p.base !== 'tva') return Math.max(0, p.override); // override manuel force le montant (sauf TVA : override = déductible)
+  const w = analyticBases(p.clearedThrough || '');
+  const fp = S.fiscalParams;
+  const forme = S.formeJuridique, fr = S.pays === 'fr';
+  const caTotal = w.mainOeuvreHT + w.materielHT + w.deplacementHT; // CA encaissé (base des cotisations micro FR)
+  const provVeh = w.deplacementHT * ((fp.tauxProvVehicule || 0) / 100);
+  const provMat = w.materielHT * ((fp.tauxProvMateriel || 0) / 100);
+  const benefWin = Math.max(0, w.mainOeuvreHT - provVeh - provMat); // bénéfice estimé = CA main d'œuvre − provisions véhicule/matériel
+  const wm = w.months;
+  const annualize = (v) => wm > 0 ? v / wm * 12 : 0;        // extrapole la fenêtre en base annuelle (pour appliquer les tranches au bon taux marginal)
+  const proRata = (annual) => wm > 0 ? annual * wm / 12 : 0; // ramène l'impôt annuel à la fenêtre
+  const societe = isSocieteForme(forme);
+  const remu = fp.remuDirigeant || 0;
+  const annualBenef = annualize(benefWin);
+  switch (p.base) {
+    case 'tva': return Math.max(0, w.tvaCollectee - (p.tvaDeductible || 0));
+    case 'vehicule': return provVeh;
+    case 'materiel': return provMat;
+    case 'social': {
+      if (fr) {
+        if (forme === 'micro') return caTotal * (((fp.microCotisPct || 0) + (fp.microCFP || 0)) / 100); // % du CA encaissé
+        if (forme === 'ei') return benefWin * ((fp.eiCotisPct || 0) / 100); // TNS ≈ % du bénéfice
+        return proRata(remu * ((fp.eiCotisPct || 0) / 100)); // société FR : charges sur rémunération dirigeant
+      }
+      const socBase = societe ? remu : annualBenef;
+      return proRata(progressiveTax(socBase, fp.inasti)); // BE : INASTI dégressif
+    }
+    case 'ipp': {
+      if (fr) {
+        if (forme === 'micro') {
+          if (fp.versementLiberatoire) return caTotal * ((fp.microIRPct || 0) / 100); // versement libératoire = % du CA
+          const imposable = annualize(caTotal * (1 - (fp.microAbattement || 0) / 100)); // CA après abattement forfaitaire
+          return proRata(progressiveTax(imposable, fp.irFr));
+        }
+        if (forme === 'ei') {
+          const imposable = annualize(benefWin * (1 - (fp.eiCotisPct || 0) / 100)); // bénéfice − cotisations déductibles
+          return proRata(progressiveTax(imposable, fp.irFr));
+        }
+        const soc = remu * ((fp.eiCotisPct || 0) / 100); // société FR : IR du dirigeant sur sa rémunération
+        return proRata(progressiveTax(Math.max(0, remu - soc), fp.irFr));
+      }
+      if (societe) { const soc = progressiveTax(remu, fp.inasti); return proRata(progressiveTax(Math.max(0, remu - soc), fp.ipp)); }
+      const soc = progressiveTax(annualBenef, fp.inasti);
+      return proRata(progressiveTax(Math.max(0, annualBenef - soc), fp.ipp)); // BE : IPP, cotisations sociales déductibles
+    }
+    case 'isoc': {
+      if (!societe) return 0;
+      const benefSoc = Math.max(0, annualBenef - remu); // bénéfice société = bénéfice − rémunération dirigeant (charge)
+      if (fr) return proRata(progressiveTax(benefSoc, [{ plafond: fp.isFrPlafond, taux: fp.isFrBas }, { plafond: null, taux: fp.isFrHaut }])); // IS FR 15/25 %
+      const taux = (benefSoc <= (fp.isocPlafond || 0) && remu >= (fp.remuMin || 0)) ? (fp.isocBas || 0) : (fp.isocHaut || 0);
+      return proRata(benefSoc * (taux / 100)); // ISoc BE 20/25 %
+    }
+    case 'precompte': { if (!societe) return 0; const taux = fr ? (fp.pfuDividendes || 0) : (fp.precompteDiv || 0); return proRata((fp.dividendes || 0) * (taux / 100)); }
+    case 'manuel': return Math.max(0, p.override || 0);
+    default: return 0;
+  }
+}
+// Une provision « société » (ISoc/précompte-flat tax) est masquée hors forme société.
+const provisionActive = (p) => !!(p && p.actif && !((p.base === 'isoc' || p.base === 'precompte') && !isSocieteForme(S.formeJuridique)));
+const provisionDue = (p) => provisionActive(p) && p.statut === 'a_provisionner' && provisionComputed(p) > 0.005;
+function markProvisionDone(p) { p.statut = 'provisionne'; saveSettings(); }
+function unmarkProvision(p) { p.statut = 'a_provisionner'; saveSettings(); }
+// « Viré » : clôt le cycle d'accumulation (avance clearedThrough au dernier mois figé) et repart à zéro pour le cycle suivant.
+function markProvisionVire(p) { p.clearedThrough = latestEncodedYm(); p.statut = 'a_provisionner'; saveSettings(); }
+const PROV_BASE_LABEL = { tva: 'TVA', vehicule: 'Véhicule', materiel: 'Matériel', social: 'Social', ipp: 'IPP', isoc: 'ISoc', precompte: 'Précompte', manuel: 'Manuel' };
+// Carte Accueil sobre « 💼 Provisions » : provisions dues (1 aperçu + « +N voir la liste »).
+function renderHomeProvisions() {
+  const card = $('homeProvisions'); if (!card) return;
+  const due = (S.provisions || []).filter((p) => provisionDue(p));
+  card.classList.toggle('hidden', !due.length);
+  const box = $('homeProvisionsList'); if (!box) return; box.innerHTML = '';
+  if (!due.length) return;
+  const sorted = due.slice().sort((a, b) => provisionComputed(b) - provisionComputed(a));
+  const first = sorted[0];
+  const el = document.createElement('div'); el.className = 'list-item';
+  el.innerHTML = `<div class="li-main"><b>${esc(first.libelle)}</b><span class="li-sub">à provisionner · ${eur(provisionComputed(first))}${first.compteId ? ' → ' + esc(compteNom(first.compteId)) : ''}</span></div>`;
+  box.appendChild(el);
+  const more = document.createElement('button'); more.className = 'btn small block'; more.style.marginTop = '6px';
+  more.textContent = sorted.length > 1 ? `+ ${sorted.length - 1} autre(s) · voir la liste` : 'Voir la liste';
+  more.addEventListener('click', () => { showTab('compta'); showCompta('provisions'); });
+  box.appendChild(more);
+}
+// Page dédiée « Provisions » (Compta) : base figée, forme juridique, provisions (statut à provisionner/provisionné/viré), paramètres fiscaux.
+function renderProvisions() {
+  const box = $('provisionsBody'); if (!box) return;
+  const months = provisionMonths();
+  if (!months.length) {
+    box.innerHTML = `<section class="card"><h2>💼 Provisions</h2><p class="hint">Aucune période comptable <b>encodée</b>. Les provisions se calculent uniquement sur les mois dont la démarche liquide est marquée <b>« encodé »</b> (Compta → Déclaration compta). Encodez un mois terminé pour démarrer les provisions.</p></section>`;
+    return;
+  }
+  // Normalise la forme juridique selon le pays (ex. bascule BE→FR : physique → micro).
+  if (!regimesForPays().some((r) => r.id === S.formeJuridique)) { S.formeJuridique = defaultFormeForPays(S.pays); saveSettings(); }
+  const societe = isSocieteForme(S.formeJuridique);
+  const tot = analyticBases('');
+  const cptOpts = (sel) => '<option value="">— compte —</option>' + (S.comptes || []).map((c) => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.nom)}</option>`).join('');
+  const scOpts = (sel) => '<option value="">— sous-compte —</option>' + (S.sousComptes || []).map((s) => `<option value="${s.id}"${s.id === sel ? ' selected' : ''}>${esc(s.famille + ' · ' + s.nom)}</option>`).join('');
+  const stLabel = { a_provisionner: 'à provisionner', provisionne: 'provisionné' };
+  const list = (S.provisions || []).filter(provisionActive);
+  const totalDue = list.filter((p) => p.statut === 'a_provisionner').reduce((s, p) => s + provisionComputed(p), 0);
+  let html = `<section class="card">
+    <h2>💼 Provisions</h2>
+    <p class="hint">Calculées sur <b>${months.length}</b> mois figé(s) (démarche encodée). Base main d'œuvre <b>${eur(tot.mainOeuvreHT)}</b> HT · matériel <b>${eur(tot.materielHT)}</b> · déplacement <b>${eur(tot.deplacementHT)}</b> · TVA collectée <b>${eur(tot.tvaCollectee)}</b>.</p>
+    <label class="chk2" style="margin:4px 0">Forme juridique (${S.pays === 'fr' ? 'France' : 'Belgique'})
+      <select id="provForme" style="margin-left:8px">${regimesForPays().map((r) => `<option value="${r.id}"${r.id === S.formeJuridique ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</select></label>
+    <p class="hint">Reste à provisionner : <b>${eur(totalDue)}</b>.</p>
+  </section>
+  <section class="card"><div id="provList" class="list"></div>
+    <div class="actions" style="margin-top:8px"><button class="btn small" id="provAdd">＋ Provision manuelle</button><button class="btn small" id="provReset">↺ Réinitialiser</button></div>
+  </section>
+  <section class="card"><details><summary><b>⚙️ Paramètres fiscaux</b></summary><div id="provParams" style="margin-top:8px"></div></details></section>`;
+  box.innerHTML = html;
+  $('provForme').addEventListener('change', (e) => { const ids = regimesForPays().map((r) => r.id); S.formeJuridique = ids.includes(e.target.value) ? e.target.value : defaultFormeForPays(S.pays); saveSettings(); renderProvisions(); renderHome(); });
+  $('provAdd').addEventListener('click', () => { S.provisions.push({ id: uid(), libelle: 'Provision manuelle', base: 'manuel', compteId: (comptesActifs()[0] || {}).id || null, sousCompteId: null, actif: true, override: 0, tvaDeductible: 0, statut: 'a_provisionner', clearedThrough: '' }); saveSettings(); renderProvisions(); renderHome(); });
+  $('provReset').addEventListener('click', () => { if (!confirm('Réinitialiser les provisions à la liste de base ? Vos provisions manuelles et statuts seront perdus.')) return; S.provisions = mkProvisions(S.comptes, S.sousComptes); saveSettings(); renderProvisions(); renderHome(); });
+  const lb = $('provList');
+  list.forEach((p) => {
+    const amount = provisionComputed(p);
+    const el = document.createElement('div'); el.className = 'edit-row' + (p.statut === 'provisionne' ? ' done' : '');
+    const isTva = p.base === 'tva', isManuel = p.base === 'manuel';
+    let acts = '';
+    if (p.statut === 'a_provisionner') acts += '<button class="btn small primary" data-done>✓ Provisionné</button>';
+    else { acts += '<span class="badge">✓ provisionné</span><button class="btn small" data-undo>↩</button><button class="btn small primary" data-vire>💸 Viré</button>'; }
+    el.innerHTML = `<div class="er-top">
+        <label class="chk2" style="margin:0"><input type="checkbox" data-k="actif" ${p.actif ? 'checked' : ''}/> actif</label>
+        <input class="grow er-title" data-k="libelle" value="${esc(p.libelle || '')}"/>
+        <span class="badge">${esc(PROV_BASE_LABEL[p.base] || p.base)}</span>
+        ${isManuel ? '<button class="a-del" data-del title="Supprimer">✕</button>' : ''}</div>
+      <p class="hint" style="margin:2px 0"><b style="font-size:1.1em">${eur(amount)}</b> à provisionner${p.statut === 'provisionne' ? ' (mis de côté)' : ''}</p>
+      <div class="er-grid">
+        <label>Compte<select data-k="compteId">${cptOpts(p.compteId)}</select></label>
+        <label>Sous-compte<select data-k="sousCompteId">${scOpts(p.sousCompteId)}</select></label>
+        ${isTva ? `<label>TVA déductible (sortie réelle)<input data-k="tvaDeductible" type="number" min="0" step="0.01" value="${p.tvaDeductible || ''}"/></label>` : (isManuel ? `<label>Montant<input data-k="override" type="number" min="0" step="0.01" value="${p.override != null ? p.override : ''}"/></label>` : `<label>Forcer le montant (vide = auto)<input data-k="override" type="number" min="0" step="0.01" value="${p.override != null ? p.override : ''}"/></label>`)}
+      </div>
+      <div class="li-act li-act-col">${acts}</div>`;
+    el.querySelector('[data-k="actif"]').addEventListener('change', (e) => { p.actif = e.target.checked; saveSettings(); renderProvisions(); renderHome(); });
+    el.querySelector('[data-k="libelle"]').addEventListener('input', (e) => { p.libelle = e.target.value; saveSettings(); });
+    el.querySelector('[data-k="compteId"]').addEventListener('change', (e) => { p.compteId = e.target.value || null; saveSettings(); });
+    el.querySelector('[data-k="sousCompteId"]').addEventListener('change', (e) => { p.sousCompteId = e.target.value || null; saveSettings(); });
+    { const td = el.querySelector('[data-k="tvaDeductible"]'); if (td) td.addEventListener('change', (e) => { p.tvaDeductible = Math.max(0, parseNum(e.target.value) || 0); saveSettings(); renderProvisions(); renderHome(); }); }
+    { const ov = el.querySelector('[data-k="override"]'); if (ov) ov.addEventListener('change', (e) => { const v = e.target.value.trim(); p.override = v === '' ? (isManuel ? 0 : null) : Math.max(0, parseNum(v) || 0); saveSettings(); renderProvisions(); renderHome(); }); }
+    { const b = el.querySelector('[data-done]'); if (b) b.addEventListener('click', () => { markProvisionDone(p); renderProvisions(); renderHome(); }); }
+    { const b = el.querySelector('[data-undo]'); if (b) b.addEventListener('click', () => { unmarkProvision(p); renderProvisions(); renderHome(); }); }
+    { const b = el.querySelector('[data-vire]'); if (b) b.addEventListener('click', () => { if (!confirm('Marquer cette provision comme virée ? Le cycle d\'accumulation repart à zéro à partir des mois figés actuels.')) return; markProvisionVire(p); renderProvisions(); renderHome(); }); }
+    { const b = el.querySelector('[data-del]'); if (b) b.addEventListener('click', () => { if (!confirm('Supprimer cette provision manuelle ?')) return; S.provisions = S.provisions.filter((x) => x.id !== p.id); saveSettings(); renderProvisions(); renderHome(); }); }
+    lb.appendChild(el);
+  });
+  renderProvParams(societe);
+}
+// Éditeur des taux fiscaux, dépendant du pays (BE : INASTI/IPP/ISoc · FR : micro/EI/IS + barème IR) + taux véhicule/matériel.
+function renderProvParams(societe) {
+  const box = $('provParams'); if (!box) return;
+  const fp = S.fiscalParams; const fr = S.pays === 'fr'; const forme = S.formeJuridique;
+  const brRows = (key) => (fp[key] || []).map((b, i) => `<div class="row" data-br="${key}" data-i="${i}">
+      <label class="grow">Plafond (€, vide = illimité)<input data-brk="plafond" type="number" min="0" step="1" value="${b.plafond == null ? '' : b.plafond}"/></label>
+      <label class="grow">Taux %<input data-brk="taux" type="number" min="0" max="100" step="0.01" value="${b.taux}"/></label>
+      <button class="a-del" data-brdel title="Supprimer la tranche">✕</button></div>`).join('');
+  const vehMat = `<div class="er-grid" style="margin-top:8px">
+      <label>Provision véhicule (% du déplacement)<input id="fpVeh" type="number" min="0" max="100" step="1" value="${fp.tauxProvVehicule}"/></label>
+      <label>Provision matériel (% du matériel)<input id="fpMat" type="number" min="0" max="100" step="1" value="${fp.tauxProvMateriel}"/></label>
+    </div>`;
+  let inner;
+  if (fr) {
+    inner = `
+      ${forme === 'micro' ? `<h3 class="rsub">Micro-entrepreneur</h3><div class="er-grid">
+        <label>Cotisations sociales (% du CA)<input id="fpMicroCot" type="number" min="0" max="100" step="0.1" value="${fp.microCotisPct}"/></label>
+        <label>Formation prof. CFP (% du CA)<input id="fpMicroCfp" type="number" min="0" max="100" step="0.1" value="${fp.microCFP}"/></label>
+        <label>Abattement IR (%)<input id="fpMicroAbat" type="number" min="0" max="100" step="1" value="${fp.microAbattement}"/></label>
+        <label>Versement libératoire IR (% du CA)<input id="fpMicroIR" type="number" min="0" max="100" step="0.1" value="${fp.microIRPct}"/></label>
+      </div><label class="chk2"><input type="checkbox" id="fpVL" ${fp.versementLiberatoire ? 'checked' : ''}/> Option versement libératoire de l'IR</label>` : ''}
+      ${forme === 'ei' ? `<h3 class="rsub">Entreprise individuelle (réel)</h3><div class="er-grid">
+        <label>Cotisations TNS (% du bénéfice)<input id="fpEiCot" type="number" min="0" max="100" step="0.1" value="${fp.eiCotisPct}"/></label>
+      </div>` : ''}
+      ${societe ? `<h3 class="rsub">Société (IS)</h3><div class="er-grid">
+        <label>Rémunération dirigeant (€/an)<input id="fpRemu" type="number" min="0" step="100" value="${fp.remuDirigeant}"/></label>
+        <label>Cotisations dirigeant (% rému)<input id="fpEiCot2" type="number" min="0" max="100" step="0.1" value="${fp.eiCotisPct}"/></label>
+        <label>IS taux réduit %<input id="fpIsBas" type="number" min="0" max="100" step="0.01" value="${fp.isFrBas}"/></label>
+        <label>IS taux plein %<input id="fpIsHaut" type="number" min="0" max="100" step="0.01" value="${fp.isFrHaut}"/></label>
+        <label>Plafond taux réduit (€)<input id="fpIsPlaf" type="number" min="0" step="500" value="${fp.isFrPlafond}"/></label>
+        <label>Dividendes (€/an)<input id="fpDiv" type="number" min="0" step="100" value="${fp.dividendes}"/></label>
+        <label>Flat tax dividendes % (PFU)<input id="fpPfu" type="number" min="0" max="100" step="0.01" value="${fp.pfuDividendes}"/></label>
+      </div>` : ''}
+      <h3 class="rsub">Barème de l'impôt sur le revenu (IR, progressif)</h3><div id="brIr">${brRows('irFr')}</div>
+      <button class="btn small" data-braddk="irFr">＋ tranche</button>
+      ${vehMat}`;
+  } else {
+    inner = `
+      <h3 class="rsub">Cotisations sociales INASTI (dégressif)</h3><div id="brInasti">${brRows('inasti')}</div>
+      <button class="btn small" data-braddk="inasti">＋ tranche</button>
+      <h3 class="rsub">Impôt des personnes physiques (IPP, progressif)</h3><div id="brIpp">${brRows('ipp')}</div>
+      <button class="btn small" data-braddk="ipp">＋ tranche</button>
+      ${vehMat}
+      ${societe ? `<h3 class="rsub">Société</h3><div class="er-grid">
+        <label>Rémunération dirigeant (€/an)<input id="fpRemu" type="number" min="0" step="100" value="${fp.remuDirigeant}"/></label>
+        <label>ISoc taux réduit %<input id="fpIsocBas" type="number" min="0" max="100" step="0.01" value="${fp.isocBas}"/></label>
+        <label>ISoc taux plein %<input id="fpIsocHaut" type="number" min="0" max="100" step="0.01" value="${fp.isocHaut}"/></label>
+        <label>Plafond taux réduit (€)<input id="fpIsocPlaf" type="number" min="0" step="1000" value="${fp.isocPlafond}"/></label>
+        <label>Rému. min. taux réduit (€)<input id="fpRemuMin" type="number" min="0" step="1000" value="${fp.remuMin}"/></label>
+        <label>Dividendes (€/an)<input id="fpDiv" type="number" min="0" step="100" value="${fp.dividendes}"/></label>
+        <label>Précompte dividendes %<input id="fpPrec" type="number" min="0" max="100" step="0.01" value="${fp.precompteDiv}"/></label>
+      </div>` : ''}`;
+  }
+  box.innerHTML = inner;
+  const refresh = () => { saveSettings(); renderProvisions(); renderHome(); };
+  box.querySelectorAll('[data-br]').forEach((row) => {
+    const key = row.dataset.br, i = +row.dataset.i;
+    row.querySelector('[data-brk="plafond"]').addEventListener('change', (e) => { const v = e.target.value.trim(); fp[key][i].plafond = v === '' ? null : Math.max(0, parseNum(v) || 0); refresh(); });
+    row.querySelector('[data-brk="taux"]').addEventListener('change', (e) => { fp[key][i].taux = Math.max(0, Math.min(100, parseNum(e.target.value) || 0)); refresh(); });
+    row.querySelector('[data-brdel]').addEventListener('click', () => { if (fp[key].length <= 1) return; fp[key].splice(i, 1); refresh(); });
+  });
+  box.querySelectorAll('[data-braddk]').forEach((b) => b.addEventListener('click', () => { const k = b.dataset.braddk; fp[k].push({ plafond: null, taux: 0 }); refresh(); }));
+  const bind = (id, k, max) => { const el = $(id); if (el) el.addEventListener('change', (e) => { fp[k] = Math.max(0, max != null ? Math.min(max, parseNum(e.target.value) || 0) : (parseNum(e.target.value) || 0)); refresh(); }); };
+  bind('fpVeh', 'tauxProvVehicule', 100); bind('fpMat', 'tauxProvMateriel', 100);
+  // BE société
+  bind('fpRemu', 'remuDirigeant'); bind('fpIsocBas', 'isocBas', 100); bind('fpIsocHaut', 'isocHaut', 100); bind('fpIsocPlaf', 'isocPlafond'); bind('fpRemuMin', 'remuMin'); bind('fpDiv', 'dividendes'); bind('fpPrec', 'precompteDiv', 100);
+  // FR
+  bind('fpMicroCot', 'microCotisPct', 100); bind('fpMicroCfp', 'microCFP', 100); bind('fpMicroAbat', 'microAbattement', 100); bind('fpMicroIR', 'microIRPct', 100);
+  bind('fpEiCot', 'eiCotisPct', 100); bind('fpEiCot2', 'eiCotisPct', 100);
+  bind('fpIsBas', 'isFrBas', 100); bind('fpIsHaut', 'isFrHaut', 100); bind('fpIsPlaf', 'isFrPlafond'); bind('fpPfu', 'pfuDividendes', 100);
+  { const vl = $('fpVL'); if (vl) vl.addEventListener('change', (e) => { fp.versementLiberatoire = e.target.checked; refresh(); }); }
 }
 // Génère le PDF via l'impression du navigateur, dans le document courant (compatible PWA installée,
 // contrairement à window.open('_blank') qui est bloqué / ferme l'app sur mobile).
@@ -4923,7 +5251,7 @@ function showCompta(sub) {
   const cb = document.querySelector('#comptaSub .subtab[data-csub="' + currentCsub + '"]'), cl = document.querySelector('#comptaSub .subnav-label');
   if (cb && cl) cl.textContent = cb.textContent;
   if ($('comptaSub')) $('comptaSub').classList.remove('open');
-  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else if (currentCsub === 'nc') renderComptaNC(); else if (currentCsub === 'avenir') renderComptaAvenir(); else renderComptaMois();
+  if (currentCsub === 'decl') renderComptaDecl(); else if (currentCsub === 'impayes') renderComptaImpayes(); else if (currentCsub === 'nc') renderComptaNC(); else if (currentCsub === 'avenir') renderComptaAvenir(); else if (currentCsub === 'provisions') renderProvisions(); else renderComptaMois();
   window.scrollTo(0, 0);
 }
 // Sous-onglet Compta « Impayés » : tous les impayés clients, séparés « en attente » / « régularisés » (paiement reçu).
@@ -7503,14 +7831,74 @@ function renderHomeRappels() {
     box.appendChild(el);
   });
 }
+// ===== Paramétrage central obligatoire (1ᵉʳ lancement) : pays + forme juridique + régime TVA =====
+let _lockModal = false; // empêche la fermeture de la modale par clic sur le fond (config initiale obligatoire)
+// Y a-t-il déjà une activité de facturation ? (tournée clôturée, paiement encodé, ou mois compta encodé)
+function hasBilledTours() {
+  if (allTours().some((t) => t.closed && t.result && t.result.parClient && t.result.parClient.length)) return true;
+  if (allTours().some((t) => t.payments && Object.values(t.payments).some((p) => p && p.method))) return true;
+  return provisionMonths().length > 0;
+}
+// Pays + régime TVA VERROUILLÉS : config faite ET au moins une facture existe (avant la 1ʳᵉ facture, correction encore possible).
+function settingsFrozen() { return !!S.setupLocked && hasBilledTours(); }
+function renderHomeSetup() {
+  const card = $('homeSetup'); if (!card) return;
+  card.classList.toggle('hidden', !!S.setupDone);
+}
+function modalSetup() {
+  const d = { pays: S.pays || '', forme: S.formeJuridique || '', regime: (S.tvaRegime === 'normal' || S.tvaRegime === 'franchise') ? S.tvaRegime : '' };
+  _lockModal = true;
+  const render = () => {
+    const paysOpts = [['be', 'Belgique'], ['fr', 'France']].map(([v, l]) => `<option value="${v}"${d.pays === v ? ' selected' : ''}>${l}</option>`).join('');
+    const regs = REGIMES[d.pays] || [];
+    const formeOpts = d.pays ? regs.map((r) => `<option value="${r.id}"${d.forme === r.id ? ' selected' : ''}>${esc(r.label)}</option>`).join('') : '';
+    const ready = d.pays && d.forme && (d.regime === 'normal' || d.regime === 'franchise');
+    const regHint = d.regime === 'franchise' ? (d.pays === 'fr' ? 'Mention facture : « TVA non applicable, art. 293 B du CGI ».' : 'Mention facture : « Régime de la franchise – art. 56bis ».') : (d.regime === 'normal' ? 'TVA facturée au taux standard du pays.' : 'Choisissez votre régime de TVA.');
+    const tvaSeen = allTours().some((t) => t.result && (t.result.totalTVA || 0) > 0.005); // factures avec TVA déjà émises → probablement assujetti
+    const detected = tvaSeen ? `<div style="background:#eef6ec;border:1px solid #b9dbb0;color:#256029;padding:8px 10px;border-radius:8px;margin:6px 0;font-size:.9em">💡 Des factures <b>avec TVA</b> existent déjà dans votre historique : vous facturiez jusqu'ici en <b>Assujetti</b>.</div>` : '';
+    openModal(`<div class="modal-head"><b>⚙️ Configuration initiale</b></div>
+      <p class="hint">Ces réglages pilotent toute l'application : TVA, régimes fiscaux, provisions, mentions légales des factures. <b>À renseigner avant d'utiliser l'application.</b></p>
+      <div style="background:#fdf4e3;border:1px solid #e6cf9a;color:#7a5a12;padding:8px 10px;border-radius:8px;margin:6px 0;font-size:.9em">⚠ Le <b>pays</b> et le <b>régime de TVA</b> deviennent <b>verrouillés dès votre première facturation</b>. Une <b>sauvegarde sera téléchargée automatiquement</b> à la validation (filet de récupération).</div>
+      ${detected}
+      <label class="grow" style="display:block;margin:8px 0">Pays<select id="suPays"><option value="">— choisir —</option>${paysOpts}</select></label>
+      <label class="grow" style="display:block;margin:8px 0">Forme juridique<select id="suForme"${d.pays ? '' : ' disabled'}><option value="">${d.pays ? '— choisir —' : "— choisissez d'abord le pays —"}</option>${formeOpts}</select></label>
+      <div style="margin:10px 0"><div style="font-weight:600;margin-bottom:4px">Régime de TVA</div>
+        <div class="actions-col">
+          <button class="btn block${d.regime === 'normal' ? ' primary' : ''}" id="suRegNorm">Assujetti à la TVA (facturation avec TVA)</button>
+          <button class="btn block${d.regime === 'franchise' ? ' primary' : ''}" id="suRegFranch">Franchise en base — non assujetti (TVA 0 %)</button>
+        </div>
+        <p class="hint" id="suRegHint">${regHint}</p>
+      </div>
+      <div class="actions"><button class="btn block primary" id="suOk"${ready ? '' : ' disabled'}>Valider la configuration</button></div>`);
+    $('suPays').addEventListener('change', (e) => { d.pays = e.target.value; if (!(REGIMES[d.pays] || []).some((r) => r.id === d.forme)) d.forme = ''; render(); });
+    { const sf = $('suForme'); if (sf) sf.addEventListener('change', (e) => { d.forme = e.target.value; render(); }); }
+    $('suRegNorm').addEventListener('click', () => { d.regime = 'normal'; render(); });
+    $('suRegFranch').addEventListener('click', () => { d.regime = 'franchise'; render(); });
+    const ok = $('suOk'); if (ok) ok.addEventListener('click', () => {
+      if (!(d.pays && d.forme && (d.regime === 'normal' || d.regime === 'franchise'))) return;
+      if (!confirm('Confirmer ?\n\nPays : ' + (d.pays === 'fr' ? 'France' : 'Belgique') + '\nRégime TVA : ' + (d.regime === 'franchise' ? 'Franchise (sans TVA)' : 'Assujetti (avec TVA)') + '\n\nCes deux choix seront verrouillés dès votre première facturation. Une sauvegarde va être téléchargée juste avant.')) return;
+      try { downloadSnapshot(); } catch (e) { /* sauvegarde best-effort */ } // filet : instantané AVANT verrou (setupLocked encore false)
+      S.pays = d.pays; S.formeJuridique = d.forme; S.tvaRegime = d.regime;
+      S.tvaRate = (PAYS_TVA[S.pays] || PAYS_TVA.be).std;
+      S.setupLocked = true; S.setupDone = true;
+      saveSettings();
+      _lockModal = false; closeModal();
+      if (typeof reconcileActiveTours === 'function') reconcileActiveTours();
+      refreshEverywhere(); renderHome();
+    });
+  };
+  render();
+}
 function renderHome() {
   autoCloseOverdueTours(); // vérifie à chaque affichage de l'Accueil
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
   const upcoming = [...tournees].filter((t) => statusOf(t) === 'avenir').sort(byDate); // du plus proche au plus lointain
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((t) => box.appendChild(tourListItem(t, true))); };
+  renderHomeSetup();
   renderHomeChangelog();
   renderVehiculeStatut();
   renderHomeRappels();
+  renderHomeProvisions();
   renderBlockingArrets();
   renderHomeTrajet();
   renderRdvAPrendre();
@@ -7854,7 +8242,7 @@ function renderCalcul() {
 function bindSettings() {
   const set = (id, val) => { if ($(id)) $(id).value = val; };
   mountAddress($('homeAddr'), S.home, (a) => { S.home = a; saveSettings(); });
-  set('setRepartition', S.repartition); set('setProvider', S.provider); set('setKey', S.geoapifyKey); set('setPays', S.pays);
+  set('setRepartition', S.repartition); set('setProvider', S.provider); set('setKey', S.geoapifyKey); set('setPays', S.pays); set('setTvaRegime', S.tvaRegime);
   if ($('setDureeMode')) $('setDureeMode').value = S.dureeAuto ? 'auto' : 'vitesse';
   toggleKeyRow(); refreshTarifTable();
   // iOS : le sélecteur natif de couleur émet « change » (à la fermeture) et pas toujours « input » → on écoute les deux.
@@ -7907,7 +8295,21 @@ function bindSettings() {
   if ($('syncSecFile')) $('syncSecFile').addEventListener('change', () => { applySyncMode('file'); saveSettings(); });
   if ($('syncSecDrive')) $('syncSecDrive').addEventListener('change', () => { applySyncMode('drive'); saveSettings(); });
   applySyncMode(S.syncMode);
-  if ($('setPays')) $('setPays').addEventListener('change', (e) => { S.pays = e.target.value; S.tvaRate = (PAYS_TVA[S.pays] || PAYS_TVA.be).std; if (paints.setTva) paints.setTva(); saveSettings(); });
+  // Régime TVA : hint + verrou du taux (0 en franchise) + verrou pays/régime CONDITIONNEL (figé dès la 1ʳᵉ facture, cf. settingsFrozen()).
+  const updateTvaRegimeUI = () => {
+    const fr = S.pays === 'fr', frozen = settingsFrozen(), configurable = S.setupDone && !frozen;
+    const state = S.tvaRegime === 'franchise'
+      ? `Franchise en base : <b>TVA 0 %</b> sur les factures (TTC = HT) + mention légale automatique (« ${fr ? 'TVA non applicable, art. 293 B du CGI' : 'art. 56bis'} »).`
+      : (S.tvaRegime === 'normal' ? 'Assujetti : TVA facturée au taux standard du pays.' : '⚠ Régime non choisi — configurez l\'application (Accueil).');
+    if ($('tvaRegimeHint')) $('tvaRegimeHint').innerHTML = (frozen ? '🔒 <b>Figé</b> (au moins une facture émise, non modifiable). ' : (configurable ? 'ℹ️ Modifiable tant qu\'aucune facture n\'est émise. ' : '')) + state;
+    const tv = $('setTva'); if (tv) { tv.disabled = S.tvaRegime === 'franchise'; tv.style.opacity = S.tvaRegime === 'franchise' ? '.5' : ''; }
+    const pr = $('setPays'), rg = $('setTvaRegime');
+    if (pr) { pr.disabled = frozen; pr.style.opacity = frozen ? '.5' : ''; }
+    if (rg) { rg.disabled = frozen; rg.style.opacity = frozen ? '.5' : ''; }
+  };
+  updateTvaRegimeUI();
+  if ($('setPays')) $('setPays').addEventListener('change', (e) => { if (settingsFrozen()) { e.target.value = S.pays; updateTvaRegimeUI(); return; } S.pays = e.target.value; S.tvaRate = (PAYS_TVA[S.pays] || PAYS_TVA.be).std; if (!regimesForPays().some((r) => r.id === S.formeJuridique)) S.formeJuridique = defaultFormeForPays(S.pays); if (paints.setTva) paints.setTva(); updateTvaRegimeUI(); saveSettings(); });
+  if ($('setTvaRegime')) $('setTvaRegime').addEventListener('change', (e) => { if (settingsFrozen()) { e.target.value = S.tvaRegime; updateTvaRegimeUI(); return; } const v = e.target.value; S.tvaRegime = v === 'franchise' ? 'franchise' : (v === 'normal' ? 'normal' : S.tvaRegime); updateTvaRegimeUI(); if (typeof refreshTarifTable === 'function') refreshTarifTable(); if (typeof updateReadouts === 'function') updateReadouts(); saveSettings(); if (typeof reconcileActiveTours === 'function') reconcileActiveTours(); });
   if ($('setDureeMode')) $('setDureeMode').addEventListener('change', (e) => { S.dureeAuto = e.target.value === 'auto'; saveSettings(); updateReglagesUI(); });
   $('setRepartition').addEventListener('change', (e) => { S.repartition = e.target.value; saveSettings(); });
   $('setProvider').addEventListener('change', (e) => { S.provider = e.target.value; saveSettings(); toggleKeyRow(); });
@@ -8074,7 +8476,7 @@ function refreshEverywhere() {
 
 // ================= BOOT =================
 window.addEventListener('DOMContentLoaded', () => {
-  checkForUpdate(); // vérifie une nouvelle version au lancement (ne bloque pas l'ouverture)
+  const _bootUpdate = checkForUpdate(); // vérifie une nouvelle version au lancement ; si MAJ → purge+reload (la synchro Drive attend ce contrôle, cf. plus bas)
   applyTheme(); // couleur du thème (bandeau & boutons)
   const av = $('appVersion'); if (av) av.textContent = 'v' + APP_VERSION;
   const avTop = $('appVerTop'); if (avTop) avTop.textContent = 'v' + APP_VERSION;
@@ -8099,13 +8501,15 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   window.addEventListener('resize', updateStickyOffsets);
   updateStickyOffsets(); setTimeout(updateStickyOffsets, 300);
-  $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+  $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !_lockModal) closeModal(); }); // config initiale = non fermable par clic sur le fond
 
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
   migrateCreditedCancellations(); // 1.1.57 : marque « credited » les chevaux annulés portant une note de crédit (évite la double réduction du CA)
   bindSettings(); refreshEverywhere(); renderHome();
+  if ($('homeSetupBtn')) $('homeSetupBtn').addEventListener('click', modalSetup);
+  if (!S.setupDone) setTimeout(modalSetup, 250); // config initiale obligatoire au 1ᵉʳ lancement (pays + forme + régime TVA)
 
   if ($('appTopbar')) $('appTopbar').addEventListener('click', (e) => { if (!e.target.closest('button,a,input,select')) showTab('accueil'); });
   if ($('btnRefreshTours')) $('btnRefreshTours').addEventListener('click', refreshActiveTours);
@@ -8138,10 +8542,12 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('syncFile')) $('syncFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importSyncFile(f, $('syncStatus')); e.target.value = ''; });
   if ($('googleConnect')) $('googleConnect').addEventListener('click', async () => { const h = $('googleStatus'); try { h.className = 'status'; h.textContent = 'Connexion…'; await googleToken(true); h.className = 'status ok'; h.textContent = 'Connecté ✔ — cliquez « Synchroniser ».'; } catch (e) { h.className = 'status err'; h.textContent = 'Erreur : ' + e.message; } });
   if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
-  // Synchro Drive automatique à l'ouverture (silencieuse, sans rechargement) si le mode Drive est actif et configuré.
-  if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { try { googleSync(false, $('googleStatus'), false); } catch { /* ignore */ } }
-  // Agenda Google : rafraîchissement à l'ouverture (peut acquérir le jeton une fois, silencieux si déjà consenti).
-  if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } }
+  // Synchro Drive + Agenda : lancés SEULEMENT après le contrôle de mise à jour (fiabilité multi-appareils).
+  // Si une MAJ est disponible, checkForUpdate recharge l'app (le .then n'est jamais atteint) → la synchro se fera avec le NOUVEAU code.
+  _bootUpdate.then(() => {
+    if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { try { googleSync(false, $('googleStatus'), false); } catch { /* ignore */ } }
+    if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } }
+  }).catch(() => { /* contrôle MAJ échoué (hors-ligne) → on ne synchronise pas ce cycle, saveSettings rattrapera */ });
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);

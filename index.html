@@ -47,6 +47,11 @@
 
   <!-- ============ ACCUEIL ============ -->
   <main id="tab-accueil" class="tab-panel active">
+    <section class="card blocking-card hidden" id="homeSetup">
+      <h2>⚙️ Configuration requise</h2>
+      <p class="hint">Avant d'utiliser l'application, renseignez votre <b>pays</b>, votre <b>forme juridique</b> et votre <b>régime de TVA</b>. Ces réglages pilotent la TVA, les provisions et les mentions légales des factures.</p>
+      <div class="actions"><button class="btn primary block" id="homeSetupBtn">⚙️ Configurer l'application</button></div>
+    </section>
     <div class="actions two">
       <button class="btn" id="btnVehicule">📋 Déclarer un événement</button>
       <button class="btn" id="btnHelp" data-goto="reglages" data-rsub="calcul">❓ Comment ça marche</button>
@@ -69,6 +74,11 @@
       <h2>🔔 Rappels du mois</h2>
       <p class="hint">Échéances récurrentes à faire (dépôt caisse, salaire, cotisations, TVA, provision…). « ✓ Fait » les masque jusqu'à la prochaine échéance. Réglage : Gestion → Rappels.</p>
       <div id="homeRappelsList" class="list"></div>
+    </section>
+    <section class="card blocking-card hidden" id="homeProvisions">
+      <h2>💼 Provisions</h2>
+      <p class="hint">Montants à mettre de côté (TVA, véhicule, matériel, cotisations, impôts), calculés sur vos mois comptables encodés. Détail : Compta → Provisions.</p>
+      <div id="homeProvisionsList" class="list"></div>
     </section>
     <section class="card blocking-card hidden" id="homeBlocking">
       <h2>⚠ Tournées dépassées</h2>
@@ -236,6 +246,7 @@
         <button class="subtab" data-csub="avenir">Tournée à venir</button>
         <button class="subtab active" data-csub="mois">Mois en cours</button>
         <button class="subtab" data-csub="impayes">Impayés</button>
+        <button class="subtab" data-csub="provisions">Provisions</button>
         <button class="subtab" data-csub="nc">Notes de crédit</button>
         <button class="subtab" data-csub="decl">Déclaration compta</button>
       </div>
@@ -287,6 +298,10 @@
         <div id="impayesRegul" class="list"></div>
         <p class="empty" id="impayesRegulEmpty">Aucun impayé régularisé.</p>
       </section>
+    </div>
+
+    <div id="csub-provisions" class="subpanel">
+      <div id="provisionsBody"></div>
     </div>
 
     <div id="csub-nc" class="subpanel">
@@ -772,6 +787,10 @@
         <label class="grow">Pays (TVA)<select id="setPays"><option value="be">Belgique (21 %)</option><option value="fr">France (20 %)</option></select></label>
         <label class="grow">Taux de TVA standard<input type="number" id="setTva" step="0.1" min="0" /></label>
       </div>
+      <div class="row">
+        <label class="grow">Régime TVA<select id="setTvaRegime"><option value="">— non configuré —</option><option value="normal">Assujetti (TVA normale)</option><option value="franchise">Franchise en base (non assujetti)</option></select></label>
+      </div>
+      <p class="hint" id="tvaRegimeHint"></p>
       <p class="hint">Prix du plein = TVAC (TVA incluse). Carburant HT/km = (conso ÷ 100) × prix ÷ (1 + TVA) = <b id="fuelPerKm">—</b>.</p>
     </section>
 
