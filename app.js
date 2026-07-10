@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.9';
+const APP_VERSION = '1.2.10';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.10', date: '2026-07-10',
+    ajouts: [
+      'Journal des versions : bouton « Vider l\'historique » — ne conserve que la version la plus récente (les anciennes notes sont masquées, réaffichables à tout moment). Le Drive est synchronisé automatiquement à la fin.',
+    ],
+  },
   {
     version: '1.2.9', date: '2026-07-10',
     corrections: [
@@ -1285,6 +1291,7 @@ const DEFAULTS = {
   analyticOrder: [],                           // ordre personnalisé des cases Analytique (tournée)
   tileLabels: {},                              // titres personnalisés des cases (stats + analytique)
   changelogRead: [],                           // versions dont le message de nouveautés a été « marqué comme lu »
+  changelogHideBelow: '',                       // « vider l'historique » : on n'affiche plus que la version la plus récente (les entrées ≤ ce seuil sont masquées)
   syncMode: 'file',                            // mode de synchro ACTIF (exclusif) : 'file' (multi-appareils par fichier, défaut) | 'drive' (Google Drive)
   rdvDelaiSemaines: 5,                          // proposition RDV : délai par défaut (semaines) — même jour de la semaine
   rdvJourSemaine: '',                          // proposition RDV : jour de la semaine imposé ('' = même jour ; 0=dim..6=sam, JS getDay)
@@ -1349,6 +1356,7 @@ if (typeof S.difficileHT !== 'number') S.difficileHT = 0; // tarif par défaut �
 if (typeof S.lourdHT !== 'number') S.lourdHT = 0; // tarif par défaut « cheval lourd »
 if (typeof S.infectionHT !== 'number') S.infectionHT = 0;
 S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
+S.changelogHideBelow = typeof S.changelogHideBelow === 'string' ? S.changelogHideBelow : '';
 if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; // { 'YYYY-MM': { liquide, virement, facture } }
 if (!S.comptaRecu || typeof S.comptaRecu !== 'object') S.comptaRecu = {};       // { 'tourId:clientId': true } — paiement reçu (virement/facture)
 if (!S.comptaDemarche || typeof S.comptaDemarche !== 'object') S.comptaDemarche = {}; // { 'tourId:clientId': true } — démarche comptable effectuée (mois archivé)
@@ -1781,6 +1789,8 @@ function mergeSettings(localS, remoteS) {
   const base = ((remoteS && remoteS.updatedAt) || 0) > ((localS && localS.updatedAt) || 0) ? remoteS : localS;
   const merged = Object.assign({}, base || {});
   merged.changelogRead = Array.from(new Set([].concat((localS && localS.changelogRead) || [], (remoteS && remoteS.changelogRead) || [])));
+  // « Vider l'historique » : le seuil le PLUS récent gagne (un vidage fait sur un appareil se propage aux autres).
+  merged.changelogHideBelow = (() => { const a = (localS && localS.changelogHideBelow) || '', b = (remoteS && remoteS.changelogHideBelow) || ''; if (!a) return b; if (!b) return a; return isNewerVersion(b, a) ? b : a; })();
   // Items d'agenda : « fait sur un appareil = fait partout » → union des clés (eventId), jamais l'un n'efface l'autre.
   merged.agendaImported = Object.assign({}, (localS && localS.agendaImported) || {}, (remoteS && remoteS.agendaImported) || {});
   merged.agendaInactive = Object.assign({}, (localS && localS.agendaInactive) || {}, (remoteS && remoteS.agendaInactive) || {});
@@ -8583,7 +8593,14 @@ function renderStatutVehiculePage() {
   }
 }
 // ================= CHANGELOG / message de passage de version =================
-const changelogUnread = () => CHANGELOG.filter((e) => !(S.changelogRead || []).includes(e.version));
+// Entrées visibles : après « Vider l'historique », on ne garde que la version la plus récente (+ toute version plus récente que le seuil, pour les futures mises à jour).
+function changelogVisible() {
+  const hb = S.changelogHideBelow || '';
+  if (!hb || !CHANGELOG.length) return CHANGELOG.slice();
+  const latest = CHANGELOG[0].version;
+  return CHANGELOG.filter((e) => e.version === latest || isNewerVersion(e.version, hb));
+}
+const changelogUnread = () => changelogVisible().filter((e) => !(S.changelogRead || []).includes(e.version));
 function markChangelogRead(version) { if (!Array.isArray(S.changelogRead)) S.changelogRead = []; if (!S.changelogRead.includes(version)) S.changelogRead.push(version); LS.set('ftr.settings', S); }
 function changelogEntryHtml(e) {
   const li = (arr) => (arr || []).map((x) => `<li>${esc(x)}</li>`).join('');
@@ -8614,13 +8631,41 @@ function markAllChangelogRead() { if (!Array.isArray(S.changelogRead)) S.changel
 function renderChangelog() {
   const box = $('changelogList'); if (!box) return; box.innerHTML = '';
   if (!CHANGELOG.length) { box.innerHTML = '<p class="empty">Aucune note de version.</p>'; return; }
-  CHANGELOG.forEach((e) => {
+  const list = changelogVisible();
+  const hidden = CHANGELOG.length - list.length;
+  // Barre d'actions : vider l'historique (ne garder que la dernière version) — ou réafficher tout si déjà vidé.
+  const bar = document.createElement('div'); bar.className = 'cl-actions';
+  if (S.changelogHideBelow) {
+    bar.innerHTML = `<span class="li-sub">Historique masqué (${hidden} ancienne${hidden > 1 ? 's' : ''} version${hidden > 1 ? 's' : ''}). Seule la dernière est affichée.</span>
+      <button class="btn small" id="clShowAll">↩ Réafficher tout</button>`;
+  } else {
+    bar.innerHTML = `<button class="btn small danger" id="clClear">🗑 Vider l'historique (garder la dernière version)</button>`;
+  }
+  const status = document.createElement('p'); status.className = 'li-sub'; status.id = 'clStatus'; status.style.margin = '4px 0 8px';
+  box.appendChild(bar); box.appendChild(status);
+  const cc = $('clClear'); if (cc) cc.addEventListener('click', () => clearChangelogHistory(cc));
+  const sa = $('clShowAll'); if (sa) sa.addEventListener('click', () => { S.changelogHideBelow = ''; saveSettings(); renderChangelog(); renderHomeChangelog(); });
+  list.forEach((e) => {
     const read = (S.changelogRead || []).includes(e.version);
     const el = document.createElement('div'); el.className = 'card cl-entry' + (read ? ' cl-read' : ' cl-unread'); el.style.cursor = 'pointer';
     el.innerHTML = changelogEntryHtml(e) + `<p class="li-sub">${read ? '✔ Lu' : '● Non lu — appuyez pour lire'}</p>`;
     el.addEventListener('click', () => openChangelogEntry(e));
     box.appendChild(el);
   });
+}
+// Vide l'historique du changelog : ne conserve que la version la plus récente, marque tout comme lu, puis synchronise le Drive.
+async function clearChangelogHistory(btn) {
+  if (!CHANGELOG.length) return;
+  if (!confirm('Vider l\'historique des nouveautés ?\n\nSeule la version la plus récente (' + CHANGELOG[0].version + ') sera conservée. Vous pourrez tout réafficher ensuite.')) return;
+  S.changelogHideBelow = CHANGELOG[0].version;
+  markAllChangelogRead();           // enregistre + planifie l'envoi Drive
+  renderChangelog(); renderHomeChangelog();
+  const st = $('clStatus');
+  if (S.syncMode === 'drive') {
+    if (st) st.textContent = '⏳ Synchronisation du Drive…';
+    try { await drivePushNow(); if (st) st.textContent = '✔ Historique vidé et Drive synchronisé.'; }
+    catch { if (st) st.textContent = '✔ Historique vidé. La synchro Drive se fera au prochain démarrage.'; }
+  } else if (st) { st.textContent = '✔ Historique vidé.'; }
 }
 // Frais ÉCHUS : tout poste OU élément lié (échéance propre) non remplacé dont l'odomètre a dépassé son seuil (kmDebut + kmPrevus + report).
 function fraisEchus() {

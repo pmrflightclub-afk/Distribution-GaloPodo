@@ -427,6 +427,8 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .cl-h { font-weight: 700; margin: 8px 0 2px; font-size: .82rem; }
 .cl-ul { margin: 0 0 6px; padding-left: 18px; font-size: .84rem; }
 .cl-ul li { margin: 2px 0; }
+.cl-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:6px; }
+.cl-actions .li-sub { flex:1 1 auto; min-width:0; }
 .cl-entry { margin-bottom: 10px; }
 .cl-entry.cl-unread { border-color: var(--accent); border-width: 2px; }
 .cl-entry.cl-read { opacity: .58; }
