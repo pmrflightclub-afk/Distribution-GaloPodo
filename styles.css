@@ -94,6 +94,7 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .li-act-col { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .li-act-col .btn { white-space: nowrap; }
 .list-item.stack-act { align-items: flex-start; }
+.td-eta { color: var(--ok, #2e9e5b); font-weight: 700; font-size: .82em; white-space: nowrap; }
 .list-item.clickable { cursor: pointer; }
 .list-item.clickable:hover { border-color: var(--accent); }
 .list-item.clickable:active { background: var(--card); }

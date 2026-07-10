@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.12';
+const APP_VERSION = '1.2.13';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.13', date: '2026-07-10',
+    ajouts: [
+      'Bandeau du haut : les icônes « Km » (🗺) et « Tournées » (🗓) ont été échangées.',
+      'Listes de tournées (Accueil + page Tournées) : chaque tournée à venir affiche un compte à rebours en vert en fin de titre — « J-3 » à moins d\'une semaine, « 2 sem » au-delà.',
+      'Éditeur de tournée : les suppléments « Cheval difficile » et « Cheval lourd » apparaissent désormais comme lignes d\'article (juste au-dessus de la facture), au même montant que la répartition.',
+    ],
+  },
   {
     version: '1.2.12', date: '2026-07-10',
     corrections: [
@@ -2996,12 +3004,21 @@ function modalTourArrivee() {
 }
 
 // ================= TOURNÉES =================
+// Compte à rebours avant une tournée à venir : « J-n » (moins de 7 jours) ou « n sem » (7 jours et plus).
+function tourCountdownLabel(date) {
+  if (!date) return '';
+  const p = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, (m || 1) - 1, d || 1); };
+  const n = Math.round((p(date) - p(todayStr())) / 86400000);
+  if (n <= 0) return '';
+  return n < 7 ? 'J-' + n : Math.round(n / 7) + ' sem';
+}
 function tourListItem(t, showBadge) {
   const st = statusOf(t);
   const el = document.createElement('div'); el.className = 'list-item clickable';
   const titre = fmtDateFr(t.date) + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : '');
   const clientsLine = (t.arrets || []).map((a) => labelFor(a)).filter(Boolean).join(' · '); // noms de clients par arrêt
-  el.innerHTML = `<div class="li-main"><b>${titre}${showBadge ? ' · ' + STATUS_LBL[st] : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
+  const eta = st === 'avenir' ? tourCountdownLabel(t.date) : ''; // « J-n » / « n sem » (vert) pour les tournées à venir
+  el.innerHTML = `<div class="li-main"><b>${titre}${showBadge ? ' · ' + STATUS_LBL[st] : ''}${eta ? ' <span class="td-eta">' + eta + '</span>' : ''}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
@@ -3658,6 +3675,16 @@ function renderEditorArrets(locked) {
           alist.appendChild(row);
         });
       });
+      // Suppléments par cheval « Cheval difficile » (tournée) / « Cheval lourd » (fiche) — affichés en Article (au-dessus de la facture), mêmes montants que la répartition.
+      { const cliArt = clients.find((x) => x.id === cl.clientId);
+        (cl.chevaux || []).filter(chevalPresent).forEach((c) => {
+          const ficheArt = cliArt ? (cliArt.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null;
+          const supps = [];
+          if (c.difficile) { const u = (c.difficileHT != null && c.difficileHT !== '') ? +c.difficileHT : (S.difficileHT || 0); if (u > 0) supps.push({ lbl: 'Cheval difficile', unit: u, off: !!c.difficileOffert }); }
+          if (ficheArt && ficheArt.lourd) { const u = (ficheArt.lourdHT != null && ficheArt.lourdHT !== '') ? +ficheArt.lourdHT : (S.lourdHT || 0); if (u > 0) supps.push({ lbl: 'Cheval lourd', unit: u, off: false }); }
+          supps.forEach((sp) => { const ttcv = sp.unit * (1 + acteRate); const row = document.createElement('div'); row.className = 'list-item' + (sp.off ? ' art-off' : ''); row.innerHTML = `<div class="li-main"><b>${esc(sp.lbl)}</b><span class="li-sub">🐴 ${esc(c.nom)} · ${sp.off ? '<b>offert</b>' : eur(ttcv) + ' TTC'} · <i>auto</i></span></div>`; alist.appendChild(row); });
+        });
+      }
       articlesForArret(a, cl.clientId).forEach((art) => {
         const rr = (art.tvaPct || 0) / 100, qte = Math.max(1, (art.chevalNoms || []).length || 1), ttcv = (art.prixHT || 0) * qte * (1 + rr);
         const chn = (art.chevalNoms || []).join(', ');
@@ -9066,13 +9093,13 @@ const chipHtml = (ico, val) => '<span class="chip-ico">' + ico + '</span><span c
 function refreshEverywhere() {
   $('fuelChip').innerHTML = chipHtml('⛽', eur(S.prixPleinL) + '/L');
   $('consoChip').innerHTML = chipHtml('🚗', (S.consoL100 || 0) + ' L/100');
-  if ($('kmMonthChip')) $('kmMonthChip').innerHTML = chipHtml('🗓', km(kmStats().mois));
+  if ($('kmMonthChip')) $('kmMonthChip').innerHTML = chipHtml('🗺', km(kmStats().mois));
   const actifs = clients.filter(isClientActif);
   const nCh = actifs.reduce((s, c) => s + activeChevaux(c).length, 0);
   const ym = todayStr().slice(0, 7); const nT = allTours().filter((t) => (t.date || '').startsWith(ym)).length;
   if ($('clientsChip')) $('clientsChip').innerHTML = chipHtml('👤', actifs.length + ' Clients');
   if ($('chevauxChip')) $('chevauxChip').innerHTML = chipHtml('🐴', nCh + ' Chevaux');
-  if ($('toursMonthChip')) $('toursMonthChip').innerHTML = chipHtml('🗺', nT + ' Tournées');
+  if ($('toursMonthChip')) $('toursMonthChip').innerHTML = chipHtml('🗓', nT + ' Tournées');
   refreshTarifTable(); updateReglagesUI();
   if ($('tab-accueil').classList.contains('active')) renderHome();
   // Note : vehicule / materiel / articles ne sont PAS re-rendus ici (édition inline = ne pas détruire les champs en cours de frappe).
