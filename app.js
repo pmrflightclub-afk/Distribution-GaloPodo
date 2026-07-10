@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.4';
+const APP_VERSION = '1.2.5';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.5', date: '2026-07-10',
+    ajouts: [
+      'Envoi par email RÉEL avec pièce jointe : « Envoyer par email » (planches, impayés, notes de crédit) ouvre une fenêtre où vous saisissez le destinataire, puis envoie le mail avec le PDF joint automatiquement via votre compte Gmail connecté. (À la 1ʳᵉ utilisation, Google demande l\'autorisation d\'envoyer des mails — reconnexion unique.) Le partage / téléchargement reste disponible en repli.',
+      'Déclarer → « Calculer un trajet » : choisissez un départ et une arrivée (parmi vos adresses, un client ou une écurie — tapez le nom, ou une adresse libre) et ouvrez l\'itinéraire exact dans Google Maps (contrairement à Waze qui part toujours de votre position actuelle).',
+      'Éditeur de tournée → bouton « 🧭 Étape » sur chaque arrêt : ouvre l\'itinéraire de cet arrêt vers l\'arrêt suivant (ou vers l\'arrivée pour le dernier).',
+    ],
+  },
   {
     version: '1.2.4', date: '2026-07-10',
     corrections: [
@@ -1882,7 +1890,7 @@ const GDRIVE_FILE = 'galopodo-sync.json';
 // UN SEUL jeton combiné (Drive appData + Calendar lecture) → une seule connexion couvre Drive ET Agenda,
 // persistée une fois. Les deux constantes sont volontairement identiques : même clé de cache, même jeton partagé.
 // UN SEUL jeton mutualisé Drive + Calendar + Gmail : les 3 constantes sont volontairement IDENTIQUES → même clé de cache, une seule connexion couvre tout.
-const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.readonly';
+const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send';
 const GSCOPE_CAL = GSCOPE_DRIVE;
 // Lecture Gmail (scope RESTREINT) — connexion séparée, à activer dans la console Google Cloud de l'utilisateur.
 const GSCOPE_MAIL = GSCOPE_DRIVE; // Gmail mutualisé avec Drive/Calendar (même jeton, une seule connexion)
@@ -2347,6 +2355,36 @@ function openNav(addr) {
   window.addEventListener('pagehide', cancel, { once: true });
   document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); }, { once: true });
   window.location.href = wazeApp;
+}
+// Requête d'adresse pour Google Maps : coordonnées si dispo (plus exact), sinon texte de l'adresse.
+function addrQuery(addr) { if (!addr) return ''; if (addr.lat && addr.lon) return addr.lat + ',' + addr.lon; return addrStr(addr); }
+// Ouvre Google Maps avec un itinéraire départ → arrivée (contrairement à openNav qui part de la position actuelle).
+function openMapsRoute(origin, dest) {
+  const url = 'https://www.google.com/maps/dir/?api=1&origin=' + encodeURIComponent(origin) + '&destination=' + encodeURIComponent(dest) + '&travelmode=driving';
+  try { const w = window.open(url, '_blank'); if (!w) window.location.href = url; } catch { window.location.href = url; }
+}
+// Lieux sélectionnables pour un calcul de trajet : domicile + mes adresses + adresses clients/écuries (dédupliqués).
+function collectRoutePlaces() {
+  const out = []; const seen = new Set();
+  const add = (label, addr) => { if (!addrStr(addr).trim()) return; const k = norm(label); if (seen.has(k)) return; seen.add(k); out.push({ label, addr }); };
+  if (addrStr(S.home).trim()) add('🏠 Domicile', S.home);
+  (S.adresses || []).forEach((a) => add('📍 ' + (a.nom || 'Adresse'), a.addr));
+  clients.forEach((c) => (c.chevaux || []).forEach((h) => { const ecu = chevalAddrNom(c, h); const lbl = '🐴 ' + fullName(c) + (ecu && norm(ecu) !== norm(fullName(c)) ? ' · ' + ecu : ''); add(lbl, chevalAddr(c, h)); }));
+  return out;
+}
+// Modale « Calculer un trajet » : départ + arrivée (mes adresses / clients / écuries, ou saisie libre) → Google Maps.
+function modalRouteCalc(prefill) {
+  const places = collectRoutePlaces();
+  const dl = places.map((p) => `<option value="${esc(p.label)}"></option>`).join('');
+  openModal(`<div class="modal-head"><b>🗺 Calculer un trajet</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Choisissez un <b>départ</b> et une <b>arrivée</b> : tapez un nom de client, d'écurie ou d'adresse (liste proposée), ou une adresse libre. Le bouton ouvre Google Maps avec l'itinéraire exact (contrairement à Waze qui part de votre position actuelle).</p>
+    <label>Départ<input type="text" id="rcFrom" list="rcList" value="${esc((prefill && prefill.from) || '')}" placeholder="Domicile, client, écurie, adresse…"/></label>
+    <label>Arrivée<input type="text" id="rcTo" list="rcList" value="${esc((prefill && prefill.to) || '')}" placeholder="Client, écurie, adresse…"/></label>
+    <datalist id="rcList">${dl}</datalist>
+    <div class="actions"><button class="btn primary block" id="rcGo">🧭 Ouvrir l'itinéraire (Google Maps)</button></div>`);
+  $('mX').onclick = closeModal;
+  const resolve = (txt) => { txt = (txt || '').trim(); if (!txt) return ''; const p = places.find((x) => norm(x.label) === norm(txt)) || places.find((x) => norm(x.label).includes(norm(txt))); return p ? addrQuery(p.addr) : txt; };
+  $('rcGo').onclick = () => { const f = resolve($('rcFrom').value), t = resolve($('rcTo').value); if (!f || !t) { alert('Renseignez un départ et une arrivée.'); return; } openMapsRoute(f, t); };
 }
 
 // ---------- Modal ----------
@@ -3378,10 +3416,11 @@ function renderEditorArrets(locked) {
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
     const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
     // Heure de RDV de l'arrêt (1 par arrêt), Waze, Route (grisé ✓ si temps réel encodé), RDV (grisé ✓ si suivant programmé), Paiement.
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small${payDone ? ' done' : ''}" data-pay>💶 Paiement${payDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small" data-add-pret>＋ Prêt</button></span>`}`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small" data-etape title="Itinéraire de cet arrêt vers l'arrêt suivant">🧭 Étape</button> <button class="btn small${payDone ? ' done' : ''}" data-pay>💶 Paiement${payDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small" data-add-pret>＋ Prêt</button></span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
+      { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const next = currentTour.arrets[i + 1]; const destAddr = next ? next.addr : ((currentTour.arrivee && addrStr(currentTour.arrivee).trim()) ? currentTour.arrivee : tourHome()); if (!destAddr || !addrStr(destAddr).trim()) { alert('Pas d\'arrêt suivant ni d\'arrivée définie.'); return; } openMapsRoute(addrQuery(a.addr), addrQuery(destAddr)); }); }
       nav.querySelector('[data-pay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets())); // classer le paiement pour la Compta
       const rdvB = nav.querySelector('[data-rdv]'); if (rdvB) rdvB.addEventListener('click', () => { const cid = (a.clients && a.clients[0]) ? a.clients[0].clientId : null; if (cid) modalRDV(currentTour, a, cid, () => renderEditorArrets()); });
       const prB = nav.querySelector('[data-add-pret]'); if (prB) prB.addEventListener('click', () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, currentTour); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, currentTour) }))); });
@@ -5416,7 +5455,50 @@ async function shareDoc(blob, filename, title, text) {
   try { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); return true; } catch (e) { alert('Impossible de générer le fichier.'); return false; }
 }
 // Texte du mail (destinataire non préréglable via le partage natif → on le rappelle dans le corps).
-function mailBodyFor(client, docLabel) { return `Bonjour${client && fullName(client) ? ' ' + fullName(client) : ''},\n\nVeuillez trouver ci-joint : ${docLabel}.\n\nBien à vous.${client && client.email ? '\n\n(Destinataire : ' + client.email + ')' : ''}`; }
+function mailBodyFor(client, docLabel) { return `Bonjour${client && fullName(client) ? ' ' + fullName(client) : ''},\n\nVeuillez trouver ci-joint : ${docLabel}.\n\nBien à vous.`; }
+// ===== Envoi d'email réel avec pièce jointe via l'API Gmail (le compte Google connecté sert d'expéditeur) =====
+const _b64 = (bytes) => { let bin = ''; const CH = 0x8000; for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH)); return btoa(bin); };
+const _wrap76 = (s) => s.replace(/(.{76})/g, '$1\r\n');
+async function buildMimeEmail(to, subject, bodyText, blob, filename) {
+  const B = '==GaloPodoBoundary=='; // n'apparaît jamais dans du base64
+  const subjEnc = '=?UTF-8?B?' + _b64(new TextEncoder().encode(subject || '')) + '?=';
+  const bodyB64 = _wrap76(_b64(new TextEncoder().encode(bodyText || '')));
+  const pdfB64 = _wrap76(_b64(new Uint8Array(await blob.arrayBuffer())));
+  return [
+    'To: ' + to, 'Subject: ' + subjEnc, 'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="' + B + '"', '',
+    '--' + B, 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', bodyB64,
+    '--' + B, 'Content-Type: application/pdf; name="' + filename + '"', 'Content-Transfer-Encoding: base64', 'Content-Disposition: attachment; filename="' + filename + '"', '', pdfB64,
+    '--' + B + '--', '',
+  ].join('\r\n');
+}
+async function gmailSend(to, subject, bodyText, blob, filename) {
+  const token = await googleToken(true, GSCOPE_MAIL); // interactif : re-consentement possible pour le scope gmail.send
+  const mime = await buildMimeEmail(to, subject, bodyText, blob, filename);
+  const raw = btoa(mime).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
+  if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('Gmail ' + r.status + ' ' + t.slice(0, 160)); }
+  return true;
+}
+// Modale d'envoi d'un document : saisie du destinataire + envoi Gmail (PDF joint) OU repli partage/téléchargement.
+function modalSendDoc(blob, filename, defaultTo, subject, bodyText, onSent) {
+  openModal(`<div class="modal-head"><b>📧 Envoyer par email</b><button class="x" id="mX">✕</button></div>
+    <label>Destinataire<input type="email" id="sdTo" value="${esc(defaultTo || '')}" placeholder="email@exemple.com"/></label>
+    <label>Objet<input type="text" id="sdSubj" value="${esc(subject || '')}"/></label>
+    <label class="pl-note-field">Message<textarea id="sdBody" rows="4">${esc(bodyText || '')}</textarea></label>
+    <div class="actions"><button class="btn primary block" id="sdGmail">📨 Envoyer via Gmail (PDF joint automatiquement)</button></div>
+    <p class="hint">Envoi depuis votre compte Gmail connecté (Réglages → Mail). À la 1ʳᵉ fois, Google demandera l'autorisation d'<b>envoyer</b> des mails.</p>
+    <div class="actions"><button class="btn block" id="sdShare">📤 Sinon : partager / télécharger le PDF</button></div>
+    <p class="status" id="sdStatus"></p>`);
+  $('mX').onclick = closeModal;
+  $('sdGmail').onclick = async () => {
+    const to = $('sdTo').value.trim(); if (!to) { alert('Renseignez le destinataire.'); return; }
+    const st = $('sdStatus'), btn = $('sdGmail'); btn.disabled = true; st.className = 'status'; st.textContent = 'Envoi via Gmail…';
+    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to; if (onSent) onSent(); setTimeout(closeModal, 1400); }
+    catch (e) { st.className = 'status err'; st.textContent = 'Échec : ' + (e && e.message || e) + ' — utilisez « partager / télécharger ».'; btn.disabled = false; }
+  };
+  $('sdShare').onclick = async () => { const ok = await shareDoc(blob, filename, subject, bodyText); if (ok && onSent) onSent(); };
+}
 function concatBytes(parts) { let len = 0; parts.forEach((p) => len += p.length); const out = new Uint8Array(len); let o = 0; parts.forEach((p) => { out.set(p, o); o += p.length; }); return out; }
 function dataUrlToBytes(u) { const b64 = (u || '').split(',')[1] || ''; const bin = atob(b64); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
 // PDF binaire : une image JPEG par page (DCTDecode), mise à l'échelle A4 (paysage/portrait). pages = [{bytes,w,h}].
@@ -5637,9 +5719,8 @@ function modalEmailClient(client) {
   };
 }
 // Partage un document client par email (pièce jointe), puis exécute onSent() si l'envoi a bien été lancé.
-async function sendClientDoc(client, blob, filename, docLabel, onSent) {
-  const ok = await shareDoc(blob, filename, docLabel, mailBodyFor(client, docLabel));
-  if (ok && onSent) onSent();
+function sendClientDoc(client, blob, filename, docLabel, onSent) {
+  modalSendDoc(blob, filename, (client && client.email) || '', docLabel, mailBodyFor(client, docLabel), onSent);
 }
 // HTML des 3 sections d'UN mois. archived (ym < mois courant) = démarches disponibles.
 function comptaSectionsHtml(ym) {
@@ -6884,8 +6965,7 @@ function modalPlancheCreate(type, prefill) {
     try {
       const blob = await planchePdfBlob();
       const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
-      const ok = await shareDoc(blob, plancheBaseName(plCreate) + '.pdf', 'Planche — ' + (plCreate.cheval || 'cheval'), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval')));
-      if (ok) plancheTodoDone(plCreate);
+      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', 'Planche — ' + (plCreate.cheval || 'cheval'), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval')), () => plancheTodoDone(plCreate));
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
   };
@@ -8514,6 +8594,7 @@ function modalVehicule() {
   openModal(`<div class="modal-head"><b>📋 Déclarer un événement</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Que voulez-vous faire ?</p>
     <div class="actions"><button class="btn primary block" id="vClient">👤 Créer un client</button></div>
+    <div class="actions"><button class="btn block" id="vRoute">🗺 Calculer un trajet (départ → arrivée)</button></div>
     <div class="actions"><button class="btn block" id="vPlanche">🖼 Planche de contact (photos)</button></div>
     <div class="actions"><button class="btn block" id="vPlein">⛽ Valider un plein (prix du carburant)</button></div>
     <div class="actions"><button class="btn block" id="vConso">🚗 Corriger la consommation</button></div>
@@ -8529,6 +8610,7 @@ function modalVehicule() {
     <p class="status" id="vUpdateStatus"></p>`);
   $('mX').addEventListener('click', closeModal);
   $('vClient').addEventListener('click', () => { closeModal(); editClient(null); });
+  $('vRoute').addEventListener('click', () => { closeModal(); modalRouteCalc(); });
   $('vPlanche').addEventListener('click', () => { closeModal(); if (typeof modalPlancheCreate === 'function') modalPlancheCreate('contact', { allowTourPick: true }); else { showTab('gestion'); showGestion('planche'); } });
   $('vStatut').addEventListener('click', () => { closeModal(); modalStatutVehicule(); });
   $('vPlein').addEventListener('click', modalPlein);
