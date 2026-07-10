@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.7';
+const APP_VERSION = '1.2.8';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.8', date: '2026-07-10',
+    corrections: [
+      'Bouton « Étape » : calcule l\'itinéraire de l\'arrêt courant vers l\'arrêt suivant (ou vers le retour pour le dernier arrêt). Toujours masqué sur le 1ᵉʳ arrêt.',
+    ],
+  },
   {
     version: '1.2.7', date: '2026-07-10',
     ajouts: [
@@ -3447,11 +3453,11 @@ function renderEditorArrets(locked) {
     const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
     // Heure de RDV de l'arrêt (1 par arrêt), Waze, Route (grisé ✓ si temps réel encodé), RDV (grisé ✓ si suivant programmé), Paiement.
     // Barre d'arrêt : heure d'arrêt + déplacement (Waze / Route / Étape) — communs à l'adresse. Paiement / RDV / Prêt / Planche sont PAR CLIENT (plus bas).
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de l'arrêt (générale)">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ' <button class="btn small" data-etape title="Itinéraire de l\'arrêt précédent vers cet arrêt">🧭 Étape</button>' : ''}</span>`}`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de l'arrêt (générale)">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ' <button class="btn small" data-etape title="Itinéraire de cet arrêt vers l\'arrêt suivant (ou le retour)">🧭 Étape</button>' : ''}</span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
-      { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const prev = currentTour.arrets[i - 1]; if (!prev || !addrStr(prev.addr).trim()) { alert('Pas d\'arrêt précédent défini.'); return; } openMapsRoute(addrQuery(prev.addr), addrQuery(a.addr)); }); } // étape = arrêt précédent → arrêt courant
+      { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const next = currentTour.arrets[i + 1]; const destAddr = next ? next.addr : ((currentTour.arrivee && addrStr(currentTour.arrivee).trim()) ? currentTour.arrivee : tourHome()); if (!destAddr || !addrStr(destAddr).trim()) { alert('Pas d\'arrêt suivant ni d\'arrivée définie.'); return; } openMapsRoute(addrQuery(a.addr), addrQuery(destAddr)); }); } // étape = arrêt courant → arrêt suivant (ou retour)
       const ah = nav.querySelector('[data-aheure]'); if (ah) ah.addEventListener('change', (e) => { a.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = ah.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!a.heure); if (i === 0 && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } });
     }
     el.appendChild(nav);
