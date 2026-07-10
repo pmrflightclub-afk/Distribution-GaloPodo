@@ -118,6 +118,7 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .chk { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--muted); margin-top: 8px; margin-bottom: 0; }
 .chk input, .chk2 input { width: auto; margin: 0; }
 .chk2 { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--muted); align-self: center; white-space: nowrap; }
+.chk2.chk-wrap { white-space: normal; align-items: flex-start; align-self: stretch; }
 .art-remise { font-size: .72rem; margin-right: 4px; }
 .er-flags { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
 .er-flags .chk2 { font-size: .74rem; }
@@ -423,18 +424,35 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .cl-entry.cl-read { opacity: .58; }
 
 /* Création de planche de contact (photos gardées en mémoire uniquement) */
-/* Pot photos : UNE image par ligne, pleine largeur, grande ; date + 2 menus (membre/angle) dessous, agrandis. */
-.pl-pot { display: flex; flex-direction: column; gap: 14px; margin: 6px 0 2px; }
-.pl-thumb { position: relative; width: 100%; border: 2px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); cursor: pointer; }
+/* Pot photos : 2 vues — GRILLE (vignettes, glisser/clic) ou GRANDE VUE (1 image/ligne + menus membre/angle). */
+.pl-pot { margin: 6px 0 2px; }
+.pl-pot.large { display: flex; flex-direction: column; gap: 14px; }
+.pl-pot.grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.pl-thumb { position: relative; border: 2px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); cursor: pointer; }
+.pl-pot.large .pl-thumb { width: 100%; }
+.pl-pot.grid .pl-thumb { width: 96px; border-radius: 9px; }
 .pl-thumb.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent); }
-.pl-thumb img { display: block; width: 100%; height: auto; max-height: 58vh; object-fit: contain; background: #f4f4f4; }
-.pl-thumb .pl-th-load { height: 180px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 1.4rem; }
-.pl-thumb .pl-th-x { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; }
-.pl-thumb.placed::after { content: '✓'; position: absolute; top: 6px; left: 6px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: .95rem; display: flex; align-items: center; justify-content: center; }
-.pl-th-meta { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 8px 10px 4px; }
-.pl-th-meta .pl-th-date { font-size: .9rem; padding: 7px; flex: 1 1 auto; }
-.pl-th-jour { display: flex; align-items: center; gap: 3px; font-size: .8rem; color: var(--muted); }
-.pl-th-setdate { font-size: .82rem; padding: 7px 10px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--muted); cursor: pointer; }
+.pl-thumb img { display: block; width: 100%; background: #f4f4f4; }
+.pl-pot.large .pl-thumb img { height: auto; max-height: 58vh; object-fit: contain; }
+.pl-pot.grid .pl-thumb img { height: 70px; object-fit: cover; }
+.pl-thumb .pl-th-load { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.pl-pot.large .pl-thumb .pl-th-load { height: 180px; font-size: 1.4rem; }
+.pl-pot.grid .pl-thumb .pl-th-load { height: 70px; font-size: 1.2rem; }
+.pl-thumb .pl-th-x { position: absolute; border: 0; border-radius: 50%; background: rgba(0,0,0,.62); color: #fff; line-height: 1; cursor: pointer; }
+.pl-pot.large .pl-thumb .pl-th-x { top: 6px; right: 6px; width: 30px; height: 30px; font-size: 1rem; }
+.pl-pot.grid .pl-thumb .pl-th-x { top: 3px; right: 3px; width: 20px; height: 20px; font-size: .74rem; }
+.pl-thumb.placed::after { content: '✓'; position: absolute; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; }
+.pl-pot.large .pl-thumb.placed::after { top: 6px; left: 6px; width: 26px; height: 26px; font-size: .95rem; }
+.pl-pot.grid .pl-thumb.placed::after { top: 3px; left: 3px; width: 18px; height: 18px; font-size: .7rem; }
+.pl-th-meta { display: flex; flex-direction: row; align-items: center; gap: 6px; }
+.pl-pot.large .pl-th-meta { padding: 8px 10px 4px; }
+.pl-pot.grid .pl-th-meta { padding: 2px 3px; }
+.pl-th-meta .pl-th-date { flex: 1 1 auto; }
+.pl-pot.large .pl-th-meta .pl-th-date { font-size: .9rem; padding: 7px; }
+.pl-pot.grid .pl-th-meta .pl-th-date { font-size: .58rem; padding: 1px 2px; }
+.pl-th-setdate { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--muted); cursor: pointer; }
+.pl-pot.large .pl-th-setdate { font-size: .82rem; padding: 7px 10px; }
+.pl-pot.grid .pl-th-setdate { font-size: .56rem; padding: 2px 3px; }
 .pl-th-assign { display: flex; flex-direction: row; gap: 8px; padding: 0 10px 10px; }
 .pl-th-assign select { font-size: 1rem; padding: 9px; width: 100%; }
 /* Champ « Note (bas de page) » : titre au-dessus, textarea pleine largeur en dessous (au lieu d'être collé à droite du titre). */

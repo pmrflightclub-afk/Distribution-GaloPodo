@@ -11,10 +11,22 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.5';
+const APP_VERSION = '1.2.6';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.6', date: '2026-07-10',
+    ajouts: [
+      'Planches : le pot de photos a 2 vues — Grille (vignettes, glisser/clic pour placer) et Grande vue (une image en grand + menus membre/angle). Correction : en grande vue, les menus membre/angle gardent bien votre choix. Nouveaux types de planche : Ferrage, Parage, Déferrage, Radio ; le champ « durée du cycle précédent » (obligatoire) apparaît selon le type. Nom du fichier : date + planche + type + cheval.',
+      'Éditeur de tournée : le bouton « Étape » calcule l\'itinéraire de l\'arrêt précédent vers l\'arrêt courant (retiré du 1ᵉʳ arrêt).',
+      'Fiche cheval : la case « lourd » passe au-dessus de « liste noire » (texte qui ne déborde plus) ; nouveau champ « Reprendre une adresse connue » (client/société/adresse → remplit rue/n°/CP/localité). L\'affichage de la prise en charge sur les planches est désormais automatique.',
+    ],
+    corrections: [
+      'Planches : images entières (non rognées) et redressées automatiquement (orientation des photos portrait).',
+      'Configuration initiale : plus redemandée sur un appareil si elle a déjà été validée sur un autre (synchro Google Drive) ; le choix ne peut plus « régresser ».',
+    ],
+  },
   {
     version: '1.2.5', date: '2026-07-10',
     ajouts: [
@@ -1288,7 +1300,9 @@ S.planche.avantapres = Object.assign({ orientation: 'paysage', logo: false, mode
 if (!Array.isArray(S.planche.avantapres.pages)) S.planche.avantapres.pages = [{ membres: [] }, { membres: ['Cheval'] }];
 if (!S.planche.avantapres.modeles) S.planche.avantapres.modeles = _plModeles();
 delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
-if (!Array.isArray(S.planche.stades)) S.planche.stades = ['Cheval ferré', 'Déferrage', 'Après parage']; // types/étapes de planche (étiquette sur une planche de contact), éditables
+// Stades = types de planche (étiquette, éditables). Défaut : Ferrage / Parage / Déferrage / Radio. Migration de l'ancien trio par défaut.
+if (!Array.isArray(S.planche.stades)) S.planche.stades = ['Ferrage', 'Parage', 'Déferrage', 'Radio'];
+else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', 'Déferrage', 'Après parage'])) S.planche.stades = ['Ferrage', 'Parage', 'Déferrage', 'Radio'];
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
 // { data:dataURL, zoom:multiplicateur, x/y:décalage en FRACTION du cadre (pan) } — cadrage repris à l'identique dans l'en-tête PDF.
 if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
@@ -1757,6 +1771,11 @@ function mergeSettings(localS, remoteS) {
   { const byId = {}; ((localS && localS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); ((remoteS && remoteS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); merged.adresses = Object.values(byId); }
   // Relevés compteur (statut véhicule) : union par mois (ne jamais perdre un relevé fait sur l'autre appareil ; le plus récent gagne pour un même mois).
   { const byYm = {}; const add = (r) => { if (r && r.ym) { const ex = byYm[r.ym]; if (!ex || (r.date || '') >= (ex.date || '')) byYm[r.ym] = r; } }; ((localS && localS.odoReleves) || []).forEach(add); ((remoteS && remoteS.odoReleves) || []).forEach(add); merged.odoReleves = Object.values(byYm).sort((a, b) => (a.date || '').localeCompare(b.date || '')); }
+  // Config initiale : une fois validée sur un appareil, elle ne doit JAMAIS régresser (OR sur setupDone/setupLocked). Les champs pilotés (pays/régime/forme) suivent l'appareil qui a validé.
+  const lDone = !!(localS && localS.setupDone), rDone = !!(remoteS && remoteS.setupDone);
+  merged.setupDone = lDone || rDone;
+  merged.setupLocked = !!(localS && localS.setupLocked) || !!(remoteS && remoteS.setupLocked);
+  if (merged.setupDone) { const src = (rDone && !lDone) ? remoteS : (lDone && !rDone) ? localS : base; ['pays', 'tvaRegime', 'formeJuridique', 'tvaRate', 'fiscalParams'].forEach((k) => { if (src && src[k] !== undefined) merged[k] = src[k]; }); }
   return merged;
 }
 // Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
@@ -2701,21 +2720,21 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     if ($('cLegalHint')) $('cLegalHint').style.display = on ? 'none' : '';
   };
   const renderCh = () => {
-    const box = $('cChevaux'); box.innerHTML = '';
-    if (!w.chevaux.length) box.innerHTML = '<p class="empty">Aucun cheval.</p>';
+    const box = $('cChevaux');
+    box.innerHTML = '<datalist id="chevAddrList">' + collectRoutePlaces().map((p) => `<option value="${esc(p.label)}"></option>`).join('') + '</datalist>'; // adresses connues pour la reprise
+    if (!w.chevaux.length) box.insertAdjacentHTML('beforeend', '<p class="empty">Aucun cheval.</p>');
     w.chevaux.forEach((h, i) => {
       h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = 'specifique';
       const row = document.createElement('div'); row.className = 'cheval';
       row.innerHTML = `<div class="a-top"><input type="text" class="grow" placeholder="Nom du cheval" value="${esc(h.nom)}" data-nom /><label class="chk2"><input type="checkbox" data-actif ${h.actif !== false ? 'checked' : ''}/> Actif</label><button class="a-del" data-del>✕</button></div>
-        <label class="chk2"><input type="checkbox" data-bl ${h.blacklist ? 'checked' : ''}/> Liste noire (ne plus proposer de RDV)</label>
+        <label class="chk2 chk-wrap"><input type="checkbox" data-lourd ${h.lourd ? 'checked' : ''}/> Cheval lourd (supplément appliqué automatiquement à chaque tournée)</label>
+        ${h.lourd ? `<label>Montant du supplément « lourd » (HT, vide = tarif par défaut)<input type="number" data-lourdht step="0.01" min="0" value="${h.lourdHT != null ? h.lourdHT : ''}" placeholder="défaut : ${fmtNum(S.lourdHT || 0, 2)} € HT"/></label>` : ''}
+        <label class="chk2 chk-wrap"><input type="checkbox" data-bl ${h.blacklist ? 'checked' : ''}/> Liste noire (ne plus proposer de RDV)</label>
         <label>Date de naissance<input type="date" data-naiss value="${h.dateNaissance || ''}"/></label>
         <label>Race<input type="text" data-race value="${esc(h.race || '')}" placeholder="Race (facultatif)"/></label>
         <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
-        <label class="chk2"><input type="checkbox" data-pecpl ${h.priseEnChargePlanche !== false ? 'checked' : ''}/> Afficher la prise en charge (date + durée) sur les planches</label>
         ${h.dateDemandeSuivi ? `<label>Date de la demande de suivi (issue du mail)<input type="date" data-dds value="${h.dateDemandeSuivi}"/></label>` : ''}
         <label>Discipline / usage<input type="text" data-disc value="${esc(h.discipline || '')}" placeholder="loisir, sport, trait, élevage…"/></label>
-        <label class="chk2"><input type="checkbox" data-lourd ${h.lourd ? 'checked' : ''}/> Cheval lourd (supplément appliqué automatiquement à chaque tournée)</label>
-        ${h.lourd ? `<label>Montant du supplément « lourd » (HT, vide = tarif par défaut)<input type="number" data-lourdht step="0.01" min="0" value="${h.lourdHT != null ? h.lourdHT : ''}" placeholder="défaut : ${fmtNum(S.lourdHT || 0, 2)} € HT"/></label>` : ''}
         ${h.anamnese ? '<button class="btn small" data-anam>📄 Formulaire (anamnèse)</button>' : ''}
         <label>Adresse du cheval<select data-src>
           <option value="client">Même adresse que le client</option>
@@ -2723,7 +2742,8 @@ function editClient(existing, onSaved, prefillNom, prefill) {
           <option value="specifique">Adresse spécifique</option>
         </select></label>
         ${h.addrSource === 'specifique'
-    ? `<label class="chk2"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> Adresse privée (nom = nom du client)</label>${h.addrPrivee ? '' : `<label>Nom de l'adresse<input type="text" data-addrnom value="${esc(h.addrNom || '')}" placeholder="Écurie du Nord, pré de…"/></label>`}`
+    ? `<label class="chk2 chk-wrap"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> Adresse privée (nom = nom du client)</label>${h.addrPrivee ? '' : `<label>Nom de l'adresse<input type="text" data-addrnom value="${esc(h.addrNom || '')}" placeholder="Écurie du Nord, pré de…"/></label>`}
+        <label>Reprendre une adresse connue<input type="text" data-addrfind list="chevAddrList" placeholder="Nom client / société / adresse déjà connue…"/></label>`
     : `<p class="hint">Nom de l'adresse : <b>${esc(chevalAddrNom(w, h))}</b> (repris ${h.addrSource === 'societe' ? 'de la société' : 'du client'}).</p>`}
         <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>`;
       row.querySelector('[data-src]').value = h.addrSource;
@@ -2735,8 +2755,8 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       { const ab = row.querySelector('[data-anam]'); if (ab) ab.addEventListener('click', () => modalAnamnese(h)); }
       row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
       { const dd = row.querySelector('[data-dds]'); if (dd) dd.addEventListener('change', (e) => { h.dateDemandeSuivi = e.target.value || ''; saveDraft(); }); }
-      { const pp = row.querySelector('[data-pecpl]'); if (pp) pp.addEventListener('change', (e) => { h.priseEnChargePlanche = e.target.checked; saveDraft(); }); }
       { const dc = row.querySelector('[data-disc]'); if (dc) dc.addEventListener('input', (e) => { h.discipline = e.target.value; saveDraft(); }); }
+      { const af = row.querySelector('[data-addrfind]'); if (af) af.addEventListener('change', (e) => { const txt = (e.target.value || '').trim(); if (!txt) return; const places = collectRoutePlaces(); const p = places.find((x) => norm(x.label) === norm(txt)) || places.find((x) => norm(x.label).includes(norm(txt))); if (p && p.addr) { const s = toAddr(p.addr); h.addr = Object.assign(emptyAddr(), { rue: s.rue || '', numero: s.numero || '', cp: s.cp || '', localite: s.localite || '', lat: s.lat || null, lon: s.lon || null }); saveDraft(); renderCh(); } else { alert('Adresse non trouvée. Choisissez un nom dans la liste proposée.'); } }); }
       row.querySelector('[data-lourd]').addEventListener('change', (e) => { h.lourd = e.target.checked; if (!e.target.checked) delete h.lourdHT; renderCh(); saveDraft(); });
       { const lh = row.querySelector('[data-lourdht]'); if (lh) lh.addEventListener('input', (e) => { const v = parseFloat(e.target.value); h.lourdHT = (e.target.value === '' || isNaN(v)) ? null : Math.max(0, v); saveDraft(); }); }
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
@@ -3416,11 +3436,11 @@ function renderEditorArrets(locked) {
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
     const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
     // Heure de RDV de l'arrêt (1 par arrêt), Waze, Route (grisé ✓ si temps réel encodé), RDV (grisé ✓ si suivant programmé), Paiement.
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button> <button class="btn small" data-etape title="Itinéraire de cet arrêt vers l'arrêt suivant">🧭 Étape</button> <button class="btn small${payDone ? ' done' : ''}" data-pay>💶 Paiement${payDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small" data-add-pret>＋ Prêt</button></span>`}`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><label class="a-heure${hhv ? ' done' : ''}" title="Heure de RDV de l'arrêt">🕘 <input type="time" data-aheure value="${hhv}"/></label> <button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ' <button class="btn small" data-etape title="Itinéraire de l\'arrêt précédent vers cet arrêt">🧭 Étape</button>' : ''} <button class="btn small${payDone ? ' done' : ''}" data-pay>💶 Paiement${payDone ? ' ✓' : ''}</button> <button class="btn small${a.rdvDone ? ' done' : ''}" data-rdv>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small" data-add-pret>＋ Prêt</button></span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
-      { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const next = currentTour.arrets[i + 1]; const destAddr = next ? next.addr : ((currentTour.arrivee && addrStr(currentTour.arrivee).trim()) ? currentTour.arrivee : tourHome()); if (!destAddr || !addrStr(destAddr).trim()) { alert('Pas d\'arrêt suivant ni d\'arrivée définie.'); return; } openMapsRoute(addrQuery(a.addr), addrQuery(destAddr)); }); }
+      { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const prev = currentTour.arrets[i - 1]; if (!prev || !addrStr(prev.addr).trim()) { alert('Pas d\'arrêt précédent défini.'); return; } openMapsRoute(addrQuery(prev.addr), addrQuery(a.addr)); }); } // étape = arrêt précédent → arrêt courant
       nav.querySelector('[data-pay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets())); // classer le paiement pour la Compta
       const rdvB = nav.querySelector('[data-rdv]'); if (rdvB) rdvB.addEventListener('click', () => { const cid = (a.clients && a.clients[0]) ? a.clients[0].clientId : null; if (cid) modalRDV(currentTour, a, cid, () => renderEditorArrets()); });
       const prB = nav.querySelector('[data-add-pret]'); if (prB) prB.addEventListener('click', () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, currentTour); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, currentTour) }))); });
@@ -5568,7 +5588,7 @@ async function planchePageCanvas(pi) {
     const ry = gtop + angH + ri * rowH;
     ctx.fillStyle = (r.pj === 1) ? '#e7eef7' : '#f5f5f5'; ctx.fillRect(gx, ry, labelW, rowH);
     ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.fillText(plTrunc(ctx, plRowShort(r), labelW - 4), gx + labelW / 2, ry + rowH / 2 - fs(1.6));
-    angles.forEach((a, ci) => { const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (im) { ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip(); const s = Math.max(colW / im.width, rowH / im.height), dw = im.width * s, dh = im.height * s; ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); ctx.restore(); } });
+    angles.forEach((a, ci) => { const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (im) { const s = Math.min(colW / im.width, rowH / im.height), dw = im.width * s, dh = im.height * s; ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); } }); // contain : image entière centrée dans la case (pas de rognage)
   });
   ctx.textAlign = 'left';
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
@@ -6721,19 +6741,26 @@ function renderPlancheConfig() {
 let plCreate = null; // état de la planche en cours de création : { type, modele, angles, pages, cheval, client, date, note, photos:[{id,url,date,jour}], cells:{'page_row_col':photoId}, sel }
 
 // Réduit une image (canvas) pour l'intégration au PDF, sans jamais la persister. Renvoie un data-URL (JPEG par défaut, PNG si mime='image/png' — texte plus net).
+// Redimensionne une image → data-URL, en APPLIQUANT l'orientation EXIF (photos portrait redressées, quel que soit le format de planche).
 function plResizeImage(file, maxDim, cb, mime) {
-  const img = new Image();
-  const url = URL.createObjectURL(file);
-  img.onload = () => {
-    let w = img.naturalWidth || 1, h = img.naturalHeight || 1;
+  const finish = (drawable, iw, ih) => {
+    let w = iw || 1, h = ih || 1;
     const scale = Math.min(1, maxDim / Math.max(w, h));
     w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
     let data = '';
-    try { const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(img, 0, 0, w, h); data = mime === 'image/png' ? cv.toDataURL('image/png') : cv.toDataURL('image/jpeg', 0.82); } catch (e) { data = ''; }
-    URL.revokeObjectURL(url); cb(data);
+    try { const cv = document.createElement('canvas'); cv.width = w; cv.height = h; cv.getContext('2d').drawImage(drawable, 0, 0, w, h); data = mime === 'image/png' ? cv.toDataURL('image/png') : cv.toDataURL('image/jpeg', 0.82); } catch (e) { data = ''; }
+    cb(data);
   };
-  img.onerror = () => { URL.revokeObjectURL(url); cb(''); };
-  img.src = url;
+  const fallbackImg = () => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => { finish(img, img.naturalWidth, img.naturalHeight); URL.revokeObjectURL(url); };
+    img.onerror = () => { URL.revokeObjectURL(url); cb(''); };
+    img.src = url;
+  };
+  // createImageBitmap({imageOrientation:'from-image'}) applique l'orientation EXIF (support moderne PC/mobile) ; repli sur <img>.
+  if (window.createImageBitmap) {
+    try { createImageBitmap(file, { imageOrientation: 'from-image' }).then((bmp) => { finish(bmp, bmp.width, bmp.height); if (bmp.close) bmp.close(); }).catch(fallbackImg); } catch (e) { fallbackImg(); }
+  } else fallbackImg();
 }
 
 // Mini-parseur EXIF : extrait la date de prise de vue (DateTimeOriginal 0x9003, repli DateTime 0x0132) d'un JPEG → 'YYYY-MM-DD' (ou '' si absente).
@@ -6892,7 +6919,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', dureeCycleSem: 0, photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', dureeCycleSem: 0, potView: 'grid', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -6917,8 +6944,10 @@ function modalPlancheCreate(type, prefill) {
       <section class="card">
         <div class="card-head"><h3 class="rsub" style="margin:0">Photos</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCdateAll">📅 Tout dater à la planche</button><button class="btn small" id="plCimport">＋ Importer des photos</button></div></div>
         <p class="hint">Les photos restent dans la mémoire de l'app le temps de la création (jamais enregistrées). Touchez une vignette pour la <b>sélectionner</b>, puis touchez une case de la grille pour l'y <b>placer</b>. Touchez une case remplie pour la vider.</p>
+        <div class="seg" id="plCpotView" style="margin:6px 0"><button type="button" class="seg-btn on" data-pv="grid">▦ Grille</button><button type="button" class="seg-btn" data-pv="large">▭ Grande vue</button></div>
+        <p class="hint" id="plCpotHint" style="margin:2px 0 6px">Grille : glissez une photo dans la grille, ou touchez la photo puis la case. Grande vue : choisissez membre + angle sous chaque photo.</p>
         <input type="file" id="plCfiles" accept="image/*" multiple hidden/>
-        <div class="pl-pot" id="plCpot"></div>
+        <div class="pl-pot grid" id="plCpot"></div>
       </section>
       <section class="card">
         <h3 class="rsub">Aperçu / mise en page</h3>
@@ -6944,6 +6973,7 @@ function modalPlancheCreate(type, prefill) {
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; const w = $('plCcycleWrap'); if (w) w.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; }); // le champ « durée du cycle » suit le stade (parage/ferrage/déferrage)
   if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); plRenderPot(); plRenderGrid(); });
   $('plCimport').onclick = () => $('plCfiles').click();
+  $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
   // « Générer le PDF » = PDF propre (moteur canvas, en-tête/grille/pied) téléchargé. N'utilise PLUS window.print (qui imprimait l'interface de l'app).
@@ -6986,29 +7016,36 @@ function plHandleFiles(e) {
 
 function plRenderPot() {
   const box = $('plCpot'); if (!box || !plCreate) return;
+  const view = plCreate.potView === 'large' ? 'large' : 'grid'; // défaut = grille (vignettes) ; grande vue = 1 image/ligne + menus
+  box.className = 'pl-pot ' + view;
   box.innerHTML = '';
   if (!plCreate.photos.length) { box.innerHTML = '<p class="hint" style="margin:0">Aucune photo importée.</p>'; return; }
   const placed = new Set(Object.values(plCreate.cells));
+  const showAssign = (view === 'large' && plCreate.type === 'contact'); // menus membre/angle SEULEMENT en grande vue (en grille : glisser / clic)
   plCreate.photos.forEach((ph) => {
     const t = document.createElement('div');
     t.className = 'pl-thumb' + (plCreate.sel === ph.id ? ' sel' : '') + (placed.has(ph.id) ? ' placed' : '');
     t.setAttribute('draggable', 'true');
     let assign = '';
-    if (plCreate.type === 'contact') { // placement par listes (membre + angle) — pratique sur mobile, sans glisser
+    if (showAssign) {
       const rowOpts = []; (plCreate.pages || []).forEach((pg, pi) => (pg.membres || []).forEach((mb, ri) => rowOpts.push({ v: pi + ':' + ri, label: (plCreate.pages.length > 1 ? 'P' + (pi + 1) + ' · ' : '') + mb })));
       const pk = Object.keys(plCreate.cells).find((k) => plCreate.cells[k] === ph.id) || '';
-      let selMb = '', selAng = ''; if (pk) { const pp = pk.split('_'); selMb = pp[0] + ':' + pp[1]; selAng = pp[2]; }
-      assign = `<div class="pl-th-assign"><select class="pl-th-mb"><option value="">— membre —</option>${rowOpts.map((o) => `<option value="${o.v}"${o.v === selMb ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select><select class="pl-th-ang"><option value="">— angle —</option>${(plCreate.angles || []).map((a, ci) => `<option value="${ci}"${String(ci) === selAng ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></div>`;
+      let selMb = ph._mb || '', selAng = (ph._ang != null ? ph._ang : ''); if (pk) { const pp = pk.split('_'); selMb = pp[0] + ':' + pp[1]; selAng = pp[2]; } // restaure la sélection partielle (ph._mb/_ang) → ne se réinitialise plus
+      assign = `<div class="pl-th-assign"><select class="pl-th-mb"><option value="">— membre —</option>${rowOpts.map((o) => `<option value="${o.v}"${o.v === selMb ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select><select class="pl-th-ang"><option value="">— angle —</option>${(plCreate.angles || []).map((a, ci) => `<option value="${ci}"${String(ci) === String(selAng) ? ' selected' : ''}>${esc(a)}</option>`).join('')}</select></div>`;
     }
     t.innerHTML = `${ph.url ? `<img src="${ph.url}" alt=""/>` : '<div class="pl-th-load">…</div>'}<button class="pl-th-x" title="Retirer">✕</button>`
       + `<div class="pl-th-meta"><input type="date" value="${esc(ph.date)}" class="pl-th-date" title="Date de la photo (EXIF par défaut)"/><button type="button" class="pl-th-setdate" title="Mettre la date de la planche">= planche</button></div>${assign}`;
     t.addEventListener('dragstart', () => { plCreate.sel = ph.id; });
     t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta') || ev.target.closest('.pl-th-assign')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
-    { const mb = t.querySelector('.pl-th-mb'), ang = t.querySelector('.pl-th-ang'); if (mb && ang) { const applyAssign = () => { Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); if (mb.value && ang.value !== '') { const pr = mb.value.split(':'); plCreate.cells[pr[0] + '_' + pr[1] + '_' + ang.value] = ph.id; } plRenderPot(); plRenderGrid(); }; mb.addEventListener('change', applyAssign); ang.addEventListener('change', applyAssign); } }
+    if (showAssign) { const mb = t.querySelector('.pl-th-mb'), ang = t.querySelector('.pl-th-ang'); if (mb && ang) {
+      // FIX : on NE re-dessine PAS le pot au changement (sinon la sélection partielle se réinitialisait) — on mémorise ph._mb/_ang, on place quand les deux sont choisis, et on met à jour la grille + le badge « placé » de cette vignette.
+      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); plCreate.cells[pr[0] + '_' + pr[1] + '_' + ang.value] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); };
+      mb.addEventListener('change', applyAssign); ang.addEventListener('change', applyAssign);
+    } }
     t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
-    t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; plRenderPot(); });
-    t.querySelector('.pl-th-date').addEventListener('click', (ev) => { if (ev.target.showPicker) { try { ev.target.showPicker(); } catch { } } }); // agenda au clic
-    t.querySelector('.pl-th-setdate').addEventListener('click', () => { ph.date = plCreate.date; plRenderPot(); }); // = date de la planche
+    t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; }); // pas de re-render (garde le focus)
+    t.querySelector('.pl-th-date').addEventListener('click', (ev) => { if (ev.target.showPicker) { try { ev.target.showPicker(); } catch { } } });
+    t.querySelector('.pl-th-setdate').addEventListener('click', () => { ph.date = plCreate.date; const di = t.querySelector('.pl-th-date'); if (di) di.value = ph.date; });
     box.appendChild(t);
   });
 }
@@ -7101,7 +7138,7 @@ function plChevalLines(st) {
     if (h.race) bits.push(h.race);
     if (h.discipline) bits.push(h.discipline);
     if (bits.length) out.push(bits.join(' · '));
-    if (h.datePriseEnCharge && h.priseEnChargePlanche !== false) out.push('Suivi depuis le ' + fmtDateFr(h.datePriseEnCharge) + ' (' + durMonthsLabel(monthsBetween(h.datePriseEnCharge)) + ')');
+    if (h.datePriseEnCharge) out.push('Suivi depuis le ' + fmtDateFr(h.datePriseEnCharge) + ' (' + durMonthsLabel(monthsBetween(h.datePriseEnCharge)) + ')');
   }
   if (st.dureeCycleSem > 0) out.push('Cycle précédent : ' + st.dureeCycleSem + ' semaine' + (st.dureeCycleSem > 1 ? 's' : ''));
   return out;
@@ -7127,7 +7164,10 @@ function plGeom(land, nCols, refRows) {
 }
 // Nombre de lignes de référence (le plus grand parmi les pages) → cellules de taille FIXE d'une page/planche à l'autre.
 function plRefRows(st) { let m = 1; (st.pages || []).forEach((pg, pi) => { m = Math.max(m, plPageRows(pi).length); }); return m; }
-function plancheBaseName(st) { st = st || plCreate || {}; return ['planche', (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval'), st.date || todayStr(), (st.stade ? norm(st.stade).replace(/\s+/g, '-') : '')].filter(Boolean).join('-'); }
+// Type de prestation déduit du stade (pour le nom de fichier) : parage / ferrage / déferrage.
+function plancheStadeType(stade) { const s = norm(stade || ''); if (/deferr/.test(s)) return 'deferrage'; if (/ferr/.test(s)) return 'ferrage'; if (/parage/.test(s)) return 'parage'; return s ? s.replace(/\s+/g, '-') : ''; }
+// Nom de fichier : Date + planche + type + cheval.
+function plancheBaseName(st) { st = st || plCreate || {}; return [st.date || todayStr(), 'planche', plancheStadeType(st.stade), (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval')].filter(Boolean).join('-'); }
 // La durée du cycle précédent est requise quand le STADE de la planche relève du parage / ferrage / déferrage.
 function plancheStadeCareNeeded(stade) { return /parage|ferr/.test(norm(stade || '')); }
 // Vrai si la planche exige la durée du cycle précédent (selon le stade) mais qu'elle n'est pas renseignée → bloque la génération.
@@ -7149,7 +7189,7 @@ function planchePrint() {
     #printArea .pl-page{position:relative;width:${mm(g.pageW)};height:${mm(g.pageH)};page-break-after:always;overflow:hidden;box-sizing:border-box;font-family:Arial,sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     #printArea .pl-page:last-child{page-break-after:auto;}
     #printArea .pl-cell{position:absolute;box-sizing:border-box;border:0.2mm solid #444;overflow:hidden;}
-    #printArea .pl-cell img{width:100%;height:100%;object-fit:cover;display:block;}
+    #printArea .pl-cell img{width:100%;height:100%;object-fit:contain;display:block;}
     #printArea .pl-lab{position:absolute;box-sizing:border-box;border:0.2mm solid #444;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:3.2mm;background:#f5f5f5;}
     #printArea .pl-lab.pl-after{background:#e7eef7;}
     #printArea .pl-ang{position:absolute;box-sizing:border-box;border:0.2mm solid #444;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:2.8mm;background:#eee;overflow:hidden;}
@@ -8969,7 +9009,7 @@ window.addEventListener('DOMContentLoaded', () => {
   migrateCreditedCancellations(); // 1.1.57 : marque « credited » les chevaux annulés portant une note de crédit (évite la double réduction du CA)
   bindSettings(); refreshEverywhere(); renderHome();
   if ($('homeSetupBtn')) $('homeSetupBtn').addEventListener('click', modalSetup);
-  if (!S.setupDone) setTimeout(modalSetup, 250); // config initiale obligatoire au 1ᵉʳ lancement (pays + forme + régime TVA)
+  // L'écran de config initiale s'ouvre APRÈS la synchro Drive de démarrage (cf. _bootUpdate.then plus bas) — pour ne pas redemander si un autre appareil l'a déjà validé.
 
   if ($('appTopbar')) $('appTopbar').addEventListener('click', (e) => { if (!e.target.closest('button,a,input,select')) showTab('accueil'); });
   if ($('btnRefreshTours')) $('btnRefreshTours').addEventListener('click', refreshActiveTours);
@@ -9004,10 +9044,12 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
   // Synchro Drive + Agenda : lancés SEULEMENT après le contrôle de mise à jour (fiabilité multi-appareils).
   // Si une MAJ est disponible, checkForUpdate recharge l'app (le .then n'est jamais atteint) → la synchro se fera avec le NOUVEAU code.
-  _bootUpdate.then(() => {
-    if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { try { googleSync(false, $('googleStatus'), false); } catch { /* ignore */ } }
+  const _bootSetupGate = () => { if (!S.setupDone) modalSetup(); }; // config initiale : ouverte seulement si non déjà validée (localement OU via Drive après fusion)
+  _bootUpdate.then(async () => {
+    if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { try { await googleSync(false, $('googleStatus'), false); renderHome(); } catch { /* ignore */ } }
     if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } }
-  }).catch(() => { /* contrôle MAJ échoué (hors-ligne) → on ne synchronise pas ce cycle, saveSettings rattrapera */ });
+    _bootSetupGate(); // APRÈS la synchro Drive : si le Drive contenait déjà la config validée, la fusion a mis setupDone=true → pas de re-demande
+  }).catch(() => { _bootSetupGate(); });
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
