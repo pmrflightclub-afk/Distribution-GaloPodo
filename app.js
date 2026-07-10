@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.15';
+const APP_VERSION = '1.2.16';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.16', date: '2026-07-10',
+    corrections: [
+      'Suivi pathologique : la case « 🔁 2ᵉ RDV — suivi rapproché » n\'apparaît que lorsqu\'une pathologie (fourbure / NPAS / infection) est cochée pour le cheval, et s\'affiche tout de suite sans refermer le menu « ＋ Actes ».',
+      'Contact mail : le filtre par client et la recherche s\'appliquent désormais aussi à la section « Ignorés ».',
+    ],
+  },
   {
     version: '1.2.15', date: '2026-07-10',
     ajouts: [
@@ -3618,6 +3625,12 @@ function renderEditorArrets(locked) {
         if (S.infectionHT > 0) pathoCols.push({ key: 'infection', label: 'Infection' });
         const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
         const rr0 = rate();
+        // Bloc « 2ᵉ RDV — suivi rapproché » : présent SEULEMENT si fourbure/NPAS/infection coché (réinjecté en place par refreshChips, sans re-render → menu ＋Actes non refermé).
+        const pathoSuiviInner = (cvv, fi, ppi) => {
+          if (!fi || !cvv || !(cvv.fourbure || cvv.npas || cvv.infection)) return '';
+          const s = fi.suiviPatho || null, on = !!(s && s.actif);
+          return `<label class="ch-opt"><input type="checkbox" data-psact="${ppi}"${on ? ' checked' : ''}/> 🔁 2ᵉ RDV — suivi rapproché</label>${on ? ` <span class="ch-patho-rec">tous les <input type="number" data-psval="${ppi}" min="1" max="4" value="${Math.min(4, Math.max(1, s.valeur || 1))}"/> <select data-psunit="${ppi}"><option value="jours"${s.unite !== 'semaines' ? ' selected' : ''}>jour(s)</option><option value="semaines"${s.unite === 'semaines' ? ' selected' : ''}>semaine(s)</option></select></span>` : ''}`;
+        };
         h += '<div class="ch-list">';
         pool.forEach((ph, pi) => {
           const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite));
@@ -3643,8 +3656,7 @@ function renderEditorArrets(locked) {
           opts += ck('data-supp="difficile"', cv && cv.difficile, 'Cheval difficile', !acte);
           const dp = dernierParageInfo(cl.clientId, ph.nom, currentTour.date); // temps écoulé depuis le dernier parage/visite (tournées clôturées)
           const pInfo = dp ? ` <span class="td-eta" title="Dernier parage/visite : ${esc(fmtDateFr(dp.date))}">⏱ ${dp.days < 7 ? dp.days + ' j' : Math.round(dp.days / 7) + ' sem'}</span>` : '';
-          const sp = fiche ? (fiche.suiviPatho || null) : null; const spOn = !!(sp && sp.actif); // suivi pathologique (2ᵉ RDV rapproché) porté par la FICHE cheval
-          const pathoSuiviHtml = (acte && !cancelled && fiche) ? `<div class="ch-patho"><label class="ch-opt"><input type="checkbox" data-psact="${pi}" ${spOn ? 'checked' : ''}/> 🔁 2ᵉ RDV — suivi rapproché (fourbure / NPAS / infection)</label>${spOn ? ` <span class="ch-patho-rec">tous les <input type="number" data-psval="${pi}" min="1" max="4" value="${Math.min(4, Math.max(1, sp.valeur || 1))}"/> <select data-psunit="${pi}"><option value="jours"${sp.unite !== 'semaines' ? ' selected' : ''}>jour(s)</option><option value="semaines"${sp.unite === 'semaines' ? ' selected' : ''}>semaine(s)</option></select></span>` : ''}</div>` : '';
+          const pathoSuiviHtml = (acte && !cancelled && fiche) ? `<div class="ch-patho">${pathoSuiviInner(cv, fiche, pi)}</div>` : ''; // conteneur présent dès pris-en-charge ; contenu = vide sauf si pathologie cochée
           h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>${pathoSuiviHtml}`}</div>`;
         });
         h += '</div>';
@@ -3658,7 +3670,7 @@ function renderEditorArrets(locked) {
           const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(pool[pi].nom)) : null;
           const chips = [];
           if (cv && !cancelled) { if (cv.parage) chips.push('Parage'); if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); } if (hasPlancheTodo(cl.clientId, pool[pi].nom, currentTour.date)) chips.push('📷 Photo'); pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); }); if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : '')); if (fiche && fiche.lourd && acte) chips.push('⚖ Lourd (auto)'); }
-          const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>'; }
+          const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>'; const pb = row.querySelector('.ch-patho'); if (pb) pb.innerHTML = pathoSuiviInner(cv, fiche, pi); } // ch-patho suit la bascule pathologie sans re-render
         };
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
           const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.key;
@@ -3689,20 +3701,13 @@ function renderEditorArrets(locked) {
         }));
         // Suivi pathologique (2ᵉ RDV rapproché) : activation + récurrence, portées par la FICHE cheval (persistent d'une tournée à l'autre).
         const ficheOf = (pi) => cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(pool[pi].nom)) : null;
-        wrap.querySelectorAll('[data-psact]').forEach((inp) => inp.addEventListener('change', (e) => {
-          const fi = ficheOf(+inp.dataset.psact); if (!fi) return;
-          if (e.target.checked) fi.suiviPatho = Object.assign({ unite: 'semaines', valeur: 1 }, fi.suiviPatho || {}, { actif: true });
-          else if (fi.suiviPatho) fi.suiviPatho.actif = false;
-          saveClients(); renderEditorArrets(locked);
-        }));
-        wrap.querySelectorAll('[data-psval]').forEach((inp) => inp.addEventListener('change', (e) => {
-          const fi = ficheOf(+inp.dataset.psval); if (!fi) return;
-          fi.suiviPatho = Object.assign({ unite: 'semaines', actif: true }, fi.suiviPatho || {}, { valeur: Math.min(4, Math.max(1, parseInt(e.target.value, 10) || 1)) }); saveClients();
-        }));
-        wrap.querySelectorAll('[data-psunit]').forEach((sel) => sel.addEventListener('change', (e) => {
-          const fi = ficheOf(+sel.dataset.psunit); if (!fi) return;
-          fi.suiviPatho = Object.assign({ valeur: 1, actif: true }, fi.suiviPatho || {}, { unite: e.target.value }); saveClients();
-        }));
+        // Suivi pathologique : délégation (les contrôles sont réinjectés par refreshChips quand on coche une pathologie → les écouteurs directs ne survivraient pas).
+        wrap.addEventListener('change', (e) => {
+          const el = e.target;
+          if (el.matches('[data-psact]')) { const pi = +el.dataset.psact, fi = ficheOf(pi); if (!fi) return; if (el.checked) fi.suiviPatho = Object.assign({ unite: 'semaines', valeur: 1 }, fi.suiviPatho || {}, { actif: true }); else if (fi.suiviPatho) fi.suiviPatho.actif = false; saveClients(); const row = wrap.querySelectorAll('.ch-row')[pi], pb = row && row.querySelector('.ch-patho'); if (pb) pb.innerHTML = pathoSuiviInner(cvOf(pool[pi]), fi, pi); }
+          else if (el.matches('[data-psval]')) { const pi = +el.dataset.psval, fi = ficheOf(pi); if (!fi) return; fi.suiviPatho = Object.assign({ unite: 'semaines', actif: true }, fi.suiviPatho || {}, { valeur: Math.min(4, Math.max(1, parseInt(el.value, 10) || 1)) }); saveClients(); }
+          else if (el.matches('[data-psunit]')) { const pi = +el.dataset.psunit, fi = ficheOf(pi); if (!fi) return; fi.suiviPatho = Object.assign({ valeur: 1, actif: true }, fi.suiviPatho || {}, { unite: el.value }); saveClients(); }
+        });
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
         el.appendChild(wrap);
       } // fin des actes (édition uniquement si tournée non clôturée)
@@ -6758,7 +6763,7 @@ function renderContactMail() {
     return true;
   };
   const nouveaux = visibles.filter(matchFilter);
-  const ignores = (S.contactMails || []).filter((m) => m.status === 'ignore' && !hidden(m));
+  const ignores = (S.contactMails || []).filter((m) => m.status === 'ignore' && !hidden(m)).filter(matchFilter); // filtre/recherche s'appliquent aussi aux Ignorés
   const traites = (S.contactMails || []).filter((m) => m.status === 'client').length;
   if ($('cmTraites')) $('cmTraites').textContent = traites ? (traites + ' mail(s) déjà transformé(s) en client.') : '';
   box.innerHTML = ''; if ($('cmEmpty')) $('cmEmpty').style.display = nouveaux.length ? 'none' : 'block';
