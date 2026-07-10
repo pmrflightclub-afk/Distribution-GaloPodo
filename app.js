@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.13';
+const APP_VERSION = '1.2.14';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.14', date: '2026-07-10',
+    ajouts: [
+      'Agenda → Items : quand le titre d\'un événement correspond à un formulaire « Contact mail » encore non traité, un bouton « 👤 Créer (fiche mail) » apparaît (en plus de Récupérer / Agenda privé / Inactif). Il crée le client avec la fiche pré-remplie depuis le formulaire reçu (meilleures infos).',
+      'Gestion → Contact mail : sous le nom et l\'adresse, un statut indique « réponse formulaire contact » (formulaire détecté et rempli) ou « no data ».',
+      'Gestion → Contact mail : liste déroulante des clients des mails non traités (pour n\'afficher qu\'un client) et champ de recherche par nom, prénom ou société.',
+      'Éditeur de tournée : à droite du nom de chaque cheval (section Actes), un rappel vert indique le temps écoulé depuis son dernier parage/visite (ex. « ⏱ 5 sem »).',
+    ],
+  },
   {
     version: '1.2.13', date: '2026-07-10',
     ajouts: [
@@ -2649,10 +2658,14 @@ function recuperateEvent(ev) {
 }
 function agendaItemRow(ev) {
   const match = matchClientForEvent(ev.title);
-  const el = document.createElement('div'); el.className = 'list-item';
+  const mailMatches = matchContactMailForEvent(ev); // formulaire(s) « Contact mail » non traité(s) correspondant au titre de l'événement
+  const el = document.createElement('div'); el.className = 'list-item stack-act';
   const linkTxt = match ? '≈ ' + esc(fullName(match)) + ' (proposé)' : '⚠ client inconnu → création';
-  el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}</span></div>
-    <div class="li-act"><button class="btn small primary" data-rec>Récupérer</button> <button class="btn small" data-prive>Agenda privé</button> <button class="btn small" data-inact>Inactif</button></div>`;
+  const mailTxt = mailMatches.length ? ' · <span class="td-eta">✉ formulaire reçu</span>' : '';
+  const mailBtn = mailMatches.length ? ' <button class="btn small" data-cmail>👤 Créer (fiche mail)</button>' : '';
+  el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}${mailTxt}</span></div>
+    <div class="li-act li-act-col"><button class="btn small primary" data-rec>Récupérer</button>${mailBtn} <button class="btn small" data-prive>Agenda privé</button> <button class="btn small" data-inact>Inactif</button></div>`;
+  if (mailMatches.length) { const b = el.querySelector('[data-cmail]'); if (b) b.addEventListener('click', () => { b.disabled = true; createClientFromMail(mailMatches[0], 'normal'); }); } // fiche pré-remplie depuis le formulaire reçu
   el.querySelector('[data-rec]').addEventListener('click', () => recuperateEvent(ev));
   el.querySelector('[data-prive]').addEventListener('click', () => { S.agendaPrive[ev.id] = { title: ev.title, day: ev.day, start: ev.start, location: ev.location }; saveSettings(); renderAgendaItems(); if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHomeTrajet(); }); // → agenda privé (perso), quitte la liste
   el.querySelector('[data-inact]').addEventListener('click', () => { S.agendaInactive[ev.id] = true; saveSettings(); renderAgendaItems(); }); // → section Inactifs
@@ -3493,6 +3506,20 @@ function addClientToTour(c, chevaux) {
   if (addedImpaye) saveClients();
 }
 
+// Dernière tournée CLÔTURÉE (avant `avantDate`) où ce cheval a eu un parage ou une visite (non annulé) → écart en jours depuis.
+function dernierParageInfo(clientId, chevalNom, avantDate) {
+  const nn = norm(chevalNom); let best = '';
+  allTours().forEach((t) => {
+    if (statusOf(t) !== 'cloturee' || (avantDate && (t.date || '') >= avantDate)) return;
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => {
+      if (cl.clientId !== clientId) return;
+      (cl.chevaux || []).forEach((cv) => { if (norm(cv.nom) === nn && (cv.parage || cv.visite) && !chevalCancelled(cv) && (t.date || '') > best) best = t.date; });
+    }));
+  });
+  if (!best) return null;
+  const p = (s) => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, (m || 1) - 1, d || 1); };
+  return { date: best, days: Math.max(0, Math.round((p(avantDate || todayStr()) - p(best)) / 86400000)) };
+}
 function renderEditorArrets(locked) {
   if (locked === undefined) locked = statusOf(currentTour) === 'cloturee';
   const box = $('edArrets'); box.innerHTML = '';
@@ -3606,7 +3633,9 @@ function renderEditorArrets(locked) {
           opts += ck('data-photo', photoOn, '📷 Photo (planche à faire)', cancelled);
           pathoCols.forEach((c) => { opts += ck('data-key="' + c.key + '"', cv && cv[c.key], c.label, !acte); });
           opts += ck('data-supp="difficile"', cv && cv.difficile, 'Cheval difficile', !acte);
-          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
+          const dp = dernierParageInfo(cl.clientId, ph.nom, currentTour.date); // temps écoulé depuis le dernier parage/visite (tournées clôturées)
+          const pInfo = dp ? ` <span class="td-eta" title="Dernier parage/visite : ${esc(fmtDateFr(dp.date))}">⏱ ${dp.days < 7 ? dp.days + ' j' : Math.round(dp.days / 7) + ' sem'}</span>` : '';
+          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
         });
         h += '</div>';
         // Prestation visite choisie (affichée sous le tableau, modifiable) — par cheval dont la case Visite est cochée.
@@ -6660,12 +6689,49 @@ function findClientForMail(m) {
   const email = (m && m.from) || '', nomM = norm(mailField(f, 'Nom')), prenomM = norm(mailField(f, 'Prénom'));
   return clients.filter((c) => (email && c.email && norm(c.email) === norm(email)) || (nomM && norm(c.nom) === nomM && (!prenomM || !c.prenom || norm(c.prenom) === prenomM)));
 }
+// Nom affiché d'un mail (prénom + nom, sinon adresse) — sert au filtre déroulant et à la recherche.
+function mailDisplayName(m) { const f = (m && m.fields) || {}; return (mailField(f, 'Prénom') + ' ' + mailField(f, 'Nom')).trim() || (m && m.from) || '(inconnu)'; }
+// Le mail contient-il un formulaire de contact DÉTECTÉ ET REMPLI ? (étiquettes présentes + au moins une valeur client).
+function mailHasForm(m) {
+  const f = mailFieldsOf(m);
+  const hasLabel = ('nom du cheval' in f) || ("adresse de l'écurie" in f) || ('race' in f);
+  return hasLabel && !!(mailField(f, 'Nom') || mailField(f, 'Prénom') || mailField(f, 'Nom du cheval') || mailField(f, 'Numéro de téléphone'));
+}
+// Mails « contact » NON TRAITÉS correspondant à un événement d'agenda (nom/prénom/société/cheval présents dans le titre/lieu).
+// Sert au bouton « Créer le client (fiche mail) » de l'item d'agenda : la fiche est pré-remplie avec le formulaire reçu.
+function matchContactMailForEvent(ev) {
+  const hay = norm([ev && ev.title, ev && ev.location, ev && ev.desc].filter(Boolean).join(' '));
+  if (!hay) return [];
+  return (S.contactMails || []).filter((m) => {
+    if (m.status !== 'nouveau' || mailIsSelf(m) || mailIsBlankForm(m)) return false;
+    const f = mailFieldsOf(m);
+    const keys = [mailField(f, 'Prénom'), mailField(f, 'Nom'), (mailField(f, 'Prénom') + ' ' + mailField(f, 'Nom')).trim(), mailField(f, "Nom de l'entreprise"), mailField(f, 'Nom du cheval')].filter(Boolean).map(norm);
+    return keys.some((k) => k && k.length >= 2 && hay.includes(k));
+  });
+}
+let cmClientFilterVal = '', cmSearchVal = ''; // filtre client (liste déroulante) + recherche libre (nom/prénom/société) de la page Contact mail
 function renderContactMail() {
   const c = $('cmConnect'); if (c) c.onclick = () => gmailConnect($('cmStatus'));
   const f = $('cmFetch'); if (f) f.onclick = () => gmailFetch($('cmStatus'), renderContactMail);
   const box = $('cmList'); if (!box) return;
   const hidden = (m) => mailIsSelf(m) || mailIsBlankForm(m);
-  const nouveaux = (S.contactMails || []).filter((m) => m.status === 'nouveau' && !hidden(m));
+  const visibles = (S.contactMails || []).filter((m) => m.status === 'nouveau' && !hidden(m));
+  // Liste déroulante des clients des items non traités (peuplée sur la liste NON filtrée).
+  const sel = $('cmClientFilter');
+  if (sel) {
+    const names = [...new Set(visibles.map(mailDisplayName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    if (cmClientFilterVal && !names.some((n) => norm(n) === norm(cmClientFilterVal))) cmClientFilterVal = ''; // sélection devenue vide
+    sel.innerHTML = '<option value="">Tous les clients (' + visibles.length + ')</option>' + names.map((n) => `<option value="${esc(n)}"${norm(n) === norm(cmClientFilterVal) ? ' selected' : ''}>${esc(n)}</option>`).join('');
+    sel.onchange = (e) => { cmClientFilterVal = e.target.value; renderContactMail(); };
+  }
+  const sb = $('cmSearch'); if (sb) { if (sb.value !== cmSearchVal) sb.value = cmSearchVal; sb.oninput = (e) => { cmSearchVal = e.target.value; renderContactMail(); }; }
+  const q = norm(cmSearchVal);
+  const matchFilter = (m) => {
+    if (cmClientFilterVal && norm(mailDisplayName(m)) !== norm(cmClientFilterVal)) return false;
+    if (q) { const ff = m.fields || {}; const hay = norm([mailField(ff, 'Prénom'), mailField(ff, 'Nom'), mailField(ff, "Nom de l'entreprise")].filter(Boolean).join(' ')); if (!hay.includes(q)) return false; }
+    return true;
+  };
+  const nouveaux = visibles.filter(matchFilter);
   const ignores = (S.contactMails || []).filter((m) => m.status === 'ignore' && !hidden(m));
   const traites = (S.contactMails || []).filter((m) => m.status === 'client').length;
   if ($('cmTraites')) $('cmTraites').textContent = traites ? (traites + ' mail(s) déjà transformé(s) en client.') : '';
@@ -6681,7 +6747,8 @@ function contactMailRow(m, ignored) {
   const el = document.createElement('div'); el.className = 'list-item';
   el.className = 'list-item stack-act';
   const badge = isKnown ? ' <span class="rem-tag">client connu : ' + esc(fullName(known[0])) + '</span>' : ' <span class="rem-tag">nouveau</span>';
-  el.innerHTML = `<div class="li-main"><b>${esc(nom)}${cheval ? ' · 🐴 ' + esc(cheval) : ''}</b>${badge}<span class="li-sub">${esc(m.from || '')}${soc ? ' · ' + esc(soc) : ''}${m.date ? ' · ' + esc(String(m.date).slice(0, 16)) : ''}</span></div>`
+  const hasForm = mailHasForm(m); const statusTxt = hasForm ? '✅ réponse formulaire contact' : '— no data';
+  el.innerHTML = `<div class="li-main"><b>${esc(nom)}${cheval ? ' · 🐴 ' + esc(cheval) : ''}</b>${badge}<span class="li-sub">${esc(m.from || '')}${soc ? ' · ' + esc(soc) : ''}${m.date ? ' · ' + esc(String(m.date).slice(0, 16)) : ''}</span><span class="li-sub cm-status ${hasForm ? 'has' : 'none'}">${statusTxt}</span></div>`
     + (ignored ? '<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small" data-restore>↩ Réactiver</button></div>'
       : `<div class="li-act li-act-col"><button class="btn small" data-view>👁 Voir</button><button class="btn small${isKnown ? '' : ' primary'}" data-create>👤 Créer le client</button><button class="btn small" data-create-inact>💤 Créer (inactif)</button><button class="btn small" data-create-noir>⛔ Créer (liste noire)</button><button class="btn small${isKnown ? ' primary' : ''}" data-update>🔄 Mettre à jour${isKnown ? ' ' + esc(fullName(known[0])) : ' un client'}</button><button class="btn small" data-ignore>Ignorer</button></div>`);
   el.querySelector('[data-view]').addEventListener('click', () => modalMailView(m));

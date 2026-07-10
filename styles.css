@@ -95,6 +95,10 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .li-act-col .btn { white-space: nowrap; }
 .list-item.stack-act { align-items: flex-start; }
 .td-eta { color: var(--ok, #2e9e5b); font-weight: 700; font-size: .82em; white-space: nowrap; }
+.cm-status.has { color: var(--ok, #2e9e5b); font-weight: 600; }
+.cm-status.none { color: var(--muted); font-style: italic; }
+.cm-filters { gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
+.cm-filters select, .cm-filters input { flex: 1 1 160px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font-size: .9rem; }
 .list-item.clickable { cursor: pointer; }
 .list-item.clickable:hover { border-color: var(--accent); }
 .list-item.clickable:active { background: var(--card); }
