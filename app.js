@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.1.148';
+const APP_VERSION = '1.1.149';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.1.149', date: '2026-07-10',
+    ajouts: [
+      'Tournée — actes des chevaux repensés pour le mobile : fini le grand tableau. Chaque cheval a un menu « ＋ Actes ▾ » (Parage, Visite, 📷 Photo, Fourbure, NPAS, Infection, Cheval difficile) et, en dessous, la liste des actes cochés (rappel visuel).',
+      'Nouvelle case « 📷 Photo » par cheval : la cocher ajoute le cheval au « Compte rendu photo » de l\'Accueil (rappel de créer la planche).',
+      'Le « cheval lourd » n\'est plus une case de tournée : c\'est une propriété du cheval (fiche client, avec montant). Le supplément s\'applique alors automatiquement à chaque tournée où le cheval est paré/visité.',
+    ],
+  },
   {
     version: '1.1.148', date: '2026-07-10',
     corrections: [
@@ -2514,6 +2522,8 @@ function editClient(existing, onSaved, prefillNom, prefill) {
         <label>Date de naissance<input type="date" data-naiss value="${h.dateNaissance || ''}"/></label>
         <label>Race<input type="text" data-race value="${esc(h.race || '')}" placeholder="Race (facultatif)"/></label>
         <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
+        <label class="chk2"><input type="checkbox" data-lourd ${h.lourd ? 'checked' : ''}/> Cheval lourd (supplément appliqué automatiquement à chaque tournée)</label>
+        ${h.lourd ? `<label>Montant du supplément « lourd » (HT, vide = tarif par défaut)<input type="number" data-lourdht step="0.01" min="0" value="${h.lourdHT != null ? h.lourdHT : ''}" placeholder="défaut : ${fmtNum(S.lourdHT || 0, 2)} € HT"/></label>` : ''}
         ${h.anamnese ? '<button class="btn small" data-anam>📄 Formulaire (anamnèse)</button>' : ''}
         <label>Adresse du cheval<select data-src>
           <option value="client">Même adresse que le client</option>
@@ -2532,6 +2542,8 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       row.querySelector('[data-race]').addEventListener('input', (e) => { h.race = e.target.value; saveDraft(); });
       { const ab = row.querySelector('[data-anam]'); if (ab) ab.addEventListener('click', () => modalAnamnese(h)); }
       row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
+      row.querySelector('[data-lourd]').addEventListener('change', (e) => { h.lourd = e.target.checked; if (!e.target.checked) delete h.lourdHT; renderCh(); saveDraft(); });
+      { const lh = row.querySelector('[data-lourdht]'); if (lh) lh.addEventListener('input', (e) => { const v = parseFloat(e.target.value); h.lourdHT = (e.target.value === '' || isNaN(v)) ? null : Math.max(0, v); saveDraft(); }); }
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
       { const pv = row.querySelector('[data-priv]'); if (pv) pv.addEventListener('change', (e) => { h.addrPrivee = e.target.checked; renderCh(); saveDraft(); }); }
@@ -3245,38 +3257,65 @@ function renderEditorArrets(locked) {
         // Nom + réduction affichés ici SEULEMENT si plusieurs clients (sinon c'est dans l'en-tête de l'arrêt).
         let h = single ? '' : `<div class="patho-client">${esc(clientName(cl.clientId))}</div>`;
         if (!single) h += `<label class="reduc-row"><span class="grow">Réduction articles</span><input type="number" data-reduc step="1" min="0" max="100" value="${currentTour.reductions[cl.clientId] || ''}" placeholder="0" style="width:70px"/><span>%</span></label>`;
-        // Colonnes : Parage puis Visite (les 2 prestations qui rattachent un cheval), puis pathologies. Pas de colonne « Présent » : la présence est IMPLICITE (parage OU visite).
+        // Actes des chevaux : un menu déroulant par cheval (mobile) + liste des actes actifs (chips). Parage OU Visite = cheval pris en charge.
         const pathoCols = [];
         if (S.fourbureHT > 0) pathoCols.push({ key: 'fourbure', label: 'Fourbure' });
         if (S.npasHT > 0) pathoCols.push({ key: 'npas', label: 'NPAS' });
         if (S.infectionHT > 0) pathoCols.push({ key: 'infection', label: 'Infection' });
-        // Prestations « visite » du catalogue (case Visite par cheval → modale de choix).
         const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
-        const suppCols = [{ key: 'difficile', label: 'Difficile' }, { key: 'lourd', label: 'Lourd' }]; // suppléments à montant saisi (modale)
-        h += `<table class="patho-tbl"><thead><tr><th>Cheval</th><th>Parage</th><th>Visite</th>${pathoCols.map((c) => '<th>' + c.label + '</th>').join('')}${suppCols.map((c) => '<th>' + c.label + '</th>').join('')}</tr></thead><tbody>`;
+        const rr0 = rate();
+        h += '<div class="ch-list">';
         pool.forEach((ph, pi) => {
-          const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite)); // parage OU visite = cheval pris en charge
+          const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite));
+          const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(ph.nom)) : null;
+          const isLourd = !!(fiche && fiche.lourd);
           const tag = cancelled ? ` <span class="badge badge-cancel">${cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé'}</span>` : '';
-          h += `<tr${cancelled ? ' class="ch-cancel"' : ''}><td>🐴 ${esc(ph.nom)}${tag} <button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter ce RDV'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button></td>`;
-          h += `<td><input type="checkbox" data-key="parage" data-pi="${pi}" ${cv && cv.parage ? 'checked' : ''}${cancelled ? ' disabled' : ''}/></td>`;
-          h += `<td><input type="checkbox" data-vis data-pi="${pi}" ${cv && cv.visite ? 'checked' : ''}${(cancelled || !visArts.length) ? ' disabled' : ''}/></td>`;
-          h += pathoCols.map((c) => `<td><input type="checkbox" data-key="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${acte ? '' : ' disabled'}/></td>`).join('');
-          h += suppCols.map((c) => `<td><input type="checkbox" data-supp="${c.key}" data-pi="${pi}" ${cv && cv[c.key] ? 'checked' : ''}${acte ? '' : ' disabled'}/></td>`).join('');
-          h += '</tr>';
+          const photoOn = hasPlancheTodo(cl.clientId, ph.nom, currentTour.date);
+          const chips = [];
+          if (cv && !cancelled) {
+            if (cv.parage) chips.push('Parage');
+            if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); }
+            if (photoOn) chips.push('📷 Photo');
+            pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); });
+            if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : ''));
+            if (isLourd && acte) chips.push('⚖ Lourd (auto)');
+          }
+          const chipsHtml = cancelled ? '' : (chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>');
+          const ck = (attr, checked, label, disabled) => `<label class="ch-opt${disabled ? ' ch-opt-off' : ''}"><input type="checkbox" ${attr} data-pi="${pi}" ${checked ? 'checked' : ''}${disabled ? ' disabled' : ''}/> ${label}</label>`;
+          let opts = ck('data-key="parage"', cv && cv.parage, 'Parage', cancelled);
+          opts += ck('data-vis', cv && cv.visite, 'Visite', cancelled || !visArts.length);
+          opts += ck('data-photo', photoOn, '📷 Photo (planche à faire)', cancelled);
+          pathoCols.forEach((c) => { opts += ck('data-key="' + c.key + '"', cv && cv[c.key], c.label, !acte); });
+          opts += ck('data-supp="difficile"', cv && cv.difficile, 'Cheval difficile', !acte);
+          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
         });
-        h += '</tbody></table>';
+        h += '</div>';
         // Prestation visite choisie (affichée sous le tableau, modifiable) — par cheval dont la case Visite est cochée.
         pool.forEach((ph, pi) => { const cv = cvOf(ph); if (cv && cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; h += `<div class="reduc-row"><span class="grow">🐴 ${esc(ph.nom)} — Visite : <b>${art ? esc(art.libelle) + ' (' + eur(art.prixHT) + ')' : '<i>à choisir</i>'}</b></span><button class="btn small" data-vispick="${pi}">${art ? 'Modifier' : 'Choisir'}</button></div>`; } });
         h += `<p class="hint" style="margin-top:2px"><b>Parage</b> et <b>Visite</b> sont les 2 prestations qui rattachent un cheval à la tournée : un cheval sans parage ni visite n'est ni compté ni facturé. Fourbure / NPAS / Infection s'activent dès que Parage <b>ou</b> Visite est coché. « Visite » ouvre la liste des prestations « Visite » du catalogue et l'ajoute à la facture (section Articles), sans changer le tarif de déplacement de l'arrêt.</p>`;
         wrap.innerHTML = h;
+        // Met à jour les « chips » (actes actifs) d'un cheval SANS re-render complet (garde le menu ＋Actes ouvert).
+        const refreshChips = (pi) => {
+          const cv = cvOf(pool[pi]); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite));
+          const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(pool[pi].nom)) : null;
+          const chips = [];
+          if (cv && !cancelled) { if (cv.parage) chips.push('Parage'); if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); } if (hasPlancheTodo(cl.clientId, pool[pi].nom, currentTour.date)) chips.push('📷 Photo'); pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); }); if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : '')); if (fiche && fiche.lourd && acte) chips.push('⚖ Lourd (auto)'); }
+          const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>'; }
+        };
         const rin = wrap.querySelector('[data-reduc]');
         if (rin) rin.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); });
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
           const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.key;
           cv[key] = e.target.checked;
-          // Parage (dé)coché : recharge la grille (verrouille/déverrouille les pathologies) ; si plus de parage NI visite → efface les pathologies.
+          // Parage (dé)coché : re-render complet (change l'état pris-en-charge → active/désactive pathologies/difficile) ; efface le reste si plus de parage NI visite.
           if (key === 'parage') { if (!e.target.checked && !cv.visite) { cv.fourbure = false; cv.npas = false; cv.infection = false; cv.difficile = false; cv.lourd = false; } recomputeMoney(); renderEditorArrets(locked); return; }
-          recomputeMoney();
+          recomputeMoney(); refreshChips(+inp.dataset.pi); // pathologie → maj des chips sans fermer le menu
+        }));
+        wrap.querySelectorAll('[data-photo]').forEach((inp) => inp.addEventListener('change', (e) => {
+          const ph = pool[+inp.dataset.pi];
+          if (e.target.checked) addPlancheTodo({ clientId: cl.clientId, chevalNom: ph.nom, date: currentTour.date, tourId: currentTour.id });
+          else removePlancheTodo(cl.clientId, ph.nom, currentTour.date);
+          refreshChips(+inp.dataset.pi); if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHome();
         }));
         wrap.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => {
           const pi = +inp.dataset.pi, ph = pool[pi], cv = ensureCv(ph);
@@ -3289,7 +3328,7 @@ function renderEditorArrets(locked) {
         wrap.querySelectorAll('[data-vispick]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.vispick], cv = ensureCv(ph); modalVisitePick(ph.nom, cv.visiteArtId, visArts, (vid) => { if (vid !== undefined) cv.visiteArtId = vid || null; saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); }));
         wrap.querySelectorAll('[data-supp]').forEach((inp) => inp.addEventListener('change', (e) => {
           const ph = pool[+inp.dataset.pi], cv = ensureCv(ph), key = inp.dataset.supp;
-          if (!e.target.checked) { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; saveTournees(); recomputeMoney(); return; }
+          if (!e.target.checked) { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; saveTournees(); recomputeMoney(); refreshChips(+inp.dataset.pi); return; }
           modalSupplement(ph.nom, cv, key, () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // saisie montant HT + éligibilité remise
         }));
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture
@@ -3567,7 +3606,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => ({ clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalBilled).map((c) => ({ nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile, lourd: !!c.lourd, difficileHT: c.difficileHT, lourdHT: c.lourdHT, difficileRemise: c.difficileRemise, lourdRemise: c.lourdRemise, difficileOffert: !!c.difficileOffert, lourdOffert: !!c.lourdOffert })) })),
+    clients: (a.clients || []).map((cl) => { const cli = clients.find((x) => x.id === cl.clientId); return { clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalBilled).map((c) => { const fiche = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null; return { nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile, difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined }; }) }; }),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
@@ -6635,6 +6674,9 @@ function addPlancheTodo(x) {
   if (S.plancheTodo.some((y) => key(y) === key(x))) return false;
   S.plancheTodo.push(Object.assign({ id: uid() }, x)); saveSettings(); return true;
 }
+const plancheTodoKey = (clientId, chevalNom, date) => clientId + '|' + norm(chevalNom || '') + '|' + (date || '');
+const hasPlancheTodo = (clientId, chevalNom, date) => (S.plancheTodo || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) === plancheTodoKey(clientId, chevalNom, date));
+function removePlancheTodo(clientId, chevalNom, date) { const k = plancheTodoKey(clientId, chevalNom, date); S.plancheTodo = (S.plancheTodo || []).filter((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) !== k); saveSettings(); }
 // Depuis un arrêt (tournée ouverte OU clôturée) : créer une planche préremplie pour un cheval, ou l'ajouter au « Compte rendu photo ».
 function modalArretPlanche(t, a) {
   const rows = [];

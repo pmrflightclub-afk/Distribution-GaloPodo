@@ -289,6 +289,19 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .btn-cancel { border: 1px solid var(--warn); background: #fde68a22; color: var(--warn); font-size: .72rem; font-weight: 700; padding: 2px 9px; border-radius: 999px; cursor: pointer; white-space: nowrap; margin-left: 4px; }
 .btn-cancel:hover { background: var(--warn); color: #fff; }
 .btn-cancel.on { background: var(--warn); color: #fff; }
+/* Actes des chevaux dans un arrêt : bloc par cheval (menu déroulant + chips) */
+.ch-list { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.ch-row { border: 1px solid var(--line); border-radius: 9px; padding: 7px 9px; background: var(--card); }
+.ch-row.ch-cancel td, .ch-row.ch-cancel b { text-decoration: line-through; }
+.ch-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ch-top-act { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.ch-menu > summary { list-style: none; cursor: pointer; display: inline-block; }
+.ch-menu > summary::-webkit-details-marker { display: none; }
+.ch-opts { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
+.ch-opt { display: flex; align-items: center; gap: 8px; font-size: .95rem; }
+.ch-opt-off { opacity: .45; }
+.ch-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.ch-chip { font-size: .72rem; background: var(--accent); color: var(--accent-ink); padding: 1px 8px; border-radius: 999px; }
 .a-invoices { margin-top: 10px; }
 .a-invoices .inv-client { border-top: 2px solid var(--accent); }
 .a-invoices:empty { display: none; }
