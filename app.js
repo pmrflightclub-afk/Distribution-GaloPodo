@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.2';
+const APP_VERSION = '1.2.3';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.3', date: '2026-07-10',
+    ajouts: [
+      'Planches refondues (contact, avant/après, comparaison) : marges réduites à 0,5 mm et images maximisées (au ras de la grille). Grille à cellules de taille fixe — les images gardent la même taille et la même position d\'une planche à l\'autre, même s\'il manque des photos ou des lignes. La 1ʳᵉ colonne affiche les abréviations AG / AD / PG / PD.',
+      'Nouvel en-tête : client (gauche) · cheval (centre) · votre identité + logo (droite). Le cheval affiche automatiquement âge, race, discipline et durée de prise en charge. Pied de page sur toute la largeur : mini-logo GaloPodo + Contact (email · téléphone) + n° de TVA.',
+      'Identité pour les documents (Gestion → « Configuration activité », anciennement « Mes adresses ») : prénom, nom, société, téléphone, email, n° de TVA + logo (déplacé depuis les Réglages). Un logo GaloPodo par défaut est utilisé si vous n\'importez pas le vôtre.',
+      'Fiche cheval : champ « Discipline / usage » et interrupteur pour afficher (ou non) la prise en charge sur les planches.',
+      'Planche de parage / ferrage : nouvelle case dédiée + champ « durée du cycle précédent » (en semaines), obligatoire avant de générer.',
+    ],
+  },
   {
     version: '1.2.2', date: '2026-07-10',
     ajouts: [
@@ -1263,6 +1273,9 @@ if (!Array.isArray(S.planche.stades)) S.planche.stades = ['Cheval ferré', 'Déf
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
 // { data:dataURL, zoom:multiplicateur, x/y:décalage en FRACTION du cadre (pan) } — cadrage repris à l'identique dans l'en-tête PDF.
 if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
+// Identité du pro (documents : planches) — coordonnées d'activité, à côté du logo (Gestion → Configuration activité).
+if (!S.proIdent || typeof S.proIdent !== 'object') S.proIdent = {};
+S.proIdent = Object.assign({ prenom: '', nom: '', societe: '', tel: '', email: '', tvaNum: '' }, S.proIdent);
 // Statut des adresses de chevaux (clé = adresse normalisée) : { [addrKey]: 'inactif' | 'noir' } (absent = actif). Partagé par tous les chevaux à cette adresse.
 if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {};
 // Chevaux en attente de planche photo (« Compte rendu photo » sur l'Accueil) : { id, clientId, chevalId, chevalNom, date, tourId }. Aucune image stockée.
@@ -2376,7 +2389,7 @@ function showReglages(sub) {
   const rb = document.querySelector('#reglagesSub .subtab[data-rsub="' + currentRsub + '"]'), rl = document.querySelector('#reglagesSub .subnav-label');
   if (rb && rl) rl.textContent = rb.textContent;
   if ($('reglagesSub')) $('reglagesSub').classList.remove('open');
-  if (currentRsub === 'config') { renderAmortStats(); renderProLogoEditor(); }
+  if (currentRsub === 'config') { renderAmortStats(); }
   if (currentRsub === 'mail') renderMailConfig();
   if (currentRsub === 'statistiques') renderStatConfig();
   if (currentRsub === 'calcul') renderCalcul();
@@ -2649,7 +2662,9 @@ function editClient(existing, onSaved, prefillNom, prefill) {
         <label>Date de naissance<input type="date" data-naiss value="${h.dateNaissance || ''}"/></label>
         <label>Race<input type="text" data-race value="${esc(h.race || '')}" placeholder="Race (facultatif)"/></label>
         <label>Date de prise en charge<input type="date" data-pec value="${h.datePriseEnCharge || ''}"/></label>
+        <label class="chk2"><input type="checkbox" data-pecpl ${h.priseEnChargePlanche !== false ? 'checked' : ''}/> Afficher la prise en charge (date + durée) sur les planches</label>
         ${h.dateDemandeSuivi ? `<label>Date de la demande de suivi (issue du mail)<input type="date" data-dds value="${h.dateDemandeSuivi}"/></label>` : ''}
+        <label>Discipline / usage<input type="text" data-disc value="${esc(h.discipline || '')}" placeholder="loisir, sport, trait, élevage…"/></label>
         <label class="chk2"><input type="checkbox" data-lourd ${h.lourd ? 'checked' : ''}/> Cheval lourd (supplément appliqué automatiquement à chaque tournée)</label>
         ${h.lourd ? `<label>Montant du supplément « lourd » (HT, vide = tarif par défaut)<input type="number" data-lourdht step="0.01" min="0" value="${h.lourdHT != null ? h.lourdHT : ''}" placeholder="défaut : ${fmtNum(S.lourdHT || 0, 2)} € HT"/></label>` : ''}
         ${h.anamnese ? '<button class="btn small" data-anam>📄 Formulaire (anamnèse)</button>' : ''}
@@ -2671,6 +2686,8 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       { const ab = row.querySelector('[data-anam]'); if (ab) ab.addEventListener('click', () => modalAnamnese(h)); }
       row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
       { const dd = row.querySelector('[data-dds]'); if (dd) dd.addEventListener('change', (e) => { h.dateDemandeSuivi = e.target.value || ''; saveDraft(); }); }
+      { const pp = row.querySelector('[data-pecpl]'); if (pp) pp.addEventListener('change', (e) => { h.priseEnChargePlanche = e.target.checked; saveDraft(); }); }
+      { const dc = row.querySelector('[data-disc]'); if (dc) dc.addEventListener('input', (e) => { h.discipline = e.target.value; saveDraft(); }); }
       row.querySelector('[data-lourd]').addEventListener('change', (e) => { h.lourd = e.target.checked; if (!e.target.checked) delete h.lourdHT; renderCh(); saveDraft(); });
       { const lh = row.querySelector('[data-lourdht]'); if (lh) lh.addEventListener('input', (e) => { const v = parseFloat(e.target.value); h.lourdHT = (e.target.value === '' || isNaN(v)) ? null : Math.max(0, v); saveDraft(); }); }
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
@@ -2757,7 +2774,13 @@ function renderChevAddresses() {
   });
 }
 // ================= GESTION → MES ADRESSES (départ) =================
+// Identité pro (documents) : coordonnées d'activité, dans Gestion → Configuration activité.
+function renderProIdent() {
+  const set = (id, key) => { const el = $(id); if (el) { el.value = S.proIdent[key] || ''; el.oninput = (e) => { S.proIdent[key] = e.target.value; saveSettings(); }; } };
+  set('piPrenom', 'prenom'); set('piNom', 'nom'); set('piSociete', 'societe'); set('piTel', 'tel'); set('piEmail', 'email'); set('piTva', 'tvaNum');
+}
 function renderAdresses() {
+  renderProIdent(); renderProLogoEditor(); // bloc « Identité (documents) » en haut de Configuration activité
   const box = $('adressesList'); if (!box) return; box.innerHTML = '';
   $('adressesEmpty').style.display = S.adresses.length ? 'none' : 'block';
   S.adresses.forEach((a) => {
@@ -5413,40 +5436,59 @@ function pdfFromJpegPages(pages, land) {
 }
 function plLoadImg(src) { return new Promise((res) => { if (!src) return res(null); const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; }); }
 function plTrunc(ctx, s, maxW) { s = String(s || ''); if (ctx.measureText(s).width <= maxW) return s; while (s.length && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1); return s + '…'; }
-// Rend une page de planche sur un canvas (en-tête + grille + photos) → pour l'export PDF image / email.
+// Rend une page de planche sur un canvas (en-tête 3 zones + grille cellules fixes + pied) → export PDF image / email. Géométrie mm partagée.
 async function planchePageCanvas(pi) {
-  const st = plCreate, land = st.orientation !== 'portrait', W = land ? 1400 : 990, H = land ? 990 : 1400;
+  const st = plCreate, land = st.orientation !== 'portrait';
+  const g = plGeom(land, (st.angles || []).length, plRefRows(st));
+  const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.textBaseline = 'top';
-  const M = 28, headH = 86; let hx = M;
-  if (st.logo && S.proLogo && S.proLogo.data) { const lg = await plLoadImg(S.proLogo.data); if (lg) { const lw = 190, lh = 64; ctx.save(); ctx.beginPath(); ctx.rect(M, M, lw, lh); ctx.clip(); const z = S.proLogo.zoom || 1, s = Math.min(lw / lg.width, lh / lg.height) * z, dw = lg.width * s, dh = lg.height * s, cx = M + lw / 2 + (S.proLogo.x || 0) * lw, cy = M + lh / 2 + (S.proLogo.y || 0) * lh; ctx.drawImage(lg, cx - dw / 2, cy - dh / 2, dw, dh); ctx.restore(); hx = M + lw + 14; } }
-  ctx.fillStyle = '#111'; ctx.font = 'bold 26px sans-serif';
-  ctx.fillText(st.type === 'avantapres' ? 'Avant / apres (parage)' : 'Planche de contact', hx, M + 8);
-  ctx.font = '15px sans-serif'; ctx.textAlign = 'right';
-  ctx.fillText((st.cheval || '-') + '  ·  ' + (st.client || '-'), W - M, M + 8);
-  ctx.fillText(fmtDateFr(st.date), W - M, M + 30); ctx.textAlign = 'left';
-  ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(M, M + headH); ctx.lineTo(W - M, M + headH); ctx.stroke();
-  const angles = st.angles || [], rows = plPageRows(pi), gx = M, gw = W - 2 * M, top = M + headH + 10, noteH = st.note ? 56 : 0, gh = H - top - M - noteH;
-  const labelW = Math.min(180, gw * 0.18), colW = (gw - labelW) / Math.max(1, angles.length), headerRowH = 30, rowH = (gh - headerRowH) / Math.max(1, rows.length);
-  ctx.fillStyle = '#eee'; ctx.fillRect(gx, top, gw, headerRowH);
-  ctx.fillStyle = '#111'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
-  angles.forEach((a, ci) => ctx.fillText(plTrunc(ctx, a, colW - 8), gx + labelW + ci * colW + colW / 2, top + 8)); ctx.textAlign = 'left';
+  const angles = st.angles || [], rows = plPageRows(pi);
+  const titre = (st.type === 'avantapres' ? 'Avant / après (parage)' : 'Planche de contact') + (st.stade ? ' — ' + st.stade : '');
+  const headerLogo = (S.proLogo && S.proLogo.data) ? S.proLogo.data : GALOPODO_LOGO; // logo pro, ou GaloPodo par défaut (toujours affiché)
+  const topY = px(g.margin);
+  // Zone client (gauche)
+  const zcX = px(g.margin), zcW = px(g.gridW * 0.32); let cy = topY;
+  ctx.textAlign = 'left'; ctx.fillStyle = '#555'; ctx.font = fs(2.4) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, titre, zcW), zcX, cy); cy += fs(3);
+  ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, st.client || '—', zcW), zcX, cy); cy += fs(4.4);
+  ctx.font = fs(2.6) + 'px sans-serif'; ctx.fillText(fmtDateFr(st.date), zcX, cy); cy += fs(3.1);
+  plClientLines(st).forEach((l) => { ctx.fillText(plTrunc(ctx, l, zcW), zcX, cy); cy += fs(3.1); });
+  // Zone cheval (centre)
+  const zhX = px(g.margin + g.gridW * 0.34), zhW = px(g.gridW * 0.32), zhCx = zhX + zhW / 2; let vy = topY;
+  ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, st.cheval || '—', zhW), zhCx, vy); vy += fs(4.4);
+  ctx.font = fs(2.6) + 'px sans-serif'; plChevalLines(st).forEach((l) => { ctx.fillText(plTrunc(ctx, l, zhW), zhCx, vy); vy += fs(3.1); });
+  if (st.note) { ctx.font = 'italic ' + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, 'Note : ' + st.note, zhW), zhCx, vy); }
+  // Zone pro (droite) : logo + noms
+  const zpX = px(g.margin + g.gridW * 0.68), zpW = px(g.gridW * 0.32); let py = topY;
+  if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(9), lw = Math.min(zpW, lg.width * (lh / lg.height)); ctx.drawImage(lg, zpX + zpW - lw, py, lw, lh); py += lh + fs(1); } }
+  ctx.textAlign = 'right'; ctx.fillStyle = '#111'; ctx.font = fs(2.6) + 'px sans-serif'; plProNameLines().forEach((n) => { ctx.fillText(plTrunc(ctx, n, zpW), zpX + zpW, py); py += fs(3.1); });
+  ctx.textAlign = 'left';
+  // Grille (cellules fixes)
+  const gx = px(g.gridLeft), gtop = px(g.gridTop), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH);
+  ctx.fillStyle = '#eee'; ctx.fillRect(gx, gtop, px(g.gridW), angH);
+  ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(2.8) + 'px sans-serif'; ctx.textAlign = 'center';
+  angles.forEach((a, ci) => ctx.fillText(plTrunc(ctx, a, colW - 6), gx + labelW + ci * colW + colW / 2, gtop + angH / 2 - fs(1.4)));
   const imgs = {};
   for (const r of rows) for (let ci = 0; ci < angles.length; ci++) { const pid = st.cells[plCellKey(pi, r, ci)], ph = pid && st.photos.find((p) => p.id === pid); if (ph && ph.url) imgs[r.ri + '_' + r.pj + '_' + ci] = await plLoadImg(ph.url); }
-  ctx.font = 'bold 13px sans-serif';
+  ctx.font = 'bold ' + fs(3.2) + 'px sans-serif';
   rows.forEach((r, ri) => {
-    const ry = top + headerRowH + ri * rowH;
+    const ry = gtop + angH + ri * rowH;
     ctx.fillStyle = (r.pj === 1) ? '#e7eef7' : '#f5f5f5'; ctx.fillRect(gx, ry, labelW, rowH);
-    ctx.fillStyle = '#111'; ctx.save(); ctx.beginPath(); ctx.rect(gx + 3, ry, labelW - 6, rowH); ctx.clip(); ctx.fillText(plTrunc(ctx, r.label, labelW - 8), gx + 5, ry + rowH / 2 - 7); ctx.restore();
-    angles.forEach((a, ci) => { const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (im) { const s = Math.min((colW - 6) / im.width, (rowH - 6) / im.height), dw = im.width * s, dh = im.height * s; ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); } });
+    ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.fillText(plTrunc(ctx, plRowShort(r), labelW - 4), gx + labelW / 2, ry + rowH / 2 - fs(1.6));
+    angles.forEach((a, ci) => { const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (im) { ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip(); const s = Math.max(colW / im.width, rowH / im.height), dw = im.width * s, dh = im.height * s; ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); ctx.restore(); } });
   });
+  ctx.textAlign = 'left';
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
-  const gridBottom = top + headerRowH + rows.length * rowH;
-  for (let ci = 0; ci <= angles.length; ci++) { const xx = gx + labelW + ci * colW; ctx.moveTo(xx, top); ctx.lineTo(xx, gridBottom); }
-  ctx.moveTo(gx, top); ctx.lineTo(gx, gridBottom);
-  for (let ri = 0; ri <= rows.length; ri++) { const yy = top + headerRowH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gx + gw, yy); }
-  ctx.moveTo(gx, top); ctx.lineTo(gx + gw, top); ctx.stroke();
-  if (st.note) { ctx.fillStyle = '#111'; ctx.font = '13px sans-serif'; ctx.save(); ctx.beginPath(); ctx.rect(gx, H - M - noteH + 6, gw, noteH); ctx.clip(); ctx.fillText(plTrunc(ctx, 'Note : ' + st.note, gw), gx, H - M - noteH + 10); ctx.restore(); }
+  const gridBottom = gtop + angH + rows.length * rowH, gridRight = gx + labelW + angles.length * colW;
+  for (let ci = 0; ci <= angles.length; ci++) { const xx = gx + labelW + ci * colW; ctx.moveTo(xx, gtop); ctx.lineTo(xx, gridBottom); }
+  ctx.moveTo(gx, gtop); ctx.lineTo(gx, gridBottom);
+  for (let ri = 0; ri <= rows.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
+  ctx.moveTo(gx, gtop); ctx.lineTo(gx + px(g.gridW), gtop); ctx.stroke();
+  // Pied de page : mini-logo GaloPodo + contact + TVA
+  const fy = px(g.pageH - g.margin - g.footerH);
+  ctx.strokeStyle = '#999'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(px(g.margin), fy); ctx.lineTo(px(g.margin + g.gridW), fy); ctx.stroke();
+  let fx = px(g.margin); const flg = await plLoadImg(GALOPODO_LOGO); if (flg) { const fh = px(3.6), fw = flg.width * (fh / flg.height); ctx.drawImage(flg, fx, fy + px(0.7), fw, fh); fx += fw + px(2); }
+  ctx.fillStyle = '#333'; ctx.font = fs(2.4) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(plTrunc(ctx, plProFooter(), px(g.margin + g.gridW) - fx), fx, fy + px(1.2));
   return cv;
 }
 async function planchePdfBlob() {
@@ -6543,11 +6585,10 @@ function renderPlancheConfig() {
   // Orientation + logo
   const head = document.createElement('section'); head.className = 'card';
   head.innerHTML = `<label>Orientation<select id="plOri"><option value="paysage">Paysage</option><option value="portrait">Portrait</option></select></label>
-    <label class="chk2"><input type="checkbox" id="plLogo" ${P.logo ? 'checked' : ''}/> Afficher le logo / l'identité du pro en en-tête</label>`;
+    <p class="hint">🖼 En-tête (logo + votre identité) et pied de page se règlent dans <b>Gestion → Configuration activité</b>. Le logo GaloPodo par défaut est utilisé si aucun n'est importé.</p>`;
   body.appendChild(head);
   $('plOri').value = P.orientation || 'paysage';
   $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; saveSettings(); });
-  $('plLogo').addEventListener('change', (e) => { P.logo = e.target.checked; saveSettings(); });
   // Colonnes = angles de vue, par modèle 3/4/5
   const sc = document.createElement('section'); sc.className = 'card';
   sc.innerHTML = `<h3 class="rsub">Colonnes — angles de vue (par modèle)</h3>
@@ -6690,13 +6731,14 @@ const plShortDate = (d) => { if (!d) return 'Date ?'; const p = String(d).split(
 function plPageRows(pi) {
   const st = plCreate;
   if (st.type === 'avantapres') {
-    const base = (pi === 0) ? (st.compar || []).map((c) => plShortDate(c.date)) : ((st.pages[pi] && st.pages[pi].membres) || []);
+    const isDate = (pi === 0);
+    const base = isDate ? (st.compar || []).map((c) => plShortDate(c.date)) : ((st.pages[pi] && st.pages[pi].membres) || []);
     const rows = [];
-    base.forEach((label, ri) => ['Avant', 'Après'].forEach((ph, pj) => rows.push({ label: label + ' · ' + ph, ri, pj })));
+    base.forEach((b, ri) => ['Avant', 'Après'].forEach((ph, pj) => rows.push({ label: b + ' · ' + ph, base: b, phase: ph, isDate, ri, pj })));
     return rows;
   }
   const membres = (st.pages[pi] && st.pages[pi].membres) || [];
-  return membres.map((label, ri) => ({ label, ri, pj: null }));
+  return membres.map((b, ri) => ({ label: b, base: b, phase: null, isDate: false, ri, pj: null }));
 }
 const plCellKey = (pi, r, ci) => plCreate.type === 'avantapres' ? (pi + '_' + r.ri + '_' + r.pj + '_' + ci) : (pi + '_' + r.ri + '_' + ci);
 
@@ -6758,7 +6800,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: !!P.logo, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', parageFerrage: false, dureeCycleSem: 0, photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -6777,6 +6819,8 @@ function modalPlancheCreate(type, prefill) {
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>
         ${type === 'contact' ? `<label>Type de planche (stade)<select id="plCstade"><option value="">(aucun)</option>${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
         ${type === 'contact' && plCreate.hasChevalPage ? `<label class="chk2"><input type="checkbox" id="plCchevalPage" ${plCreate.chevalPageOn ? 'checked' : ''}/> ➕ Ajouter la page « Cheval »</label>` : ''}
+        <label class="chk2"><input type="checkbox" id="plCparage" ${plCreate.parageFerrage ? 'checked' : ''}/> 🐴 Planche de parage / ferrage (durée du cycle obligatoire)</label>
+        <label id="plCcycleWrap" style="${plCreate.parageFerrage ? '' : 'display:none'}">Durée du cycle précédent (semaines)<input type="number" id="plCcycle" min="1" step="1" value="${plCreate.dureeCycleSem || ''}" placeholder="ex : 7"/></label>
         <label>Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
       </section>
       <section class="card">
@@ -6805,6 +6849,8 @@ function modalPlancheCreate(type, prefill) {
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
   $('plCdate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } }); // ouvre l'agenda au clic (comme la date de tournée)
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
+  if ($('plCparage')) $('plCparage').addEventListener('change', (e) => { plCreate.parageFerrage = e.target.checked; const w = $('plCcycleWrap'); if (w) w.style.display = e.target.checked ? '' : 'none'; });
+  if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; });
   if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); plRenderPot(); plRenderGrid(); });
   $('plCimport').onclick = () => $('plCfiles').click();
@@ -6812,6 +6858,7 @@ function modalPlancheCreate(type, prefill) {
   $('plCfiles').addEventListener('change', plHandleFiles);
   $('plCpdf').onclick = planchePrint;
   $('plCmail').onclick = async () => {
+    if (plancheCycleMissing(plCreate)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines) avant d\'envoyer.'); return; }
     if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo placée. Envoyer quand même la planche (vide) ?')) return;
     const btn = $('plCmail'); const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Préparation…';
     try {
@@ -6922,45 +6969,118 @@ function plRenderGrid() {
 }
 
 // Nom de fichier d'une planche : planche-<cheval>-<date>[-<stade>].
+// ===== Planches v2 : logo par défaut, abréviations, géométrie mm partagée, infos cheval/client/pro =====
+const GALOPODO_LOGO_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='300' height='88'><text x='6' y='60' font-family='Segoe UI, Arial, sans-serif' font-size='46' font-weight='700'><tspan fill='#2e7d32'>Galo</tspan><tspan fill='#333'>Podo</tspan></text></svg>";
+const GALOPODO_LOGO = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(GALOPODO_LOGO_SVG);
+// Abréviation d'un membre : AG/AD/PG/PD (gain de place en 1ʳᵉ colonne).
+function memberAbbr(base) {
+  const s = norm(base || '');
+  if (s.startsWith('anterieur gauche')) return 'AG';
+  if (s.startsWith('anterieur droit')) return 'AD';
+  if (s.startsWith('posterieur gauche')) return 'PG';
+  if (s.startsWith('posterieur droit')) return 'PD';
+  if (s === 'cheval') return 'Ch';
+  if (s.startsWith('anterieur')) return 'A';
+  if (s.startsWith('posterieur')) return 'P';
+  return (base || '').split(/\s+/).map((w) => (w[0] || '').toUpperCase()).join('').slice(0, 3) || (base || '');
+}
+const plRowShort = (r) => (r.isDate ? (r.base || '') : memberAbbr(r.base)) + (r.phase ? ' ' + (r.phase === 'Avant' ? 'Av' : 'Ap') : '');
+// Retrouve le client + le cheval (fiche) associés à la planche (par nom).
+function plFindCheval(st) {
+  let cli = clients.find((c) => st.client && norm(fullName(c)) === norm(st.client)) || null;
+  if (cli) { const h = (cli.chevaux || []).find((x) => norm(x.nom) === norm(st.cheval)); if (h) return { cli, h }; }
+  for (const c of clients) { const h = (c.chevaux || []).find((x) => st.cheval && norm(x.nom) === norm(st.cheval)); if (h) return { cli: c, h }; }
+  return { cli, h: null };
+}
+// Lignes d'info cheval affichées sur la planche (âge, race, discipline, prise en charge, cycle précédent).
+function plChevalLines(st) {
+  const { h } = plFindCheval(st); const out = [];
+  if (h) {
+    const bits = [];
+    if (h.dateNaissance) bits.push('Âge : ' + durMonthsLabel(monthsBetween(h.dateNaissance)));
+    if (h.race) bits.push(h.race);
+    if (h.discipline) bits.push(h.discipline);
+    if (bits.length) out.push(bits.join(' · '));
+    if (h.datePriseEnCharge && h.priseEnChargePlanche !== false) out.push('Suivi depuis le ' + fmtDateFr(h.datePriseEnCharge) + ' (' + durMonthsLabel(monthsBetween(h.datePriseEnCharge)) + ')');
+  }
+  if (st.dureeCycleSem > 0) out.push('Cycle précédent : ' + st.dureeCycleSem + ' semaine' + (st.dureeCycleSem > 1 ? 's' : ''));
+  return out;
+}
+// Ligne d'info client (écurie / lieu du cheval) pour la zone gauche de l'en-tête.
+function plClientLines(st) {
+  const { cli, h } = plFindCheval(st); const out = [];
+  if (cli && h) { const ecu = chevalAddrNom(cli, h); if (ecu && norm(ecu) !== norm(st.client || '')) out.push('📍 ' + ecu); }
+  return out;
+}
+const plProNameLines = () => { const p = S.proIdent || {}; return [[p.prenom, p.nom].filter(Boolean).join(' '), p.societe].filter(Boolean); };
+function plProFooter() { const p = S.proIdent || {}; const bits = []; if (p.email) bits.push(p.email); if (p.tel) bits.push(p.tel); let s = bits.length ? 'Contact : ' + bits.join(' · ') : ''; if (p.tvaNum) s += (s ? '   ·   ' : '') + 'TVA : ' + p.tvaNum; return s; }
+// Géométrie de planche en MILLIMÈTRES (A4), partagée par le moteur canvas et le moteur impression (marges 0,5 mm, cellules fixes).
+const PL_PXMM = 4.7; // résolution du rendu canvas (px par mm)
+function plGeom(land, nCols, refRows) {
+  const pageW = land ? 297 : 210, pageH = land ? 210 : 297;
+  const margin = 0.5, headerH = 15, footerH = 5, labelW = 9, angleHeaderH = 5;
+  const gridLeft = margin, gridTop = margin + headerH;
+  const gridW = pageW - 2 * margin, gridH = pageH - 2 * margin - headerH - footerH;
+  const colW = (gridW - labelW) / Math.max(1, nCols);
+  const rowH = (gridH - angleHeaderH) / Math.max(1, refRows);
+  return { pageW, pageH, margin, headerH, footerH, labelW, angleHeaderH, gridLeft, gridTop, gridW, gridH, colW, rowH, nCols, refRows };
+}
+// Nombre de lignes de référence (le plus grand parmi les pages) → cellules de taille FIXE d'une page/planche à l'autre.
+function plRefRows(st) { let m = 1; (st.pages || []).forEach((pg, pi) => { m = Math.max(m, plPageRows(pi).length); }); return m; }
 function plancheBaseName(st) { st = st || plCreate || {}; return ['planche', (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval'), st.date || todayStr(), (st.stade ? norm(st.stade).replace(/\s+/g, '-') : '')].filter(Boolean).join('-'); }
-// Génère le PDF de la planche via l'impression navigateur (l'OS choisit « Enregistrer en PDF »). Rien n'est stocké.
+// Vrai si la planche exige la durée du cycle précédent (parage/ferrage) mais qu'elle n'est pas renseignée → bloque la génération.
+function plancheCycleMissing(st) { return !!(st && st.parageFerrage && !(st.dureeCycleSem > 0)); }
+// Génère le PDF de la planche via l'impression navigateur (l'OS choisit « Enregistrer en PDF »). Positionnement en mm (marges 0,5 mm), cellules fixes. Rien n'est stocké.
 function planchePrint() {
   if (!plCreate) return;
   const st = plCreate;
+  if (plancheCycleMissing(st)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines) avant de générer.'); return; }
   if (!Object.keys(st.cells).length && !confirm('Aucune photo n\'est placée dans la grille. Générer quand même la planche (vide) ?')) return;
-  const ori = st.orientation === 'portrait' ? 'portrait' : 'landscape';
-  const logoHtml = st.logo ? proLogoBox(150, 58) : '';
+  const land = (st.orientation !== 'portrait');
+  const g = plGeom(land, (st.angles || []).length, plRefRows(st));
   const titre = (st.type === 'avantapres' ? 'Avant / après (parage)' : 'Planche de contact') + (st.stade ? ' — ' + st.stade : '');
+  const headerLogo = (S.proLogo && S.proLogo.data) ? S.proLogo.data : GALOPODO_LOGO; // logo pro, ou GaloPodo par défaut (toujours affiché)
+  const proNames = plProNameLines(), chLines = plChevalLines(st), clLines = plClientLines(st);
+  const mm = (v) => v.toFixed(2) + 'mm';
   let body = `<style>
-    @page{size:${ori};margin:8mm;}
-    #printArea .pl-page{page-break-after:always;}
+    @page{size:A4 ${land ? 'landscape' : 'portrait'};margin:0;}
+    #printArea .pl-page{position:relative;width:${mm(g.pageW)};height:${mm(g.pageH)};page-break-after:always;overflow:hidden;box-sizing:border-box;font-family:Arial,sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     #printArea .pl-page:last-child{page-break-after:auto;}
-    #printArea .pl-head{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:8px;}
-    #printArea .pl-hl{display:flex;align-items:center;gap:8px;}
-    #printArea .pl-htitle{font-size:15px;font-weight:700;color:#111;}
-    #printArea .pl-hinfo{font-size:12px;color:#111;text-align:right;}
-    #printArea table.pl-ptable{width:100%;border-collapse:collapse;table-layout:fixed;}
-    #printArea table.pl-ptable th,#printArea table.pl-ptable td{border:1px solid #444;padding:2px;text-align:center;vertical-align:middle;}
-    #printArea table.pl-ptable thead th{background:#eee;font-size:11px;}
-    #printArea table.pl-ptable th.pl-mem{width:82px;font-size:10px;font-weight:700;background:#f5f5f5;text-align:left;}
-    #printArea table.pl-ptable th.pl-mem.pl-after{background:#e7eef7;}
-    #printArea table.pl-ptable td img{width:100%;height:auto;max-height:158px;object-fit:contain;display:block;margin:0 auto;}
-    #printArea .pl-note{margin-top:8px;font-size:11px;color:#111;border-top:1px solid #999;padding-top:4px;white-space:pre-wrap;}
+    #printArea .pl-cell{position:absolute;box-sizing:border-box;border:0.2mm solid #444;overflow:hidden;}
+    #printArea .pl-cell img{width:100%;height:100%;object-fit:cover;display:block;}
+    #printArea .pl-lab{position:absolute;box-sizing:border-box;border:0.2mm solid #444;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:3.2mm;background:#f5f5f5;}
+    #printArea .pl-lab.pl-after{background:#e7eef7;}
+    #printArea .pl-ang{position:absolute;box-sizing:border-box;border:0.2mm solid #444;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:2.8mm;background:#eee;overflow:hidden;}
+    #printArea .pl-hz{position:absolute;top:${mm(g.margin)};font-size:2.6mm;line-height:1.15;overflow:hidden;}
+    #printArea .pl-title{font-size:2.4mm;color:#555;}
+    #printArea .pl-name{font-size:3.6mm;font-weight:700;}
+    #printArea .pl-hpro img{max-height:9mm;max-width:100%;object-fit:contain;display:inline-block;margin-bottom:1mm;}
+    #printArea .pl-foot{position:absolute;left:${mm(g.margin)};bottom:${mm(g.margin)};width:${mm(g.gridW)};height:${mm(g.footerH)};border-top:0.2mm solid #999;display:flex;align-items:center;gap:2mm;font-size:2.4mm;color:#333;overflow:hidden;}
+    #printArea .pl-foot img{height:3.6mm;object-fit:contain;}
   </style>`;
   (st.pages || []).forEach((pg, pi) => {
     const rows = plPageRows(pi);
-    body += `<div class="pl-page"><div class="pl-head"><div class="pl-hl">${logoHtml}<span class="pl-htitle">${titre}</span></div>`
-      + `<div class="pl-hinfo"><b>${esc(st.cheval) || '—'}</b><br>${esc(st.client) || '—'} · ${esc(fmtDateFr(st.date))}</div></div>`;
-    body += `<table class="pl-ptable"><thead><tr><th class="pl-mem"></th>${st.angles.map((a) => `<th>${esc(a)}</th>`).join('')}</tr></thead><tbody>`;
-    rows.forEach((r) => {
-      body += `<tr><th class="pl-mem${r.pj === 1 ? ' pl-after' : ''}">${esc(r.label)}</th>` + st.angles.map((a, ci) => {
+    let cells = `<div class="pl-ang" style="left:${mm(g.gridLeft)};top:${mm(g.gridTop)};width:${mm(g.labelW)};height:${mm(g.angleHeaderH)}"></div>`;
+    (st.angles || []).forEach((a, ci) => { const x = g.gridLeft + g.labelW + ci * g.colW; cells += `<div class="pl-ang" style="left:${mm(x)};top:${mm(g.gridTop)};width:${mm(g.colW)};height:${mm(g.angleHeaderH)}">${esc(a)}</div>`; });
+    rows.forEach((r, ri) => {
+      const y = g.gridTop + g.angleHeaderH + ri * g.rowH;
+      cells += `<div class="pl-lab${r.pj === 1 ? ' pl-after' : ''}" style="left:${mm(g.gridLeft)};top:${mm(y)};width:${mm(g.labelW)};height:${mm(g.rowH)}">${esc(plRowShort(r))}</div>`;
+      (st.angles || []).forEach((a, ci) => {
+        const x = g.gridLeft + g.labelW + ci * g.colW;
         const pid = st.cells[plCellKey(pi, r, ci)], ph = pid && st.photos.find((p) => p.id === pid);
-        return `<td>${ph && ph.url ? `<img src="${ph.url}" alt=""/>` : ''}</td>`;
-      }).join('') + '</tr>';
+        cells += `<div class="pl-cell" style="left:${mm(x)};top:${mm(y)};width:${mm(g.colW)};height:${mm(g.rowH)}">${ph && ph.url ? `<img src="${ph.url}" alt=""/>` : ''}</div>`;
+      });
     });
-    body += '</tbody></table>';
-    if (st.note) body += `<div class="pl-note">${esc(st.note)}</div>`;
-    body += '</div>';
+    const clientHtml = `<div class="pl-title">${esc(titre)}</div><div class="pl-name">${esc(st.client) || '—'}</div><div>${esc(fmtDateFr(st.date))}</div>` + clLines.map((l) => `<div>${esc(l)}</div>`).join('');
+    const chevalHtml = `<div class="pl-name">${esc(st.cheval) || '—'}</div>` + chLines.map((l) => `<div>${esc(l)}</div>`).join('') + (st.note ? `<div style="font-style:italic">Note : ${esc(st.note)}</div>` : '');
+    const proHtml = (headerLogo ? `<img src="${headerLogo}" alt=""/><br>` : '') + proNames.map((n) => `<div>${esc(n)}</div>`).join('');
+    body += `<div class="pl-page">
+      <div class="pl-hz" style="left:${mm(g.margin)};width:${mm(g.gridW * 0.32)}">${clientHtml}</div>
+      <div class="pl-hz" style="left:${mm(g.margin + g.gridW * 0.34)};width:${mm(g.gridW * 0.32)};text-align:center">${chevalHtml}</div>
+      <div class="pl-hz pl-hpro" style="right:${mm(g.margin)};width:${mm(g.gridW * 0.32)};text-align:right">${proHtml}</div>
+      ${cells}
+      <div class="pl-foot"><img src="${GALOPODO_LOGO}" alt=""/><span>${esc(plProFooter())}</span></div>
+    </div>`;
   });
   printHtml(plancheBaseName(st), body);
   plancheTodoDone(st); // planche générée → le cheval quitte le « Compte rendu photo »
@@ -7004,20 +7124,20 @@ function plancheComparePrint() {
   if (!c.a && !c.b) { alert('Importez au moins une image.'); return; }
   const ori = c.orientation === 'portrait' ? 'portrait' : 'landscape';
   const stack = c.layout === 'stack';
+  const pageW = ori === 'landscape' ? 297 : 210, pageH = ori === 'landscape' ? 210 : 297, m = 0.5, titleH = 6;
   const cell = (url, lbl) => `<div class="pl-cmp-cell"><div class="pl-cmp-lbl">${esc(lbl)}</div>${url ? `<img src="${url}" alt=""/>` : '<div class="pl-cmp-empty">—</div>'}</div>`;
-  // Hauteur d'image selon disposition/orientation : empilé → 2 images sur la hauteur ; côte à côte → pleine hauteur.
-  const maxH = stack ? (ori === 'portrait' ? 350 : 230) : (ori === 'portrait' ? 340 : 470);
   const body = `<style>
-    @page{size:${ori};margin:8mm;}
-    #printArea .pl-cmp-title{font-size:15px;font-weight:700;color:#111;text-align:center;margin-bottom:8px;}
-    #printArea .pl-cmp-row{display:flex;gap:8px;align-items:flex-start;flex-direction:${stack ? 'column' : 'row'};}
-    #printArea .pl-cmp-cell{${stack ? 'width:100%;' : 'flex:1;'}text-align:center;border:1px solid #999;padding:4px;box-sizing:border-box;}
-    #printArea .pl-cmp-lbl{font-size:12px;font-weight:700;color:#111;margin-bottom:4px;}
-    #printArea .pl-cmp-cell img{width:100%;height:auto;max-height:${maxH}px;object-fit:contain;display:block;margin:0 auto;}
-    #printArea .pl-cmp-empty{color:#999;padding:40px 0;}
+    @page{size:A4 ${ori};margin:0;}
+    #printArea .pl-cmp-page{position:relative;width:${pageW}mm;height:${pageH}mm;overflow:hidden;box-sizing:border-box;padding:${m}mm;font-family:Arial,sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    #printArea .pl-cmp-title{font-size:4mm;font-weight:700;text-align:center;height:${titleH}mm;line-height:${titleH}mm;}
+    #printArea .pl-cmp-row{display:flex;gap:${m}mm;height:${pageH - 2 * m - titleH}mm;flex-direction:${stack ? 'column' : 'row'};}
+    #printArea .pl-cmp-cell{${stack ? 'width:100%;height:50%;' : 'flex:1;height:100%;'}border:0.2mm solid #999;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;}
+    #printArea .pl-cmp-lbl{font-size:3mm;font-weight:700;height:5mm;line-height:5mm;text-align:center;background:#f5f5f5;}
+    #printArea .pl-cmp-cell img{width:100%;flex:1;min-height:0;object-fit:contain;display:block;}
+    #printArea .pl-cmp-empty{color:#999;flex:1;display:flex;align-items:center;justify-content:center;}
   </style>
-  <div class="pl-cmp-title">${esc(c.title || 'Comparaison')}</div>
-  <div class="pl-cmp-row">${cell(c.a, c.la || 'Document 1')}${cell(c.b, c.lb || 'Document 2')}</div>`;
+  <div class="pl-cmp-page"><div class="pl-cmp-title">${esc(c.title || 'Comparaison')}</div>
+  <div class="pl-cmp-row">${cell(c.a, c.la || 'Document 1')}${cell(c.b, c.lb || 'Document 2')}</div></div>`;
   printHtml('Comparaison — ' + (c.title || 'documents'), body);
 }
 

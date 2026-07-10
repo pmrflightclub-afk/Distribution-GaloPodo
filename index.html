@@ -334,7 +334,7 @@
     <nav class="subtabs" id="gestionSub">
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Clients</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
-        <button class="subtab" data-gsub="adresses">Mes adresses</button>
+        <button class="subtab" data-gsub="adresses">Configuration activité</button>
         <button class="subtab" data-gsub="adrchev">Adresses chevaux</button>
         <button class="subtab active" data-gsub="clients">Clients</button>
         <button class="subtab" data-gsub="articles">Articles</button>
@@ -357,6 +357,17 @@
     </div>
 
     <div id="gsub-adresses" class="subpanel">
+      <section class="card">
+        <h2>Identité (documents / planches)</h2>
+        <p class="hint">Vos coordonnées d'activité + logo, repris en <b>en-tête</b> et <b>pied de page</b> des planches (contact, avant/après, comparaison). Le logo GaloPodo par défaut est utilisé si vous n'importez pas le vôtre.</p>
+        <div class="row"><label class="grow">Prénom<input type="text" id="piPrenom"/></label><label class="grow">Nom<input type="text" id="piNom"/></label></div>
+        <label>Société (si applicable)<input type="text" id="piSociete" placeholder="Nom commercial / société"/></label>
+        <div class="row"><label class="grow">Téléphone<input type="text" id="piTel"/></label><label class="grow">Email<input type="text" id="piEmail"/></label></div>
+        <label>N° de TVA<input type="text" id="piTva" placeholder="BE0123.456.789 / FR…"/></label>
+        <h3 class="rsub">Logo</h3>
+        <p class="hint">Choisissez une image, puis <b>zoomez</b> et <b>déplacez-la</b> dans le cadre. Enregistré dans l'app (les photos de planche, elles, ne le sont jamais).</p>
+        <div id="proLogoEditor"></div>
+      </section>
       <section class="card">
         <h2>Point de départ (domicile / base)</h2>
         <p class="hint">Adresse de départ par défaut de toutes vos tournées (modifiable par tournée via « Changer le départ »).</p>
@@ -838,11 +849,7 @@
       <p class="hint">Progression basée sur l'odomètre <b>estimé</b> (recalé sur vos relevés « Statut véhicule »). Les dates servent à l'âge et au km/an.</p>
     </section>
 
-    <section class="card">
-      <h2>Logo / identité (documents)</h2>
-      <p class="hint">Votre logo apparaît en en-tête des <b>planches de contact</b> (si le logo est activé dans Gestion → Planche). Choisissez une image, puis <b>zoomez</b> et <b>déplacez-la</b> dans le cadre pour l'ajuster. Le logo est enregistré dans l'app ; les photos de planche, elles, ne le sont jamais.</p>
-      <div id="proLogoEditor"></div>
-    </section>
+    <p class="hint">🖼 Le logo et l'identité pour les documents sont désormais dans <b>Gestion → Configuration activité</b>.</p>
 
     </div><!-- /rsub-config -->
 
