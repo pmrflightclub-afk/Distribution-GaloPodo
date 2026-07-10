@@ -107,6 +107,7 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .rdv-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); border: 1px solid var(--warn); border-radius: 8px; padding: 4px 8px; font-size: .8rem; font-weight: 600; margin: 6px 0 0; }
 .rdv-patho { margin: 8px 0 0 14px; border-left: 2px solid var(--accent); padding: 4px 0 4px 10px; } /* indenté dans le cheval */
 .ch-patho { margin-top: 4px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: .82rem; }
+.ch-patho-rec { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-wrap: nowrap; } /* nb + jour/semaine sur la même ligne */
 .ch-patho-rec input[type=number] { width: 48px; padding: 2px 4px; }
 .ch-patho-rec select { padding: 2px 4px; }
 .rdv-dh { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -554,4 +555,4 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 .rdv-cheval { padding: 8px 10px; }
 .rdv-cheval.rdv-ignored { opacity: .55; }
 .rdv-ch-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
-.rdv-ch-opt { display: flex; align-items: center; gap: 6px; font-size: .84rem; color: var(--muted); margin: 3px 0; } /* empilés l'un au-dessus de l'autre */
+.rdv-ch-opt { display: flex; justify-content: flex-start; align-items: center; gap: 6px; font-size: .84rem; color: var(--muted); margin: 3px 0; white-space: nowrap; } /* empilés, alignés à gauche, texte sur une ligne */

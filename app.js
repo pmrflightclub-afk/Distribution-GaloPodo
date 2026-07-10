@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.18';
+const APP_VERSION = '1.2.19';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.19', date: '2026-07-11',
+    corrections: [
+      'Suivi rapproché (en-tête client) : le nombre et l\'unité (jours / semaines) sont désormais sur la même ligne.',
+      'Programmer le suivi : les options « ne pas replacer » / « date différente » et « Maintenir » / « Arrêter » sont alignées à gauche, chaque libellé sur une seule ligne.',
+    ],
+  },
   {
     version: '1.2.18', date: '2026-07-10',
     ajouts: [
