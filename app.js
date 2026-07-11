@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.36';
+const APP_VERSION = '1.2.37';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.37', date: '2026-07-11',
+    ajouts: [
+      'Pastille/badge de statut aligné à DROITE de l\'item et agrandi : pastille verte/orange des clients (Gestion → Clients), badge « prête / à compléter / recalculer » des tournées, et bouton « Refuser ce lieu » (Adresses chevaux) restent bien à droite.',
+      'Planche de contact : le type de planche (parage, ferrage, déferrage, radio) est désormais obligatoire — impossible de générer ou envoyer une planche de contact sans type (Avant/après et comparaison non concernés).',
+    ],
+  },
   {
     version: '1.2.36', date: '2026-07-11',
     ajouts: [
@@ -2942,7 +2949,8 @@ function renderClients() {
     const nChev = (c.chevaux || []).length, nChevInact = (c.chevaux || []).filter((h) => h.actif === false).length;
     const valid = !scanClient(c); // pastille : fiche complète (tous les champs fonctionnels remplis) ?
     const el = document.createElement('div'); el.className = 'list-item clickable' + (off ? ' item-off' : '');
-    el.innerHTML = `<div class="li-main"><b>${valid ? '<span class="cli-valid ok" title="Fiche complète">●</span> ' : '<span class="cli-valid warn" title="Champs importants manquants (voir Assistant de vérification)">●</span> '}${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}${specNoms.length ? ' · 📍 ' + esc(specNoms.join(', ')) : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    const pastille = valid ? '<span class="cli-valid ok" title="Fiche complète">●</span>' : '<span class="cli-valid warn" title="Champs importants manquants (voir Assistant de vérification)">●</span>';
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}${specNoms.length ? ' · 📍 ' + esc(specNoms.join(', ')) : ''}</span></div><div class="li-act li-act-badge">${pastille}<span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => editClient(c));
     list.appendChild(el);
   });
@@ -3277,7 +3285,7 @@ function tourListItem(t, showBadge) {
     if (tourRouteStale(t)) fin = ' <span class="td-badge warn">🔄 recalculer itinéraire</span>';
     else fin = tourReadyIssues(t).length ? ' <span class="td-badge warn">⚠ à compléter</span>' : ' <span class="td-badge ok">✓ prête</span>';
   }
-  el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}${fin}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
+  el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act li-act-badge">${fin}<span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
@@ -7460,7 +7468,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', dureeCycleSem: 0, potView: 'grid', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: '', dureeCycleSem: 0, potView: 'grid', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -7477,7 +7485,7 @@ function modalPlancheCreate(type, prefill) {
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>${plCreate.allowTourPick ? '<div id="plCdateSuggest"></div>' : ''}
-        ${type === 'contact' ? `<label>Type de planche (stade)<select id="plCstade"><option value="">(aucun)</option>${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
+        ${type === 'contact' ? `<label>Type de planche (stade) — <b>obligatoire</b><select id="plCstade">${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
         ${type === 'contact' && plCreate.hasChevalPage ? `<label class="chk2"><input type="checkbox" id="plCchevalPage" ${plCreate.chevalPageOn ? 'checked' : ''}/> ➕ Ajouter la page « Cheval »</label>` : ''}
         <label id="plCcycleWrap" style="${plancheStadeCareNeeded(plCreate.stade) ? '' : 'display:none'}">Durée du cycle précédent (semaines) — <b>obligatoire</b><input type="number" id="plCcycle" min="1" step="1" value="${plCreate.dureeCycleSem || ''}" placeholder="ex : 7"/></label>
         <label class="pl-note-field">Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
@@ -7522,6 +7530,7 @@ function modalPlancheCreate(type, prefill) {
   $('plCfiles').addEventListener('change', plHandleFiles);
   // « Générer le PDF » = PDF propre (moteur canvas, en-tête/grille/pied) téléchargé. N'utilise PLUS window.print (qui imprimait l'interface de l'app).
   $('plCpdf').onclick = async () => {
+    if (plCreate.type === 'contact' && !plCreate.stade) { alert('Choisissez le type de planche (parage, ferrage, déferrage ou radio) avant de générer.'); return; }
     if (plancheCycleMissing(plCreate)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines) avant de générer.'); return; }
     if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo n\'est placée dans la grille. Générer quand même la planche (vide) ?')) return;
     const btn = $('plCpdf'); const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Génération…';
@@ -7533,6 +7542,7 @@ function modalPlancheCreate(type, prefill) {
     if ($('plCpdf')) { btn.disabled = false; btn.textContent = old; }
   };
   $('plCmail').onclick = async () => {
+    if (plCreate.type === 'contact' && !plCreate.stade) { alert('Choisissez le type de planche (parage, ferrage, déferrage ou radio) avant d\'envoyer.'); return; }
     if (plancheCycleMissing(plCreate)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines) avant d\'envoyer.'); return; }
     if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo placée. Envoyer quand même la planche (vide) ?')) return;
     const btn = $('plCmail'); const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Préparation…';

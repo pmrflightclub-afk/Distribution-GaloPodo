@@ -100,12 +100,16 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .td-badge { font-size: .68rem; font-weight: 700; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
 .td-badge.warn { color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); }
 .td-badge.ok { color: var(--ok, #2e9e5b); background: color-mix(in srgb, var(--ok, #2e9e5b) 13%, transparent); }
-.cli-valid { font-size: .7rem; vertical-align: middle; }
+.cli-valid { font-size: 1.05rem; vertical-align: middle; line-height: 1; }
 .cli-valid.ok { color: var(--ok, #2e9e5b); }
 .cli-valid.warn { color: var(--warn); }
+/* Badge/pastille aligné à DROITE de l'item (colonne : badge au-dessus du chevron) */
+.li-act-badge { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 4px; }
 .btn.pret-on { border-color: var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--card)); }
 .rdv-patho .rdv-ch-opt { margin-left: -10px; } /* Maintenir/Arrêter collés au bord gauche malgré l'indentation de la section */
-.ac-ecurie { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.ac-ecurie { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
+.ac-ecurie .li-sub { flex: 1 1 auto; min-width: 0; }
+.ac-ecurie .btn { flex: none; margin-left: auto; }
 .btn.pl-red { border-color: var(--danger); color: #fff; background: var(--danger); }
 .btn.pl-orange { border-color: var(--warn); color: #fff; background: var(--warn); }
 .btn.pl-green { border-color: var(--ok, #2e9e5b); color: #fff; background: var(--ok, #2e9e5b); }
