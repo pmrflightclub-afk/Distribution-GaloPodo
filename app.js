@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.32';
+const APP_VERSION = '1.2.33';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.33', date: '2026-07-11',
+    ajouts: [
+      'Assistant de vérification (Déclarer) — Tournées : l\'heure de RDV se complète maintenant PAR CLIENT (et non plus une seule par arrêt), conformément aux heures par client. Un itinéraire passé en « 🔄 à recalculer » (après un changement d\'ordre/d\'adresse) est proposé à re-encoder, et n\'est plus considéré comme déjà renseigné.',
+    ],
+  },
   {
     version: '1.2.32', date: '2026-07-11',
     ajouts: [
@@ -7868,22 +7874,25 @@ function modalRecoverStats(t, opts) {
   openModal(`<div class="modal-head"><b>📊 Compléter — ${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''}${prog}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Renseignez les données manquantes de cette tournée pour des statistiques complètes : l'heure de RDV et le temps de route réel de chaque arrêt, la durée de consultation de chaque cheval/visite, et le temps de retour. ${statusOf(t) === 'cloturee' ? '<b>Tournée clôturée : seules les statistiques sont mises à jour, jamais la facture.</b>' : ''}</p>
     <div id="recBody"></div>
-    <label>Temps de retour réel (min)<input type="number" min="0" step="1" id="recReturn" value="${typeof t.returnRealMin === 'number' ? t.returnRealMin : ''}" placeholder="retour → domicile"/></label>
+    <label>Temps de retour réel (min)<input type="number" min="0" step="1" id="recReturn" value="${t.returnRealMin > 0 ? t.returnRealMin : ''}" placeholder="${t.returnRealMin === 0 ? '🔄 à recalculer' : 'retour → domicile'}"/></label>
     <div class="actions${opts ? ' two' : ''}">${opts ? '<button class="btn" id="recSkip">Passer</button>' : ''}<button class="btn primary${opts ? '' : ' block'}" id="recSave">Enregistrer</button></div>`);
   const body = $('recBody');
   (t.arrets || []).forEach((a, i) => {
     const wrap = document.createElement('div'); wrap.className = 'inv-client';
     let h = `<div class="inv-head"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}</span></div>
-      <label>Heure de RDV<input type="time" data-heure="${i}" value="${a.heure || ''}"/></label>
-      <label>Temps de route réel (min)<input type="number" min="0" step="1" data-route="${i}" value="${typeof a.realMin === 'number' ? a.realMin : ''}" placeholder="depuis l'arrêt précédent (ou le domicile)"/></label>`;
-    (a.clients || []).forEach((cl, j) => (cl.chevaux || []).forEach((cv, k) => { if (!chevalFait(cv)) return; h += `<label>🐴 ${esc(cv.nom)} — consultation (min)<input type="number" min="0" step="1" data-consult="${i}.${j}.${k}" value="${typeof cv.consultMin === 'number' ? cv.consultMin : ''}"/></label>`; }));
+      <label>Temps de route réel (min)<input type="number" min="0" step="1" data-route="${i}" value="${a.realMin > 0 ? a.realMin : ''}" placeholder="${a.realMin === 0 ? '🔄 à recalculer' : "depuis l'arrêt précédent (ou le domicile)"}"/></label>`;
+    (a.clients || []).forEach((cl, j) => {
+      const present = (cl.chevaux || []).some((cv) => !chevalCancelled(cv));
+      if (present) h += `<label>🕘 ${esc(clientName(cl.clientId))} — heure de RDV<input type="time" data-clheure="${i}.${j}" value="${cl.heure || a.heure || ''}"/></label>`;
+      (cl.chevaux || []).forEach((cv, k) => { if (!chevalFait(cv)) return; h += `<label>🐴 ${esc(cv.nom)} — consultation (min)<input type="number" min="0" step="1" data-consult="${i}.${j}.${k}" value="${typeof cv.consultMin === 'number' ? cv.consultMin : ''}"/></label>`; });
+    });
     wrap.innerHTML = h; body.appendChild(wrap);
   });
   $('mX').addEventListener('click', closeModal);
   if (opts && $('recSkip')) $('recSkip').addEventListener('click', () => opts.onNext());
   $('recSave').addEventListener('click', () => {
     const numOrNull = (v) => { v = (v || '').toString().trim(); return v === '' ? null : Math.max(0, Math.round(parseNum(v))); };
-    body.querySelectorAll('[data-heure]').forEach((inp) => { t.arrets[+inp.dataset.heure].heure = inp.value || ''; });
+    body.querySelectorAll('[data-clheure]').forEach((inp) => { const [i, j] = inp.dataset.clheure.split('.').map(Number); const cl = t.arrets[i] && t.arrets[i].clients[j]; if (cl) cl.heure = inp.value || ''; });
     body.querySelectorAll('[data-route]').forEach((inp) => { const a = t.arrets[+inp.dataset.route]; const v = numOrNull(inp.value); if (v == null) delete a.realMin; else a.realMin = v; });
     body.querySelectorAll('[data-consult]').forEach((inp) => { const [i, j, k] = inp.dataset.consult.split('.').map(Number); const cv = t.arrets[i] && t.arrets[i].clients[j] && t.arrets[i].clients[j].chevaux[k]; if (!cv) return; const v = numOrNull(inp.value); if (v == null) delete cv.consultMin; else cv.consultMin = v; });
     const rr = numOrNull($('recReturn').value); if (rr == null) delete t.returnRealMin; else t.returnRealMin = rr;
@@ -7931,10 +7940,18 @@ function scanAdresse(a) {
   if (!ad.localite) f.push({ label: 'Localité', get: () => '', set: (v) => { a.addr = toAddr(a.addr); a.addr.localite = v; a.addr.lat = null; a.addr.lon = null; } });
   return f.length ? { adresse: a, fields: f } : null;
 }
-// Nb de champs de STATS manquants d'une tournée (heure/route par arrêt, consultation par cheval fait, retour).
+// Nb de champs de STATS manquants d'une tournée : heure de RDV PAR CLIENT présent, temps de route réel par arrêt
+// (0 = « à recalculer » compte comme manquant), consultation par cheval fait, temps de retour. Reflète les mises à jour de statut (itinéraire périmé, heures par client).
 function tourMissingStats(t) {
   let n = 0;
-  (t.arrets || []).forEach((a) => { if (!arretHeure(a)) n++; if (!(a.realMin > 0)) n++; (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv) && typeof cv.consultMin !== 'number') n++; })); });
+  (t.arrets || []).forEach((a) => {
+    if (!(a.realMin > 0)) n++; // route jamais encodée OU périmée (à recalculer)
+    (a.clients || []).forEach((cl) => {
+      const present = (cl.chevaux || []).some((cv) => !chevalCancelled(cv));
+      if (present && !(cl.heure || a.heure)) n++; // heure de RDV manquante pour ce client présent
+      (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv) && typeof cv.consultMin !== 'number') n++; });
+    });
+  });
   if (!(t.returnRealMin > 0)) n++;
   return n;
 }
