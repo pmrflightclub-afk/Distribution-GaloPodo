@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.34';
+const APP_VERSION = '1.2.35';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.35', date: '2026-07-11',
+    ajouts: [
+      'Envoi d\'un document par email : nouvelle case « 📧 M\'envoyer une copie » (cochée par défaut, mémorisée). Si cochée, vous recevez le mail en copie (Cc) avec le PDF — via Gmail uniquement.',
+      'Objet du mail et nom du fichier des planches : texte structuré « date · type de planche · type · cheval » (avant/après → « avant-apres », comparaison → « comparaison »), au lieu d\'un objet générique.',
+    ],
+    corrections: [
+      'Facturation des photos : chaque planche facturable est désormais une ligne PAR CHEVAL (ses types regroupés), ce qui corrige l\'attribution par cheval dans les statistiques et les notes de crédit (annulation après paiement).',
+      'Un cheval avec uniquement une planche facturable (sans parage/visite) n\'est plus ignoré : son déplacement et sa planche sont bien facturés, et l\'arrêt peut être clôturé.',
+    ],
+  },
   {
     version: '1.2.34', date: '2026-07-11',
     ajouts: [
@@ -1545,6 +1556,7 @@ if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), fr
 if (typeof S.mailExcludeSelf !== 'boolean') S.mailExcludeSelf = true; // n'inclut pas les mails que VOUS avez envoyés (seulement les réponses reçues)
 if (typeof S.mailScanForm !== 'boolean') S.mailScanForm = true;       // détecte aussi les formulaires sans le mot-clé (étiquettes distinctives)
 if (typeof S.mailSelf !== 'string') S.mailSelf = '';                  // adresse du compte Gmail connecté (pour masquer VOS mails envoyés déjà importés)
+if (typeof S.mailSelfCopy !== 'boolean') S.mailSelfCopy = true;       // envoi de documents : mettre l'utilisateur en copie (Cc) par défaut
 if (typeof S.tempsKm !== 'number') S.tempsKm = 0;
 if (typeof S.urgenceSuppKm !== 'number') S.urgenceSuppKm = 0;
 if (typeof S.fourbureHT !== 'number') S.fourbureHT = 0;
@@ -3574,7 +3586,7 @@ function tourCloseBlock(t) {
 // Un client SANS cheval à l'adresse (déplacement seul) est OK. Empêche de payer/clôturer un arrêt où aucun cheval n'a été pris en charge.
 function arretActeOK(a) {
   return (a.clients || []).every((cl) => {
-    if ((cl.chevaux || []).some(chevalBilled)) return true;
+    if ((cl.chevaux || []).some((c) => chevalBilled(c) || (!chevalCancelled(c) && photoHasBillableStades(c.photo)))) return true; // parage/visite OU planche facturable = cheval pris en charge
     const c = clients.find((x) => x.id === cl.clientId);
     const hasHorsesHere = c ? activeChevaux(c).some((h) => norm(addrStr(chevalAddr(c, h))) === norm(addrStr(a.addr))) : (cl.chevaux || []).length > 0;
     return !hasHorsesHere;
@@ -4126,7 +4138,7 @@ const photoHasBillableStades = (photo) => !!(photo && (photo.stades || []).some(
 // Montant HT « photos » d'un cheval de tournée : 1× le tarif du modèle d'angles PAR stade FACTURABLE sélectionné (radio exclue).
 function chevalPhotoHT(cv) { if (!cv || !cv.photo) return 0; const n = ((cv.photo.stades || []).filter(plancheStadeBillable)).length; return n ? photoTariffHT(cv.photo.angle) * n : 0; }
 // Client entièrement annulé à un arrêt = avait des chevaux, aucun facturé (→ pas de déplacement facturé, mais compte toujours dans la géométrie figée).
-function clientAllCancelled(cl) { const ch = (cl && cl.chevaux) || []; return ch.length > 0 && !ch.some(chevalBilled); }
+function clientAllCancelled(cl) { const ch = (cl && cl.chevaux) || []; return ch.length > 0 && !ch.some((c) => chevalBilled(c) || (!chevalCancelled(c) && photoHasBillableStades(c.photo))); } // un cheval avec seule une planche facturable garde le client actif (déplacement + planche)
 function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
@@ -4195,17 +4207,11 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
             m.htArt += off ? 0 : prix; m.tvaArt += off ? 0 : prix * rr;
           });
         }
-        // Photos / planches : 1× le tarif du modèle d'angles PAR stade facturable (radio exclue), indépendant du parage. Accumulé → 1 ligne consolidée par client.
-        if (photoHasBillableStades(c.photo)) { const add = chevalPhotoHT(c); if (add > 0) { const st = (c.photo.stades || []).filter(plancheStadeBillable); m._photoHT = (m._photoHT || 0) + add; m._photoCount = (m._photoCount || 0) + st.length; (m._photoDet = m._photoDet || []).push(c.nom + ' (' + st.join(', ') + ')'); } }
+        // Photos / planches : 1× le tarif du modèle d'angles PAR stade facturable (radio exclue), indépendant du parage.
+        // Une ligne PAR CHEVAL (ses stades globalisés) → attribution correcte (facture, NC, stats par cheval).
+        if (photoHasBillableStades(c.photo)) { const st = (c.photo.stades || []).filter(plancheStadeBillable); const ht = photoTariffHT(c.photo.angle) * st.length; if (ht > 0) { const rr = stdRate; m.articles.push({ libelle: 'Photos / planches (' + st.join(', ') + ')', chevaux: [c.nom], qte: 1, prixHT: ht, tvaPct: effPct(S.tvaRate), ht, tva: ht * rr, ttc: ht * (1 + rr), photo: true, offert: false, remiseOff: true, remiseProduit: false, remiseLiquide: false }); m.htArt += ht; m.tvaArt += ht * rr; } }
       });
     });
-  });
-  // Photos / planches : une ligne consolidée par client (somme de toutes ses planches facturables ; radio exclue).
-  Object.values(cmap).forEach((m) => {
-    if (!(m._photoHT > 0)) return;
-    const rr = stdRate, ht = m._photoHT;
-    m.articles.push({ libelle: 'Photos / planches — ' + (m._photoDet || []).join(' · '), chevaux: [], qte: 1, prixHT: ht, tvaPct: effPct(S.tvaRate), ht, tva: ht * rr, ttc: ht * (1 + rr), photo: true, photoCount: m._photoCount, offert: false, remiseOff: true, remiseProduit: false, remiseLiquide: false });
-    m.htArt += ht; m.tvaArt += ht * rr;
   });
   // Chevaux annulés par client (pour retirer aussi leurs articles manuels — produit non livré).
   const cancelByClient = {};
@@ -5912,22 +5918,24 @@ function mailBodyFor(client, docLabel) { return `Bonjour${client && fullName(cli
 // ===== Envoi d'email réel avec pièce jointe via l'API Gmail (le compte Google connecté sert d'expéditeur) =====
 const _b64 = (bytes) => { let bin = ''; const CH = 0x8000; for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH)); return btoa(bin); };
 const _wrap76 = (s) => s.replace(/(.{76})/g, '$1\r\n');
-async function buildMimeEmail(to, subject, bodyText, blob, filename) {
+async function buildMimeEmail(to, subject, bodyText, blob, filename, cc) {
   const B = '==GaloPodoBoundary=='; // n'apparaît jamais dans du base64
   const subjEnc = '=?UTF-8?B?' + _b64(new TextEncoder().encode(subject || '')) + '?=';
   const bodyB64 = _wrap76(_b64(new TextEncoder().encode(bodyText || '')));
   const pdfB64 = _wrap76(_b64(new Uint8Array(await blob.arrayBuffer())));
   return [
-    'To: ' + to, 'Subject: ' + subjEnc, 'MIME-Version: 1.0',
+    'To: ' + to, ...(cc ? ['Cc: ' + cc] : []), 'Subject: ' + subjEnc, 'MIME-Version: 1.0',
     'Content-Type: multipart/mixed; boundary="' + B + '"', '',
     '--' + B, 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', bodyB64,
     '--' + B, 'Content-Type: application/pdf; name="' + filename + '"', 'Content-Transfer-Encoding: base64', 'Content-Disposition: attachment; filename="' + filename + '"', '', pdfB64,
     '--' + B + '--', '',
   ].join('\r\n');
 }
-async function gmailSend(to, subject, bodyText, blob, filename) {
+async function gmailSend(to, subject, bodyText, blob, filename, cc) {
   const token = await googleToken(true, GSCOPE_MAIL); // interactif : re-consentement possible pour le scope gmail.send
-  const mime = await buildMimeEmail(to, subject, bodyText, blob, filename);
+  if (cc && !S.mailSelf) { try { const pr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', { headers: { Authorization: 'Bearer ' + token } }); if (pr.ok) { const pj = await pr.json(); if (pj.emailAddress) { S.mailSelf = pj.emailAddress; saveSettings(); } } } catch { /* profil indisponible */ } }
+  if (cc === true) cc = S.mailSelf || ''; // true = « mettre l'utilisateur en copie » → résolu à l'adresse du compte connecté
+  const mime = await buildMimeEmail(to, subject, bodyText, blob, filename, cc);
   const raw = btoa(mime).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
   if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('Gmail ' + r.status + ' ' + t.slice(0, 160)); }
@@ -5939,15 +5947,17 @@ function modalSendDoc(blob, filename, defaultTo, subject, bodyText, onSent) {
     <label>Destinataire<input type="email" id="sdTo" value="${esc(defaultTo || '')}" placeholder="email@exemple.com"/></label>
     <label>Objet<input type="text" id="sdSubj" value="${esc(subject || '')}"/></label>
     <label class="pl-note-field">Message<textarea id="sdBody" rows="4">${esc(bodyText || '')}</textarea></label>
+    <label class="chk2"><input type="checkbox" id="sdCopy" ${S.mailSelfCopy !== false ? 'checked' : ''}/> 📧 M'envoyer une copie${S.mailSelf ? ' (' + esc(S.mailSelf) + ')' : ' (mon adresse)'}</label>
     <div class="actions"><button class="btn primary block" id="sdGmail">📨 Envoyer via Gmail (PDF joint automatiquement)</button></div>
-    <p class="hint">Envoi depuis votre compte Gmail connecté (Réglages → Mail). À la 1ʳᵉ fois, Google demandera l'autorisation d'<b>envoyer</b> des mails.</p>
+    <p class="hint">Envoi depuis votre compte Gmail connecté (Réglages → Mail). À la 1ʳᵉ fois, Google demandera l'autorisation d'<b>envoyer</b> des mails. La copie n'est possible que par Gmail (pas par le partage natif).</p>
     <div class="actions"><button class="btn block" id="sdShare">📤 Sinon : partager / télécharger le PDF</button></div>
     <p class="status" id="sdStatus"></p>`);
   $('mX').onclick = closeModal;
   $('sdGmail').onclick = async () => {
     const to = $('sdTo').value.trim(); if (!to) { alert('Renseignez le destinataire.'); return; }
+    const copy = !!($('sdCopy') && $('sdCopy').checked); S.mailSelfCopy = copy; saveSettings(); // mémorise le choix par défaut
     const st = $('sdStatus'), btn = $('sdGmail'); btn.disabled = true; st.className = 'status'; st.textContent = 'Envoi via Gmail…';
-    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to; if (onSent) onSent(); setTimeout(closeModal, 1400); }
+    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename, copy ? true : ''); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to + (copy && S.mailSelf ? ' (copie à ' + S.mailSelf + ')' : ''); if (onSent) onSent(); setTimeout(closeModal, 1400); }
     catch (e) { st.className = 'status err'; st.textContent = 'Échec : ' + (e && e.message || e) + ' — utilisez « partager / télécharger ».'; btn.disabled = false; }
   };
   $('sdShare').onclick = async () => { const ok = await shareDoc(blob, filename, subject, bodyText); if (ok && onSent) onSent(); };
@@ -7514,7 +7524,7 @@ function modalPlancheCreate(type, prefill) {
     try {
       const blob = await planchePdfBlob();
       const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
-      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', 'Planche — ' + (plCreate.cheval || 'cheval'), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval')), () => plancheTodoDone(plCreate));
+      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), () => plancheTodoDone(plCreate));
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
   };
@@ -7686,7 +7696,7 @@ function plRefRows(st) { let m = 1; (st.pages || []).forEach((pg, pi) => { m = M
 // Type de prestation déduit du stade (pour le nom de fichier) : parage / ferrage / déferrage.
 function plancheStadeType(stade) { const s = norm(stade || ''); if (/deferr/.test(s)) return 'deferrage'; if (/ferr/.test(s)) return 'ferrage'; if (/parage/.test(s)) return 'parage'; return s ? s.replace(/\s+/g, '-') : ''; }
 // Nom de fichier : Date + planche + type + cheval.
-function plancheBaseName(st) { st = st || plCreate || {}; return [st.date || todayStr(), 'planche', plancheStadeType(st.stade), (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval')].filter(Boolean).join('-'); }
+function plancheBaseName(st) { st = st || plCreate || {}; const genre = st.type === 'avantapres' ? 'avant-apres' : 'planche'; return [st.date || todayStr(), genre, plancheStadeType(st.stade), (norm(st.cheval || '').replace(/\s+/g, '-') || 'cheval')].filter(Boolean).join('-'); }
 // La durée du cycle précédent est requise quand le STADE de la planche relève du parage / ferrage / déferrage.
 function plancheStadeCareNeeded(stade) { return /parage|ferr/.test(norm(stade || '')); }
 // Vrai si la planche exige la durée du cycle précédent (selon le stade) mais qu'elle n'est pas renseignée → bloque la génération.
@@ -7808,7 +7818,7 @@ function plancheComparePrint() {
   </style>
   <div class="pl-cmp-page"><div class="pl-cmp-title">${esc(c.title || 'Comparaison')}</div>
   <div class="pl-cmp-row">${cell(c.a, c.la || 'Document 1')}${cell(c.b, c.lb || 'Document 2')}</div></div>`;
-  printHtml('Comparaison — ' + (c.title || 'documents'), body);
+  printHtml([todayStr(), 'comparaison', (norm(c.title || '').replace(/\s+/g, '-') || 'documents')].filter(Boolean).join('-'), body);
 }
 
 // ================= SMS (modèle) =================
