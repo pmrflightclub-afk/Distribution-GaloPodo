@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.45';
+const APP_VERSION = '1.2.46';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.46', date: '2026-07-11',
+    corrections: [
+      'Planche PDF — en-tête : votre nom est maintenant réellement centré sous le logo, et le logo n\'est plus rogné par le bord droit de la page.',
+      'Planche PDF — ligne « Âge » du cheval en gras.',
+      'Planche PDF — pied de page : le vrai logo GaloPodo (fond transparent) en bas à gauche, et le texte (société · contact · TVA) descendu et aligné sur le bas du logo, plus collé au cadre de la grille.',
+    ],
+  },
   {
     version: '1.2.45', date: '2026-07-11',
     ajouts: [
@@ -6174,12 +6182,12 @@ async function planchePageCanvas(pi) {
   // Zone cheval (centre)
   const zhX = px(g.margin + g.gridW * 0.34), zhW = px(g.gridW * 0.32), zhCx = zhX + zhW / 2; let vy = topY;
   ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, st.cheval || '—', zhW), zhCx, vy); vy += fs(4.4);
-  ctx.font = fs(2.6) + 'px sans-serif'; plChevalLines(st).forEach((l) => { ctx.fillText(plTrunc(ctx, l, zhW), zhCx, vy); vy += fs(3.1); });
+  plChevalLines(st).forEach((l) => { ctx.font = (/^Âge/.test(l) ? 'bold ' : '') + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, l, zhW), zhCx, vy); vy += fs(3.1); }); // ligne « Âge » en gras
   if (st.note) { ctx.font = 'italic ' + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, 'Note : ' + st.note, zhW), zhCx, vy); }
   // Zone pro (droite) : logo en haut à droite + NOM du pro centré dessous (gras). La société est reportée dans le pied de page.
   const zpX = px(g.margin + g.gridW * 0.68), zpW = px(g.gridW * 0.32), zpCx = zpX + zpW / 2; let py = topY;
-  if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(10), lw = Math.min(zpW, lg.width * (lh / lg.height)); ctx.drawImage(lg, zpX + zpW - lw, py, lw, lh); py += lh + fs(1.5); } }
-  { const p = S.proIdent || {}; const proName = [p.prenom, p.nom].filter(Boolean).join(' '); if (proName) { ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.1) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, proName, zpW), zpCx, py); } }
+  if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(10), lw = Math.min(zpW, lg.width * (lh / lg.height)); ctx.drawImage(lg, zpCx - lw / 2, py, lw, lh); py += lh + fs(1.5); } } // logo CENTRÉ dans la zone (plus collé au bord droit → plus rogné par la marge de page)
+  { const p = S.proIdent || {}; const proName = [p.prenom, p.nom].filter(Boolean).join(' '); if (proName) { ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.1) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, proName, zpW), zpCx, py); } } // nom centré, sous le logo
   ctx.textAlign = 'left';
   // Grille (cellules fixes)
   const gx = px(g.gridLeft), gtop = px(g.gridTop), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH);
@@ -6202,12 +6210,13 @@ async function planchePageCanvas(pi) {
   ctx.moveTo(gx, gtop); ctx.lineTo(gx, gridBottom);
   for (let ri = 0; ri <= rows.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
   ctx.moveTo(gx, gtop); ctx.lineTo(gx + px(g.gridW), gtop); ctx.stroke();
-  // Pied de page : logo GaloPodo (le vrai, en bas à gauche) + société · contact · TVA (centré, gras, plus grand)
+  // Pied de page : vrai logo GaloPodo (transparent) en bas à gauche + société · contact · TVA centré, descendu et aligné sur le BAS du logo.
   const fy = px(g.pageH - g.margin - g.footerH);
-  ctx.strokeStyle = '#999'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(px(g.margin), fy); ctx.lineTo(px(g.margin + g.gridW), fy); ctx.stroke();
-  const flg = await plLoadImg(GALOPODO_MARK); if (flg) { const fh = px(g.footerH - 0.8), fw = flg.width * (fh / flg.height); ctx.drawImage(flg, px(g.margin), fy + px(0.6), fw, fh); } // logo bas-gauche, aligné à gauche
-  ctx.fillStyle = '#222'; ctx.font = 'bold ' + fs(2.8) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(plTrunc(ctx, plProFooter(), px(g.gridW) - px(20)), px(g.margin + g.gridW / 2), fy + px(1.8)); // texte centré au milieu de la page
-  ctx.textAlign = 'left';
+  const flg = await plLoadImg(GALOPODO_LOGO_FILE), fh = px(5), lTop = fy + px(1.4); // logo descendu (écarté du cadre de la grille)
+  if (flg) { const fw = flg.width * (fh / flg.height); ctx.drawImage(flg, px(g.margin), lTop, fw, fh); }
+  ctx.fillStyle = '#222'; ctx.font = 'bold ' + fs(2.8) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(plTrunc(ctx, plProFooter(), px(g.gridW) - px(24)), px(g.margin + g.gridW / 2), lTop + fh - px(0.6)); // bas du texte ≈ bas du logo
+  ctx.textBaseline = 'top'; ctx.textAlign = 'left';
   return cv;
 }
 async function planchePdfBlob() {
@@ -7824,6 +7833,7 @@ const GALOPODO_LOGO = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(G
 // Vrai logo GaloPodo (sabot/mont + auréole + trajectoire de croissance) — inline en data URI (jamais de taint canvas → export PDF fiable).
 const GALOPODO_MARK_SVG = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512'><rect width='512' height='512' rx='104' fill='#e8722a'/><path d='M92 432 L92 296 L150 338 L202 244 L256 318 L310 244 L362 338 L420 296 L420 432 Z' fill='#c65e17'/><ellipse cx='272' cy='138' rx='150' ry='52' fill='none' stroke='#241f1a' stroke-width='24'/><polyline points='118,378 196,318 250,360 322,258 404,172' fill='none' stroke='#241f1a' stroke-width='30' stroke-linecap='round' stroke-linejoin='round'/><path d='M404 172 L346 192 M404 172 L386 230' fill='none' stroke='#241f1a' stroke-width='30' stroke-linecap='round' stroke-linejoin='round'/></svg>";
 const GALOPODO_MARK = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(GALOPODO_MARK_SVG);
+const GALOPODO_LOGO_FILE = './icons/logo-mark.png'; // vrai logo GaloPodo (PNG à fond transparent, même fichier que le bandeau) pour le pied de page
 // Abréviation d'un membre : AG/AD/PG/PD (gain de place en 1ʳᵉ colonne).
 function memberAbbr(base) {
   const s = norm(base || '');
