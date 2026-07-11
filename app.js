@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.40';
+const APP_VERSION = '1.2.41';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.41', date: '2026-07-11',
+    ajouts: [
+      'Gestion → Adresses chevaux : bouton « ＋ Ajouter une adresse de référence ». Vous pouvez enregistrer un lieu (écurie) connu même sans cheval actuel — avec un client de référence facultatif — et le passer directement en liste noire ou inactif. Si cette adresse réapparaît dans une tournée (déménagement d\'un cheval, nouveau client), l\'arrêt affiche le badge « ⛔ liste noire » ou « 💤 lieu inactif » pour vous avertir.',
+    ],
+  },
   {
     version: '1.2.40', date: '2026-07-11',
     ajouts: [
@@ -1584,6 +1590,7 @@ if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {};
 if (!Array.isArray(S.plancheTodo)) S.plancheTodo = [];
 if (!Array.isArray(S.plancheDone)) S.plancheDone = [];
 if (!Array.isArray(S.plancheHistory)) S.plancheHistory = []; // historique des planches de contact générées (métadonnées : client, cheval, date, stade, note, cycle, modèle) — jamais d'images
+if (!Array.isArray(S.lieuxRefs)) S.lieuxRefs = []; // adresses de référence saisies à la main (écuries connues, hors chevaux actuels) : { id, addr, clientRef, status } — statut répercuté dans S.addrStatus
 // Tarifs « photos / planches » (supplément par cheval). 3 angles = référence ; 4 & 5 = manuels OU calculés en % (base/photo × (1−%) × nb photos).
 S.photoTarifs = Object.assign({ angle3HT: 10, angle4HT: 13, angle5HT: 16, pctMode: false, pct4: 0, pct5: 0 }, S.photoTarifs || {});
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
@@ -3170,10 +3177,12 @@ function chevalAddressesByClient() {
 function renderChevAddresses() {
   const seg = $('adrChevFilterSeg'); if (seg) seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._afw) { b._afw = true; b.addEventListener('click', () => { adrChevFilter = b.dataset.af; renderChevAddresses(); }); } b.classList.toggle('on', b.dataset.af === adrChevFilter); });
   const box = $('adrChevList'); if (!box) return; box.innerHTML = '';
+  const addBtn = document.createElement('button'); addBtn.className = 'btn small block'; addBtn.style.marginBottom = '8px'; addBtn.textContent = '＋ Ajouter une adresse de référence'; addBtn.addEventListener('click', () => modalAddLieuRef()); box.appendChild(addBtn);
   const all = chevalAddressesByClient();
   const wantSt = adrChevFilter === 'noir' ? 'noir' : adrChevFilter === 'inactifs' ? 'inactif' : 'actif';
   const shown = all.filter((e) => clientState(e.client) === wantSt).sort((a, b) => fullName(a.client).localeCompare(fullName(b.client)));
-  if ($('adrChevEmpty')) { $('adrChevEmpty').style.display = shown.length ? 'none' : 'block'; $('adrChevEmpty').textContent = all.length ? 'Aucun client dans cette catégorie.' : 'Aucune adresse.'; }
+  const refs = (S.lieuxRefs || []).filter((lr) => (addrStatusOf(lr.addr) || 'actif') === wantSt);
+  if ($('adrChevEmpty')) { $('adrChevEmpty').style.display = (shown.length || refs.length) ? 'none' : 'block'; $('adrChevEmpty').textContent = (all.length || (S.lieuxRefs || []).length) ? 'Aucune adresse dans cette catégorie.' : 'Aucune adresse.'; }
   const srcOf = (h) => h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
   shown.forEach((e) => {
     const c = e.client, st = clientState(c);
@@ -3191,6 +3200,42 @@ function renderChevAddresses() {
     el.querySelectorAll('[data-ecurie]').forEach((b) => b.addEventListener('click', () => { const a = addrList[+b.dataset.ecurie]; setAddrStatus(a, isAddrNoir(a) ? 'actif' : 'noir'); renderChevAddresses(); })); // refus de LIEU (écurie), séparé du statut client
     el.querySelectorAll('[data-nom]').forEach((inp) => { const h = specInputs[+inp.dataset.nom]; inp.addEventListener('input', (ev) => { h.addrNom = ev.target.value; saveClients(); }); inp.addEventListener('change', () => renderChevAddresses()); });
     box.appendChild(el);
+  });
+  // Adresses de référence saisies à la main (écuries connues, hors chevaux actuels).
+  refs.forEach((lr) => {
+    const stt = addrStatusOf(lr.addr);
+    const b = stt === 'noir' ? ' <span class="badge badge-noir">⛔ liste noire</span>' : stt === 'inactif' ? ' <span class="badge">💤 inactif</span>' : '';
+    const el = document.createElement('div'); el.className = 'list-item stack-act' + (stt !== 'actif' ? ' item-off' : '');
+    el.innerHTML = `<div class="li-main"><b>📍 Adresse de référence${b}</b><div class="li-sub">${esc(addrStr(lr.addr)) || '<i>adresse ?</i>'}${lr.clientRef ? ' · 👤 ' + esc(lr.clientRef) : ''}</div></div><div class="li-act li-act-col"><button class="btn small" data-lredit>Modifier</button><button class="btn small danger" data-lrdel>Supprimer</button></div>`;
+    el.querySelector('[data-lredit]').addEventListener('click', () => modalAddLieuRef(lr));
+    el.querySelector('[data-lrdel]').addEventListener('click', () => { if (!confirm('Supprimer cette adresse de référence ?')) return; S.lieuxRefs = (S.lieuxRefs || []).filter((x) => x.id !== lr.id); setAddrStatus(lr.addr, 'actif'); saveSettings(); renderChevAddresses(); });
+    box.appendChild(el);
+  });
+}
+// Ajout/édition d'une adresse de référence (écurie connue) : adresse + client de référence (facultatif) + statut (liste noire / inactif).
+function modalAddLieuRef(existing) {
+  const w = existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), addr: emptyAddr(), clientRef: '', status: 'noir' };
+  w.addr = toAddr(w.addr);
+  openModal(`<div class="modal-head"><b>📍 ${existing ? 'Modifier' : 'Ajouter'} une adresse de référence</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Enregistrez un lieu connu (écurie) même sans cheval actuel — pour garder une trace et être averti s'il réapparaît (déménagement d'un cheval, nouveau client). Vous pouvez le passer en liste noire ou inactif.</p>
+    <div id="lrAddr"></div>
+    <label>Client de référence (facultatif)<input type="text" id="lrClient" list="lrClientList" value="${esc(w.clientRef || '')}" placeholder="ex. ancien propriétaire / écurie"/></label>
+    <datalist id="lrClientList">${clients.map((c) => `<option value="${esc(fullName(c))}"></option>`).join('')}</datalist>
+    <label class="chk2"><input type="checkbox" id="lrNoir" ${w.status === 'noir' ? 'checked' : ''}/> ⛔ Refuser ce lieu (liste noire)</label>
+    <label class="chk2"><input type="checkbox" id="lrInactif" ${w.status === 'inactif' ? 'checked' : ''}/> 💤 Marquer inactif</label>
+    <div class="actions two"><button class="btn" id="lrCancel">Annuler</button><button class="btn primary" id="lrOk">Enregistrer</button></div>`);
+  mountAddress($('lrAddr'), w.addr, (a) => { w.addr = a; });
+  $('mX').onclick = closeModal; $('lrCancel').onclick = closeModal;
+  $('lrClient').addEventListener('input', (e) => { w.clientRef = e.target.value; });
+  $('lrNoir').addEventListener('change', (e) => { if (e.target.checked) $('lrInactif').checked = false; }); // statuts exclusifs
+  $('lrInactif').addEventListener('change', (e) => { if (e.target.checked) $('lrNoir').checked = false; });
+  $('lrOk').addEventListener('click', () => {
+    if (!addrStr(w.addr).trim()) { alert('Renseignez l\'adresse.'); return; }
+    w.status = $('lrNoir').checked ? 'noir' : ($('lrInactif').checked ? 'inactif' : 'actif');
+    if (!Array.isArray(S.lieuxRefs)) S.lieuxRefs = [];
+    const i = S.lieuxRefs.findIndex((x) => x.id === w.id); if (i >= 0) S.lieuxRefs[i] = w; else S.lieuxRefs.push(w);
+    setAddrStatus(w.addr, w.status); // répercute le statut sur le LIEU → badge dans les tournées si l'adresse réapparaît
+    saveSettings(); closeModal(); renderChevAddresses();
   });
 }
 // ================= GESTION → MES ADRESSES (départ) =================
@@ -3776,6 +3821,7 @@ const addrKey = (a) => norm(addrStr(a));
 function addrStatusOf(a) { const k = addrKey(a); return (k && S.addrStatus && S.addrStatus[k]) || 'actif'; }
 function setAddrStatus(a, st) { const k = addrKey(a); if (!k) return; if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {}; if (st === 'actif') delete S.addrStatus[k]; else S.addrStatus[k] = st; saveSettings(); }
 const isAddrNoir = (a) => addrStatusOf(a) === 'noir';
+const isAddrInactif = (a) => addrStatusOf(a) === 'inactif';
 // Toutes les adresses de chevaux répertoriées, agrégées par adresse physique.
 function chevalAddresses() {
   const map = {};
@@ -3854,7 +3900,7 @@ function renderEditorArrets(locked) {
       <div class="a-top">
         ${locked ? '' : '<div class="a-drag" title="Glisser pour réordonner">⠿</div>'}
         ${locked ? `<span class="a-num">${i + 1}</span>` : `<input class="a-num-in" data-order type="number" min="1" max="${N}" value="${i + 1}" title="N° d'ordre de passage (modifiable)"/>`}
-        <div class="grow"><b>${esc(labelFor(a))}</b>${aFinal ? ' <span class="badge badge-lock">🔒 clôturé</span>' : ''}${addrNoir ? ' <span class="badge badge-noir">⛔ adresse liste noire</span>' : ''}<div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
+        <div class="grow"><b>${esc(labelFor(a))}</b>${aFinal ? ' <span class="badge badge-lock">🔒 clôturé</span>' : ''}${addrNoir ? ' <span class="badge badge-noir">⛔ adresse liste noire</span>' : ''}${isAddrInactif(a.addr) ? ' <span class="badge">💤 lieu inactif (référence)</span>' : ''}<div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
         ${locked ? '' : '<button class="a-del" data-del title="Retirer">✕</button>'}
       </div>
       <div class="a-grid"><label class="grow">Tarif appliqué<select data-type ${locked ? 'disabled' : ''}><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label></div>`;
@@ -8490,7 +8536,7 @@ function renderHomeTrajet() {
       if (t.startedAt) { if (validated) { arState = '✅ clôturé'; arCls = 'ok'; } else if (seqLocked) { arState = '⏳ en attente'; arCls = 'wait'; } else if (!acteOK) { arState = '⚠ cocher un cheval'; arCls = 'warn'; } else { arState = '➡ à finaliser'; arCls = 'now'; } }
       if (arCls === 'now') el.classList.add('arret-now');
       if (isAddrNoir(a.addr)) el.classList.add('arret-noir');
-      el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b> <span class="ar-state ${arCls}">${arState}</span>${isAddrNoir(a.addr) ? ' <span class="badge badge-noir">⛔ liste noire</span>' : ''}<span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
+      el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b> <span class="ar-state ${arCls}">${arState}</span>${isAddrNoir(a.addr) ? ' <span class="badge badge-noir">⛔ liste noire</span>' : ''}${isAddrInactif(a.addr) ? ' <span class="badge">💤 lieu inactif</span>' : ''}<span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
         <div class="li-act"><button class="btn small" data-agir${seqLocked ? ' disabled title="Finalisez d\'abord l\'arrêt précédent"' : ''}>⚡ Agir</button> ${clotBtn}</div>`;
       // « Agir » : regroupe Waze / Route / SMS / Ticket dans une modale (évite la surcharge de boutons).
       const smsAction = () => modalSmsChoice(c0, smsDataFor(c0, { cheval: chNames, trajet, adresse }));
