@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.46';
+const APP_VERSION = '1.2.47';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.47', date: '2026-07-11',
+    ajouts: [
+      'Champs de saisie : la valeur mémorisée s\'affiche en gris. Quand vous cliquez dans un champ (texte/nombre), il se vide (curseur prêt) tout en montrant la valeur en gris — vous tapez directement la nouvelle valeur sans devoir effacer d\'abord. Si vous ne tapez rien, l\'ancienne valeur est conservée.',
+      'Ajout d\'un élément (article, matériel, frais, compte, charge, rappel, provision) : l\'écran se recentre automatiquement sur le nouvel élément créé (avec un bref surlignage), pour ne plus le chercher plus bas dans la page.',
+    ],
+  },
   {
     version: '1.2.46', date: '2026-07-11',
     corrections: [
@@ -2766,6 +2773,38 @@ function modalRouteCalc(prefill) {
 // ---------- Modal ----------
 function openModal(html) { $('modalBox').innerHTML = html; $('modal').classList.remove('hidden'); }
 function closeModal() { $('modal').classList.add('hidden'); $('modalBox').innerHTML = ''; }
+// Après un ajout : recentre l'écran sur le nouvel élément (dernier de la liste, hors bouton) + flash bref → l'utilisateur voit ce qui vient d'être créé.
+function revealNew(containerId) {
+  requestAnimationFrame(() => {
+    const box = $(containerId); if (!box) return;
+    let el = box.lastElementChild;
+    while (el && el.matches && el.matches('button,.btn')) el = el.previousElementSibling; // ignore un bouton d'ajout en fin de liste
+    if (!el) return;
+    try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch { el.scrollIntoView(); }
+    el.classList.add('flash-new'); setTimeout(() => el.classList.remove('flash-new'), 1500);
+  });
+}
+// ===== Champs « valeur mémorisée en gris » (A+) : au focus, la valeur passe en placeholder (gris) et le champ se vide (curseur à zéro),
+// on tape par-dessus sans effacer ; au blur sans saisie la valeur est restaurée (et re-committée si on avait touché au champ). L'indice
+// d'origine est sauvegardé/restauré (pas de conflit). Exclut : recherche, date/heure/couleur/range/case/radio/fichier, lecture seule, .no-mem.
+function isMemField(el) {
+  if (!el || el.tagName !== 'INPUT') return false; // pas les textarea (édition en place des notes) — elles restent grises via CSS
+  if (el.readOnly || el.disabled || el.classList.contains('ro') || el.classList.contains('no-mem')) return false;
+  const t = el.type;
+  return t === 'text' || t === 'number' || t === 'tel' || t === 'email' || t === 'url';
+}
+document.addEventListener('focusin', (e) => {
+  const el = e.target; if (!isMemField(el) || el.value === '' || el.dataset.memmode) return;
+  el.dataset.memval = el.value; el.dataset.memhint = el.getAttribute('placeholder') || '';
+  el.setAttribute('placeholder', el.value); el.value = ''; el.dataset.memmode = '1';
+});
+document.addEventListener('input', (e) => { const el = e.target; if (el && el.dataset && el.dataset.memmode === '1') el.dataset.memtouched = '1'; });
+document.addEventListener('focusout', (e) => {
+  const el = e.target; if (!el || !el.dataset || el.dataset.memmode !== '1') return;
+  el.setAttribute('placeholder', el.dataset.memhint || '');
+  if (el.value === '') { el.value = el.dataset.memval; if (el.dataset.memtouched) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } } // rien (ou vidé) → restaure la mémoire, re-commit si nécessaire
+  delete el.dataset.memval; delete el.dataset.memhint; delete el.dataset.memmode; delete el.dataset.memtouched;
+});
 
 // ---------- Navigation ----------
 // Recalcule les hauteurs des barres collantes (bandeau + onglets) → offsets sticky des sous-onglets.
@@ -5746,7 +5785,7 @@ function renderProvisions() {
   <section class="card"><details><summary><b>⚙️ Paramètres fiscaux</b></summary><div id="provParams" style="margin-top:8px"></div></details></section>`;
   box.innerHTML = html;
   $('provForme').addEventListener('change', (e) => { const ids = regimesForPays().map((r) => r.id); S.formeJuridique = ids.includes(e.target.value) ? e.target.value : defaultFormeForPays(S.pays); saveSettings(); renderProvisions(); renderHome(); });
-  $('provAdd').addEventListener('click', () => { S.provisions.push({ id: uid(), libelle: 'Provision manuelle', base: 'manuel', compteId: (comptesActifs()[0] || {}).id || null, sousCompteId: null, actif: true, override: 0, tvaDeductible: 0, statut: 'a_provisionner', clearedThrough: '' }); saveSettings(); renderProvisions(); renderHome(); });
+  $('provAdd').addEventListener('click', () => { S.provisions.push({ id: uid(), libelle: 'Provision manuelle', base: 'manuel', compteId: (comptesActifs()[0] || {}).id || null, sousCompteId: null, actif: true, override: 0, tvaDeductible: 0, statut: 'a_provisionner', clearedThrough: '' }); saveSettings(); renderProvisions(); renderHome(); revealNew('provisionsBody'); });
   $('provReset').addEventListener('click', () => { if (!confirm('Réinitialiser les provisions à la liste de base ? Vos provisions manuelles et statuts seront perdus.')) return; S.provisions = mkProvisions(S.comptes, S.sousComptes); saveSettings(); renderProvisions(); renderHome(); });
   const lb = $('provList');
   list.forEach((p) => {
@@ -5961,7 +6000,7 @@ function payCharge(ch) {
   saveSettings();
 }
 function renderCharges() {
-  const add = $('btnAddCharge'); if (add) add.onclick = () => { S.chargesAchat.push({ id: uid(), libelle: 'Nouvelle charge', montant: 0, freq: 'annuel', jour: 1, mois: 1, moisAnchor: 1, date: '', compteId: (comptesActifs()[0] || {}).id || null, sousCompteId: null, actif: true, dernierPaye: '', paye: false }); saveSettings(); renderCharges(); };
+  const add = $('btnAddCharge'); if (add) add.onclick = () => { S.chargesAchat.push({ id: uid(), libelle: 'Nouvelle charge', montant: 0, freq: 'annuel', jour: 1, mois: 1, moisAnchor: 1, date: '', compteId: (comptesActifs()[0] || {}).id || null, sousCompteId: null, actif: true, dernierPaye: '', paye: false }); saveSettings(); renderCharges(); revealNew('chargesList'); };
   const box = $('chargesList'); if (!box) return; box.innerHTML = '';
   if ($('chargesEmpty')) $('chargesEmpty').style.display = (S.chargesAchat && S.chargesAchat.length) ? 'none' : 'block';
   const cptOpts = (sel) => (S.comptes || []).map((c) => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.nom)}</option>`).join('');
@@ -9381,7 +9420,7 @@ function rappelSchedText(r) {
 }
 // Page Gestion → Rappels : configuration de l'échéancier (activer, fréquence, jour, montant, ajouter/supprimer/réinitialiser).
 function renderRappels() {
-  const addBtn = $('btnAddRappel'); if (addBtn) addBtn.onclick = () => { S.rappels.push({ id: uid(), type: 'autre', libelle: 'Nouveau rappel', actif: true, freq: 'mensuel', jour: 1, montant: 0, dernierFait: '' }); saveSettings(); renderRappels(); renderHome(); };
+  const addBtn = $('btnAddRappel'); if (addBtn) addBtn.onclick = () => { S.rappels.push({ id: uid(), type: 'autre', libelle: 'Nouveau rappel', actif: true, freq: 'mensuel', jour: 1, montant: 0, dernierFait: '' }); saveSettings(); renderRappels(); renderHome(); revealNew('rappelsList'); };
   const resetBtn = $('btnResetRappels'); if (resetBtn) resetBtn.onclick = () => { if (!confirm('Réinitialiser la liste des rappels à la base par défaut ? Vos rappels personnalisés seront perdus.')) return; S.rappels = mkRappels(); saveSettings(); renderRappels(); renderHome(); };
   const box = $('rappelsList'); if (!box) return; box.innerHTML = '';
   if ($('rappelsEmpty')) $('rappelsEmpty').style.display = (S.rappels && S.rappels.length) ? 'none' : 'block';
@@ -9415,8 +9454,8 @@ function renderRappels() {
 const comptesActifs = () => (S.comptes || []).filter((c) => c.actif);
 const compteNom = (id) => { const c = (S.comptes || []).find((x) => x.id === id); return c ? c.nom : '—'; };
 function renderComptes() {
-  const addB = $('btnAddCompte'); if (addB) addB.onclick = () => { S.comptes.push({ id: uid(), nom: 'Nouveau compte', type: 'epargne', actif: true, lettre: '', iban: '' }); saveSettings(); renderComptes(); };
-  const addS = $('btnAddSousCompte'); if (addS) addS.onclick = () => { S.sousComptes.push({ id: uid(), nom: 'Nouveau sous-compte', famille: 'F', compteId: (comptesActifs()[0] || {}).id || null, actif: true }); saveSettings(); renderComptes(); };
+  const addB = $('btnAddCompte'); if (addB) addB.onclick = () => { S.comptes.push({ id: uid(), nom: 'Nouveau compte', type: 'epargne', actif: true, lettre: '', iban: '' }); saveSettings(); renderComptes(); revealNew('comptesList'); };
+  const addS = $('btnAddSousCompte'); if (addS) addS.onclick = () => { S.sousComptes.push({ id: uid(), nom: 'Nouveau sous-compte', famille: 'F', compteId: (comptesActifs()[0] || {}).id || null, actif: true }); saveSettings(); renderComptes(); revealNew('comptesList'); };
   const rs = $('btnResetSousComptes'); if (rs) rs.onclick = () => { if (!confirm('Réinitialiser les sous-comptes à la liste de base ?')) return; S.sousComptes = mkSousComptes(S.comptes); saveSettings(); renderComptes(); };
   const box = $('comptesList');
   if (box) {
@@ -10026,9 +10065,9 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('appTopbar')) $('appTopbar').addEventListener('click', (e) => { if (!e.target.closest('button,a,input,select')) showTab('accueil'); });
   if ($('btnRefreshTours')) $('btnRefreshTours').addEventListener('click', refreshActiveTours);
   $('btnVehicule').addEventListener('click', modalVehicule);
-  $('btnAddFrais').addEventListener('click', () => { S.frais.push({ id: uid(), poste: '', nature: 'recurrent', statut: 'actif', kmReport: 0, montantHT: 0, kmPrevus: 0, kmDebut: Math.round(odometer()), date: todayStr() }); saveSettings(); renderFraisVehicule(); });
-  $('btnAddMateriel').addEventListener('click', () => { S.materiel.push({ id: uid(), libelle: '', montantHT: 0, nbChevaux: 1 }); saveSettings(); renderMateriel(); });
-  $('btnNewArticleCat').addEventListener('click', () => { S.articlesCatalogue.push({ id: uid(), libelle: '', prixHT: 0, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std }); saveSettings(); renderArticlesCat(); });
+  $('btnAddFrais').addEventListener('click', () => { S.frais.push({ id: uid(), poste: '', nature: 'recurrent', statut: 'actif', kmReport: 0, montantHT: 0, kmPrevus: 0, kmDebut: Math.round(odometer()), date: todayStr() }); saveSettings(); renderFraisVehicule(); revealNew('fraisList'); });
+  $('btnAddMateriel').addEventListener('click', () => { S.materiel.push({ id: uid(), libelle: '', montantHT: 0, nbChevaux: 1 }); saveSettings(); renderMateriel(); revealNew('materielList'); });
+  $('btnNewArticleCat').addEventListener('click', () => { S.articlesCatalogue.push({ id: uid(), libelle: '', prixHT: 0, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std }); saveSettings(); renderArticlesCat(); revealNew('articlesCatList'); });
   if ($('analyticDragBtn')) $('analyticDragBtn').addEventListener('click', () => toggleTileDrag('analyticOrder', $('analyticTiles'), $('analyticDragBtn')));
   if ($('statDragBtn')) $('statDragBtn').addEventListener('click', () => toggleTileDrag('statOrder', $('statTiles'), $('statDragBtn')));
   $('btnNewTour').addEventListener('click', newTour);

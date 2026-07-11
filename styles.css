@@ -60,6 +60,12 @@ h2 { font-size: 1rem; margin: 0 0 10px; } .card-head h2 { margin: 0; }
 label { display: block; font-size: .82rem; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
 label.grow { flex: 1; }
 input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font-size: 16px; }
+/* Valeur mémorisée affichée en GRIS (A+) — champs éditables texte/nombre ; exclut lecture seule, cases, couleurs, etc. */
+input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=range]):not([type=file]):not([readonly]):not(.ro), textarea:not([readonly]):not(.ro) { color: var(--muted); }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
+/* Flash bref sur un élément nouvellement créé (recentrage) */
+@keyframes flashNew { 0% { background: color-mix(in srgb, var(--accent) 32%, transparent); } 100% { background: transparent; } }
+.flash-new { animation: flashNew 1.5s ease-out; }
 .row { display: flex; gap: 10px; }
 .hint, small.hint { display: block; font-size: .76rem; color: var(--muted); font-weight: 400; margin-top: 6px; }
 .empty { color: var(--muted); font-size: .85rem; text-align: center; padding: 8px; }
