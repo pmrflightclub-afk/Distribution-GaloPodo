@@ -63,6 +63,24 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 /* Valeur mémorisée affichée en GRIS (A+) — champs éditables texte/nombre ; exclut lecture seule, cases, couleurs, etc. */
 input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=range]):not([type=file]):not([readonly]):not(.ro), textarea:not([readonly]):not(.ro) { color: var(--muted); }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
+/* ===== Menu déroulant « maison » (remplace l'ouverture native des <select>, qui ne se ferme pas au clic-dehors sur mobile).
+   Le <select> natif reste dans le DOM (masqué, .gp-native) comme source de vérité ; une façade cliquable est superposée. */
+select.gp-native { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; }
+.gp-sel { position: relative; display: block; margin-top: 5px; }
+.gp-sel-btn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 16px; font-family: inherit; font-weight: 600; cursor: pointer; text-align: left; }
+.gp-sel-btn[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+.gp-sel-btn .gp-sel-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gp-sel-btn .gp-sel-car { flex: none; color: var(--muted); transition: transform .15s ease; }
+.gp-sel.open .gp-sel-car { transform: rotate(180deg); }
+.gp-sel-pop { position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; right: 0; max-height: 260px; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 4px; display: none; }
+.gp-sel.open .gp-sel-pop { display: block; }
+.gp-sel-opt { padding: 10px 12px; border-radius: 8px; cursor: pointer; color: var(--ink); font-size: 16px; }
+.gp-sel-opt.hi { background: var(--bg); }
+.gp-sel-opt.sel { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.gp-sel-opt.disabled { color: var(--muted); opacity: .5; pointer-events: none; }
+/* Contextes compacts : la façade reprend la taille du <select> natif qu'elle remplace */
+.cm-filters .gp-sel { flex: 1 1 160px; min-width: 0; }
+.cm-filters .gp-sel-btn { padding: 8px 10px; font-size: .9rem; }
 /* Flash bref sur un élément nouvellement créé (recentrage) */
 @keyframes flashNew { 0% { background: color-mix(in srgb, var(--accent) 32%, transparent); } 100% { background: transparent; } }
 .flash-new { animation: flashNew 1.5s ease-out; }
@@ -482,7 +500,7 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 #homeTrajetCard.min .hint { display: none; }
 #homeTrajetCard.min .empty { margin: 4px 0 0; padding: 0; }
 .arret-locked .a-drag, .arret-locked [data-del] { display: none; }
-.arret-locked input, .arret-locked select, .arret-locked .a-nav-b button, .arret-locked .a-articles button, .arret-locked .a-prets button { pointer-events: none; opacity: .5; }
+.arret-locked input, .arret-locked select, .arret-locked .gp-sel-btn, .arret-locked .a-nav-b button, .arret-locked .a-articles button, .arret-locked .a-prets button { pointer-events: none; opacity: .5; }
 .a-prets .a-art-head span:first-child { color: var(--accent); }
 .a-art-head { display: flex; align-items: center; justify-content: space-between; font-size: .72rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
 

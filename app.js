@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.47';
+const APP_VERSION = '1.2.48';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.48', date: '2026-07-11',
+    ajouts: [
+      'Menus déroulants « maison » : tous les champs à choix (type de tarif, TVA, compte, période, civilité, etc.) s\'ouvrent désormais avec un menu intégré à l\'app — plus le sélecteur du téléphone. Il se ferme d\'une simple pression à côté (et non plus seulement en choisissant une valeur), et la valeur retenue s\'affiche en gris comme les autres champs. Navigation possible au clavier (flèches, Entrée, Échap).',
+    ],
+  },
   {
     version: '1.2.47', date: '2026-07-11',
     ajouts: [
@@ -2805,6 +2811,88 @@ document.addEventListener('focusout', (e) => {
   if (el.value === '') { el.value = el.dataset.memval; if (el.dataset.memtouched) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } } // rien (ou vidé) → restaure la mémoire, re-commit si nécessaire
   delete el.dataset.memval; delete el.dataset.memhint; delete el.dataset.memmode; delete el.dataset.memtouched;
 });
+
+// ===== Menu déroulant « maison » (Item 3) : le picker natif des <select> ne se ferme pas au clic-dehors sur mobile.
+// On GARDE le <select> natif (masqué, .gp-native) comme SOURCE DE VÉRITÉ : sa .value, ses handlers `change`/`.onchange`,
+// ses data-*, son état disabled restent intacts → zéro changement aux ~59 sites d'appel. Une façade cliquable est superposée ;
+// choisir une option écrit dans le natif + dispatch 'change' → toute la logique existante se déclenche. Valeur en gris (motif mémoire).
+let _gpSelOpen = null; // wrapper .gp-sel actuellement ouvert (un seul à la fois)
+function gpSelLabel(sel) { const o = sel.options[sel.selectedIndex]; return o ? (o.textContent || '').trim() : ''; }
+function gpSelSync(sel) { const w = sel._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpSelLabel(sel) || '—'; }
+function gpSelClose() { if (!_gpSelOpen) return; _gpSelOpen.classList.remove('open'); _gpSelOpen = null; }
+function gpSelBuildPop(w) {
+  const sel = w._gpSel, pop = w.querySelector('.gp-sel-pop'); pop.innerHTML = '';
+  Array.from(sel.options).forEach((o, i) => {
+    const d = document.createElement('div');
+    d.className = 'gp-sel-opt' + (i === sel.selectedIndex ? ' sel' : '') + (o.disabled ? ' disabled' : '');
+    d.textContent = (o.textContent || '').trim() || '—'; d.dataset.i = i; pop.appendChild(d);
+  });
+}
+function gpSelOpen(w) {
+  const sel = w._gpSel; if (!sel || sel.disabled) return;
+  if (_gpSelOpen && _gpSelOpen !== w) gpSelClose();
+  gpSelBuildPop(w); // reconstruit depuis les <option> courantes (parfois repeuplées après coup)
+  w.classList.add('open'); _gpSelOpen = w;
+  const cur = w.querySelector('.gp-sel-opt.sel');
+  if (cur) { cur.classList.add('hi'); try { cur.scrollIntoView({ block: 'nearest' }); } catch { } }
+}
+function gpSelPick(w, i) {
+  const sel = w._gpSel, o = sel.options[i]; if (!o || o.disabled) return;
+  if (sel.selectedIndex !== i) {
+    sel.selectedIndex = i; gpSelSync(sel);
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  gpSelClose();
+}
+function gpSelKey(w, e) {
+  const open = w.classList.contains('open');
+  if (e.key === 'Escape') { if (open) { e.preventDefault(); gpSelClose(); } return; }
+  if (e.key === 'Enter' || e.key === ' ') {
+    if (!open) { e.preventDefault(); gpSelOpen(w); return; }
+    const hi = w.querySelector('.gp-sel-opt.hi'); if (hi) { e.preventDefault(); gpSelPick(w, +hi.dataset.i); } return;
+  }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault(); if (!open) { gpSelOpen(w); return; }
+    const opts = Array.from(w.querySelectorAll('.gp-sel-opt')).filter((o) => !o.classList.contains('disabled'));
+    if (!opts.length) return;
+    let idx = opts.findIndex((o) => o.classList.contains('hi'));
+    idx = e.key === 'ArrowDown' ? Math.min(opts.length - 1, idx + 1) : Math.max(0, idx - 1); if (idx < 0) idx = 0;
+    opts.forEach((o) => o.classList.remove('hi')); opts[idx].classList.add('hi');
+    try { opts[idx].scrollIntoView({ block: 'nearest' }); } catch { }
+  }
+}
+function enhanceSelect(sel) {
+  if (!sel || sel.dataset.gpEnhanced || sel.multiple) return;
+  sel.dataset.gpEnhanced = '1'; sel.classList.add('gp-native');
+  const w = document.createElement('div'); w.className = 'gp-sel';
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'gp-sel-btn';
+  btn.setAttribute('aria-haspopup', 'listbox'); btn.setAttribute('aria-disabled', sel.disabled ? 'true' : 'false');
+  btn.innerHTML = '<span class="gp-sel-val"></span><span class="gp-sel-car">▾</span>';
+  const pop = document.createElement('div'); pop.className = 'gp-sel-pop';
+  w.appendChild(btn); w.appendChild(pop);
+  sel.parentNode.insertBefore(w, sel); w.appendChild(sel); // le natif vit (masqué) dans le wrapper
+  w._gpSel = sel; sel._gpWrap = w; gpSelSync(sel);
+  btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (sel.disabled) return; w.classList.contains('open') ? gpSelClose() : gpSelOpen(w); });
+  pop.addEventListener('click', (e) => { const o = e.target.closest('.gp-sel-opt'); if (o) { e.preventDefault(); e.stopPropagation(); gpSelPick(w, +o.dataset.i); } }); // preventDefault : évite le re-clic synthétique du <label> parent sur le bouton
+  btn.addEventListener('keydown', (e) => gpSelKey(w, e));
+  sel.addEventListener('change', () => gpSelSync(sel)); // resync si le code déclenche un change
+  // intercepte l'écriture programmatique `sel.value = …` (ne déclenche pas 'change') → maj du libellé
+  const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+  if (desc && desc.get && desc.set) Object.defineProperty(sel, 'value', { configurable: true, get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); gpSelSync(this); } });
+}
+function enhanceAllSelects(root) { (root || document).querySelectorAll('select:not([data-gp-enhanced])').forEach(enhanceSelect); }
+// Observe le DOM : enhance les nouveaux <select> (rendus/modales) et resync ceux dont les <option> sont repeuplées.
+function startSelectObserver() {
+  enhanceAllSelects(document);
+  new MutationObserver((recs) => {
+    for (const r of recs) {
+      const t = r.target;
+      if (t && t.nodeType === 1) { const en = t.tagName === 'SELECT' && t.dataset.gpEnhanced ? t : (t.closest ? t.closest('select[data-gp-enhanced]') : null); if (en) { gpSelSync(en); const w = en._gpWrap; if (w && w.classList.contains('open')) gpSelBuildPop(w); } }
+      for (const n of r.addedNodes) { if (n.nodeType !== 1) continue; if (n.tagName === 'SELECT') enhanceSelect(n); else if (n.querySelectorAll) n.querySelectorAll('select:not([data-gp-enhanced])').forEach(enhanceSelect); }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+}
 
 // ---------- Navigation ----------
 // Recalcule les hauteurs des barres collantes (bandeau + onglets) → offsets sticky des sous-onglets.
@@ -10049,7 +10137,9 @@ window.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', (e) => {
     const t = $('mainTabs'); if (t && t.classList.contains('open') && !t.contains(e.target)) t.classList.remove('open');
     document.querySelectorAll('.subtabs.open').forEach((n) => { if (!n.contains(e.target)) n.classList.remove('open'); });
+    if (_gpSelOpen && !_gpSelOpen.contains(e.target)) gpSelClose(); // menu <select> maison : fermeture au clic-dehors
   });
+  startSelectObserver(); // Item 3 : façade maison pour tous les <select> (enhance + resync)
   window.addEventListener('resize', updateStickyOffsets);
   updateStickyOffsets(); setTimeout(updateStickyOffsets, 300);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !_lockModal) closeModal(); }); // config initiale = non fermable par clic sur le fond
