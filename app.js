@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.54';
+const APP_VERSION = '1.2.55';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.55', date: '2026-07-12',
+    corrections: [
+      'Frais véhicule : ajouter un « élément lié » à un type recentre désormais l\'écran sur ce nouvel élément (là où il s\'insère sous son type), et non plus sur le dernier de la liste.',
+    ],
+  },
   {
     version: '1.2.54', date: '2026-07-12',
     corrections: [
@@ -2827,11 +2833,12 @@ function modalRouteCalc(prefill) {
 function openModal(html) { $('modalBox').innerHTML = html; $('modal').classList.remove('hidden'); }
 function closeModal() { $('modal').classList.add('hidden'); $('modalBox').innerHTML = ''; }
 // Après un ajout : recentre l'écran sur le nouvel élément (dernier de la liste, hors bouton) + flash bref → l'utilisateur voit ce qui vient d'être créé.
-function revealNew(containerId) {
+function revealNew(containerId, targetSel) {
   requestAnimationFrame(() => {
     const box = $(containerId); if (!box) return;
-    let el = box.lastElementChild;
-    while (el && el.matches && el.matches('button,.btn')) el = el.previousElementSibling; // ignore un bouton d'ajout en fin de liste
+    let el;
+    if (targetSel) el = box.querySelector(targetSel); // cible précise (ex. élément intercalé, pas le dernier de la liste)
+    else { el = box.lastElementChild; while (el && el.matches && el.matches('button,.btn')) el = el.previousElementSibling; } // sinon dernier élément (ignore un bouton d'ajout en fin de liste)
     if (!el) return;
     try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch { el.scrollIntoView(); }
     el.classList.add('flash-new'); setTimeout(() => el.classList.remove('flash-new'), 1500);
@@ -6937,7 +6944,7 @@ function renderFraisVehicule() {
     const typeHeads = S.frais.filter((x) => !x.parentId && x.id !== f.id); // têtes de type auxquelles se lier
     const inactif = f.statut === 'remplace'; // remplacé → grisé, hors base véhicule
     const jauge = esc(fraisJaugeText(f));
-    const el = document.createElement('div'); el.className = 'edit-row' + (inactif ? ' frais-off' : '') + (isChild ? ' frais-child' : ''); el.dataset.idx = i;
+    const el = document.createElement('div'); el.className = 'edit-row' + (inactif ? ' frais-off' : '') + (isChild ? ' frais-child' : ''); el.dataset.idx = i; el.dataset.fid = f.id;
     el.innerHTML = `<div class="er-top"><span class="drag-h">⠿</span><span class="li-sub" title="Identifiant du frais">#${f.id.slice(-4)}</span>
         <input class="grow er-title" data-k="poste" value="${esc(f.poste)}" placeholder="Poste (entretien, assurance…)"/>
         <button class="a-del" data-del title="Supprimer">✕</button></div>
@@ -6967,7 +6974,7 @@ function renderFraisVehicule() {
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
     { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; if (f.date) { const rel = (S.odoReleves || []).find((r) => r && r.date === f.date && typeof r.km === 'number'); if (rel) f.kmDebut = rel.km; else { const est = Math.round(estOdoAt(f.date)); if (est > 0) f.kmDebut = est; } } /* km repris d'un relevé de même date, sinon estimé (relevés + tournées) à cette date */ saveSettings(); renderFraisVehicule(); }); }
     { const pe = el.querySelector('[data-k="parentId"]'); if (pe) pe.addEventListener('change', (e) => { f.parentId = e.target.value || null; saveSettings(); renderFraisVehicule(); }); }
-    { const ae = el.querySelector('[data-add-elem]'); if (ae) ae.addEventListener('click', () => { S.frais.push({ id: uid(), poste: 'Nouvel élément', nature: 'exceptionnel', statut: 'actif', kmReport: 0, montantHT: 0, kmPrevus: f.kmPrevus || 0, kmDebut: Math.round(odometer()), date: todayStr(), parentId: f.id }); saveSettings(); renderFraisVehicule(); revealNew('fraisList'); }); }
+    { const ae = el.querySelector('[data-add-elem]'); if (ae) ae.addEventListener('click', () => { const nid = uid(); S.frais.push({ id: nid, poste: 'Nouvel élément', nature: 'exceptionnel', statut: 'actif', kmReport: 0, montantHT: 0, kmPrevus: f.kmPrevus || 0, kmDebut: Math.round(odometer()), date: todayStr(), parentId: f.id }); saveSettings(); renderFraisVehicule(); revealNew('fraisList', '[data-fid="' + nid + '"]'); }); } // cible l'élément lié (intercalé sous son parent), pas le dernier de la liste
     el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; saveSettings(); renderFraisVehicule(); });
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== f.id); (S.frais || []).forEach((x) => { if (x.parentId === f.id) x.parentId = null; }); saveSettings(); renderFraisVehicule(); });
     box.appendChild(el);
@@ -8000,7 +8007,6 @@ function modalPlancheCreate(type, prefill) {
   $('plCclient').addEventListener('input', (e) => { plCreate.client = e.target.value; });
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
   if (plCreate.allowTourPick) plRenderDateSuggest();
-  $('plCdate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } }); // ouvre l'agenda au clic (comme la date de tournée)
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
   if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; const w = $('plCcycleWrap'); if (w) w.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; }); // le champ « durée du cycle » suit le stade (parage/ferrage/déferrage)
@@ -8086,7 +8092,6 @@ function plRenderPot() {
     } }
     t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; if (plCreate.cellT) delete plCreate.cellT[k]; } }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
     t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; }); // pas de re-render (garde le focus)
-    t.querySelector('.pl-th-date').addEventListener('click', (ev) => { if (ev.target.showPicker) { try { ev.target.showPicker(); } catch { } } });
     t.querySelector('.pl-th-setdate').addEventListener('click', () => { ph.date = plCreate.date; const di = t.querySelector('.pl-th-date'); if (di) di.value = ph.date; });
     box.appendChild(t);
   });
@@ -10476,7 +10481,6 @@ window.addEventListener('DOMContentLoaded', () => {
   $('edMapBtn').addEventListener('click', showMapOnly);
   $('edReloc').addEventListener('click', forceRelocate);
   $('edDate').addEventListener('change', (e) => { currentTour.date = e.target.value; });
-  $('edDate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } });
   $('edCalc').addEventListener('click', calcTour);
   if ($('edRecover')) $('edRecover').addEventListener('click', () => { if (currentTour) modalRecoverStats(currentTour); });
   // (« Recalculer cette tournée » retiré en 1.1.99 : le recalcul complet — fallback calcTour quand la géométrie figée est périmée — est désormais AUTOMATIQUE dans « Corriger les prestations ».)
