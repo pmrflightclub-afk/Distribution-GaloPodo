@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.33';
+const APP_VERSION = '1.2.34';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.34', date: '2026-07-11',
+    ajouts: [
+      'Photos / planches facturées : Gestion → Articles → « Photos » — 3 tarifs (3, 4, 5 angles) avec TTC automatique et prix par photo. Un interrupteur calcule les tarifs 4 & 5 angles en pourcentage à partir du prix/photo de la référence (3 angles), sinon ils sont manuels.',
+      'Acte « Photo » dans un arrêt : cocher Photo ouvre une fenêtre pour choisir le tarif (nombre d\'angles) ET le(s) type(s) de planche — parage, ferrage, déferrage, radio (plusieurs possibles par cheval). Chaque type facturable ajoute son tarif à la facture (une ligne « Photos / planches » consolidée par client). La radio est suivie mais jamais facturée.',
+      'Statut des planches par TYPE : le badge 📷 (rouge/orange/vert) et le « Compte rendu photo » tiennent compte de chaque type. Faire une planche d\'un type la marque « faite » pour ce type précis.',
+      'Création de planche (Déclarer) : les dates proposées pour un cheval montrent la date ET le type ; cliquer l\'une remplit automatiquement la date et le type de la planche.',
+    ],
+  },
   {
     version: '1.2.33', date: '2026-07-11',
     ajouts: [
@@ -1525,8 +1534,11 @@ if (!S.proIdent || typeof S.proIdent !== 'object') S.proIdent = {};
 S.proIdent = Object.assign({ prenom: '', nom: '', societe: '', tel: '', email: '', tvaNum: '' }, S.proIdent);
 // Statut des adresses de chevaux (clé = adresse normalisée) : { [addrKey]: 'inactif' | 'noir' } (absent = actif). Partagé par tous les chevaux à cette adresse.
 if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {};
-// Chevaux en attente de planche photo (« Compte rendu photo » sur l'Accueil) : { id, clientId, chevalId, chevalNom, date, tourId }. Aucune image stockée.
+// Chevaux en attente de planche photo (« Compte rendu photo » sur l'Accueil) : { id, clientId, chevalId, chevalNom, date, tourId, type(stade) }. Aucune image stockée.
 if (!Array.isArray(S.plancheTodo)) S.plancheTodo = [];
+if (!Array.isArray(S.plancheDone)) S.plancheDone = [];
+// Tarifs « photos / planches » (supplément par cheval). 3 angles = référence ; 4 & 5 = manuels OU calculés en % (base/photo × (1−%) × nb photos).
+S.photoTarifs = Object.assign({ angle3HT: 10, angle4HT: 13, angle5HT: 16, pctMode: false, pct4: 0, pct5: 0 }, S.photoTarifs || {});
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
 if (!Array.isArray(S.mailKeywords) || !S.mailKeywords.length) S.mailKeywords = ['prise de contact'];
 if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, body, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
@@ -3485,7 +3497,7 @@ function reconcileTour(tour) {
         if (!h) return; // cheval supprimé → retiré
         const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
         let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '' }; arr.clients.push(ncl); }
-        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null, parageOffert: !!cv.parageOffert, visiteOffert: !!cv.visiteOffert, fourbureOffert: !!cv.fourbureOffert, npasOffert: !!cv.npasOffert, infectionOffert: !!cv.infectionOffert });
+        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null, parageOffert: !!cv.parageOffert, visiteOffert: !!cv.visiteOffert, fourbureOffert: !!cv.fourbureOffert, npasOffert: !!cv.npasOffert, infectionOffert: !!cv.infectionOffert, photo: cv.photo || null, difficile: !!cv.difficile, difficileHT: cv.difficileHT, difficileOffert: !!cv.difficileOffert, consultMin: cv.consultMin });
       });
     });
   });
@@ -3883,12 +3895,12 @@ function renderEditorArrets(locked) {
           const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(ph.nom)) : null;
           const isLourd = !!(fiche && fiche.lourd);
           const tag = cancelled ? ` <span class="badge badge-cancel">${cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé'}</span>` : '';
-          const photoOn = hasPlancheTodo(cl.clientId, ph.nom, currentTour.date);
+          const photoOn = !!(cv && cv.photo && (cv.photo.stades || []).length);
           const chips = [];
           if (cv && !cancelled) {
             if (cv.parage) chips.push('Parage');
             if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); }
-            if (photoOn) chips.push('📷 Photo');
+            if (photoOn) chips.push('📷 ' + esc((cv.photo.stades || []).join('/')) + ' · ' + (cv.photo.angle || 3) + ' angles');
             pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); });
             if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : ''));
             if (isLourd && acte) chips.push('⚖ Lourd (auto)');
@@ -3914,7 +3926,7 @@ function renderEditorArrets(locked) {
           const cv = cvOf(pool[pi]); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite));
           const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(pool[pi].nom)) : null;
           const chips = [];
-          if (cv && !cancelled) { if (cv.parage) chips.push('Parage'); if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); } if (hasPlancheTodo(cl.clientId, pool[pi].nom, currentTour.date)) chips.push('📷 Photo'); pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); }); if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : '')); if (fiche && fiche.lourd && acte) chips.push('⚖ Lourd (auto)'); }
+          if (cv && !cancelled) { if (cv.parage) chips.push('Parage'); if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); } if (cv.photo && (cv.photo.stades || []).length) chips.push('📷 ' + esc((cv.photo.stades || []).join('/')) + ' · ' + (cv.photo.angle || 3) + ' angles'); pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); }); if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : '')); if (fiche && fiche.lourd && acte) chips.push('⚖ Lourd (auto)'); }
           const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>'; }
         };
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
@@ -3927,10 +3939,9 @@ function renderEditorArrets(locked) {
           recomputeMoney(); refreshChips(+inp.dataset.pi); const sv = el.querySelector('.ac-suivi[data-cid="' + cl.clientId + '"]'); if (sv) sv.innerHTML = suiviRowsInner(cl); // pathologie → maj chips + case « 2ᵉ RDV » de l'en-tête, sans fermer le menu
         }));
         wrap.querySelectorAll('[data-photo]').forEach((inp) => inp.addEventListener('change', (e) => {
-          const ph = pool[+inp.dataset.pi];
-          if (e.target.checked) addPlancheTodo({ clientId: cl.clientId, chevalNom: ph.nom, date: currentTour.date, tourId: currentTour.id });
-          else removePlancheTodo(cl.clientId, ph.nom, currentTour.date);
-          refreshChips(+inp.dataset.pi); const pb = el.querySelector('[data-cplanche][data-cid="' + cl.clientId + '"]'); if (pb) pb.className = 'btn small' + plancheBtnClass(plancheStateForClient(currentTour, cl.clientId)); if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHome(); // maj couleur bouton Planche
+          const ph = pool[+inp.dataset.pi], cv = ensureCv(ph);
+          if (e.target.checked) modalPhotoPick(cv, () => { syncPhotoTodos(cl.clientId, cv, currentTour.date, currentTour.id); persistCurrentTour(); recomputeMoney(); renderEditorArrets(locked); }); // choix tarif + types → cv.photo + « à faire » par type + facture
+          else { delete cv.photo; removePlancheTodoAll(cl.clientId, ph.nom, currentTour.date); persistCurrentTour(); recomputeMoney(); renderEditorArrets(locked); }
         }));
         wrap.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => {
           const pi = +inp.dataset.pi, ph = pool[pi], cv = ensureCv(ph);
@@ -4099,6 +4110,21 @@ function chevalFait(c) { return !chevalCancelled(c) && !!(c && (c.parage || c.fo
 function chevalCredited(c) { return !!(c && c.cancel && c.cancel.credited); }
 // « Facturé » = pris en charge OU payé-puis-annulé (facture figée). Sert au recalcul argent : un cheval crédité ne doit JAMAIS sortir de la facture (sinon double réduction avec la NC).
 function chevalBilled(c) { return chevalFait(c) || chevalCredited(c); }
+// ===== Photos / planches : tarifs par nombre d'angles + stades facturables =====
+const PHOTO_NB = { 3: 12, 4: 16, 5: 20 }; // nb de photos par modèle d'angles
+// Tarif HT d'un modèle d'angles : 3 = référence (manuel) ; 4 & 5 = manuels OU calculés en % : base/photo (=HT3÷12) × (1−%) × nb photos du modèle.
+function photoTariffHT(angle) {
+  const P = S.photoTarifs || {}; angle = +angle || 3;
+  const base = (P.angle3HT || 0) / PHOTO_NB[3];
+  if (angle === 4) return P.pctMode ? base * (1 - (P.pct4 || 0) / 100) * PHOTO_NB[4] : (P.angle4HT || 0);
+  if (angle === 5) return P.pctMode ? base * (1 - (P.pct5 || 0) / 100) * PHOTO_NB[5] : (P.angle5HT || 0);
+  return P.angle3HT || 0;
+}
+// Un stade de planche est FACTURABLE sauf « radio » (le vétérinaire fait/fournit les radios ; on n'assure que le suivi de la planche).
+const plancheStadeBillable = (stade) => !/radio/.test(norm(stade || ''));
+const photoHasBillableStades = (photo) => !!(photo && (photo.stades || []).some(plancheStadeBillable));
+// Montant HT « photos » d'un cheval de tournée : 1× le tarif du modèle d'angles PAR stade FACTURABLE sélectionné (radio exclue).
+function chevalPhotoHT(cv) { if (!cv || !cv.photo) return 0; const n = ((cv.photo.stades || []).filter(plancheStadeBillable)).length; return n ? photoTariffHT(cv.photo.angle) * n : 0; }
 // Client entièrement annulé à un arrêt = avait des chevaux, aucun facturé (→ pas de déplacement facturé, mais compte toujours dans la géométrie figée).
 function clientAllCancelled(cl) { const ch = (cl && cl.chevaux) || []; return ch.length > 0 && !ch.some(chevalBilled); }
 function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
@@ -4169,8 +4195,17 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
             m.htArt += off ? 0 : prix; m.tvaArt += off ? 0 : prix * rr;
           });
         }
+        // Photos / planches : 1× le tarif du modèle d'angles PAR stade facturable (radio exclue), indépendant du parage. Accumulé → 1 ligne consolidée par client.
+        if (photoHasBillableStades(c.photo)) { const add = chevalPhotoHT(c); if (add > 0) { const st = (c.photo.stades || []).filter(plancheStadeBillable); m._photoHT = (m._photoHT || 0) + add; m._photoCount = (m._photoCount || 0) + st.length; (m._photoDet = m._photoDet || []).push(c.nom + ' (' + st.join(', ') + ')'); } }
       });
     });
+  });
+  // Photos / planches : une ligne consolidée par client (somme de toutes ses planches facturables ; radio exclue).
+  Object.values(cmap).forEach((m) => {
+    if (!(m._photoHT > 0)) return;
+    const rr = stdRate, ht = m._photoHT;
+    m.articles.push({ libelle: 'Photos / planches — ' + (m._photoDet || []).join(' · '), chevaux: [], qte: 1, prixHT: ht, tvaPct: effPct(S.tvaRate), ht, tva: ht * rr, ttc: ht * (1 + rr), photo: true, photoCount: m._photoCount, offert: false, remiseOff: true, remiseProduit: false, remiseLiquide: false });
+    m.htArt += ht; m.tvaArt += ht * rr;
   });
   // Chevaux annulés par client (pour retirer aussi leurs articles manuels — produit non livré).
   const cancelByClient = {};
@@ -4232,7 +4267,7 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => { const cli = clients.find((x) => x.id === cl.clientId); return { clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter(chevalBilled).map((c) => { const fiche = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null; return { nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile, difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined }; }) }; }),
+    clients: (a.clients || []).map((cl) => { const cli = clients.find((x) => x.id === cl.clientId); return { clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter((c) => chevalBilled(c) || (!chevalCancelled(c) && photoHasBillableStades(c.photo))).map((c) => { const fiche = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null; return { nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile, difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined, photo: c.photo || null }; }) }; }),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
@@ -6463,6 +6498,41 @@ function renderArticlesPage() {
   refreshTarifTable();
   updateReadouts();
   renderArticlesCat();
+  renderPhotoTarifs();
+}
+// Gestion → Articles → Photos : 3 tarifs (3/4/5 angles) avec TTC auto + prix/photo. Interrupteur : 4 & 5 en % (base/photo réf. × (1−%) × nb photos).
+function renderPhotoTarifs() {
+  const box = $('photoTarifsBody'); if (!box) return;
+  const P = S.photoTarifs;
+  const perPhoto = (ht, a) => PHOTO_NB[a] ? ht / PHOTO_NB[a] : 0;
+  const row = (a) => {
+    const editable = a === 3 || !P.pctMode;
+    return `<div class="card" style="margin:8px 0">
+      <div class="a-art-head"><span><b>${a} angles</b> · ${PHOTO_NB[a]} photos${a === 3 ? ' · <i>référence</i>' : ''}</span></div>
+      <div class="er-grid er-grid-3">
+        <label>HT<input type="number" step="0.01" min="0" data-pht="${a}"${editable ? '' : ' readonly'}/></label>
+        <label>TTC<input data-pttc="${a}" readonly/></label>
+        <label>€/photo<input data-pphoto="${a}" readonly/></label>
+      </div>
+      ${(a !== 3 && P.pctMode) ? `<label>Réduction vs 3 angles (%)<input type="number" step="1" min="0" max="100" data-ppct="${a}" value="${(a === 4 ? P.pct4 : P.pct5) || ''}"/></label>` : ''}
+    </div>`;
+  };
+  box.innerHTML = `${row(3)}
+    <label class="chk2"><input type="checkbox" id="photoPctMode" ${P.pctMode ? 'checked' : ''}/> Calculer les tarifs 4 &amp; 5 angles en pourcentage (à partir du prix/photo de la référence 3 angles)</label>
+    ${row(4)}
+    ${row(5)}`;
+  const paint = () => {
+    [3, 4, 5].forEach((a) => {
+      const ht = photoTariffHT(a);
+      const hi = box.querySelector(`[data-pht="${a}"]`); if (hi) { const editable = a === 3 || !P.pctMode; if (editable) { if (document.activeElement !== hi) hi.value = ht ? fmtNum(ht, 2) : ''; } else hi.value = fmtNum(ht, 2); }
+      const t = box.querySelector(`[data-pttc="${a}"]`); if (t) t.value = fmtNum(ttc(ht), 2) + ' € TTC';
+      const pp = box.querySelector(`[data-pphoto="${a}"]`); if (pp) pp.value = fmtNum(perPhoto(ht, a), 2) + ' €';
+    });
+  };
+  box.querySelector('#photoPctMode').addEventListener('change', (e) => { P.pctMode = e.target.checked; if (!P.pctMode) { P.angle4HT = 0; P.angle5HT = 0; } saveSettings(); renderPhotoTarifs(); });
+  box.querySelectorAll('[data-pht]').forEach((inp) => inp.addEventListener('input', (e) => { const a = +inp.dataset.pht, v = parseNum(e.target.value); if (a === 3) P.angle3HT = v; else if (a === 4) P.angle4HT = v; else P.angle5HT = v; saveSettings(); paint(); }));
+  box.querySelectorAll('[data-ppct]').forEach((inp) => inp.addEventListener('input', (e) => { const a = +inp.dataset.ppct, v = Math.max(0, Math.min(100, parseNum(e.target.value))); if (a === 4) P.pct4 = v; else P.pct5 = v; saveSettings(); paint(); }));
+  paint();
 }
 const fraisGroupes = () => [...new Set((S.frais || []).map((f) => f.groupe).filter(Boolean))];
 // Assistant de migration tout-en-un : régler km/date de référence, organiser les frais en Types (lier les éléments), et amorcer le journal des frais réels — en une passe.
@@ -7355,11 +7425,11 @@ function startPlancheQueue(items) {
 // Suggestions de dates (flux Déclarer) : dates de tournée du cheval choisi dont la planche n'est PAS encore faite.
 function plRenderDateSuggest() {
   const box = $('plCdateSuggest'); if (!box) return;
-  const nn = norm(plCreate && plCreate.cheval); const seen = new Set(), sug = [];
-  if (nn) allTours().forEach((t) => { if (!t.date) return; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (norm(cv.nom) === nn && !chevalCancelled(cv) && hasPlancheTodo(cl.clientId, cv.nom, t.date) && !hasPlancheDone(cl.clientId, cv.nom, t.date) && !seen.has(t.date)) { seen.add(t.date); sug.push(t.date); } }))); });
-  sug.sort((a, b) => (b || '').localeCompare(a || ''));
-  box.innerHTML = sug.length ? '<p class="hint" style="margin:6px 0 2px">📅 Dates de tournée (planche à faire) :</p>' + sug.map((d) => `<button type="button" class="btn small" data-sugdate="${d}" style="margin:2px">${esc(fmtDateFr(d))}</button>`).join('') : (nn ? '<p class="hint" style="margin:6px 0 2px;opacity:.7">Aucune tournée avec planche à faire pour ce cheval.</p>' : '');
-  box.querySelectorAll('[data-sugdate]').forEach((b) => b.addEventListener('click', () => { plCreate.date = b.dataset.sugdate; const di = $('plCdate'); if (di) di.value = plCreate.date; plRenderDateSuggest(); }));
+  const nn = norm(plCreate && plCreate.cheval); const sug = [], seen = new Set();
+  if (nn) (S.plancheTodo || []).forEach((y) => { if (norm(y.chevalNom) !== nn) return; if (hasPlancheDone(y.clientId, y.chevalNom, y.date, y.type)) return; const k = (y.date || '') + '|' + norm(y.type); if (seen.has(k)) return; seen.add(k); sug.push({ date: y.date || '', type: y.type || '' }); });
+  sug.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (a.type || '').localeCompare(b.type || ''));
+  box.innerHTML = sug.length ? '<p class="hint" style="margin:6px 0 2px">📅 Planches à faire (date · type) :</p>' + sug.map((s) => `<button type="button" class="btn small" data-sugd="${esc(s.date)}" data-sugt="${esc(s.type)}" style="margin:2px">${esc(fmtDateFr(s.date))}${s.type ? ' · ' + esc(s.type) : ''}</button>`).join('') : (nn ? '<p class="hint" style="margin:6px 0 2px;opacity:.7">Aucune planche à faire pour ce cheval.</p>' : '');
+  box.querySelectorAll('[data-sugd]').forEach((b) => b.addEventListener('click', () => { plCreate.date = b.dataset.sugd; plCreate.stade = b.dataset.sugt || ''; const di = $('plCdate'); if (di) di.value = plCreate.date; const si = $('plCstade'); if (si) si.value = plCreate.stade; const cw = $('plCcycleWrap'); if (cw) cw.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; plRenderDateSuggest(); }));
 }
 function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
@@ -7681,10 +7751,10 @@ function planchePrint() {
 // On NE retire PLUS le « à faire » (il porte l'état « acte photo attendu ») ; renderComptePhoto filtre les faites.
 function plancheTodoDone(st) {
   if (!st) return;
-  let clientId = st.clientId || null, chevalNom = st.cheval || '', date = st.date || '';
-  if (st.todoId) { const td = (S.plancheTodo || []).find((y) => y.id === st.todoId); if (td) { clientId = clientId || td.clientId; chevalNom = td.chevalNom || chevalNom; date = td.date || date; } }
+  let clientId = st.clientId || null, chevalNom = st.cheval || '', date = st.date || '', type = st.stade || '';
+  if (st.todoId) { const td = (S.plancheTodo || []).find((y) => y.id === st.todoId); if (td) { clientId = clientId || td.clientId; chevalNom = td.chevalNom || chevalNom; date = td.date || date; if (!type) type = td.type || ''; } }
   if (!clientId && st.client) { const c = clients.find((x) => norm(fullName(x)) === norm(st.client)); if (c) clientId = c.id; }
-  if (clientId && chevalNom && date) addPlancheDone(clientId, chevalNom, date);
+  if (clientId && chevalNom && date) addPlancheDone(clientId, chevalNom, date, type); // « fait » rattaché au STADE (type) de la planche générée
   saveSettings(); renderComptePhoto();
 }
 
@@ -8129,28 +8199,60 @@ function modalAssignRdvCheval(client, cheval, reportedItems) {
     closeModal(); renderHome();
   });
 }
-// ===== Compte rendu photo (planches à faire) =====
+// ===== Compte rendu photo (planches à faire) — clé PAR TYPE (stade) : client|cheval|date|type. Legacy (sans type) = un seul bucket ''. =====
+const plancheTodoKey = (clientId, chevalNom, date, type) => clientId + '|' + norm(chevalNom || '') + '|' + (date || '') + '|' + norm(type || '');
 function addPlancheTodo(x) {
   if (!Array.isArray(S.plancheTodo)) S.plancheTodo = [];
-  const key = (y) => y.clientId + '|' + norm(y.chevalNom || '') + '|' + (y.date || '');
-  if (S.plancheTodo.some((y) => key(y) === key(x))) return false;
+  const k = plancheTodoKey(x.clientId, x.chevalNom, x.date, x.type);
+  if (S.plancheTodo.some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === k)) return false;
   S.plancheTodo.push(Object.assign({ id: uid() }, x)); saveSettings(); return true;
 }
-const plancheTodoKey = (clientId, chevalNom, date) => clientId + '|' + norm(chevalNom || '') + '|' + (date || '');
-const hasPlancheTodo = (clientId, chevalNom, date) => (S.plancheTodo || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) === plancheTodoKey(clientId, chevalNom, date));
-function removePlancheTodo(clientId, chevalNom, date) { const k = plancheTodoKey(clientId, chevalNom, date); S.plancheTodo = (S.plancheTodo || []).filter((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) !== k); saveSettings(); }
-// Planches FAITES (planche enregistrée/envoyée) — distinctes des « à faire ». Clé identique (client|cheval|date).
-function addPlancheDone(clientId, chevalNom, date) { if (!Array.isArray(S.plancheDone)) S.plancheDone = []; const k = plancheTodoKey(clientId, chevalNom, date); if (!S.plancheDone.some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) === k)) { S.plancheDone.push({ clientId, chevalNom: chevalNom || '', date: date || '' }); saveSettings(); } }
-const hasPlancheDone = (clientId, chevalNom, date) => (S.plancheDone || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) === plancheTodoKey(clientId, chevalNom, date));
-// État planche d'un CLIENT à une date, selon les chevaux ayant l'acte « Photo » : 'none' | 'red' (aucune faite) | 'orange' (partiel) | 'green' (toutes faites).
+const hasPlancheTodo = (clientId, chevalNom, date, type) => (S.plancheTodo || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === plancheTodoKey(clientId, chevalNom, date, type));
+function removePlancheTodo(clientId, chevalNom, date, type) { const k = plancheTodoKey(clientId, chevalNom, date, type); S.plancheTodo = (S.plancheTodo || []).filter((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) !== k); saveSettings(); }
+// Retire TOUS les stades d'un cheval/date (décocher « Photo »).
+function removePlancheTodoAll(clientId, chevalNom, date) { const cn = norm(chevalNom || ''); S.plancheTodo = (S.plancheTodo || []).filter((y) => !(y.clientId === clientId && norm(y.chevalNom || '') === cn && (y.date || '') === (date || ''))); saveSettings(); }
+// Planches FAITES (planche enregistrée/envoyée) — distinctes des « à faire ». Clé identique (client|cheval|date|type).
+function addPlancheDone(clientId, chevalNom, date, type) { if (!Array.isArray(S.plancheDone)) S.plancheDone = []; const k = plancheTodoKey(clientId, chevalNom, date, type); if (!S.plancheDone.some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === k)) { S.plancheDone.push({ clientId, chevalNom: chevalNom || '', date: date || '', type: type || '' }); saveSettings(); } }
+const hasPlancheDone = (clientId, chevalNom, date, type) => (S.plancheDone || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === plancheTodoKey(clientId, chevalNom, date, type));
+// Synchronise les « à faire » (un par stade) avec cv.photo.stades pour un cheval de tournée.
+function syncPhotoTodos(clientId, cv, date, tourId) {
+  removePlancheTodoAll(clientId, cv.nom, date);
+  (((cv.photo && cv.photo.stades) || [])).forEach((sd) => addPlancheTodo({ clientId, chevalId: cv.id, chevalNom: cv.nom, date, tourId, type: sd, angle: (cv.photo || {}).angle }));
+}
+// État planche d'un CLIENT à une date, par (cheval × stade) : 'none' | 'red' (aucune faite) | 'orange' (partiel) | 'green' (toutes faites).
 function plancheStateForClient(t, clientId) {
-  const date = t.date, chevaux = [];
-  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv) && hasPlancheTodo(clientId, cv.nom, date)) chevaux.push(cv.nom); }); }));
-  if (!chevaux.length) return 'none';
-  const done = chevaux.filter((nom) => hasPlancheDone(clientId, nom, date)).length;
-  return done === 0 ? 'red' : done < chevaux.length ? 'orange' : 'green';
+  const date = t.date; let total = 0, done = 0;
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; (cl.chevaux || []).forEach((cv) => {
+    if (chevalCancelled(cv)) return;
+    const stades = (cv.photo && cv.photo.stades) || [];
+    stades.forEach((sd) => { total++; if (hasPlancheDone(clientId, cv.nom, date, sd)) done++; });
+    if (!stades.length && hasPlancheTodo(clientId, cv.nom, date)) { total++; if (hasPlancheDone(clientId, cv.nom, date)) done++; } // legacy sans stade
+  }); }));
+  if (!total) return 'none';
+  return done === 0 ? 'red' : done < total ? 'orange' : 'green';
 }
 const plancheBtnClass = (st) => st === 'red' ? ' pl-red' : st === 'orange' ? ' pl-orange' : st === 'green' ? ' pl-green' : '';
+// Acte « Photo » d'un cheval : choix du tarif (angles 3/4/5) + type(s) de planche (stades, multi). Enregistre cv.photo = { angle, stades:[] } ; radio suivie mais non facturée.
+function modalPhotoPick(cv, onDone) {
+  const cur = cv.photo || {}; let angle = cur.angle || 3; const sel = new Set(cur.stades || []);
+  const stades = S.planche.stades || [];
+  openModal(`<div class="modal-head"><b>📷 Photos — ${esc(cv.nom)}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Choisissez le <b>tarif</b> (nombre d'angles) et le(s) <b>type(s) de planche</b>. Plusieurs types possibles pour un même cheval. La <b>radio</b> est suivie mais <b>non facturée</b>.</p>
+    <label>Tarif (angles)</label>
+    <div class="seg" id="phAngles" style="flex-wrap:wrap"></div>
+    <p class="hint" id="phTarif" style="margin:6px 0"></p>
+    <label>Type(s) de planche</label>
+    <div id="phStades"></div>
+    <div class="actions two"><button class="btn" id="phCancel">Annuler</button><button class="btn primary" id="phOk">Enregistrer</button></div>`);
+  const seg = $('phAngles'), tarifEl = $('phTarif'), box = $('phStades');
+  const paintTarif = () => { const n = [...sel].filter(plancheStadeBillable).length; tarifEl.innerHTML = n ? `${n} planche(s) facturable(s) × ${eur(ttc(photoTariffHT(angle)))} = <b>${eur(ttc(photoTariffHT(angle) * n))} TTC</b>` : '<i>Aucune planche facturable (radio seule ou aucun type).</i>'; };
+  const paintAngles = () => { seg.innerHTML = [3, 4, 5].map((a) => `<button type="button" class="seg-btn${a === angle ? ' on' : ''}" data-pa="${a}">${a} angles · ${eur(ttc(photoTariffHT(a)))}</button>`).join(''); seg.querySelectorAll('[data-pa]').forEach((b) => b.addEventListener('click', () => { angle = +b.dataset.pa; paintAngles(); paintTarif(); })); };
+  paintAngles();
+  stades.forEach((sd) => { const row = document.createElement('label'); row.className = 'chk2'; row.innerHTML = `<input type="checkbox" ${sel.has(sd) ? 'checked' : ''}/> ${esc(sd)}${plancheStadeBillable(sd) ? '' : ' <span class="li-sub">— non facturée</span>'}`; row.querySelector('input').addEventListener('change', (e) => { if (e.target.checked) sel.add(sd); else sel.delete(sd); paintTarif(); }); box.appendChild(row); });
+  paintTarif();
+  const finish = (save) => { closeModal(); if (save) { if (sel.size) cv.photo = { angle, stades: stades.filter((sd) => sel.has(sd)) }; else delete cv.photo; } if (onDone) onDone(); };
+  $('mX').onclick = () => finish(false); $('phCancel').onclick = () => finish(false); $('phOk').onclick = () => finish(true);
+}
 // Depuis un arrêt (tournée ouverte OU clôturée) : créer une planche préremplie pour un cheval, ou l'ajouter au « Compte rendu photo ».
 function modalArretPlanche(t, a, onlyClientId) {
   const rows = [];
@@ -8163,8 +8265,11 @@ function modalArretPlanche(t, a, onlyClientId) {
   $('mX').onclick = closeModal; $('apClose').onclick = closeModal;
   const box = $('apList');
   rows.forEach(({ cl, cv }) => {
-    const cvSt = hasPlancheDone(cl.clientId, cv.nom, t.date) ? 'green' : hasPlancheTodo(cl.clientId, cv.nom, t.date) ? 'red' : 'none'; // vert = faite ; rouge = photo à faire
-    const stLbl = cvSt === 'green' ? ' <span class="td-eta">✅ planche faite</span>' : cvSt === 'red' ? ' <span class="td-eta td-past">📷 à faire</span>' : '';
+    const stades = (cv.photo && cv.photo.stades) || [];
+    let cvSt = 'none';
+    if (stades.length) { const dn = stades.filter((sd) => hasPlancheDone(cl.clientId, cv.nom, t.date, sd)).length; cvSt = dn === 0 ? 'red' : dn < stades.length ? 'orange' : 'green'; }
+    else if (hasPlancheTodo(cl.clientId, cv.nom, t.date)) cvSt = hasPlancheDone(cl.clientId, cv.nom, t.date) ? 'green' : 'red'; // legacy sans stade
+    const stLbl = cvSt === 'green' ? ' <span class="td-eta">✅ toutes faites</span>' : cvSt === 'orange' ? ' <span class="td-eta td-past">📷 en partie</span>' : cvSt === 'red' ? ' <span class="td-eta td-past">📷 à faire</span>' : '';
     const el = document.createElement('div'); el.className = 'list-item stack-act';
     el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cv.nom)}</b>${stLbl}<span class="li-sub">${esc(clientName(cl.clientId))}</span></div><div class="li-act li-act-col"><button class="btn small${plancheBtnClass(cvSt) || ' primary'}" data-make>🖼 Créer la planche</button><button class="btn small" data-todo>➕ Compte rendu photo</button></div>`;
     el.querySelector('[data-make]').addEventListener('click', () => { closeModal(); modalPlancheCreate('contact', { cheval: cv.nom, client: clientName(cl.clientId), clientId: cl.clientId, date: t.date }); });
@@ -8176,13 +8281,13 @@ function modalArretPlanche(t, a, onlyClientId) {
 // Section Accueil « Compte rendu photo » : chevaux dont une planche est à faire → créer la planche préremplie (disparaît quand la planche est générée).
 function renderComptePhoto() {
   const card = $('homeComptePhoto'), list = $('homeComptePhotoList'); if (!card || !list) return;
-  const items = (S.plancheTodo || []).filter((x) => !hasPlancheDone(x.clientId, x.chevalNom, x.date)); // les planches FAITES sortent de la liste
+  const items = (S.plancheTodo || []).filter((x) => !hasPlancheDone(x.clientId, x.chevalNom, x.date, x.type)); // les planches FAITES (par type) sortent de la liste
   card.classList.toggle('hidden', !items.length);
   list.innerHTML = '';
   items.forEach((x) => {
     const el = document.createElement('div'); el.className = 'list-item stack-act';
-    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(x.chevalNom)}</b><span class="li-sub">${esc(clientName(x.clientId))} · RDV du ${esc(fmtDateFr(x.date))}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-make>🖼 Créer la planche</button><button class="btn small" data-rm>Retirer</button></div>`;
-    el.querySelector('[data-make]').addEventListener('click', () => modalPlancheCreate('contact', { cheval: x.chevalNom, client: clientName(x.clientId), date: x.date, todoId: x.id }));
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(x.chevalNom)}</b>${x.type ? ' <span class="td-eta td-past">' + esc(x.type) + '</span>' : ''}<span class="li-sub">${esc(clientName(x.clientId))} · RDV du ${esc(fmtDateFr(x.date))}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-make>🖼 Créer la planche</button><button class="btn small" data-rm>Retirer</button></div>`;
+    el.querySelector('[data-make]').addEventListener('click', () => modalPlancheCreate('contact', { cheval: x.chevalNom, client: clientName(x.clientId), clientId: x.clientId, date: x.date, stade: x.type || '', todoId: x.id }));
     el.querySelector('[data-rm]').addEventListener('click', () => { if (!confirm('Retirer ce cheval du compte rendu photo ?')) return; S.plancheTodo = (S.plancheTodo || []).filter((y) => y.id !== x.id); saveSettings(); renderComptePhoto(); });
     list.appendChild(el);
   });
