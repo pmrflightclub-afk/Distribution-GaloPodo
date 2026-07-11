@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.21';
+const APP_VERSION = '1.2.22';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.22', date: '2026-07-11',
+    corrections: [
+      'Correctif important : l\'heure de RDV saisie par client dans l\'éditeur de tournée est désormais réellement enregistrée. Avant, dans certains cas, elle n\'était pas écrite dans la tournée et disparaissait au rechargement (et n\'était donc pas synchronisée sur les autres appareils). Idem pour le changement de départ / d\'arrivée.',
+      'Liste des tournées (Accueil + Tournées) : le montant TTC affiché tient compte de l\'arrondi de l\'encaissement liquide (montant réellement payé), comme le pied de facture — plus de décimale parasite quand les clients paient en liquide arrondi. Se met à jour à la fermeture de la tournée.',
+    ],
+  },
   {
     version: '1.2.21', date: '2026-07-11',
     corrections: [
@@ -3070,10 +3077,10 @@ function modalTourHome() {
   const setHome = async (addr) => {
     currentTour.home = toAddr(addr);
     if (!currentTour.home.lat && addrStr(currentTour.home).trim()) { try { const g = await geocode(currentTour.home); currentTour.home.lat = g.lat; currentTour.home.lon = g.lon; } catch { /* localisation différée */ } }
-    saveTournees(); closeModal(); openEditor(); scheduleGeoRecalc();
+    persistCurrentTour(); closeModal(); openEditor(); scheduleGeoRecalc();
   };
   $('thNew').addEventListener('click', () => modalAdresse(null, (na) => setHome(na.addr)));
-  $('thHome').addEventListener('click', () => { currentTour.home = null; saveTournees(); closeModal(); openEditor(); scheduleGeoRecalc(); });
+  $('thHome').addEventListener('click', () => { currentTour.home = null; persistCurrentTour(); closeModal(); openEditor(); scheduleGeoRecalc(); });
   const box = $('thList');
   S.adresses.forEach((a) => { const b = document.createElement('button'); b.className = 'btn block'; b.style.textAlign = 'left'; b.style.marginBottom = '6px'; b.innerHTML = `<b>${esc(a.nom)}</b> <span class="li-sub">${esc(addrStr(a.addr))}</span>`; b.addEventListener('click', () => setHome(a.addr)); box.appendChild(b); });
 }
@@ -3090,10 +3097,10 @@ function modalTourArrivee() {
   const setArr = async (addr) => {
     currentTour.arrivee = toAddr(addr);
     if (!currentTour.arrivee.lat && addrStr(currentTour.arrivee).trim()) { try { const g = await geocode(currentTour.arrivee); currentTour.arrivee.lat = g.lat; currentTour.arrivee.lon = g.lon; } catch { /* localisation différée */ } }
-    saveTournees(); closeModal(); openEditor(); scheduleGeoRecalc();
+    persistCurrentTour(); closeModal(); openEditor(); scheduleGeoRecalc();
   };
   $('taNew').addEventListener('click', () => modalAdresse(null, (na) => setArr(na.addr)));
-  $('taHome').addEventListener('click', () => { currentTour.arrivee = null; saveTournees(); closeModal(); openEditor(); scheduleGeoRecalc(); });
+  $('taHome').addEventListener('click', () => { currentTour.arrivee = null; persistCurrentTour(); closeModal(); openEditor(); scheduleGeoRecalc(); });
   const box = $('taList');
   S.adresses.forEach((a) => { const b = document.createElement('button'); b.className = 'btn block'; b.style.textAlign = 'left'; b.style.marginBottom = '6px'; b.innerHTML = `<b>${esc(a.nom)}</b> <span class="li-sub">${esc(addrStr(a.addr))}</span>`; b.addEventListener('click', () => setArr(a.addr)); box.appendChild(b); });
 }
@@ -3109,6 +3116,13 @@ function tourEta(date, st) {
   if (st === 'cloturee') { const a = Math.abs(n); return { text: a < 1 ? "aujourd'hui" : 'il y a ' + (a < 7 ? a + ' j' : Math.round(a / 7) + ' sem'), cls: 'td-eta td-past' }; }
   return null;
 }
+// Total TTC réellement facturé/payé d'une tournée = Σ par client (total + arrondi de caisse liquide). Identique au pied de facture.
+// Liquide arrondi → montant rond ; virement/facture → montant exact (décimale acceptée). Utilisé par la liste des tournées.
+function tourDisplayTTC(t) {
+  const R = t && t.result; if (!R) return 0;
+  if (!R.parClient) return R.totalTTC || 0;
+  return R.parClient.reduce((s, m) => s + (m.totalTTC || 0) + payArrondi(m, (t.payments || {})[m.clientId]), 0);
+}
 function tourListItem(t, showBadge) {
   const st = statusOf(t);
   const el = document.createElement('div'); el.className = 'list-item clickable';
@@ -3116,7 +3130,7 @@ function tourListItem(t, showBadge) {
   const clientsLine = (t.arrets || []).map((a) => labelFor(a)).filter(Boolean).join(' · '); // noms de clients par arrêt
   const badge = (showBadge && st !== 'avenir') ? ' · ' + STATUS_LBL[st] : ''; // « À venir » retiré (redondant avec la section À venir)
   const eta = tourEta(t.date, st); const etaHtml = eta ? ` <span class="${eta.cls}">${esc(eta.text)}</span>` : '';
-  el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(t.result.totalTTC) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
+  el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
@@ -3678,7 +3692,7 @@ function renderEditorArrets(locked) {
         actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
-          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; saveTournees(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); }
+          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); } // persistCurrentTour (pas saveTournees) : currentTour est une COPIE → il faut la réécrire dans le tableau, sinon l'heure est perdue
           actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), null, cl.clientId));
           actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
