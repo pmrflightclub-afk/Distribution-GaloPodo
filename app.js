@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.29';
+const APP_VERSION = '1.2.30';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.30', date: '2026-07-11',
+    corrections: [
+      'Planche via « Déclarer » : les dates proposées pour un cheval ne reprennent plus que les tournées où l\'acte « Photo » a été coché (et dont la planche n\'est pas encore faite).',
+    ],
+  },
   {
     version: '1.2.29', date: '2026-07-11',
     ajouts: [
@@ -7284,7 +7290,7 @@ function startPlancheQueue(items) {
 function plRenderDateSuggest() {
   const box = $('plCdateSuggest'); if (!box) return;
   const nn = norm(plCreate && plCreate.cheval); const seen = new Set(), sug = [];
-  if (nn) allTours().forEach((t) => { if (!t.date) return; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (norm(cv.nom) === nn && !chevalCancelled(cv) && !hasPlancheDone(cl.clientId, cv.nom, t.date) && !seen.has(t.date)) { seen.add(t.date); sug.push(t.date); } }))); });
+  if (nn) allTours().forEach((t) => { if (!t.date) return; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (norm(cv.nom) === nn && !chevalCancelled(cv) && hasPlancheTodo(cl.clientId, cv.nom, t.date) && !hasPlancheDone(cl.clientId, cv.nom, t.date) && !seen.has(t.date)) { seen.add(t.date); sug.push(t.date); } }))); });
   sug.sort((a, b) => (b || '').localeCompare(a || ''));
   box.innerHTML = sug.length ? '<p class="hint" style="margin:6px 0 2px">📅 Dates de tournée (planche à faire) :</p>' + sug.map((d) => `<button type="button" class="btn small" data-sugdate="${d}" style="margin:2px">${esc(fmtDateFr(d))}</button>`).join('') : (nn ? '<p class="hint" style="margin:6px 0 2px;opacity:.7">Aucune tournée avec planche à faire pour ce cheval.</p>' : '');
   box.querySelectorAll('[data-sugdate]').forEach((b) => b.addEventListener('click', () => { plCreate.date = b.dataset.sugdate; const di = $('plCdate'); if (di) di.value = plCreate.date; plRenderDateSuggest(); }));
