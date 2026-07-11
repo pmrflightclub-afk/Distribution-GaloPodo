@@ -65,7 +65,7 @@ input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=range])
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 /* ===== Menu déroulant « maison » (remplace l'ouverture native des <select>, qui ne se ferme pas au clic-dehors sur mobile).
    Le <select> natif reste dans le DOM (masqué, .gp-native) comme source de vérité ; une façade cliquable est superposée. */
-select.gp-native { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; }
+.gp-native { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; }
 .gp-sel { position: relative; display: block; margin-top: 5px; }
 .gp-sel-btn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 16px; font-family: inherit; font-weight: 600; cursor: pointer; text-align: left; }
 .gp-sel-btn[aria-disabled="true"] { opacity: .5; pointer-events: none; }
@@ -81,6 +81,16 @@ select.gp-native { position: absolute; opacity: 0; pointer-events: none; width: 
 /* Contextes compacts : la façade reprend la taille du <select> natif qu'elle remplace */
 .cm-filters .gp-sel { flex: 1 1 160px; min-width: 0; }
 .cm-filters .gp-sel-btn { padding: 8px 10px; font-size: .9rem; }
+/* Sélecteur d'heure maison (Item 5) — réutilise .gp-sel / .gp-sel-pop */
+.gp-time .gp-sel-pop { left: 0; right: auto; min-width: 132px; }
+.gp-time-hd { display: flex; gap: 4px; padding: 2px 6px 4px; font-size: .7rem; color: var(--muted); }
+.gp-time-hd span { flex: 1; text-align: center; }
+.gp-time-cols { display: flex; gap: 4px; }
+.gp-time-col { flex: 1; max-height: 220px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.gp-time-col .gp-sel-opt { text-align: center; padding: 8px 6px; }
+/* Contexte pastille .a-heure : façade compacte, sans bordure (comme l'ancien input inline) */
+.a-heure .gp-sel.gp-time { margin-top: 0; }
+.a-heure .gp-sel-btn { border: 0; background: transparent; padding: 2px; min-width: 68px; width: auto; font-size: .82rem; color: var(--muted); gap: 4px; }
 /* Flash bref sur un élément nouvellement créé (recentrage) */
 @keyframes flashNew { 0% { background: color-mix(in srgb, var(--accent) 32%, transparent); } 100% { background: transparent; } }
 .flash-new { animation: flashNew 1.5s ease-out; }

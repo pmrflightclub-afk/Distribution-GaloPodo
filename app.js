@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.48';
+const APP_VERSION = '1.2.49';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.49', date: '2026-07-11',
+    ajouts: [
+      'Saisie de l\'heure (RDV client, RDV parage, 2ᵉ RDV, prise de RDV) : nouveau sélecteur intégré à l\'app à la place du sélecteur d\'heure du téléphone — deux colonnes (heures / minutes), fermeture d\'une pression à côté, valeur affichée en gris. Le format et l\'agenda restent inchangés.',
+    ],
+  },
   {
     version: '1.2.48', date: '2026-07-11',
     ajouts: [
@@ -2881,15 +2887,62 @@ function enhanceSelect(sel) {
   const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
   if (desc && desc.get && desc.set) Object.defineProperty(sel, 'value', { configurable: true, get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); gpSelSync(this); } });
 }
-function enhanceAllSelects(root) { (root || document).querySelectorAll('select:not([data-gp-enhanced])').forEach(enhanceSelect); }
-// Observe le DOM : enhance les nouveaux <select> (rendus/modales) et resync ceux dont les <option> sont repeuplées.
+// ===== Sélecteur d'heure « maison » (Item 5) : même principe que le <select> maison. Le <input type=time> natif reste
+// masqué (source de vérité) ; façade `.gp-sel.gp-time` avec 2 colonnes (heures 00-23 · minutes 00-59). Choisir met à jour
+// le natif (format HH:MM) + dispatch input/change → handlers `cl.heure`/`cv.heure`/etc. intacts. Réutilise _gpSelOpen/gpSelClose.
+function gpPad2(n) { return (n < 10 ? '0' : '') + n; }
+function gpTimeParse(v) { const m = /^(\d{1,2}):(\d{2})$/.exec(v || ''); return m ? { h: +m[1], mn: +m[2] } : { h: null, mn: null }; }
+function gpTimeLabel(inp) { return /^\d{1,2}:\d{2}$/.test(inp.value || '') ? inp.value : 'HH:MM'; }
+function gpTimeSync(inp) { const w = inp._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpTimeLabel(inp); }
+function gpTimeBuildPop(w) {
+  const inp = w._gpInp, p = gpTimeParse(inp.value), pop = w.querySelector('.gp-sel-pop');
+  const col = (type, n, cur) => { let s = ''; for (let i = 0; i < n; i++) s += `<div class="gp-sel-opt${i === cur ? ' sel' : ''}" data-t="${type}" data-v="${i}">${gpPad2(i)}</div>`; return s; };
+  pop.innerHTML = `<div class="gp-time-hd"><span>h</span><span>min</span></div><div class="gp-time-cols"><div class="gp-time-col" data-col="h">${col('h', 24, p.h)}</div><div class="gp-time-col" data-col="m">${col('m', 60, p.mn)}</div></div>`;
+  requestAnimationFrame(() => { pop.querySelectorAll('.gp-sel-opt.sel').forEach((o) => { try { o.scrollIntoView({ block: 'center' }); } catch { } }); });
+}
+function gpTimeOpen(w) { const inp = w._gpInp; if (!inp || inp.disabled) return; if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); gpTimeBuildPop(w); w.classList.add('open'); _gpSelOpen = w; }
+function gpTimePick(w, type, val) {
+  const inp = w._gpInp, p = gpTimeParse(inp.value); let h = p.h == null ? 0 : p.h, mn = p.mn == null ? 0 : p.mn;
+  if (type === 'h') h = val; else mn = val;
+  inp.value = gpPad2(h) + ':' + gpPad2(mn); gpTimeSync(inp);
+  inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
+  gpTimeBuildPop(w); // maj surbrillance, reste ouvert (l'utilisateur peut régler l'autre colonne)
+}
+function enhanceTime(inp) {
+  if (!inp || inp.dataset.gpEnhanced) return;
+  inp.dataset.gpEnhanced = '1'; inp.classList.add('gp-native');
+  const w = document.createElement('div'); w.className = 'gp-sel gp-time';
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'gp-sel-btn';
+  btn.setAttribute('aria-haspopup', 'dialog'); btn.setAttribute('aria-disabled', inp.disabled ? 'true' : 'false');
+  btn.innerHTML = '<span class="gp-sel-val"></span><span class="gp-sel-car">▾</span>';
+  const pop = document.createElement('div'); pop.className = 'gp-sel-pop';
+  w.appendChild(btn); w.appendChild(pop);
+  inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
+  w._gpInp = inp; inp._gpWrap = w; gpTimeSync(inp);
+  btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (inp.disabled) return; w.classList.contains('open') ? gpSelClose() : gpTimeOpen(w); });
+  pop.addEventListener('click', (e) => { const o = e.target.closest('.gp-sel-opt'); if (o) { e.preventDefault(); e.stopPropagation(); gpTimePick(w, o.dataset.t, +o.dataset.v); } });
+  inp.addEventListener('change', () => gpTimeSync(inp));
+  const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  if (desc && desc.get && desc.set) Object.defineProperty(inp, 'value', { configurable: true, get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); gpTimeSync(this); } });
+}
+function enhanceControls(root) {
+  const r = root || document;
+  r.querySelectorAll('select:not([data-gp-enhanced])').forEach(enhanceSelect);
+  r.querySelectorAll('input[type=time]:not([data-gp-enhanced])').forEach(enhanceTime);
+}
+// Observe le DOM : enhance les nouveaux <select> / <input type=time> (rendus/modales) et resync les <select> repeuplés.
 function startSelectObserver() {
-  enhanceAllSelects(document);
+  enhanceControls(document);
   new MutationObserver((recs) => {
     for (const r of recs) {
       const t = r.target;
       if (t && t.nodeType === 1) { const en = t.tagName === 'SELECT' && t.dataset.gpEnhanced ? t : (t.closest ? t.closest('select[data-gp-enhanced]') : null); if (en) { gpSelSync(en); const w = en._gpWrap; if (w && w.classList.contains('open')) gpSelBuildPop(w); } }
-      for (const n of r.addedNodes) { if (n.nodeType !== 1) continue; if (n.tagName === 'SELECT') enhanceSelect(n); else if (n.querySelectorAll) n.querySelectorAll('select:not([data-gp-enhanced])').forEach(enhanceSelect); }
+      for (const n of r.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.tagName === 'SELECT') enhanceSelect(n);
+        else if (n.tagName === 'INPUT' && n.type === 'time') enhanceTime(n);
+        else if (n.querySelectorAll) enhanceControls(n);
+      }
     }
   }).observe(document.body, { childList: true, subtree: true });
 }
