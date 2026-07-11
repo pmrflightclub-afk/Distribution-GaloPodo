@@ -592,9 +592,14 @@ table.pl-egrid th.pl-mem { font-size: .68rem; font-weight: 700; color: var(--str
 .pl-cell { width: 72px; height: 56px; cursor: pointer; position: relative; padding: 0; }
 .pl-cell.sel-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .pl-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.pl-cell img.pl-tr { object-fit: contain; transform-origin: center center; } /* case cadrée (cellT) : contain + transfo, comme le PDF */
 .pl-cell-ph { color: var(--muted); font-size: 1.1rem; opacity: .5; }
 .pl-cell-edit { cursor: crosshair; }
+/* Case de la grille de PLANCHE au RATIO EXACT de la case PDF (colW:rowH), via .pl-cellbox → aperçu fidèle du cadrage.
+   Scopé à .pl-egrid : n'affecte NI la grille de planning (même classe .pl-cell) NI le PDF (moteur canvas séparé). */
+.pl-egrid td.pl-cell { width: auto; height: auto; min-height: 0; }
+.pl-cellbox { position: relative; width: 100%; overflow: hidden; display: grid; place-items: center; background: var(--card); }
+.pl-cellbox img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.pl-cellbox img.pl-tr { object-fit: contain; transform-origin: center center; } /* case cadrée (cellT) : contain + transfo, comme le PDF */
 /* Cadrillage d'aide (mode édition) — aperçu seulement, jamais sur le PDF */
 .pl-guide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .pl-guide line { stroke: rgba(20, 20, 20, .5); stroke-width: .8; vector-effect: non-scaling-stroke; }

@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.53';
+const APP_VERSION = '1.2.54';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.54', date: '2026-07-12',
+    corrections: [
+      'Planche — aperçu de la grille : chaque case adopte désormais la forme exacte de la case du PDF ; l\'aperçu du cadrage d\'une image est fidèle au rendu final (le PDF, lui, est inchangé).',
+    ],
+  },
   {
     version: '1.2.53', date: '2026-07-12',
     corrections: [
@@ -8098,6 +8104,7 @@ function plRenderGrid() {
   const box = $('plCgrid'); if (!box || !plCreate) return;
   box.innerHTML = '';
   const st = plCreate, pages = st.pages || [], angles = st.angles || [];
+  const g = plGeom(st.orientation !== 'portrait', angles.length, plRefRows(st)); // géométrie PDF → ratio de case (colW:rowH) pour l'aperçu fidèle
   if (!pages.length) { box.innerHTML = '<p class="hint">Aucune page configurée. Configurez la planche dans Gestion → Planche.</p>'; return; }
   pages.forEach((pg, pi) => {
     const wrap = document.createElement('div'); wrap.className = 'pl-grid-wrap';
@@ -8131,7 +8138,7 @@ function plRenderGrid() {
         const key = plCellKey(pi, r, ci), pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
         const T = st.cellT && st.cellT[key];
         const imgTag = ph && ph.url ? `<img src="${ph.url}" alt=""${T ? ` class="pl-tr" style="transform:translate(${(T.x || 0) * 100}%,${(T.y || 0) * 100}%) scale(${T.zoom || 1}) rotate(${T.rot || 0}deg)"` : ''}/>` : '<span class="pl-cell-ph">+</span>';
-        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}${st.gridEdit ? ' pl-cell-edit' : ''}" data-key="${key}">${imgTag}${st.gridEdit ? plGuideSvg() : ''}</td>`;
+        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}${st.gridEdit ? ' pl-cell-edit' : ''}" data-key="${key}"><div class="pl-cellbox" style="aspect-ratio:${g.colW} / ${g.rowH}">${imgTag}${st.gridEdit ? plGuideSvg() : ''}</div></td>`;
       }).join('') + '</tr>';
     });
     html += '</tbody>';
