@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.50';
+const APP_VERSION = '1.2.51';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.51', date: '2026-07-12',
+    ajouts: [
+      'Planches — cadrage des images : nouveau bouton « ✏️ Éditer les images » au-dessus de la grille. En mode édition, un cadrillage d\'aide s\'affiche sur chaque case (marges + axe central rouge) et toucher une image ouvre un éditeur pour la zoomer, la déplacer et la redresser (rotation). Le cadrage est repris à l\'identique sur le PDF (rogné à la case) ; le cadrillage, lui, n\'apparaît jamais sur le PDF. En mode normal, toucher une image la retire (comme avant).',
+      'Gestion → Planche : réglage des marges du cadrillage d\'aide (gauche/droite et haut/bas, en cm) — repère visuel pour aligner le haut du pied et le centre.',
+    ],
+  },
   {
     version: '1.2.50', date: '2026-07-11',
     ajouts: [
@@ -1651,6 +1658,8 @@ delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
 // Stades = types de planche (étiquette, éditables). Défaut : Ferrage / Parage / Déferrage / Radio. Migration de l'ancien trio par défaut.
 if (!Array.isArray(S.planche.stades)) S.planche.stades = ['Ferrage', 'Parage', 'Déferrage', 'Radio'];
 else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', 'Déferrage', 'Après parage'])) S.planche.stades = ['Ferrage', 'Parage', 'Déferrage', 'Radio'];
+// Cadrillage d'aide au cadrage des images (mode édition) : marges en cm (gauche/droite liées + haut/bas). Aperçu seulement — jamais dans le PDF.
+if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 };
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
 // { data:dataURL, zoom:multiplicateur, x/y:décalage en FRACTION du cadre (pan) } — cadrage repris à l'identique dans l'en-tête PDF.
 if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
@@ -6450,7 +6459,17 @@ async function planchePageCanvas(pi) {
     const ry = gtop + angH + ri * rowH;
     ctx.fillStyle = (r.pj === 1) ? '#e7eef7' : '#f5f5f5'; ctx.fillRect(gx, ry, labelW, rowH);
     ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.fillText(plTrunc(ctx, plRowShort(r), labelW - 4), gx + labelW / 2, ry + rowH / 2 - fs(1.6));
-    angles.forEach((a, ci) => { const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (im) { const s = Math.min(colW / im.width, rowH / im.height), dw = im.width * s, dh = im.height * s; ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); } }); // contain : image entière centrée dans la case (pas de rognage)
+    angles.forEach((a, ci) => {
+      const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (!im) return;
+      const s = Math.min(colW / im.width, rowH / im.height), dw = im.width * s, dh = im.height * s; // base « contain »
+      const T = st.cellT && st.cellT[plCellKey(pi, r, ci)];
+      if (T) { // même transfo que l'éditeur (translate·scale·rotate, origine centre), rognée à la case
+        ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip();
+        ctx.translate(cx + colW / 2 + (T.x || 0) * colW, ry + rowH / 2 + (T.y || 0) * rowH);
+        ctx.scale(T.zoom || 1, T.zoom || 1); ctx.rotate((T.rot || 0) * Math.PI / 180);
+        ctx.drawImage(im, -dw / 2, -dh / 2, dw, dh); ctx.restore();
+      } else { ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); } // contain : image entière centrée
+    });
   });
   ctx.textAlign = 'left';
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
@@ -7634,11 +7653,17 @@ function renderPlancheConfig() {
   const P = plancheType === 'contact' ? S.planche.contact : S.planche.avantapres;
   // Orientation + logo
   const head = document.createElement('section'); head.className = 'card';
+  const gg = S.planche.gridGuide || (S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 });
   head.innerHTML = `<label>Orientation<select id="plOri"><option value="paysage">Paysage</option><option value="portrait">Portrait</option></select></label>
-    <p class="hint">🖼 En-tête (logo + votre identité) et pied de page se règlent dans <b>Gestion → Configuration activité</b>. Le logo GaloPodo par défaut est utilisé si aucun n'est importé.</p>`;
+    <p class="hint">🖼 En-tête (logo + votre identité) et pied de page se règlent dans <b>Gestion → Configuration activité</b>. Le logo GaloPodo par défaut est utilisé si aucun n'est importé.</p>
+    <h3 class="rsub" style="margin-top:10px">Cadrillage d'aide au cadrage</h3>
+    <p class="hint">Repères affichés en <b>mode « Éditer les images »</b> (aperçu seulement, jamais sur le PDF) : marges + axe central rouge, pour aligner le haut du pied et le centre.</p>
+    <div class="row"><label class="grow">Marge gauche / droite (cm)<input type="number" id="plGuideLR" min="0" step="0.1" value="${gg.marginLR}"/></label><label class="grow">Marge haut / bas (cm)<input type="number" id="plGuideTB" min="0" step="0.1" value="${gg.marginTB}"/></label></div>`;
   body.appendChild(head);
   $('plOri').value = P.orientation || 'paysage';
   $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; saveSettings(); });
+  $('plGuideLR').addEventListener('change', (e) => { S.planche.gridGuide.marginLR = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
+  $('plGuideTB').addEventListener('change', (e) => { S.planche.gridGuide.marginTB = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
   // Colonnes = angles de vue, par modèle 3/4/5
   const sc = document.createElement('section'); sc.className = 'card';
   sc.innerHTML = `<h3 class="rsub">Colonnes — angles de vue (par modèle)</h3>
@@ -7879,7 +7904,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, gridEdit: false, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -7912,7 +7937,8 @@ function modalPlancheCreate(type, prefill) {
         <div class="pl-pot grid" id="plCpot"></div>
       </section>
       <section class="card">
-        <h3 class="rsub">Aperçu / mise en page</h3>
+        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div>
+        <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (zoom, déplacement, rotation). Le cadrillage n'apparaît pas sur le PDF. Rebasculez pour revenir au mode normal (toucher une image = la retirer).</p>
         <div id="plCgrid"></div>
       </section>
       <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button>${plCreate.queueTotal ? '<button class="btn block primary" id="plCnext">' + (plCreate.queue && plCreate.queue.length ? '➡ Planche suivante' : '✅ Terminer') + '</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
@@ -7944,6 +7970,13 @@ function modalPlancheCreate(type, prefill) {
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
+  if ($('plCgridEdit')) $('plCgridEdit').addEventListener('click', () => {
+    plCreate.gridEdit = !plCreate.gridEdit;
+    $('plCgridEdit').classList.toggle('primary', plCreate.gridEdit);
+    $('plCgridEdit').textContent = plCreate.gridEdit ? '✅ Terminer l\'édition' : '✏️ Éditer les images';
+    if ($('plCgridEditHint')) $('plCgridEditHint').style.display = plCreate.gridEdit ? '' : 'none';
+    plRenderGrid();
+  });
   // « Générer le PDF » = PDF propre (moteur canvas, en-tête/grille/pied) téléchargé. N'utilise PLUS window.print (qui imprimait l'interface de l'app).
   $('plCpdf').onclick = async () => {
     if (plCreate.type === 'contact' && !plCreate.stade) { alert('Choisissez le type de planche (parage, ferrage, déferrage ou radio) avant de générer.'); return; }
@@ -8060,19 +8093,71 @@ function plRenderGrid() {
     rows.forEach((r) => {
       html += `<tr><th class="pl-mem${r.pj === 1 ? ' pl-after' : ''}">${esc(r.label)}</th>` + angles.map((a, ci) => {
         const key = plCellKey(pi, r, ci), pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
-        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}" data-key="${key}">${ph && ph.url ? `<img src="${ph.url}" alt=""/>` : '<span class="pl-cell-ph">+</span>'}</td>`;
+        const T = st.cellT && st.cellT[key];
+        const imgTag = ph && ph.url ? `<img src="${ph.url}" alt=""${T ? ` class="pl-tr" style="transform:translate(${(T.x || 0) * 100}%,${(T.y || 0) * 100}%) scale(${T.zoom || 1}) rotate(${T.rot || 0}deg)"` : ''}/>` : '<span class="pl-cell-ph">+</span>';
+        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}${st.gridEdit ? ' pl-cell-edit' : ''}" data-key="${key}">${imgTag}${st.gridEdit ? plGuideSvg() : ''}</td>`;
       }).join('') + '</tr>';
     });
     html += '</tbody>';
     tbl.innerHTML = html;
     tbl.querySelectorAll('.pl-cell').forEach((td) => {
       const key = td.dataset.key;
-      td.addEventListener('click', () => { if (st.cells[key]) { delete st.cells[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); } });
+      td.addEventListener('click', () => {
+        if (st.gridEdit) { if (st.cells[key]) modalCellEdit(key); else plPlace(key); return; } // mode édition : cadrer l'image (jamais de suppression)
+        if (st.cells[key]) { delete st.cells[key]; if (st.cellT) delete st.cellT[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); }
+      });
       td.addEventListener('dragover', (e) => e.preventDefault());
       td.addEventListener('drop', (e) => { e.preventDefault(); plPlace(key); });
     });
     wrap.appendChild(tbl); box.appendChild(wrap);
   });
+}
+
+// Cadrillage d'aide (mode édition) : 4 lignes de marge (gauche/droite/haut/bas, cm → % de la case) + axe central rouge.
+// SVG en pourcentages (viewBox 0-100, non-scaling-stroke) → même rendu sur la case de grille et dans l'éditeur, jamais sur le PDF.
+function plGuideSvg() {
+  const st = plCreate; const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
+  const gg = (S.planche && S.planche.gridGuide) || { marginLR: 0.5, marginTB: 0.5 };
+  const Lp = Math.max(0, Math.min(49, (10 * (+gg.marginLR || 0)) / g.colW * 100));
+  const Tp = Math.max(0, Math.min(49, (10 * (+gg.marginTB || 0)) / g.rowH * 100));
+  return `<svg class="pl-guide" viewBox="0 0 100 100" preserveAspectRatio="none">`
+    + `<line x1="${Lp}" y1="0" x2="${Lp}" y2="100"/><line x1="${100 - Lp}" y1="0" x2="${100 - Lp}" y2="100"/>`
+    + `<line x1="0" y1="${Tp}" x2="100" y2="${Tp}"/><line x1="0" y1="${100 - Tp}" x2="100" y2="${100 - Tp}"/>`
+    + `<line class="c" x1="50" y1="0" x2="50" y2="100"/></svg>`;
+}
+// Éditeur de cadrage d'une case (zoom + déplacement + rotation) — réutilise le moteur de renderProLogoEditor (fractions + drag pointer),
+// avec en plus la rotation. Enregistre st.cellT[key] = { zoom, x, y, rot } ; le PDF applique la même transfo, rognée à la case.
+function modalCellEdit(key) {
+  const st = plCreate; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
+  if (!ph || !ph.url) return;
+  if (!st.cellT) st.cellT = {};
+  const t0 = st.cellT[key] || {}; const T = { zoom: t0.zoom || 1, x: t0.x || 0, y: t0.y || 0, rot: t0.rot || 0 };
+  const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
+  const fw = 300, fh = Math.max(60, Math.round(fw * g.rowH / g.colW));
+  openModal(`<div class="modal-head"><b>✏️ Cadrer l'image</b><button class="x" id="ceX">✕</button></div>
+    <div class="pl-ce-wrap">
+      <div class="pl-ce-frame" id="ceFrame" style="width:${fw}px;height:${fh}px;max-width:100%"><img id="ceImg" src="${ph.url}" alt="" draggable="false"/>${plGuideSvg()}</div>
+      <label class="pro-logo-zoom">Zoom<input type="range" id="ceZoom" min="0.3" max="4" step="0.02" value="${T.zoom}"/></label>
+      <label class="pro-logo-zoom">Rotation<input type="range" id="ceRot" min="-180" max="180" step="1" value="${T.rot}"/></label>
+      <div class="pro-logo-btns"><button class="btn small" id="ceRotL">⟲ −90°</button><button class="btn small" id="ceRotR">⟳ +90°</button><button class="btn small" id="ceCenter">Recentrer</button></div>
+      <p class="hint">Glissez l'image pour la déplacer. Le cadrillage (aperçu seulement) aide à aligner le haut du pied et l'axe central.</p>
+    </div>
+    <div class="actions"><button class="btn primary block" id="ceOk">Valider</button><button class="btn block" id="ceCancel">Annuler</button></div>`);
+  const img = $('ceImg'), frame = $('ceFrame');
+  const apply = () => { img.style.transform = `translate(${T.x * fw}px,${T.y * fh}px) scale(${T.zoom}) rotate(${T.rot}deg)`; };
+  apply();
+  $('ceZoom').addEventListener('input', (e) => { T.zoom = parseFloat(e.target.value) || 1; apply(); });
+  $('ceRot').addEventListener('input', (e) => { T.rot = parseInt(e.target.value, 10) || 0; apply(); });
+  $('ceRotL').onclick = () => { T.rot = ((T.rot - 90 + 540) % 360) - 180; $('ceRot').value = T.rot; apply(); };
+  $('ceRotR').onclick = () => { T.rot = ((T.rot + 90 + 540) % 360) - 180; $('ceRot').value = T.rot; apply(); };
+  $('ceCenter').onclick = () => { T.x = 0; T.y = 0; T.zoom = 1; T.rot = 0; $('ceZoom').value = 1; $('ceRot').value = 0; apply(); };
+  let drag = null;
+  frame.addEventListener('pointerdown', (e) => { if (e.target.closest('input,button')) return; drag = { sx: e.clientX, sy: e.clientY, ox: T.x, oy: T.y }; try { frame.setPointerCapture(e.pointerId); } catch (err) { } e.preventDefault(); });
+  frame.addEventListener('pointermove', (e) => { if (!drag) return; T.x = Math.max(-2, Math.min(2, drag.ox + (e.clientX - drag.sx) / fw)); T.y = Math.max(-2, Math.min(2, drag.oy + (e.clientY - drag.sy) / fh)); apply(); });
+  frame.addEventListener('pointerup', () => { drag = null; });
+  frame.addEventListener('pointercancel', () => { drag = null; });
+  $('ceX').onclick = $('ceCancel').onclick = () => closeModal();
+  $('ceOk').onclick = () => { st.cellT[key] = { zoom: T.zoom, x: T.x, y: T.y, rot: T.rot }; closeModal(); plRenderGrid(); };
 }
 
 // Nom de fichier d'une planche : planche-<cheval>-<date>[-<stade>].
