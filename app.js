@@ -11,10 +11,25 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.22';
+const APP_VERSION = '1.2.23';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.23', date: '2026-07-11',
+    corrections: [
+      'Un RDV déjà payé (paiement validé, quel que soit le mode) ne peut plus être reporté — la prestation est considérée comme effectuée (« Annulé » reste possible pour une note de crédit).',
+      'Éditeur : valider le paiement de tous les clients d\'un arrêt clôture désormais l\'arrêt (comme depuis « ⚡ Agir »).',
+      'Temps estimé par arrêt : c\'est maintenant le temps du tronçon (arrêt précédent → arrêt courant), au lieu du cumul depuis le domicile.',
+      'Bouton « Étape » : passe grisé (✓) quand le temps de route est validé (reste cliquable) ; sur mobile, il ouvre plus directement l\'app Google Maps.',
+      'Agenda de l\'app : chaque client d\'un arrêt a son propre horaire de RDV (deux clients à la même adresse = deux rendez-vous distincts).',
+      'Bandeau du haut (km, tournées) rafraîchi après un paiement ou une annulation.',
+      'Bouton « ＋ Prêt » en orange quand un prêt est en cours pour le client ; section « Prêts en cours » remontée au-dessus des Articles.',
+      'Listes de tournées : chaque client est affiché individuellement (plus de regroupement) ; badge « ⚠ à compléter » / « ✓ prête » selon le blocage de clôture.',
+      'Gestion → Clients : pastille verte (fiche complète) / orange (champs manquants) sur chaque client.',
+      'Programmer le suivi : options « ne pas replacer / date différente / Maintenir / Arrêter » alignées à gauche.',
+    ],
+  },
   {
     version: '1.2.22', date: '2026-07-11',
     corrections: [
@@ -2527,7 +2542,9 @@ function addrQuery(addr) { if (!addr) return ''; if (addr.lat && addr.lon) retur
 // Ouvre Google Maps avec un itinéraire départ → arrivée (contrairement à openNav qui part de la position actuelle).
 function openMapsRoute(origin, dest) {
   const url = 'https://www.google.com/maps/dir/?api=1&origin=' + encodeURIComponent(origin) + '&destination=' + encodeURIComponent(dest) + '&travelmode=driving';
-  try { const w = window.open(url, '_blank'); if (!w) window.location.href = url; } catch { window.location.href = url; }
+  const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+  // Mobile : navigation directe → l'OS ouvre l'app Google Maps (le lien universel préserve départ + arrivée). Desktop : nouvel onglet.
+  try { if (mobile) { window.location.href = url; } else { const w = window.open(url, '_blank'); if (!w) window.location.href = url; } } catch { window.location.href = url; }
 }
 // Lieux sélectionnables pour un calcul de trajet : domicile + mes adresses + adresses clients/écuries (dédupliqués).
 function collectRoutePlaces() {
@@ -2654,7 +2671,7 @@ function dayAgendaEntries(day) {
   privateEventsForDay(day).forEach((p) => out.push({ heure: eventHeure(p), type: 'prive', label: p.title || '(privé)' }));
   allTours().forEach((t) => {
     if (t.date !== day || statusOf(t) === 'cloturee') return; // tournées clôturées/passées exclues de l'agenda
-    (t.arrets || []).forEach((a) => { const hh = arretHeure(a); (a.clients || []).forEach((cl) => { if (!(cl.chevaux || []).some((cv) => !chevalCancelled(cv))) return; out.push({ heure: hh, type: 'tour', label: clientLabel(cl.clientId) }); }); }); // client entièrement annulé/reporté → retiré de l'agenda
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (!(cl.chevaux || []).some((cv) => !chevalCancelled(cv))) return; out.push({ heure: cl.heure || arretHeure(a), type: 'tour', label: clientLabel(cl.clientId) }); })); // 1 entrée PAR CLIENT avec SON heure (deux clients au même arrêt = deux RDV distincts) ; client entièrement annulé/reporté → retiré
   });
   return out.sort((x, y) => (x.heure || '~').localeCompare(y.heure || '~'));
 }
@@ -2819,8 +2836,9 @@ function renderClients() {
     const off = isClientNoir(c) || c.actif === false;
     const badge = isClientNoir(c) ? ' <span class="badge">liste noire</span>' : (c.actif === false ? ' <span class="badge">inactif</span>' : '');
     const nChev = (c.chevaux || []).length, nChevInact = (c.chevaux || []).filter((h) => h.actif === false).length;
+    const valid = !scanClient(c); // pastille : fiche complète (tous les champs fonctionnels remplis) ?
     const el = document.createElement('div'); el.className = 'list-item clickable' + (off ? ' item-off' : '');
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}${specNoms.length ? ' · 📍 ' + esc(specNoms.join(', ')) : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
+    el.innerHTML = `<div class="li-main"><b>${valid ? '<span class="cli-valid ok" title="Fiche complète">●</span> ' : '<span class="cli-valid warn" title="Champs importants manquants (voir Assistant de vérification)">●</span> '}${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}${specNoms.length ? ' · 📍 ' + esc(specNoms.join(', ')) : ''}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => editClient(c));
     list.appendChild(el);
   });
@@ -3127,10 +3145,11 @@ function tourListItem(t, showBadge) {
   const st = statusOf(t);
   const el = document.createElement('div'); el.className = 'list-item clickable';
   const titre = `<span class="tour-date">${fmtDateFr(t.date)}</span>` + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''); // date en couleur des boutons (accent)
-  const clientsLine = (t.arrets || []).map((a) => labelFor(a)).filter(Boolean).join(' · '); // noms de clients par arrêt
+  const clientsLine = (t.arrets || []).flatMap((a) => (a.clients || []).map((cl) => clientName(cl.clientId))).filter(Boolean).join(' · '); // chaque client individuel (non groupé), même au même arrêt
   const badge = (showBadge && st !== 'avenir') ? ' · ' + STATUS_LBL[st] : ''; // « À venir » retiré (redondant avec la section À venir)
   const eta = tourEta(t.date, st); const etaHtml = eta ? ` <span class="${eta.cls}">${esc(eta.text)}</span>` : '';
-  el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
+  const fin = st !== 'cloturee' ? (tourFinalizeBlock(t).length ? ' <span class="td-badge warn">⚠ à compléter</span>' : ' <span class="td-badge ok">✓ prête</span>') : ''; // clôture bloquée par un paramétrage manquant ?
+  el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}${fin}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
@@ -3624,7 +3643,7 @@ function renderEditorArrets(locked) {
   const box = $('edArrets'); box.innerHTML = '';
   $('edArretsEmpty').style.display = currentTour.arrets.length ? 'none' : 'block';
   const N = currentTour.arrets.length;
-  const legMins = legMinutesFor(currentTour); // temps de trajet estimé cumulé par arrêt
+  const segMins = segMinutesFor(currentTour); // temps de trajet estimé du tronçon (arrêt précédent → courant), pas cumulé
   currentTour.arrets.forEach((a, i) => {
     const nb = arretNbClients(a);
     const single = a.clients.length === 1 ? a.clients[0] : null; // réduction dans l'en-tête si 1 seul client
@@ -3642,11 +3661,11 @@ function renderEditorArrets(locked) {
     el.querySelector('[data-type]').value = a.type || 'tournee';
     // Temps trajet + (tournée non clôturée) Waze / Route / Paiement. Tournée clôturée = figée : aucun bouton (paiement se gère en Compta).
     const nav = document.createElement('div'); nav.className = 'a-nav';
-    const estMin = legMins[i] != null ? Math.round(legMins[i]) : null;
+    const estMin = segMins[i] != null ? Math.round(segMins[i]) : null; // temps du TRONÇON vers cet arrêt (pas cumulé)
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
     const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
     // Barre d'arrêt : temps de trajet + déplacement (Waze / Route / Étape) — communs à l'adresse. L'HEURE est PAR CLIENT (l'heure d'arrêt = celle du 1ᵉʳ client). Paiement / RDV / Prêt / Planche aussi par client (plus bas).
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ' <button class="btn small" data-etape title="Itinéraire de cet arrêt vers l\'arrêt suivant (ou le retour)">🧭 Étape</button>' : ''}</span>`}`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ` <button class="btn small${routeDone ? ' done' : ''}" data-etape title="Itinéraire de cet arrêt vers l'arrêt suivant (ou le retour)">🧭 Étape${routeDone ? ' ✓' : ''}</button>` : ''}</span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
@@ -3687,13 +3706,13 @@ function renderEditorArrets(locked) {
       };
       // ===== En-tête du client EN TÊTE : nom · TTC · heure du client · Paiement/RDV/Prêt/Planche · réduction =====
       {
-        const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '';
+        const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '', pretOn = ((((clients.find((x) => x.id === cl.clientId) || {}).prets) || []).length > 0);
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); } // persistCurrentTour (pas saveTournees) : currentTour est une COPIE → il faut la réécrire dans le tableau, sinon l'heure est perdue
-          actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), null, cl.clientId));
+          actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (arretPaiementDone(currentTour, a) && typeof a.validatedAt !== 'number') { a.validatedAt = Date.now(); persistCurrentTour(); } refreshEverywhere(); }, cl.clientId)); // paiement complet de l'arrêt → clôture l'arrêt (validatedAt) + rafraîchit le bandeau
           actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
           actBar.querySelector('[data-cplanche]').addEventListener('click', () => modalArretPlanche(currentTour, a, cl.clientId));
@@ -3795,7 +3814,7 @@ function renderEditorArrets(locked) {
           if (!e.target.checked) { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; saveTournees(); recomputeMoney(); refreshChips(+inp.dataset.pi); return; }
           modalSupplement(ph.nom, cv, key, () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // saisie montant HT + éligibilité remise
         }));
-        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { saveTournees(); if (!paid) recomputeMoney(); renderEditorArrets(locked); scheduleCalPush(currentTour); } }); })); // payé → facture figée (note de crédit) ; non payé → recalcul de la facture ; annulation/report → maj Google (retire l'évènement du client entièrement annulé)
+        wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { persistCurrentTour(); if (!paid) recomputeMoney(); renderEditorArrets(locked); scheduleCalPush(currentTour); refreshEverywhere(); } }); })); // persistCurrentTour (copie) ; payé → facture figée (NC) ; non payé → recalcul ; maj Google + bandeau (km)
         el.appendChild(wrap);
       } // fin des actes (édition uniquement si tournée non clôturée)
 
@@ -3858,7 +3877,7 @@ function renderEditorArrets(locked) {
       if (prets.length) {
         const pretBox = document.createElement('div'); pretBox.className = 'a-prets';
         pretBox.innerHTML = '<div class="a-art-head"><span>🎁 Prêts en cours</span></div>' + prets.map((pr) => `<div class="list-item" data-pretid="${pr.id}"><div class="li-main"><b>🎁 ${esc(pr.text)}</b><span class="li-sub">prêté le ${esc(fmtDateFr(pr.date))}</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-pret-keep>Maintenir</button> <button class="btn small danger" data-pret-back>Récupéré</button></div>'}</div>`).join('');
-        el.appendChild(pretBox);
+        el.insertBefore(pretBox, artWrap); // « Prêts en cours » AU-DESSUS de la section Articles
         if (!locked) {
           pretBox.querySelectorAll('[data-pret-back]').forEach((b) => b.addEventListener('click', () => { const row = b.closest('[data-pretid]'); if (cObjP) { cObjP.prets = (cObjP.prets || []).filter((p) => p.id !== row.dataset.pretid); saveClients(); } renderEditorArrets(locked); }));
           pretBox.querySelectorAll('[data-pret-keep]').forEach((b) => b.addEventListener('click', () => { b.textContent = 'Maintenu ✓'; setTimeout(() => { b.textContent = 'Maintenir'; }, 1200); }));
@@ -7633,6 +7652,13 @@ function legMinutesFor(t) {
   (t.arrets || []).forEach((a, i) => { const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; cum += seg * mpk; out.push(R && R.rows ? cum : null); });
   return out;
 }
+// Temps de trajet estimé du TRONÇON (arrêt précédent → arrêt courant, domicile → arrêt 1) — pas cumulé. Utilisé pour l'« estimé » de chaque arrêt.
+function segMinutesFor(t) {
+  const R = t.result; const out = [];
+  const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
+  (t.arrets || []).forEach((a, i) => { const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; out.push(R && R.rows ? seg * mpk : null); });
+  return out;
+}
 // Heure de RDV d'un arrêt = heure du 1ᵉʳ client de l'arrêt (une heure par client) ; repli sur l'ancienne heure d'arrêt (a.heure) puis la plus tôt des heures par cheval.
 function arretHeure(a) {
   const c0 = a && a.clients && a.clients[0];
@@ -8287,7 +8313,7 @@ function modalCancelRdv(nom, opts) {
     const rep = status === 'reporte';
     if ($('cxReportBox')) $('cxReportBox').style.display = rep ? '' : 'none';
     if ($('cxNote2')) { const issue = clientPaiementIssue(opts.tour, opts.clientId);
-      $('cxNote2').innerHTML = rep ? '↩ Report : aucun paiement à valider ; le RDV part dans « Rendez-vous à prendre ».'
+      $('cxNote2').innerHTML = rep ? (clientPaiementDone(opts.tour, opts.clientId) ? '⛔ <b>Report impossible</b> : ce RDV est déjà payé (prestation effectuée). Choisissez « Annulé » si nécessaire.' : '↩ Report : aucun paiement à valider ; le RDV part dans « Rendez-vous à prendre ».')
         : (issue ? '⚠ <b>Annulation</b> : le paiement du client doit d\'abord être validé (' + esc(issue) + ').'
           : '✔ Paiement validé → une <b>note de crédit</b> (à rembourser) sera créée pour ce RDV.'); }
   };
@@ -8296,6 +8322,7 @@ function modalCancelRdv(nom, opts) {
   refreshMode();
   $('cxOk').addEventListener('click', () => {
     const note = $('cxNote').value.trim();
+    if (status === 'reporte' && clientPaiementDone(opts.tour, opts.clientId)) { alert('⛔ Ce RDV est déjà payé (paiement validé) : la prestation est considérée comme effectuée, il ne peut pas être reporté (liquide, virement ou facture). Utilisez « Annulé » si vous devez émettre une note de crédit.'); return; }
     if (status === 'annule') { // ANNULATION : paiement du client OBLIGATOIRE d'abord
       const issue = clientPaiementIssue(opts.tour, opts.clientId);
       if (issue) { if (confirm('Avant d\'annuler ce client, son paiement doit être validé (' + issue + '). Ouvrir le paiement maintenant ?') && opts.arret) { closeModal(); modalPayment(opts.tour, opts.arret, () => modalCancelRdv(nom, opts)); } return; }
