@@ -94,6 +94,7 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .li-act-col { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .li-act-col .btn { white-space: nowrap; }
 .list-item.stack-act { align-items: flex-start; }
+.list-item.stack-act > .li-main { flex: 1 1 auto; } /* remplit la largeur de l'item → la barre écurie (Refuser ce lieu) s'aligne à droite */
 .td-eta { color: var(--ok, #2e9e5b); font-weight: 700; font-size: .82em; white-space: nowrap; }
 .td-eta.td-past { color: var(--danger); }
 .tour-date { color: var(--accent); }
@@ -103,6 +104,10 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 .cli-valid { font-size: 1.05rem; vertical-align: middle; line-height: 1; }
 .cli-valid.ok { color: var(--ok, #2e9e5b); }
 .cli-valid.warn { color: var(--warn); }
+/* Pastille client bien visible : pilule ronde colorée avec icône (✓ complet / ⚠ à compléter) */
+.cli-pill { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 999px; font-size: .9rem; font-weight: 800; color: #fff; }
+.cli-pill.ok { background: var(--ok, #2e9e5b); }
+.cli-pill.warn { background: var(--warn); }
 /* Badge/pastille aligné à DROITE de l'item (colonne : badge au-dessus du chevron) */
 .li-act-badge { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 4px; }
 .btn.pret-on { border-color: var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--card)); }

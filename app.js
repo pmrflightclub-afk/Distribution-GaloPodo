@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.41';
+const APP_VERSION = '1.2.42';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.42', date: '2026-07-11',
+    ajouts: [
+      'Pastille de statut des clients (Gestion → Clients) : remplacée par une pilule colorée bien visible (✓ vert = fiche complète, ⚠ orange = champs manquants), alignée à droite de l\'item.',
+      'Tournées à venir (Accueil + Tournées) : l\'échéance « J-n / n sem » est maintenant alignée à droite de l\'item, avec le badge d\'état.',
+    ],
+    corrections: [
+      'Adresses chevaux : le bouton « Refuser ce lieu » (et « Réautoriser ») est désormais bien aligné tout à droite de chaque item (l\'item occupe toute la largeur).',
+    ],
+  },
   {
     version: '1.2.41', date: '2026-07-11',
     ajouts: [
@@ -2979,7 +2989,7 @@ function renderClients() {
     const nChev = (c.chevaux || []).length, nChevInact = (c.chevaux || []).filter((h) => h.actif === false).length;
     const valid = !scanClient(c); // pastille : fiche complète (tous les champs fonctionnels remplis) ?
     const el = document.createElement('div'); el.className = 'list-item clickable' + (off ? ' item-off' : '');
-    const pastille = valid ? '<span class="cli-valid ok" title="Fiche complète">●</span>' : '<span class="cli-valid warn" title="Champs importants manquants (voir Assistant de vérification)">●</span>';
+    const pastille = valid ? '<span class="cli-pill ok" title="Fiche complète">✓</span>' : '<span class="cli-pill warn" title="Champs importants manquants (voir Assistant de vérification)">⚠</span>';
     el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}${specNoms.length ? ' · 📍 ' + esc(specNoms.join(', ')) : ''}</span></div><div class="li-act li-act-badge">${pastille}<span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => editClient(c));
     list.appendChild(el);
@@ -3354,7 +3364,7 @@ function tourListItem(t, showBadge) {
     else if (tourHeureStale(t)) fin = ' <span class="td-badge warn">⚠ heures à revoir</span>';
     else fin = tourReadyIssues(t).length ? ' <span class="td-badge warn">⚠ à compléter</span>' : ' <span class="td-badge ok">✓ prête</span>';
   }
-  el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act li-act-badge">${fin}<span class="li-chev">›</span></div>`;
+  el.innerHTML = `<div class="li-main"><b>${titre}${badge}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act li-act-badge">${etaHtml}${fin}<span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
