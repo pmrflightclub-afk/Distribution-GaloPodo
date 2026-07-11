@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.38';
+const APP_VERSION = '1.2.39';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.39', date: '2026-07-11',
+    corrections: [
+      'Itinéraire — invalidation ciblée : ajouter un client/cheval à un arrêt EXISTANT (ou ajouter un arrêt en fin) ne remet plus à zéro tous les temps de trajet réels. Seuls les segments réellement modifiés (arrêt précédent → arrêt) passent en « à recalculer », et le retour seulement si le dernier arrêt change.',
+    ],
+    ajouts: [
+      'Quand l\'ordre des arrêts change (insertion, réordre, retrait), les heures de RDV des arrêts SUIVANTS sont marquées « ⚠ à revoir » (l\'horaire d\'arrivée décale) — sans être effacées ni toucher l\'agenda. L\'indication disparaît dès que vous ré-encodez l\'heure (ce qui met alors l\'agenda à jour). La tournée affiche le badge « ⚠ heures à revoir ».',
+    ],
+  },
   {
     version: '1.2.38', date: '2026-07-11',
     ajouts: [
@@ -3290,6 +3299,7 @@ function tourListItem(t, showBadge) {
   let fin = ''; // badge « prête » = paramétrage complet (adresses + itinéraire + cheval présent + heure), PAS acte/paiement ; « recalculer » prioritaire
   if (st !== 'cloturee') {
     if (tourRouteStale(t)) fin = ' <span class="td-badge warn">🔄 recalculer itinéraire</span>';
+    else if (tourHeureStale(t)) fin = ' <span class="td-badge warn">⚠ heures à revoir</span>';
     else fin = tourReadyIssues(t).length ? ' <span class="td-badge warn">⚠ à compléter</span>' : ' <span class="td-badge ok">✓ prête</span>';
   }
   el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act li-act-badge">${fin}<span class="li-chev">›</span></div>`;
@@ -3537,7 +3547,7 @@ function reconcileTour(tour) {
   newArrets.forEach((na) => { const old = oldArrets.find((o) => norm(addrStr(o.addr)) === norm(addrStr(na.addr))); if (old) { if (typeof old.realMin === 'number') na.realMin = old.realMin; if (typeof old.validatedAt === 'number') na.validatedAt = old.validatedAt; if (old.heure) na.heure = old.heure; if (old.rdvDone) na.rdvDone = old.rdvDone; } });
   tour.arrets = newArrets.filter((a) => a.clients.length);
   if (JSON.stringify(tour.arrets) !== beforeArrets) changed = true;
-  if (beforeAddr !== addrSig(tour.arrets)) { tour.result = null; invalidateTourRoute(tour); } // adresses modifiées → recalcul géométrie + temps réels périmés
+  if (beforeAddr !== addrSig(tour.arrets)) { tour.result = null; invalidateTourRoute(oldArrets.map((a) => norm(addrStr(a.addr))), tour); } // adresses modifiées → recalcul géométrie + segments/heures périmés
   // Articles : resync par id (renommage / suppression de cheval)
   (tour.articles || []).forEach((art) => {
     if (art.impaye) return; // impayé : rattaché au client, sans cheval → on n'y touche pas
@@ -3565,7 +3575,28 @@ function reconcileActiveTours() {
 // Convention : realMin (et returnRealMin) === 0 = « à recalculer » (périmé), > 0 = temps réel encodé à jour, null/absent = jamais encodé.
 function tourRouteStale(t) { return !!t && ((t.arrets || []).some((a) => a.realMin === 0) || t.returnRealMin === 0); }
 // Invalide les temps réels DÉJÀ encodés (>0) → 0 (à recalculer) suite à un changement d'ordre/composition/adresse. Les segments jamais encodés (null) restent « à encoder ».
-function invalidateTourRoute(t) { if (!t) return false; let ch = false; (t.arrets || []).forEach((a) => { if (typeof a.realMin === 'number' && a.realMin > 0) { a.realMin = 0; ch = true; } }); if (typeof t.returnRealMin === 'number' && t.returnRealMin > 0) { t.returnRealMin = 0; ch = true; } return ch; }
+// Invalidation CHIRURGICALE après un changement d'ordre/composition/adresse. `oldAddrs` = adresses ordonnées AVANT.
+// (1) Temps réel d'un arrêt (realMin[i] = trajet précédent→arrêt) remis à « à recalculer » (0) seulement si la paire
+//     (précédent → soi) a réellement changé ; le RETOUR seulement si le dernier arrêt change.
+// (2) À partir du 1ᵉʳ arrêt dont la position change, l'heure d'arrivée estimée décale → les HEURES de RDV des arrêts
+//     suivants sont marquées « à revoir » (cl.heureStale) SANS être effacées (l'agenda ne bouge qu'au ré-encodage).
+// Ajout sur un arrêt existant / ordre inchangé → rien n'est invalidé ni marqué.
+function invalidateTourRoute(oldAddrs, t) {
+  if (t === undefined) { t = oldAddrs; oldAddrs = (t && t.arrets || []).map((a) => norm(addrStr(a.addr))); } // repli : pas d'ancien ordre → aucun segment considéré comme modifié
+  if (!t) return false;
+  const arr = t.arrets || [], newAddrs = arr.map((a) => norm(addrStr(a.addr)));
+  const oldPairs = new Set();
+  for (let i = 0; i < oldAddrs.length; i++) oldPairs.add((i === 0 ? '#HOME' : oldAddrs[i - 1]) + '||' + oldAddrs[i]);
+  let ch = false;
+  arr.forEach((a, i) => { const prev = i === 0 ? '#HOME' : newAddrs[i - 1]; if (typeof a.realMin === 'number' && a.realMin > 0 && !oldPairs.has(prev + '||' + newAddrs[i])) { a.realMin = 0; ch = true; } });
+  const oldLast = oldAddrs.length ? oldAddrs[oldAddrs.length - 1] : null, newLast = newAddrs.length ? newAddrs[newAddrs.length - 1] : null;
+  if (typeof t.returnRealMin === 'number' && t.returnRealMin > 0 && newLast !== oldLast) { t.returnRealMin = 0; ch = true; }
+  let firstChanged = -1;
+  for (let i = 0; i < newAddrs.length; i++) { if (newAddrs[i] !== (oldAddrs[i] != null ? oldAddrs[i] : null)) { firstChanged = i; break; } }
+  if (firstChanged >= 0) for (let i = firstChanged; i < arr.length; i++) (arr[i].clients || []).forEach((cl) => { if (cl.heure && !cl.heureStale) { cl.heureStale = true; ch = true; } });
+  return ch;
+}
+const tourHeureStale = (t) => !!t && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.heureStale));
 // « Prête » = paramétrage complet (PAS d'acte ni de paiement) : adresses localisées + itinéraire calculé + ≥1 cheval présent/client + heure de RDV/client. Renvoie la liste des manques (vide = prête). L'itinéraire périmé est signalé à part (tourRouteStale).
 function tourReadyIssues(t) {
   const out = [];
@@ -3762,6 +3793,7 @@ function chooseClientTargets(c) {
   $('addSel').addEventListener('click', () => { addClientToTour(c, chs.filter((_, i) => picked.has(i))); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); });
 }
 function addClientToTour(c, chevaux) {
+  const oldAddrs = (currentTour.arrets || []).map((a) => norm(addrStr(a.addr))); // ordre AVANT ajout (invalidation chirurgicale)
   const groups = {};
   const push = (addr, ch) => { const k = norm(addrStr(addr)); if (!groups[k]) groups[k] = { addr: toAddr(addr), chevaux: [] }; if (ch) groups[k].chevaux.push({ id: ch.id, nom: ch.nom || 'cheval', fourbure: false, npas: false, infection: false }); };
   if (!chevaux.length) push(c.addr, null);
@@ -3781,7 +3813,7 @@ function addClientToTour(c, chevaux) {
     im.collected = true; im.collectedTourId = currentTour.id; addedImpaye = true;
   });
   if (addedImpaye) saveClients();
-  invalidateTourRoute(currentTour); persistCurrentTour(); // composition modifiée → temps réels périmés
+  invalidateTourRoute(oldAddrs, currentTour); persistCurrentTour(); // composition modifiée → segments/heures suivantes périmés (rien si arrêt existant)
 }
 
 // Dernière tournée CLÔTURÉE (avant `avantDate`) où ce cheval a eu un parage ou une visite (non annulé) → écart en jours depuis.
@@ -3837,7 +3869,7 @@ function renderEditorArrets(locked) {
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
-      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; currentTour.arrets.splice(i, 1); invalidateTourRoute(currentTour); persistCurrentTour(); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); }); // retrait arrêt → itinéraire périmé + maj Google
+      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; const oldA = currentTour.arrets.map((x) => norm(addrStr(x.addr))); currentTour.arrets.splice(i, 1); invalidateTourRoute(oldA, currentTour); persistCurrentTour(); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); }); // retrait arrêt → segments/heures suivants périmés + maj Google
       // N° d'ordre saisi : déplace l'arrêt à la position demandée ; les autres se renumérotent tout seuls.
       const ord = el.querySelector('[data-order]');
       if (ord) ord.addEventListener('change', (e) => {
@@ -3845,9 +3877,10 @@ function renderEditorArrets(locked) {
         if (isNaN(np)) { renderEditorArrets(locked); return; }
         np = Math.max(1, Math.min(N, np)) - 1;
         if (np === i) return;
+        const oldA = currentTour.arrets.map((x) => norm(addrStr(x.addr)));
         const [moved] = currentTour.arrets.splice(i, 1);
         currentTour.arrets.splice(np, 0, moved);
-        invalidateTourRoute(currentTour); persistCurrentTour();
+        invalidateTourRoute(oldA, currentTour); persistCurrentTour();
         renderEditorArrets(locked); scheduleGeoRecalc();
       });
     }
@@ -3871,10 +3904,10 @@ function renderEditorArrets(locked) {
       {
         const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '', pretOn = ((((clients.find((x) => x.id === cl.clientId) || {}).prets) || []).length > 0), plCls = plancheBtnClass(plancheStateForClient(currentTour, cl.clientId));
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-acts"><button class="btn small${a.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-acts"><button class="btn small${a.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
-          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); } // persistCurrentTour (pas saveTournees) : currentTour est une COPIE → il faut la réécrire dans le tableau, sinon l'heure est perdue
+          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; delete cl.heureStale; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); } // ré-encodage → l'heure n'est plus « à revoir » ; persistCurrentTour (copie) sinon l'heure est perdue
           if (!futureTour) actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (arretPaiementDone(currentTour, a) && typeof a.validatedAt !== 'number') { a.validatedAt = Date.now(); persistCurrentTour(); } refreshEverywhere(); }, cl.clientId)); // paiement complet de l'arrêt → clôture l'arrêt (validatedAt) + rafraîchit le bandeau
           if (!futureTour) actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
@@ -4093,9 +4126,10 @@ function enableDrag(listEl) {
       const up = () => {
         dragEl.classList.remove('dragging');
         document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
+        const oldA = currentTour.arrets.map((x) => norm(addrStr(x.addr)));
         const order = [...listEl.querySelectorAll('.arret')].map((x) => +x.dataset.idx);
         currentTour.arrets = order.map((i) => currentTour.arrets[i]);
-        invalidateTourRoute(currentTour); persistCurrentTour();
+        invalidateTourRoute(oldA, currentTour); persistCurrentTour();
         renderEditorArrets(false); scheduleGeoRecalc();
       };
       document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
@@ -8009,7 +8043,7 @@ function modalRecoverStats(t, opts) {
   if (opts && $('recSkip')) $('recSkip').addEventListener('click', () => opts.onNext());
   $('recSave').addEventListener('click', () => {
     const numOrNull = (v) => { v = (v || '').toString().trim(); return v === '' ? null : Math.max(0, Math.round(parseNum(v))); };
-    body.querySelectorAll('[data-clheure]').forEach((inp) => { const [i, j] = inp.dataset.clheure.split('.').map(Number); const cl = t.arrets[i] && t.arrets[i].clients[j]; if (cl) cl.heure = inp.value || ''; });
+    body.querySelectorAll('[data-clheure]').forEach((inp) => { const [i, j] = inp.dataset.clheure.split('.').map(Number); const cl = t.arrets[i] && t.arrets[i].clients[j]; if (cl) { cl.heure = inp.value || ''; if (cl.heure) delete cl.heureStale; } });
     body.querySelectorAll('[data-route]').forEach((inp) => { const a = t.arrets[+inp.dataset.route]; const v = numOrNull(inp.value); if (v == null) delete a.realMin; else a.realMin = v; });
     body.querySelectorAll('[data-consult]').forEach((inp) => { const [i, j, k] = inp.dataset.consult.split('.').map(Number); const cv = t.arrets[i] && t.arrets[i].clients[j] && t.arrets[i].clients[j].chevaux[k]; if (!cv) return; const v = numOrNull(inp.value); if (v == null) delete cv.consultMin; else cv.consultMin = v; });
     const rr = numOrNull($('recReturn').value); if (rr == null) delete t.returnRealMin; else t.returnRealMin = rr;

@@ -451,6 +451,8 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .a-heure { display: inline-flex; align-items: center; gap: 3px; font-size: .82rem; border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }
 .a-heure input[type=time] { width: 80px; border: 0; padding: 2px; background: transparent; }
 .a-heure.done { border-color: var(--ok, #2e9e5b); background: color-mix(in srgb, var(--ok, #2e9e5b) 12%, transparent); }
+.a-heure.stale { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.a-heure.stale::after { content: '⚠ à revoir'; font-size: .7rem; color: var(--warn); margin-left: 2px; }
 .btn.small.done { opacity: .55; background: color-mix(in srgb, var(--ok, #2e9e5b) 16%, var(--card)); }
 .btn.block.done { background: color-mix(in srgb, var(--ok, #2e9e5b) 18%, var(--card)); border-color: var(--ok, #2e9e5b); }
 
