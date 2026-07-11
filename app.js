@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.37';
+const APP_VERSION = '1.2.38';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.38', date: '2026-07-11',
+    ajouts: [
+      'Planche de contact (PDF) — en-tête revu : à gauche, le nom du client en 1ʳᵉ ligne (plus gros), puis la date (plus grande), puis le type de planche. À droite, le logo reste en haut et votre nom est centré dessous, en gras et agrandi. La société passe dans le pied de page.',
+      'Planche de contact (PDF) — pied de page : le vrai logo GaloPodo (sabot + auréole) en bas à gauche, et « société · Contact · TVA » centré au milieu, en gras et plus grand.',
+    ],
+  },
   {
     version: '1.2.37', date: '2026-07-11',
     ajouts: [
@@ -6026,21 +6033,22 @@ async function planchePageCanvas(pi) {
   const titre = (st.type === 'avantapres' ? 'Avant / après (parage)' : 'Planche de contact') + (st.stade ? ' — ' + st.stade : '');
   const headerLogo = (S.proLogo && S.proLogo.data) ? S.proLogo.data : GALOPODO_LOGO; // logo pro, ou GaloPodo par défaut (toujours affiché)
   const topY = px(g.margin);
-  // Zone client (gauche)
+  // Zone client (gauche) : nom du client (1ʳᵉ ligne) → date → type de planche
   const zcX = px(g.margin), zcW = px(g.gridW * 0.32); let cy = topY;
-  ctx.textAlign = 'left'; ctx.fillStyle = '#555'; ctx.font = fs(2.4) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, titre, zcW), zcX, cy); cy += fs(3);
-  ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, st.client || '—', zcW), zcX, cy); cy += fs(4.4);
-  ctx.font = fs(2.6) + 'px sans-serif'; ctx.fillText(fmtDateFr(st.date), zcX, cy); cy += fs(3.1);
-  plClientLines(st).forEach((l) => { ctx.fillText(plTrunc(ctx, l, zcW), zcX, cy); cy += fs(3.1); });
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(4.2) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, st.client || '—', zcW), zcX, cy); cy += fs(5.2);
+  ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.0) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, fmtDateFr(st.date), zcW), zcX, cy); cy += fs(3.7);
+  ctx.fillStyle = '#333'; ctx.font = fs(2.9) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, titre, zcW), zcX, cy); cy += fs(3.5);
+  ctx.fillStyle = '#555'; ctx.font = fs(2.6) + 'px sans-serif'; plClientLines(st).forEach((l) => { ctx.fillText(plTrunc(ctx, l, zcW), zcX, cy); cy += fs(3.1); });
   // Zone cheval (centre)
   const zhX = px(g.margin + g.gridW * 0.34), zhW = px(g.gridW * 0.32), zhCx = zhX + zhW / 2; let vy = topY;
   ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, st.cheval || '—', zhW), zhCx, vy); vy += fs(4.4);
   ctx.font = fs(2.6) + 'px sans-serif'; plChevalLines(st).forEach((l) => { ctx.fillText(plTrunc(ctx, l, zhW), zhCx, vy); vy += fs(3.1); });
   if (st.note) { ctx.font = 'italic ' + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, 'Note : ' + st.note, zhW), zhCx, vy); }
-  // Zone pro (droite) : logo + noms
-  const zpX = px(g.margin + g.gridW * 0.68), zpW = px(g.gridW * 0.32); let py = topY;
-  if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(9), lw = Math.min(zpW, lg.width * (lh / lg.height)); ctx.drawImage(lg, zpX + zpW - lw, py, lw, lh); py += lh + fs(1); } }
-  ctx.textAlign = 'right'; ctx.fillStyle = '#111'; ctx.font = fs(2.6) + 'px sans-serif'; plProNameLines().forEach((n) => { ctx.fillText(plTrunc(ctx, n, zpW), zpX + zpW, py); py += fs(3.1); });
+  // Zone pro (droite) : logo en haut à droite + NOM du pro centré dessous (gras). La société est reportée dans le pied de page.
+  const zpX = px(g.margin + g.gridW * 0.68), zpW = px(g.gridW * 0.32), zpCx = zpX + zpW / 2; let py = topY;
+  if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(10), lw = Math.min(zpW, lg.width * (lh / lg.height)); ctx.drawImage(lg, zpX + zpW - lw, py, lw, lh); py += lh + fs(1.5); } }
+  { const p = S.proIdent || {}; const proName = [p.prenom, p.nom].filter(Boolean).join(' '); if (proName) { ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.1) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, proName, zpW), zpCx, py); } }
   ctx.textAlign = 'left';
   // Grille (cellules fixes)
   const gx = px(g.gridLeft), gtop = px(g.gridTop), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH);
@@ -6063,11 +6071,12 @@ async function planchePageCanvas(pi) {
   ctx.moveTo(gx, gtop); ctx.lineTo(gx, gridBottom);
   for (let ri = 0; ri <= rows.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
   ctx.moveTo(gx, gtop); ctx.lineTo(gx + px(g.gridW), gtop); ctx.stroke();
-  // Pied de page : mini-logo GaloPodo + contact + TVA
+  // Pied de page : logo GaloPodo (le vrai, en bas à gauche) + société · contact · TVA (centré, gras, plus grand)
   const fy = px(g.pageH - g.margin - g.footerH);
   ctx.strokeStyle = '#999'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(px(g.margin), fy); ctx.lineTo(px(g.margin + g.gridW), fy); ctx.stroke();
-  let fx = px(g.margin); const flg = await plLoadImg(GALOPODO_LOGO); if (flg) { const fh = px(3.6), fw = flg.width * (fh / flg.height); ctx.drawImage(flg, fx, fy + px(0.7), fw, fh); fx += fw + px(2); }
-  ctx.fillStyle = '#333'; ctx.font = fs(2.4) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(plTrunc(ctx, plProFooter(), px(g.margin + g.gridW) - fx), fx, fy + px(1.2));
+  const flg = await plLoadImg(GALOPODO_MARK); if (flg) { const fh = px(g.footerH - 0.8), fw = flg.width * (fh / flg.height); ctx.drawImage(flg, px(g.margin), fy + px(0.6), fw, fh); } // logo bas-gauche, aligné à gauche
+  ctx.fillStyle = '#222'; ctx.font = 'bold ' + fs(2.8) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(plTrunc(ctx, plProFooter(), px(g.gridW) - px(20)), px(g.margin + g.gridW / 2), fy + px(1.8)); // texte centré au milieu de la page
+  ctx.textAlign = 'left';
   return cv;
 }
 async function planchePdfBlob() {
@@ -7663,6 +7672,9 @@ function plRenderGrid() {
 // ===== Planches v2 : logo par défaut, abréviations, géométrie mm partagée, infos cheval/client/pro =====
 const GALOPODO_LOGO_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='300' height='88'><text x='6' y='60' font-family='Segoe UI, Arial, sans-serif' font-size='46' font-weight='700'><tspan fill='#2e7d32'>Galo</tspan><tspan fill='#333'>Podo</tspan></text></svg>";
 const GALOPODO_LOGO = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(GALOPODO_LOGO_SVG);
+// Vrai logo GaloPodo (sabot/mont + auréole + trajectoire de croissance) — inline en data URI (jamais de taint canvas → export PDF fiable).
+const GALOPODO_MARK_SVG = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512' width='512' height='512'><rect width='512' height='512' rx='104' fill='#e8722a'/><path d='M92 432 L92 296 L150 338 L202 244 L256 318 L310 244 L362 338 L420 296 L420 432 Z' fill='#c65e17'/><ellipse cx='272' cy='138' rx='150' ry='52' fill='none' stroke='#241f1a' stroke-width='24'/><polyline points='118,378 196,318 250,360 322,258 404,172' fill='none' stroke='#241f1a' stroke-width='30' stroke-linecap='round' stroke-linejoin='round'/><path d='M404 172 L346 192 M404 172 L386 230' fill='none' stroke='#241f1a' stroke-width='30' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+const GALOPODO_MARK = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(GALOPODO_MARK_SVG);
 // Abréviation d'un membre : AG/AD/PG/PD (gain de place en 1ʳᵉ colonne).
 function memberAbbr(base) {
   const s = norm(base || '');
@@ -7704,12 +7716,12 @@ function plClientLines(st) {
   return out;
 }
 const plProNameLines = () => { const p = S.proIdent || {}; return [[p.prenom, p.nom].filter(Boolean).join(' '), p.societe].filter(Boolean); };
-function plProFooter() { const p = S.proIdent || {}; const bits = []; if (p.email) bits.push(p.email); if (p.tel) bits.push(p.tel); let s = bits.length ? 'Contact : ' + bits.join(' · ') : ''; if (p.tvaNum) s += (s ? '   ·   ' : '') + 'TVA : ' + p.tvaNum; return s; }
+function plProFooter() { const p = S.proIdent || {}; const bits = []; if (p.societe) bits.push(p.societe); const c = []; if (p.email) c.push(p.email); if (p.tel) c.push(p.tel); if (c.length) bits.push('Contact : ' + c.join(' · ')); if (p.tvaNum) bits.push('TVA : ' + p.tvaNum); return bits.join('   ·   '); } // société · contact · TVA
 // Géométrie de planche en MILLIMÈTRES (A4), partagée par le moteur canvas et le moteur impression (marges 0,5 mm, cellules fixes).
 const PL_PXMM = 4.7; // résolution du rendu canvas (px par mm)
 function plGeom(land, nCols, refRows) {
   const pageW = land ? 297 : 210, pageH = land ? 210 : 297;
-  const margin = 0.5, headerH = 15, footerH = 5, labelW = 9, angleHeaderH = 5;
+  const margin = 0.5, headerH = 15, footerH = 7, labelW = 9, angleHeaderH = 5;
   const gridLeft = margin, gridTop = margin + headerH;
   const gridW = pageW - 2 * margin, gridH = pageH - 2 * margin - headerH - footerH;
   const colW = (gridW - labelW) / Math.max(1, nCols);
