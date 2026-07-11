@@ -93,9 +93,9 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .a-heure .gp-sel-btn { border: 0; background: transparent; padding: 2px; min-width: 68px; width: auto; font-size: .82rem; color: var(--muted); gap: 4px; }
 /* Calendrier maison (Item 4) — réutilise .gp-sel / .gp-sel-pop */
 .gp-date .gp-sel-pop { min-width: 250px; padding: 8px; }
-.gp-cal-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.gp-cal-title { font-weight: 700; color: var(--ink); font-size: .95rem; text-transform: capitalize; }
-.gp-cal-nav { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; width: 32px; height: 32px; font-size: 1.1rem; cursor: pointer; line-height: 1; }
+.gp-cal-hd { display: flex; align-items: center; justify-content: space-between; gap: 2px; margin-bottom: 6px; }
+.gp-cal-title { flex: 1; text-align: center; font-weight: 700; color: var(--ink); font-size: .9rem; text-transform: capitalize; }
+.gp-cal-nav { flex: none; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; width: 28px; height: 32px; font-size: 1rem; cursor: pointer; line-height: 1; padding: 0; }
 .gp-cal-wd { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 4px; }
 .gp-cal-wd span { text-align: center; font-size: .68rem; color: var(--muted); font-weight: 700; }
 .gp-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
@@ -600,6 +600,7 @@ table.pl-egrid th.pl-mem { font-size: .68rem; font-weight: 700; color: var(--str
 .pl-guide line { stroke: rgba(20, 20, 20, .5); stroke-width: .8; vector-effect: non-scaling-stroke; }
 .pl-guide line.c { stroke: #e11; stroke-width: 1.2; }
 /* Éditeur de cadrage d'une case (zoom / déplacement / rotation) */
+.pl-ce-overlay { z-index: 3100; } /* au-dessus de la modale de création de planche (3000) */
 .pl-ce-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .pl-ce-frame { position: relative; overflow: hidden; background: #efece7; border: 1px solid var(--line); border-radius: 8px; margin: 0 auto; touch-action: none; }
 .pl-ce-frame img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; transform-origin: center center; user-select: none; -webkit-user-drag: none; display: block; }

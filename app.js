@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.52';
+const APP_VERSION = '1.2.53';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.53', date: '2026-07-12',
+    corrections: [
+      'Planche — édition des images : corrige une perte de la planche en cours (ouvrir l\'éditeur de cadrage n\'efface plus l\'écran de création ; il s\'affiche par-dessus).',
+      'Menus déroulants / heure / date : le menu s\'affiche désormais toujours en entier, même quand le champ est dans une petite vignette ou en bas d\'une fenêtre (il n\'est plus coupé) ; il s\'ouvre vers le haut s\'il manque de place et se referme quand on fait défiler la page.',
+      'Calendrier : navigation par année ajoutée (« / ») — plus besoin de reculer mois par mois pour une date de naissance ancienne.',
+      'Planche — cadrage des images : le cadrage n\'est plus appliqué par erreur à une autre photo après un déplacement, un remplacement, une suppression, un changement de modèle/de page ou le retrait d\'une date de comparaison.',
+      'Éditeur de cadrage : le cadre respecte désormais toujours la forme de la case (plus de cadre démesuré en format portrait).',
+      'Sélecteur d\'heure : la colonne des minutes ne resaute plus à chaque choix d\'heure.',
+    ],
+  },
   {
     version: '1.2.52', date: '2026-07-12',
     ajouts: [
@@ -2849,7 +2860,24 @@ document.addEventListener('focusout', (e) => {
 let _gpSelOpen = null; // wrapper .gp-sel actuellement ouvert (un seul à la fois)
 function gpSelLabel(sel) { const o = sel.options[sel.selectedIndex]; return o ? (o.textContent || '').trim() : ''; }
 function gpSelSync(sel) { const w = sel._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpSelLabel(sel) || '—'; }
-function gpSelClose() { if (!_gpSelOpen) return; _gpSelOpen.classList.remove('open'); _gpSelOpen = null; }
+function gpSelClose() { if (!_gpSelOpen) return; gpResetPop(_gpSelOpen); _gpSelOpen.classList.remove('open'); _gpSelOpen = null; window.removeEventListener('scroll', gpSelClose, true); }
+// Positionne le popup en `position:fixed` calculé sur le rect du bouton → il échappe au clipping de tout ancêtre `overflow`
+// (vignettes `.pl-thumb`, bas de modale…), comme le picker natif s'affichait en top-layer. Ouvre vers le haut s'il manque de place.
+function gpPlacePop(w) {
+  const btn = w.querySelector('.gp-sel-btn'), pop = w.querySelector('.gp-sel-pop'); if (!btn || !pop) return;
+  const r = btn.getBoundingClientRect();
+  pop.style.position = 'fixed'; pop.style.right = 'auto'; pop.style.bottom = 'auto'; pop.style.top = '0'; pop.style.left = '0';
+  if (w.classList.contains('gp-date')) pop.style.width = '';
+  else if (w.classList.contains('gp-time')) pop.style.width = Math.max(r.width, 132) + 'px';
+  else pop.style.width = r.width + 'px';
+  const pw = pop.offsetWidth, phh = pop.offsetHeight;
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - pw - 8));
+  let top = r.bottom + 4;
+  if (top + phh > window.innerHeight - 8 && r.top - 4 - phh > 8) top = r.top - 4 - phh; // pas de place en bas → au-dessus
+  pop.style.left = left + 'px'; pop.style.top = top + 'px';
+}
+function gpResetPop(w) { const pop = w && w.querySelector('.gp-sel-pop'); if (!pop) return; ['position', 'top', 'left', 'right', 'bottom', 'width'].forEach((p) => { pop.style[p] = ''; }); }
+function gpAfterOpen(w) { gpPlacePop(w); window.addEventListener('scroll', gpSelClose, true); } // referme au scroll (le popup fixed ne suit pas)
 function gpSelBuildPop(w) {
   const sel = w._gpSel, pop = w.querySelector('.gp-sel-pop'); pop.innerHTML = '';
   Array.from(sel.options).forEach((o, i) => {
@@ -2862,18 +2890,16 @@ function gpSelOpen(w) {
   const sel = w._gpSel; if (!sel || sel.disabled) return;
   if (_gpSelOpen && _gpSelOpen !== w) gpSelClose();
   gpSelBuildPop(w); // reconstruit depuis les <option> courantes (parfois repeuplées après coup)
-  w.classList.add('open'); _gpSelOpen = w;
+  w.classList.add('open'); _gpSelOpen = w; gpAfterOpen(w);
   const cur = w.querySelector('.gp-sel-opt.sel');
   if (cur) { cur.classList.add('hi'); try { cur.scrollIntoView({ block: 'nearest' }); } catch { } }
 }
 function gpSelPick(w, i) {
   const sel = w._gpSel, o = sel.options[i]; if (!o || o.disabled) return;
-  if (sel.selectedIndex !== i) {
-    sel.selectedIndex = i; gpSelSync(sel);
-    sel.dispatchEvent(new Event('input', { bubbles: true }));
-    sel.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-  gpSelClose();
+  const changed = sel.selectedIndex !== i;
+  if (changed) { sel.selectedIndex = i; gpSelSync(sel); }
+  gpSelClose(); // ferme AVANT de dispatcher : si un handler `change` re-rend le conteneur, pas de référence à un nœud détaché
+  if (changed) { sel.dispatchEvent(new Event('input', { bubbles: true })); sel.dispatchEvent(new Event('change', { bubbles: true })); }
 }
 function gpSelKey(w, e) {
   const open = w.classList.contains('open');
@@ -2894,7 +2920,7 @@ function gpSelKey(w, e) {
 }
 function enhanceSelect(sel) {
   if (!sel || sel.dataset.gpEnhanced || sel.multiple) return;
-  sel.dataset.gpEnhanced = '1'; sel.classList.add('gp-native');
+  sel.dataset.gpEnhanced = '1'; sel.classList.add('gp-native'); sel.tabIndex = -1; sel.setAttribute('aria-hidden', 'true'); // hors tabulation + inaccessible au clavier (le picker natif ne doit jamais s'ouvrir)
   const w = document.createElement('div'); w.className = 'gp-sel';
   const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'gp-sel-btn';
   btn.setAttribute('aria-haspopup', 'listbox'); btn.setAttribute('aria-disabled', sel.disabled ? 'true' : 'false');
@@ -2918,13 +2944,13 @@ function gpPad2(n) { return (n < 10 ? '0' : '') + n; }
 function gpTimeParse(v) { const m = /^(\d{1,2}):(\d{2})$/.exec(v || ''); return m ? { h: +m[1], mn: +m[2] } : { h: null, mn: null }; }
 function gpTimeLabel(inp) { return /^\d{1,2}:\d{2}$/.test(inp.value || '') ? inp.value : 'HH:MM'; }
 function gpTimeSync(inp) { const w = inp._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpTimeLabel(inp); }
-function gpTimeBuildPop(w) {
+function gpTimeBuildPop(w, scroll) {
   const inp = w._gpInp, p = gpTimeParse(inp.value), pop = w.querySelector('.gp-sel-pop');
   const col = (type, n, cur) => { let s = ''; for (let i = 0; i < n; i++) s += `<div class="gp-sel-opt${i === cur ? ' sel' : ''}" data-t="${type}" data-v="${i}">${gpPad2(i)}</div>`; return s; };
   pop.innerHTML = `<div class="gp-time-hd"><span>h</span><span>min</span></div><div class="gp-time-cols"><div class="gp-time-col" data-col="h">${col('h', 24, p.h)}</div><div class="gp-time-col" data-col="m">${col('m', 60, p.mn)}</div></div>`;
-  requestAnimationFrame(() => { pop.querySelectorAll('.gp-sel-opt.sel').forEach((o) => { try { o.scrollIntoView({ block: 'center' }); } catch { } }); });
+  if (scroll) requestAnimationFrame(() => { pop.querySelectorAll('.gp-sel-opt.sel').forEach((o) => { try { o.scrollIntoView({ block: 'center' }); } catch { } }); }); // centre à l'ouverture seulement (pas de resaut de la 2ᵉ colonne à chaque choix)
 }
-function gpTimeOpen(w) { const inp = w._gpInp; if (!inp || inp.disabled) return; if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); gpTimeBuildPop(w); w.classList.add('open'); _gpSelOpen = w; }
+function gpTimeOpen(w) { const inp = w._gpInp; if (!inp || inp.disabled) return; if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); gpTimeBuildPop(w, true); w.classList.add('open'); _gpSelOpen = w; gpAfterOpen(w); }
 function gpTimePick(w, type, val) {
   const inp = w._gpInp, p = gpTimeParse(inp.value); let h = p.h == null ? 0 : p.h, mn = p.mn == null ? 0 : p.mn;
   if (type === 'h') h = val; else mn = val;
@@ -2934,7 +2960,7 @@ function gpTimePick(w, type, val) {
 }
 function enhanceTime(inp) {
   if (!inp || inp.dataset.gpEnhanced) return;
-  inp.dataset.gpEnhanced = '1'; inp.classList.add('gp-native');
+  inp.dataset.gpEnhanced = '1'; inp.classList.add('gp-native'); inp.tabIndex = -1; inp.setAttribute('aria-hidden', 'true');
   const w = document.createElement('div'); w.className = 'gp-sel gp-time';
   const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'gp-sel-btn';
   btn.setAttribute('aria-haspopup', 'dialog'); btn.setAttribute('aria-disabled', inp.disabled ? 'true' : 'false');
@@ -2974,19 +3000,19 @@ function gpDateBuildPop(w) {
     if ((min && gpDateCmp(cur, min) < 0) || (max && gpDateCmp(cur, max) > 0)) cls += ' disabled';
     cells += `<div class="${cls}" data-d="${d}">${d}</div>`;
   }
-  pop.innerHTML = `<div class="gp-cal-hd"><button type="button" class="gp-cal-nav" data-nav="-1">‹</button><div class="gp-cal-title">${GP_MONTHS[m - 1]} ${y}</div><button type="button" class="gp-cal-nav" data-nav="1">›</button></div>`
+  pop.innerHTML = `<div class="gp-cal-hd"><button type="button" class="gp-cal-nav" data-nav="-12" title="Année précédente">«</button><button type="button" class="gp-cal-nav" data-nav="-1" title="Mois précédent">‹</button><div class="gp-cal-title">${GP_MONTHS[m - 1]} ${y}</div><button type="button" class="gp-cal-nav" data-nav="1" title="Mois suivant">›</button><button type="button" class="gp-cal-nav" data-nav="12" title="Année suivante">»</button></div>`
     + `<div class="gp-cal-wd">${GP_WD.map((d) => `<span>${d}</span>`).join('')}</div><div class="gp-cal-grid">${cells}</div>`;
 }
-function gpDateOpen(w) { const inp = w._gpInp; if (!inp || inp.disabled) return; if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); const p = gpDateParse(inp.value); w._gpYM = p ? { y: p.y, m: p.mo } : null; gpDateBuildPop(w); w.classList.add('open'); _gpSelOpen = w; }
-function gpDateNav(w, delta) { if (!w._gpYM) return; let y = w._gpYM.y, m = w._gpYM.m + delta; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } w._gpYM = { y, m }; gpDateBuildPop(w); }
+function gpDateOpen(w) { const inp = w._gpInp; if (!inp || inp.disabled) return; if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); const p = gpDateParse(inp.value); w._gpYM = p ? { y: p.y, m: p.mo } : null; gpDateBuildPop(w); w.classList.add('open'); _gpSelOpen = w; gpAfterOpen(w); }
+function gpDateNav(w, delta) { if (!w._gpYM) return; let y = w._gpYM.y, m = w._gpYM.m + delta; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } w._gpYM = { y, m }; gpDateBuildPop(w); gpPlacePop(w); } // repositionne (la hauteur du calendrier varie selon le nb de semaines)
 function gpDatePick(w, d) {
   const inp = w._gpInp; inp.value = `${w._gpYM.y}-${gpPad2(w._gpYM.m)}-${gpPad2(d)}`; gpDateSync(inp);
+  gpSelClose(); // ferme avant dispatch (un handler `change` peut re-rendre le conteneur)
   inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
-  gpSelClose();
 }
 function enhanceDate(inp) {
   if (!inp || inp.dataset.gpEnhanced) return;
-  inp.dataset.gpEnhanced = '1'; inp.classList.add('gp-native');
+  inp.dataset.gpEnhanced = '1'; inp.classList.add('gp-native'); inp.tabIndex = -1; inp.setAttribute('aria-hidden', 'true');
   const w = document.createElement('div'); w.className = 'gp-sel gp-date';
   const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'gp-sel-btn';
   btn.setAttribute('aria-haspopup', 'dialog'); btn.setAttribute('aria-disabled', inp.disabled ? 'true' : 'false');
@@ -7955,7 +7981,7 @@ function modalPlancheCreate(type, prefill) {
   if ($('plCfromTour')) $('plCfromTour').onclick = () => modalPlancheFromTour();
   if ($('plCnext')) $('plCnext').onclick = () => { const q = plCreate.queue || []; if (q.length) modalPlancheCreate('contact', { cheval: q[0].cheval, client: q[0].client, date: q[0].date, stade: q[0].stade || '', queue: q.slice(1), queueTotal: plCreate.queueTotal, queueIdx: plCreate.queueIdx + 1 }); else close(); };
   $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((b) => b.addEventListener('click', () => {
-    plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.sel = null;
+    plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.cellT = {}; plCreate.sel = null;
     $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.plcm === plCreate.modele));
     plRenderPot(); plRenderGrid();
   }));
@@ -7972,7 +7998,7 @@ function modalPlancheCreate(type, prefill) {
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
   if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; const w = $('plCcycleWrap'); if (w) w.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; }); // le champ « durée du cycle » suit le stade (parage/ferrage/déferrage)
-  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); plRenderPot(); plRenderGrid(); });
+  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); if (plCreate.cellT) Object.keys(plCreate.cellT).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellT[k]; }); plRenderPot(); plRenderGrid(); });
   $('plCimport').onclick = () => $('plCfiles').click();
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
@@ -8049,10 +8075,10 @@ function plRenderPot() {
     t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta') || ev.target.closest('.pl-th-assign')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
     if (showAssign) { const mb = t.querySelector('.pl-th-mb'), ang = t.querySelector('.pl-th-ang'); if (mb && ang) {
       // FIX : on NE re-dessine PAS le pot au changement (sinon la sélection partielle se réinitialisait) — on mémorise ph._mb/_ang, on place quand les deux sont choisis, et on met à jour la grille + le badge « placé » de cette vignette.
-      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); plCreate.cells[pr[0] + '_' + pr[1] + '_' + ang.value] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); };
+      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; if (!plCreate.cellT) plCreate.cellT = {}; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; delete plCreate.cellT[k]; } }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); const tk = pr[0] + '_' + pr[1] + '_' + ang.value; delete plCreate.cellT[tk]; plCreate.cells[tk] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); };
       mb.addEventListener('change', applyAssign); ang.addEventListener('change', applyAssign);
     } }
-    t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) delete plCreate.cells[k]; }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
+    t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; if (plCreate.cellT) delete plCreate.cellT[k]; } }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
     t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; }); // pas de re-render (garde le focus)
     t.querySelector('.pl-th-date').addEventListener('click', (ev) => { if (ev.target.showPicker) { try { ev.target.showPicker(); } catch { } } });
     t.querySelector('.pl-th-setdate').addEventListener('click', () => { ph.date = plCreate.date; const di = t.querySelector('.pl-th-date'); if (di) di.value = ph.date; });
@@ -8062,7 +8088,9 @@ function plRenderPot() {
 
 function plPlace(key) {
   if (!plCreate.sel) return;
-  Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === plCreate.sel) delete plCreate.cells[k]; }); // une photo = une seule case
+  if (!plCreate.cellT) plCreate.cellT = {};
+  Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === plCreate.sel) { delete plCreate.cells[k]; delete plCreate.cellT[k]; } }); // une photo = une seule case (elle déménage → sa transfo tombe)
+  delete plCreate.cellT[key]; // nouvelle photo dans la case → repart en « contain »
   plCreate.cells[key] = plCreate.sel; plCreate.sel = null; plRenderPot(); plRenderGrid();
 }
 
@@ -8084,9 +8112,10 @@ function plRenderGrid() {
         const x = chip.querySelector('.pl-date-x');
         if (x) x.addEventListener('click', () => {
           st.compar.splice(ci2, 1);
-          const nc = {}; // ré-indexe les cellules de la page 0 (les lignes après celle retirée se décalent)
-          Object.keys(st.cells).forEach((k) => { const pp = k.split('_'); if (pp[0] !== '0') { nc[k] = st.cells[k]; return; } const ri = parseInt(pp[1], 10); if (ri === ci2) return; nc['0_' + (ri > ci2 ? ri - 1 : ri) + '_' + pp[2] + '_' + pp[3]] = st.cells[k]; });
-          st.cells = nc; plRenderPot(); plRenderGrid();
+          // ré-indexe cellules ET transfos de la page 0 (les lignes après celle retirée se décalent) — sinon les cadrages se déphasent
+          const remap = (src) => { const out = {}; Object.keys(src || {}).forEach((k) => { const pp = k.split('_'); if (pp[0] !== '0') { out[k] = src[k]; return; } const ri = parseInt(pp[1], 10); if (ri === ci2) return; out['0_' + (ri > ci2 ? ri - 1 : ri) + '_' + pp[2] + '_' + pp[3]] = src[k]; }); return out; };
+          st.cells = remap(st.cells); if (st.cellT) st.cellT = remap(st.cellT);
+          plRenderPot(); plRenderGrid();
         });
         bar.appendChild(chip);
       });
@@ -8140,31 +8169,40 @@ function modalCellEdit(key) {
   if (!st.cellT) st.cellT = {};
   const t0 = st.cellT[key] || {}; const T = { zoom: t0.zoom || 1, x: t0.x || 0, y: t0.y || 0, rot: t0.rot || 0 };
   const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
-  const fw = 300, fh = Math.max(60, Math.round(fw * g.rowH / g.colW));
-  openModal(`<div class="modal-head"><b>✏️ Cadrer l'image</b><button class="x" id="ceX">✕</button></div>
+  // Cadre au RATIO EXACT de la case (colW:rowH) — garantit la correspondance éditeur↔PDF — borné dans une boîte 300×380 (évite un cadre géant en portrait ou aplati si beaucoup de lignes).
+  const boxW = 300, boxH = 380; let fw, fh;
+  if (g.colW / g.rowH >= boxW / boxH) { fw = boxW; fh = Math.max(60, Math.round(boxW * g.rowH / g.colW)); }
+  else { fh = boxH; fw = Math.max(60, Math.round(boxH * g.colW / g.rowH)); }
+  // Overlay DÉDIÉ empilé au-dessus de la modale de création (openModal est mono-niveau : l'utiliser détruirait l'écran de création).
+  const ov = document.createElement('div'); ov.className = 'modal-overlay pl-ce-overlay';
+  ov.innerHTML = `<div class="modal"><div class="modal-head"><b>✏️ Cadrer l'image</b><button class="x" data-ce="x">✕</button></div>
     <div class="pl-ce-wrap">
-      <div class="pl-ce-frame" id="ceFrame" style="width:${fw}px;height:${fh}px;max-width:100%"><img id="ceImg" src="${ph.url}" alt="" draggable="false"/>${plGuideSvg()}</div>
-      <label class="pro-logo-zoom">Zoom<input type="range" id="ceZoom" min="0.3" max="4" step="0.02" value="${T.zoom}"/></label>
-      <label class="pro-logo-zoom">Rotation<input type="range" id="ceRot" min="-180" max="180" step="1" value="${T.rot}"/></label>
-      <div class="pro-logo-btns"><button class="btn small" id="ceRotL">⟲ −90°</button><button class="btn small" id="ceRotR">⟳ +90°</button><button class="btn small" id="ceCenter">Recentrer</button></div>
+      <div class="pl-ce-frame" data-ce="frame" style="width:${fw}px;height:${fh}px;max-width:100%"><img data-ce="img" src="${ph.url}" alt="" draggable="false"/>${plGuideSvg()}</div>
+      <label class="pro-logo-zoom">Zoom<input type="range" data-ce="zoom" min="0.3" max="4" step="0.02" value="${T.zoom}"/></label>
+      <label class="pro-logo-zoom">Rotation<input type="range" data-ce="rot" min="-180" max="180" step="1" value="${T.rot}"/></label>
+      <div class="pro-logo-btns"><button class="btn small" data-ce="rotL">⟲ −90°</button><button class="btn small" data-ce="rotR">⟳ +90°</button><button class="btn small" data-ce="center">Recentrer</button></div>
       <p class="hint">Glissez l'image pour la déplacer. Le cadrillage (aperçu seulement) aide à aligner le haut du pied et l'axe central.</p>
     </div>
-    <div class="actions"><button class="btn primary block" id="ceOk">Valider</button><button class="btn block" id="ceCancel">Annuler</button></div>`);
-  const img = $('ceImg'), frame = $('ceFrame');
+    <div class="actions"><button class="btn primary block" data-ce="ok">Valider</button><button class="btn block" data-ce="cancel">Annuler</button></div></div>`;
+  document.body.appendChild(ov);
+  const q = (n) => ov.querySelector(`[data-ce="${n}"]`);
+  const img = q('img'), frame = q('frame');
+  const close = () => { ov.remove(); };
   const apply = () => { img.style.transform = `translate(${T.x * fw}px,${T.y * fh}px) scale(${T.zoom}) rotate(${T.rot}deg)`; };
   apply();
-  $('ceZoom').addEventListener('input', (e) => { T.zoom = parseFloat(e.target.value) || 1; apply(); });
-  $('ceRot').addEventListener('input', (e) => { T.rot = parseInt(e.target.value, 10) || 0; apply(); });
-  $('ceRotL').onclick = () => { T.rot = ((T.rot - 90 + 540) % 360) - 180; $('ceRot').value = T.rot; apply(); };
-  $('ceRotR').onclick = () => { T.rot = ((T.rot + 90 + 540) % 360) - 180; $('ceRot').value = T.rot; apply(); };
-  $('ceCenter').onclick = () => { T.x = 0; T.y = 0; T.zoom = 1; T.rot = 0; $('ceZoom').value = 1; $('ceRot').value = 0; apply(); };
+  q('zoom').addEventListener('input', (e) => { T.zoom = parseFloat(e.target.value) || 1; apply(); });
+  q('rot').addEventListener('input', (e) => { T.rot = parseInt(e.target.value, 10) || 0; apply(); });
+  q('rotL').onclick = () => { T.rot = ((T.rot - 90 + 540) % 360) - 180; q('rot').value = T.rot; apply(); };
+  q('rotR').onclick = () => { T.rot = ((T.rot + 90 + 540) % 360) - 180; q('rot').value = T.rot; apply(); };
+  q('center').onclick = () => { T.x = 0; T.y = 0; T.zoom = 1; T.rot = 0; q('zoom').value = 1; q('rot').value = 0; apply(); };
   let drag = null;
-  frame.addEventListener('pointerdown', (e) => { if (e.target.closest('input,button')) return; drag = { sx: e.clientX, sy: e.clientY, ox: T.x, oy: T.y }; try { frame.setPointerCapture(e.pointerId); } catch (err) { } e.preventDefault(); });
+  frame.addEventListener('pointerdown', (e) => { drag = { sx: e.clientX, sy: e.clientY, ox: T.x, oy: T.y }; try { frame.setPointerCapture(e.pointerId); } catch (err) { } e.preventDefault(); });
   frame.addEventListener('pointermove', (e) => { if (!drag) return; T.x = Math.max(-2, Math.min(2, drag.ox + (e.clientX - drag.sx) / fw)); T.y = Math.max(-2, Math.min(2, drag.oy + (e.clientY - drag.sy) / fh)); apply(); });
   frame.addEventListener('pointerup', () => { drag = null; });
   frame.addEventListener('pointercancel', () => { drag = null; });
-  $('ceX').onclick = $('ceCancel').onclick = () => closeModal();
-  $('ceOk').onclick = () => { st.cellT[key] = { zoom: T.zoom, x: T.x, y: T.y, rot: T.rot }; closeModal(); plRenderGrid(); };
+  q('x').onclick = q('cancel').onclick = close;
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); }); // clic sur le fond
+  q('ok').onclick = () => { st.cellT[key] = { zoom: T.zoom, x: T.x, y: T.y, rot: T.rot }; close(); plRenderGrid(); };
 }
 
 // Nom de fichier d'une planche : planche-<cheval>-<date>[-<stade>].
