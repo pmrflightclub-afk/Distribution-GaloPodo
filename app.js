@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.42';
+const APP_VERSION = '1.2.43';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.43', date: '2026-07-11',
+    ajouts: [
+      'Pastille de statut des clients : affichée en toutes lettres — « Complet » (vert) ou « Mettre à jour » (orange), à droite de l\'item.',
+    ],
+  },
   {
     version: '1.2.42', date: '2026-07-11',
     ajouts: [
@@ -2989,7 +2995,7 @@ function renderClients() {
     const nChev = (c.chevaux || []).length, nChevInact = (c.chevaux || []).filter((h) => h.actif === false).length;
     const valid = !scanClient(c); // pastille : fiche complète (tous les champs fonctionnels remplis) ?
     const el = document.createElement('div'); el.className = 'list-item clickable' + (off ? ' item-off' : '');
-    const pastille = valid ? '<span class="cli-pill ok" title="Fiche complète">✓</span>' : '<span class="cli-pill warn" title="Champs importants manquants (voir Assistant de vérification)">⚠</span>';
+    const pastille = valid ? '<span class="cli-pill ok" title="Fiche complète">Complet</span>' : '<span class="cli-pill warn" title="Champs importants manquants (voir Assistant de vérification)">Mettre à jour</span>';
     el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}${specNoms.length ? ' · 📍 ' + esc(specNoms.join(', ')) : ''}</span></div><div class="li-act li-act-badge">${pastille}<span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => editClient(c));
     list.appendChild(el);
