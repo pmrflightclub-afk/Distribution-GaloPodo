@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.35';
+const APP_VERSION = '1.2.36';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.36', date: '2026-07-11',
+    ajouts: [
+      'Éditeur de tournée : le tarif « Photos / planches » d\'un cheval s\'affiche aussi dans la section « 🧾 Articles » (comme les suppléments), en plus de la facture répartition.',
+    ],
+  },
   {
     version: '1.2.35', date: '2026-07-11',
     ajouts: [
@@ -4006,6 +4012,15 @@ function renderEditorArrets(locked) {
           supps.forEach((sp) => { const ttcv = sp.unit * (1 + acteRate); const row = document.createElement('div'); row.className = 'list-item' + (sp.off ? ' art-off' : ''); row.innerHTML = `<div class="li-main"><b>${esc(sp.lbl)}</b><span class="li-sub">🐴 ${esc(c.nom)} · ${sp.off ? '<b>offert</b>' : eur(ttcv) + ' TTC'} · <i>auto</i></span></div>`; alist.appendChild(row); });
         });
       }
+      // Photos / planches par cheval (stades facturables ; radio non affichée car non facturée) — affiché en Article, même montant que la répartition.
+      (cl.chevaux || []).filter(chevalPresent).forEach((c) => {
+        if (!photoHasBillableStades(c.photo)) return;
+        const st = (c.photo.stades || []).filter(plancheStadeBillable);
+        const ttcv = ttc(photoTariffHT(c.photo.angle) * st.length);
+        const row = document.createElement('div'); row.className = 'list-item';
+        row.innerHTML = `<div class="li-main"><b>Photos / planches (${esc(st.join(', '))})</b><span class="li-sub">🐴 ${esc(c.nom)} · ${c.photo.angle} angles · ${eur(ttcv)} TTC · <i>auto</i></span></div>`;
+        alist.appendChild(row);
+      });
       articlesForArret(a, cl.clientId).forEach((art) => {
         const rr = (art.tvaPct || 0) / 100, qte = Math.max(1, (art.chevalNoms || []).length || 1), ttcv = (art.prixHT || 0) * qte * (1 + rr);
         const chn = (art.chevalNoms || []).join(', ');
