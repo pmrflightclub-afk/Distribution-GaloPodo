@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.28';
+const APP_VERSION = '1.2.29';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.29', date: '2026-07-11',
+    ajouts: [
+      'Planche de contact via « Déclarer » : choisir un cheval remplit automatiquement le client propriétaire, et propose en boutons les dates de tournée de ce cheval dont la planche n\'est pas encore faite (un clic sur une date la sélectionne).',
+    ],
+  },
   {
     version: '1.2.28', date: '2026-07-11',
     ajouts: [
@@ -7274,6 +7280,15 @@ function modalPlancheTourSelect(t) {
 function startPlancheQueue(items) {
   modalPlancheCreate('contact', { cheval: items[0].cheval, client: items[0].client, date: items[0].date, stade: items[0].stade || '', queue: items.slice(1), queueTotal: items.length, queueIdx: 1 });
 }
+// Suggestions de dates (flux Déclarer) : dates de tournée du cheval choisi dont la planche n'est PAS encore faite.
+function plRenderDateSuggest() {
+  const box = $('plCdateSuggest'); if (!box) return;
+  const nn = norm(plCreate && plCreate.cheval); const seen = new Set(), sug = [];
+  if (nn) allTours().forEach((t) => { if (!t.date) return; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (norm(cv.nom) === nn && !chevalCancelled(cv) && !hasPlancheDone(cl.clientId, cv.nom, t.date) && !seen.has(t.date)) { seen.add(t.date); sug.push(t.date); } }))); });
+  sug.sort((a, b) => (b || '').localeCompare(a || ''));
+  box.innerHTML = sug.length ? '<p class="hint" style="margin:6px 0 2px">📅 Dates de tournée (planche à faire) :</p>' + sug.map((d) => `<button type="button" class="btn small" data-sugdate="${d}" style="margin:2px">${esc(fmtDateFr(d))}</button>`).join('') : (nn ? '<p class="hint" style="margin:6px 0 2px;opacity:.7">Aucune tournée avec planche à faire pour ce cheval.</p>' : '');
+  box.querySelectorAll('[data-sugdate]').forEach((b) => b.addEventListener('click', () => { plCreate.date = b.dataset.sugdate; const di = $('plCdate'); if (di) di.value = plCreate.date; plRenderDateSuggest(); }));
+}
 function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
@@ -7294,7 +7309,7 @@ function modalPlancheCreate(type, prefill) {
         <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
-        <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>
+        <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>${plCreate.allowTourPick ? '<div id="plCdateSuggest"></div>' : ''}
         ${type === 'contact' ? `<label>Type de planche (stade)<select id="plCstade"><option value="">(aucun)</option>${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
         ${type === 'contact' && plCreate.hasChevalPage ? `<label class="chk2"><input type="checkbox" id="plCchevalPage" ${plCreate.chevalPageOn ? 'checked' : ''}/> ➕ Ajouter la page « Cheval »</label>` : ''}
         <label id="plCcycleWrap" style="${plancheStadeCareNeeded(plCreate.stade) ? '' : 'display:none'}">Durée du cycle précédent (semaines) — <b>obligatoire</b><input type="number" id="plCcycle" min="1" step="1" value="${plCreate.dureeCycleSem || ''}" placeholder="ex : 7"/></label>
@@ -7324,8 +7339,11 @@ function modalPlancheCreate(type, prefill) {
     plRenderPot(); plRenderGrid();
   }));
   $('plCcheval').addEventListener('input', (e) => { plCreate.cheval = e.target.value; });
+  // Flux Déclarer : cheval choisi → client propriétaire rempli automatiquement + dates de tournée suggérées (planches pas encore faites).
+  $('plCcheval').addEventListener('change', (e) => { plCreate.cheval = e.target.value; if (plCreate.allowTourPick) { const nn = norm(plCreate.cheval); const owner = nn ? clients.find((c) => (c.chevaux || []).some((h) => norm(h.nom) === nn)) : null; if (owner) { plCreate.client = fullName(owner); plCreate.clientId = owner.id; const ci = $('plCclient'); if (ci) ci.value = plCreate.client; } plRenderDateSuggest(); } });
   $('plCclient').addEventListener('input', (e) => { plCreate.client = e.target.value; });
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
+  if (plCreate.allowTourPick) plRenderDateSuggest();
   $('plCdate').addEventListener('click', (e) => { if (e.target.showPicker) { try { e.target.showPicker(); } catch { } } }); // ouvre l'agenda au clic (comme la date de tournée)
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
   if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
