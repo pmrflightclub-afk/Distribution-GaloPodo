@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.26';
+const APP_VERSION = '1.2.27';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.27', date: '2026-07-11',
+    ajouts: [
+      'Bouton « 📷 Planche » coloré selon l\'état des planches du client : ROUGE (acte Photo coché, aucune planche encore enregistrée), ORANGE (certaines faites), VERT (toutes faites). Suivi par cheval et par date de tournée.',
+      'Quand une planche est enregistrée (PDF généré ou envoyé par email) pour un cheval, l\'app la note « faite » : le cheval sort du « Compte rendu photo » et le bouton passe au vert une fois toutes les planches des chevaux (acte Photo) du client réalisées.',
+      'Modale Planche : chaque cheval indique « 📷 à faire » (rouge) ou « ✅ planche faite » (vert).',
+    ],
+  },
   {
     version: '1.2.26', date: '2026-07-11',
     corrections: [
@@ -3737,9 +3745,9 @@ function renderEditorArrets(locked) {
       };
       // ===== En-tête du client EN TÊTE : nom · TTC · heure du client · Paiement/RDV/Prêt/Planche · réduction =====
       {
-        const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '', pretOn = ((((clients.find((x) => x.id === cl.clientId) || {}).prets) || []).length > 0);
+        const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '', pretOn = ((((clients.find((x) => x.id === cl.clientId) || {}).prets) || []).length > 0), plCls = plancheBtnClass(plancheStateForClient(currentTour, cl.clientId));
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small" data-cplanche>📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); } // persistCurrentTour (pas saveTournees) : currentTour est une COPIE → il faut la réécrire dans le tableau, sinon l'heure est perdue
@@ -3843,7 +3851,7 @@ function renderEditorArrets(locked) {
           const ph = pool[+inp.dataset.pi];
           if (e.target.checked) addPlancheTodo({ clientId: cl.clientId, chevalNom: ph.nom, date: currentTour.date, tourId: currentTour.id });
           else removePlancheTodo(cl.clientId, ph.nom, currentTour.date);
-          refreshChips(+inp.dataset.pi); if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHome();
+          refreshChips(+inp.dataset.pi); const pb = el.querySelector('[data-cplanche][data-cid="' + cl.clientId + '"]'); if (pb) pb.className = 'btn small' + plancheBtnClass(plancheStateForClient(currentTour, cl.clientId)); if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHome(); // maj couleur bouton Planche
         }));
         wrap.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => {
           const pi = +inp.dataset.pi, ph = pool[pi], cv = ensureCv(ph);
@@ -7253,7 +7261,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', dureeCycleSem: 0, potView: 'grid', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || '', note: '', dureeCycleSem: 0, potView: 'grid', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -7562,7 +7570,16 @@ function planchePrint() {
   plancheTodoDone(st); // planche générée → le cheval quitte le « Compte rendu photo »
 }
 // Retire le cheval du « Compte rendu photo » (une planche a été produite pour lui).
-function plancheTodoDone(st) { if (st && st.todoId) { S.plancheTodo = (S.plancheTodo || []).filter((y) => y.id !== st.todoId); st.todoId = null; saveSettings(); renderComptePhoto(); } }
+// Planche enregistrée/envoyée → on marque la planche FAITE (client|cheval|date) : le bouton Planche passe au vert et le cheval sort du « Compte rendu photo ».
+// On NE retire PLUS le « à faire » (il porte l'état « acte photo attendu ») ; renderComptePhoto filtre les faites.
+function plancheTodoDone(st) {
+  if (!st) return;
+  let clientId = st.clientId || null, chevalNom = st.cheval || '', date = st.date || '';
+  if (st.todoId) { const td = (S.plancheTodo || []).find((y) => y.id === st.todoId); if (td) { clientId = clientId || td.clientId; chevalNom = td.chevalNom || chevalNom; date = td.date || date; } }
+  if (!clientId && st.client) { const c = clients.find((x) => norm(fullName(x)) === norm(st.client)); if (c) clientId = c.id; }
+  if (clientId && chevalNom && date) addPlancheDone(clientId, chevalNom, date);
+  saveSettings(); renderComptePhoto();
+}
 
 // ================= Comparaison de documents (Phase 4) =================
 // Importe 2 images (planches déjà enregistrées, captures…) et les met côte à côte en PDF. Rien n'est stocké (décision : pas de rendu PDF ré-importé, on compare des images).
@@ -8004,6 +8021,18 @@ function addPlancheTodo(x) {
 const plancheTodoKey = (clientId, chevalNom, date) => clientId + '|' + norm(chevalNom || '') + '|' + (date || '');
 const hasPlancheTodo = (clientId, chevalNom, date) => (S.plancheTodo || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) === plancheTodoKey(clientId, chevalNom, date));
 function removePlancheTodo(clientId, chevalNom, date) { const k = plancheTodoKey(clientId, chevalNom, date); S.plancheTodo = (S.plancheTodo || []).filter((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) !== k); saveSettings(); }
+// Planches FAITES (planche enregistrée/envoyée) — distinctes des « à faire ». Clé identique (client|cheval|date).
+function addPlancheDone(clientId, chevalNom, date) { if (!Array.isArray(S.plancheDone)) S.plancheDone = []; const k = plancheTodoKey(clientId, chevalNom, date); if (!S.plancheDone.some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) === k)) { S.plancheDone.push({ clientId, chevalNom: chevalNom || '', date: date || '' }); saveSettings(); } }
+const hasPlancheDone = (clientId, chevalNom, date) => (S.plancheDone || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date) === plancheTodoKey(clientId, chevalNom, date));
+// État planche d'un CLIENT à une date, selon les chevaux ayant l'acte « Photo » : 'none' | 'red' (aucune faite) | 'orange' (partiel) | 'green' (toutes faites).
+function plancheStateForClient(t, clientId) {
+  const date = t.date, chevaux = [];
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv) && hasPlancheTodo(clientId, cv.nom, date)) chevaux.push(cv.nom); }); }));
+  if (!chevaux.length) return 'none';
+  const done = chevaux.filter((nom) => hasPlancheDone(clientId, nom, date)).length;
+  return done === 0 ? 'red' : done < chevaux.length ? 'orange' : 'green';
+}
+const plancheBtnClass = (st) => st === 'red' ? ' pl-red' : st === 'orange' ? ' pl-orange' : st === 'green' ? ' pl-green' : '';
 // Depuis un arrêt (tournée ouverte OU clôturée) : créer une planche préremplie pour un cheval, ou l'ajouter au « Compte rendu photo ».
 function modalArretPlanche(t, a, onlyClientId) {
   const rows = [];
@@ -8016,9 +8045,11 @@ function modalArretPlanche(t, a, onlyClientId) {
   $('mX').onclick = closeModal; $('apClose').onclick = closeModal;
   const box = $('apList');
   rows.forEach(({ cl, cv }) => {
+    const cvSt = hasPlancheDone(cl.clientId, cv.nom, t.date) ? 'green' : hasPlancheTodo(cl.clientId, cv.nom, t.date) ? 'red' : 'none'; // vert = faite ; rouge = photo à faire
+    const stLbl = cvSt === 'green' ? ' <span class="td-eta">✅ planche faite</span>' : cvSt === 'red' ? ' <span class="td-eta td-past">📷 à faire</span>' : '';
     const el = document.createElement('div'); el.className = 'list-item stack-act';
-    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cv.nom)}</b><span class="li-sub">${esc(clientName(cl.clientId))}</span></div><div class="li-act li-act-col"><button class="btn small primary" data-make>🖼 Créer la planche</button><button class="btn small" data-todo>➕ Compte rendu photo</button></div>`;
-    el.querySelector('[data-make]').addEventListener('click', () => { closeModal(); modalPlancheCreate('contact', { cheval: cv.nom, client: clientName(cl.clientId), date: t.date }); });
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cv.nom)}</b>${stLbl}<span class="li-sub">${esc(clientName(cl.clientId))}</span></div><div class="li-act li-act-col"><button class="btn small${plancheBtnClass(cvSt) || ' primary'}" data-make>🖼 Créer la planche</button><button class="btn small" data-todo>➕ Compte rendu photo</button></div>`;
+    el.querySelector('[data-make]').addEventListener('click', () => { closeModal(); modalPlancheCreate('contact', { cheval: cv.nom, client: clientName(cl.clientId), clientId: cl.clientId, date: t.date }); });
     const tb = el.querySelector('[data-todo]');
     tb.addEventListener('click', () => { const added = addPlancheTodo({ clientId: cl.clientId, chevalId: cv.id, chevalNom: cv.nom, date: t.date, tourId: t.id }); tb.textContent = added ? '✓ Ajouté' : 'Déjà dans la liste'; tb.disabled = true; renderHome(); });
     box.appendChild(el);
@@ -8027,7 +8058,7 @@ function modalArretPlanche(t, a, onlyClientId) {
 // Section Accueil « Compte rendu photo » : chevaux dont une planche est à faire → créer la planche préremplie (disparaît quand la planche est générée).
 function renderComptePhoto() {
   const card = $('homeComptePhoto'), list = $('homeComptePhotoList'); if (!card || !list) return;
-  const items = S.plancheTodo || [];
+  const items = (S.plancheTodo || []).filter((x) => !hasPlancheDone(x.clientId, x.chevalNom, x.date)); // les planches FAITES sortent de la liste
   card.classList.toggle('hidden', !items.length);
   list.innerHTML = '';
   items.forEach((x) => {
