@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.25';
+const APP_VERSION = '1.2.26';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.26', date: '2026-07-11',
+    corrections: [
+      'Gestion → Adresses chevaux : bouton « ⛔ Refuser ce lieu » par adresse, pour mettre une ÉCURIE en liste noire indépendamment du statut du client (c\'est ce lieu refusé qui affiche le badge « ⛔ liste noire » sur l\'arrêt dans les tournées). « ✅ Réautoriser ce lieu » pour l\'annuler.',
+      'Compta → Impayés : le bouton de suppression d\'un impayé a été retiré (trop risqué pour la comptabilité).',
+      'Éditeur de tournée : la section « Prêts en cours » est placée sous la Réduction et AU-DESSUS de la section Actes (et non plus au-dessus des Articles).',
+    ],
+  },
   {
     version: '1.2.25', date: '2026-07-11',
     corrections: [
@@ -3047,14 +3055,16 @@ function renderChevAddresses() {
   shown.forEach((e) => {
     const c = e.client, st = clientState(c);
     const badge = st === 'noir' ? ' <span class="badge badge-noir">liste noire</span>' : st === 'inactif' ? ' <span class="badge">inactif</span>' : '';
-    const specInputs = []; let body = '';
+    const specInputs = [], addrList = []; let body = '';
     e.addrs.forEach((grp) => {
       const chNoms = grp.chevaux.map((h) => h.nom || 'cheval').join(', ');
-      body += `<div class="li-sub" style="margin-top:4px">📍 ${esc(addrStr(grp.addr))} · 🐴 ${esc(chNoms)}</div>`;
+      const noir = isAddrNoir(grp.addr); const gi = addrList.length; addrList.push(grp.addr);
+      body += `<div class="ac-ecurie"><div class="li-sub">📍 ${esc(addrStr(grp.addr))}${noir ? ' <span class="badge badge-noir">⛔ lieu refusé</span>' : ''} · 🐴 ${esc(chNoms)}</div><button class="btn small${noir ? '' : ' danger'}" data-ecurie="${gi}" title="Refuser / réautoriser ce LIEU (écurie), indépendamment du statut du client">${noir ? '✅ Réautoriser ce lieu' : '⛔ Refuser ce lieu'}</button></div>`;
       grp.chevaux.filter((h) => srcOf(h) === 'specifique' && !h.addrPrivee).forEach((h) => { const idx = specInputs.length; specInputs.push(h); body += `<label class="ac-nom"><span class="li-sub">🐴 ${esc(h.nom || 'cheval')} — nom de l'adresse</span><input type="text" data-nom="${idx}" value="${esc(h.addrNom || '')}" placeholder="ex. Écurie du Nord"/></label>`; });
     });
     const el = document.createElement('div'); el.className = 'list-item stack-act' + (st !== 'actif' ? ' item-off' : '');
     el.innerHTML = `<div class="li-main"><b>👤 ${esc(fullName(c))}${c.societe ? ' — ' + esc(c.societe) : ''}${badge}</b>${body}</div>`;
+    el.querySelectorAll('[data-ecurie]').forEach((b) => b.addEventListener('click', () => { const a = addrList[+b.dataset.ecurie]; setAddrStatus(a, isAddrNoir(a) ? 'actif' : 'noir'); renderChevAddresses(); })); // refus de LIEU (écurie), séparé du statut client
     el.querySelectorAll('[data-nom]').forEach((inp) => { const h = specInputs[+inp.dataset.nom]; inp.addEventListener('input', (ev) => { h.addrNom = ev.target.value; saveClients(); }); inp.addEventListener('change', () => renderChevAddresses()); });
     box.appendChild(el);
   });
@@ -3748,6 +3758,18 @@ function renderEditorArrets(locked) {
           });
         }
       }
+      // ----- Prêts en cours de ce client (hors facture) — sous la Réduction, AU-DESSUS de la section Actes -----
+      { const cObjP = clients.find((x) => x.id === cl.clientId), prets = (cObjP && cObjP.prets) || [];
+        if (prets.length) {
+          const pretBox = document.createElement('div'); pretBox.className = 'a-prets';
+          pretBox.innerHTML = '<div class="a-art-head"><span>🎁 Prêts en cours</span></div>' + prets.map((pr) => `<div class="list-item" data-pretid="${pr.id}"><div class="li-main"><b>🎁 ${esc(pr.text)}</b><span class="li-sub">prêté le ${esc(fmtDateFr(pr.date))}</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-pret-keep>Maintenir</button> <button class="btn small danger" data-pret-back>Récupéré</button></div>'}</div>`).join('');
+          el.appendChild(pretBox);
+          if (!locked) {
+            pretBox.querySelectorAll('[data-pret-back]').forEach((b) => b.addEventListener('click', () => { const row = b.closest('[data-pretid]'); if (cObjP) { cObjP.prets = (cObjP.prets || []).filter((p) => p.id !== row.dataset.pretid); saveClients(); } renderEditorArrets(locked); }));
+            pretBox.querySelectorAll('[data-pret-keep]').forEach((b) => b.addEventListener('click', () => { b.textContent = 'Maintenu ✓'; setTimeout(() => { b.textContent = 'Maintenir'; }, 1200); }));
+          }
+        }
+      }
       // ===== Actes des chevaux (édition uniquement si tournée non clôturée) =====
       if (!locked) {
         const cObj = clients.find((x) => x.id === cl.clientId);
@@ -3894,18 +3916,6 @@ function renderEditorArrets(locked) {
       artWrap.appendChild(alist);
       if (!locked) { const ab = artWrap.querySelector('[data-add-art]'); if (ab) ab.addEventListener('click', () => modalTourArticle(null, { arret: a, clientId: cl.clientId })); }
       el.appendChild(artWrap);
-
-      // ----- Prêts en cours de ce client (hors facture) -----
-      const cObjP = clients.find((x) => x.id === cl.clientId), prets = (cObjP && cObjP.prets) || [];
-      if (prets.length) {
-        const pretBox = document.createElement('div'); pretBox.className = 'a-prets';
-        pretBox.innerHTML = '<div class="a-art-head"><span>🎁 Prêts en cours</span></div>' + prets.map((pr) => `<div class="list-item" data-pretid="${pr.id}"><div class="li-main"><b>🎁 ${esc(pr.text)}</b><span class="li-sub">prêté le ${esc(fmtDateFr(pr.date))}</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-pret-keep>Maintenir</button> <button class="btn small danger" data-pret-back>Récupéré</button></div>'}</div>`).join('');
-        el.insertBefore(pretBox, artWrap); // « Prêts en cours » AU-DESSUS de la section Articles
-        if (!locked) {
-          pretBox.querySelectorAll('[data-pret-back]').forEach((b) => b.addEventListener('click', () => { const row = b.closest('[data-pretid]'); if (cObjP) { cObjP.prets = (cObjP.prets || []).filter((p) => p.id !== row.dataset.pretid); saveClients(); } renderEditorArrets(locked); }));
-          pretBox.querySelectorAll('[data-pret-keep]').forEach((b) => b.addEventListener('click', () => { b.textContent = 'Maintenu ✓'; setTimeout(() => { b.textContent = 'Maintenir'; }, 1200); }));
-        }
-      }
 
       // ----- Facture (répartition) de CE client — remplie par renderArretInvoices -----
       const invBox = document.createElement('div'); invBox.className = 'a-invoices'; invBox.dataset.aidx = i; invBox.dataset.cid = cl.clientId; el.appendChild(invBox);
@@ -5918,14 +5928,6 @@ function showCompta(sub) {
   window.scrollTo(0, 0);
 }
 // Sous-onglet Compta « Impayés » : tous les impayés clients, séparés « en attente » / « régularisés » (paiement reçu).
-// Supprime DÉFINITIVEMENT un impayé : retire le record de la fiche client ET la ligne « Impayé du… » de toutes les tournées.
-// Purge complète (utile pour un impayé de test ou fantôme) → la compta du mois se recalcule sans lui.
-function deleteImpayeFully(clientId, impayeId) {
-  const c = clients.find((x) => x.id === clientId); if (!c) return;
-  c.impayes = (c.impayes || []).filter((im) => im.id !== impayeId);
-  allTours().forEach((t) => { if (Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !(a.impaye && a.impayeId === impayeId)); });
-  saveClients(); saveTournees(); saveArchive();
-}
 function renderComptaImpayes() {
   const attente = $('impayesAttente'), regul = $('impayesRegul'); if (!attente || !regul) return;
   attente.innerHTML = ''; regul.innerHTML = '';
@@ -5940,16 +5942,14 @@ function renderComptaImpayes() {
   enAttente.forEach(({ c, im }) => {
     const el = document.createElement('div'); el.className = 'list-item stack-act';
     const sent = im.sentAt ? ' · <span class="badge">📧 envoyé le ' + esc(fmtDateFr(im.sentAt)) + '</span>' : '';
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b> <b class="li-amount">${eur(im.ttc)}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">en attente</span>${sent}</span></div><div class="li-act li-act-col"><button class="btn small${im.sentAt ? ' done' : ' primary'}" data-mail>📧 Email${im.sentAt ? ' ✓' : ''}</button><button class="btn small danger" data-del>✕ Supprimer</button></div>`;
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b> <b class="li-amount">${eur(im.ttc)}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">en attente</span>${sent}</span></div><div class="li-act li-act-col"><button class="btn small${im.sentAt ? ' done' : ' primary'}" data-mail>📧 Email${im.sentAt ? ' ✓' : ''}</button></div>`;
     el.querySelector('[data-mail]').addEventListener('click', () => { if (!c.email && !confirm('Ce client n\'a pas d\'adresse email en fiche. Continuer quand même (vous choisirez le destinataire dans le mail) ?')) return; sendClientDoc(c, impayePdfBlob(c, im), 'impaye-' + norm(fullName(c)).replace(/\s+/g, '-') + '.pdf', "facture d'impayé", () => { im.sentAt = todayStr(); saveClients(); renderComptaImpayes(); }); });
-    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer DÉFINITIVEMENT cet impayé de ' + fullName(c) + ' ? Sa ligne « Impayé du… » sera retirée des tournées et de la compta.')) return; deleteImpayeFully(c.id, im.id); renderComptaImpayes(); if (typeof renderComptaMois === 'function') renderComptaMois(); });
     attente.appendChild(el);
   });
   regularises.forEach(({ c, im }) => {
     const rt = im.collectedTourId ? tourById(im.collectedTourId) : null;
     const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">paiement reçu</span>${rt ? ' · régularisé le ' + esc(fmtDateFr(rt.date)) : ''}</span></div><div class="li-act li-act-col"><b>${eur(im.ttc)}</b><button class="btn small danger" data-del>✕ Supprimer</button></div>`;
-    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer DÉFINITIVEMENT cet impayé de ' + fullName(c) + ' ? Sa ligne « Impayé du… » sera retirée des tournées et de la compta (à n\'utiliser que pour un impayé de test / fantôme).')) return; deleteImpayeFully(c.id, im.id); renderComptaImpayes(); if (typeof renderComptaMois === 'function') renderComptaMois(); });
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">paiement reçu</span>${rt ? ' · régularisé le ' + esc(fmtDateFr(rt.date)) : ''}</span></div><div class="li-act"><b>${eur(im.ttc)}</b></div>`;
     regul.appendChild(el);
   });
 }
