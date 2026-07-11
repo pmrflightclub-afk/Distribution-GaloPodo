@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.43';
+const APP_VERSION = '1.2.44';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.44', date: '2026-07-11',
+    corrections: [
+      'Multi-appareils (synchro) : les adresses de référence (liste noire / inactif), les planches à faire / faites, l\'historique des planches et les statuts de lieu ne sont plus perdus lors d\'une synchronisation entre appareils — les listes sont fusionnées (jamais écrasées).',
+      '« Heures à revoir » : l\'indicateur ne disparaissait plus tout seul à la réouverture d\'une tournée ou après modification d\'un client (il était effacé par la resynchronisation interne).',
+      'Compte rendu photo : un rappel de planche générique (ajouté via « ➕ Compte rendu photo ») disparaît maintenant dès qu\'une planche est générée pour ce cheval/date.',
+      'Photo décochée puis recochée : on repart proprement de zéro (le statut « faite » précédent ne masque plus la nouvelle demande).',
+      'Heure de RDV par cheval (Trajet du jour) : ré-encoder une heure lève aussi l\'indicateur « à revoir » du client.',
+      'Ticket d\'un arrêt : un temps réel périmé s\'affiche « à recalculer » au lieu de « 0 min ». Adresse de référence modifiée : l\'ancien statut de lieu orphelin est nettoyé.',
+    ],
+  },
   {
     version: '1.2.43', date: '2026-07-11',
     ajouts: [
@@ -2071,6 +2082,13 @@ function mergeSettings(localS, remoteS) {
   { const byId = {}; ((localS && localS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); ((remoteS && remoteS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); merged.adresses = Object.values(byId); }
   // Relevés compteur (statut véhicule) : union par mois (ne jamais perdre un relevé fait sur l'autre appareil ; le plus récent gagne pour un même mois).
   { const byYm = {}; const add = (r) => { if (r && r.ym) { const ex = byYm[r.ym]; if (!ex || (r.date || '') >= (ex.date || '')) byYm[r.ym] = r; } }; ((localS && localS.odoReleves) || []).forEach(add); ((remoteS && remoteS.odoReleves) || []).forEach(add); merged.odoReleves = Object.values(byYm).sort((a, b) => (a.date || '').localeCompare(b.date || '')); }
+  // Listes accumulatives introduites avec les planches/photos/adresses de référence : union (ne jamais perdre ce qui a été saisi sur l'autre appareil).
+  const unionById = (k) => { const byId = {}; ((localS && localS[k]) || []).forEach((x) => { if (x && x.id) byId[x.id] = x; }); ((remoteS && remoteS[k]) || []).forEach((x) => { if (x && x.id) byId[x.id] = x; }); return Object.values(byId); };
+  merged.lieuxRefs = unionById('lieuxRefs');
+  merged.plancheTodo = unionById('plancheTodo');
+  merged.plancheHistory = unionById('plancheHistory');
+  { const byK = {}, kk = (y) => (y.clientId || '') + '|' + norm(y.chevalNom || '') + '|' + (y.date || '') + '|' + norm(y.type || ''); ((localS && localS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); ((remoteS && remoteS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); merged.plancheDone = Object.values(byK); }
+  merged.addrStatus = Object.assign({}, (localS && localS.addrStatus) || {}, (remoteS && remoteS.addrStatus) || {}); // statut de lieu (noir/inactif) : union — un lieu refusé sur un appareil le reste
   // Config initiale : une fois validée sur un appareil, elle ne doit JAMAIS régresser (OR sur setupDone/setupLocked). Les champs pilotés (pays/régime/forme) suivent l'appareil qui a validé.
   const lDone = !!(localS && localS.setupDone), rDone = !!(remoteS && remoteS.setupDone);
   merged.setupDone = lDone || rDone;
@@ -3249,6 +3267,7 @@ function modalAddLieuRef(existing) {
     if (!addrStr(w.addr).trim()) { alert('Renseignez l\'adresse.'); return; }
     w.status = $('lrNoir').checked ? 'noir' : ($('lrInactif').checked ? 'inactif' : 'actif');
     if (!Array.isArray(S.lieuxRefs)) S.lieuxRefs = [];
+    if (existing && addrKey(existing.addr) !== addrKey(w.addr) && !(S.lieuxRefs || []).some((x) => x.id !== w.id && addrKey(x.addr) === addrKey(existing.addr))) setAddrStatus(existing.addr, 'actif'); // adresse modifiée → nettoie l'ancien statut orphelin (si plus aucune réf ne l'utilise)
     const i = S.lieuxRefs.findIndex((x) => x.id === w.id); if (i >= 0) S.lieuxRefs[i] = w; else S.lieuxRefs.push(w);
     setAddrStatus(w.addr, w.status); // répercute le statut sur le LIEU → badge dans les tournées si l'adresse réapparaît
     saveSettings(); closeModal(); renderChevAddresses();
@@ -3598,16 +3617,16 @@ function reconcileTour(tour) {
       const c = clients.find((x) => x.id === cl.clientId);
       if (!c) return; // client supprimé → retiré
       const actifs = activeChevaux(c);
-      if (!actifs.length) { const arr = findOrCreate(c.addr, a.type); if (!arr.clients.some((x) => x.clientId === cl.clientId)) arr.clients.push({ clientId: cl.clientId, chevaux: [], heure: cl.heure || '' }); return; } // client sans cheval actif → déplacement seul, à l'adresse ACTUELLE du client
+      if (!actifs.length) { const arr = findOrCreate(c.addr, a.type); if (!arr.clients.some((x) => x.clientId === cl.clientId)) arr.clients.push({ clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }); return; } // client sans cheval actif → déplacement seul, à l'adresse ACTUELLE du client
       if (!cl.chevaux.length) { // arrêt « déplacement seul » alors que le client a maintenant des chevaux actifs (ex. client créé à la récupération d'un item, chevaux ajoutés depuis) → on les rattache
-        actifs.forEach((h) => { const arr = findOrCreate(chevalAddr(c, h), a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '' }; arr.clients.push(ncl); } if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '' }); });
+        actifs.forEach((h) => { const arr = findOrCreate(chevalAddr(c, h), a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); } if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '' }); });
         return;
       }
       cl.chevaux.forEach((cv) => {
         const h = (c.chevaux || []).find((x) => (cv.id && x.id === cv.id) || norm(x.nom) === norm(cv.nom));
         if (!h) return; // cheval supprimé → retiré
         const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
-        let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '' }; arr.clients.push(ncl); }
+        let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); }
         if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null, parageOffert: !!cv.parageOffert, visiteOffert: !!cv.visiteOffert, fourbureOffert: !!cv.fourbureOffert, npasOffert: !!cv.npasOffert, infectionOffert: !!cv.infectionOffert, photo: cv.photo || null, difficile: !!cv.difficile, difficileHT: cv.difficileHT, difficileOffert: !!cv.difficileOffert, consultMin: cv.consultMin });
       });
     });
@@ -4076,7 +4095,7 @@ function renderEditorArrets(locked) {
         wrap.querySelectorAll('[data-photo]').forEach((inp) => inp.addEventListener('change', (e) => {
           const ph = pool[+inp.dataset.pi], cv = ensureCv(ph);
           if (e.target.checked) modalPhotoPick(cv, () => { syncPhotoTodos(cl.clientId, cv, currentTour.date, currentTour.id); persistCurrentTour(); recomputeMoney(); renderEditorArrets(locked); }); // choix tarif + types → cv.photo + « à faire » par type + facture
-          else { delete cv.photo; removePlancheTodoAll(cl.clientId, ph.nom, currentTour.date); persistCurrentTour(); recomputeMoney(); renderEditorArrets(locked); }
+          else { delete cv.photo; removePlancheTodoAll(cl.clientId, ph.nom, currentTour.date); removePlancheDoneAll(cl.clientId, ph.nom, currentTour.date); persistCurrentTour(); recomputeMoney(); renderEditorArrets(locked); } // on repart de zéro pour ce cheval/date (todo + fait)
         }));
         wrap.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => {
           const pi = +inp.dataset.pi, ph = pool[pi], cv = ensureCv(ph);
@@ -8386,6 +8405,10 @@ function removePlancheTodoAll(clientId, chevalNom, date) { const cn = norm(cheva
 // Planches FAITES (planche enregistrée/envoyée) — distinctes des « à faire ». Clé identique (client|cheval|date|type).
 function addPlancheDone(clientId, chevalNom, date, type) { if (!Array.isArray(S.plancheDone)) S.plancheDone = []; const k = plancheTodoKey(clientId, chevalNom, date, type); if (!S.plancheDone.some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === k)) { S.plancheDone.push({ clientId, chevalNom: chevalNom || '', date: date || '', type: type || '' }); saveSettings(); } }
 const hasPlancheDone = (clientId, chevalNom, date, type) => (S.plancheDone || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === plancheTodoKey(clientId, chevalNom, date, type));
+// Une planche (N'IMPORTE quel type) a-t-elle été faite pour ce cheval/date ? Sert aux « à faire » SANS type (générique) qui doivent se vider dès qu'une planche est générée.
+const hasAnyPlancheDone = (clientId, chevalNom, date) => { const cn = norm(chevalNom || ''); return (S.plancheDone || []).some((y) => y.clientId === clientId && norm(y.chevalNom || '') === cn && (y.date || '') === (date || '')); };
+// Retire toutes les planches FAITES d'un cheval/date (décocher « Photo » → on repart de zéro pour ce cheval/date).
+function removePlancheDoneAll(clientId, chevalNom, date) { const cn = norm(chevalNom || ''); S.plancheDone = (S.plancheDone || []).filter((y) => !(y.clientId === clientId && norm(y.chevalNom || '') === cn && (y.date || '') === (date || ''))); saveSettings(); }
 // Synchronise les « à faire » (un par stade) avec cv.photo.stades pour un cheval de tournée.
 function syncPhotoTodos(clientId, cv, date, tourId) {
   removePlancheTodoAll(clientId, cv.nom, date);
@@ -8398,7 +8421,7 @@ function plancheStateForClient(t, clientId) {
     if (chevalCancelled(cv)) return;
     const stades = (cv.photo && cv.photo.stades) || [];
     stades.forEach((sd) => { total++; if (hasPlancheDone(clientId, cv.nom, date, sd)) done++; });
-    if (!stades.length && hasPlancheTodo(clientId, cv.nom, date)) { total++; if (hasPlancheDone(clientId, cv.nom, date)) done++; } // legacy sans stade
+    if (!stades.length && hasPlancheTodo(clientId, cv.nom, date)) { total++; if (hasAnyPlancheDone(clientId, cv.nom, date)) done++; } // legacy/générique sans stade : « fait » dès qu'une planche (n'importe quel type) existe
   }); }));
   if (!total) return 'none';
   return done === 0 ? 'red' : done < total ? 'orange' : 'green';
@@ -8453,7 +8476,7 @@ function modalArretPlanche(t, a, onlyClientId) {
 // Section Accueil « Compte rendu photo » : chevaux dont une planche est à faire → créer la planche préremplie (disparaît quand la planche est générée).
 function renderComptePhoto() {
   const card = $('homeComptePhoto'), list = $('homeComptePhotoList'); if (!card || !list) return;
-  const items = (S.plancheTodo || []).filter((x) => !hasPlancheDone(x.clientId, x.chevalNom, x.date, x.type)); // les planches FAITES (par type) sortent de la liste
+  const items = (S.plancheTodo || []).filter((x) => x.type ? !hasPlancheDone(x.clientId, x.chevalNom, x.date, x.type) : !hasAnyPlancheDone(x.clientId, x.chevalNom, x.date)); // faites (par type) OU, pour un rappel générique sans type, dès qu'une planche est générée
   card.classList.toggle('hidden', !items.length);
   list.innerHTML = '';
   items.forEach((x) => {
@@ -8558,7 +8581,7 @@ function renderHomeTrajet() {
       const smsAction = () => modalSmsChoice(c0, smsDataFor(c0, { cheval: chNames, trajet, adresse }));
       const ticketAction = async (btn) => {
         const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cl0.clientId) : null;
-        let txt = `Trajet vers ${adresse}\n  Estimé : ${est != null ? durMin(est) : '—'} · Réel : ${real != null ? durMin(real) : 'non renseigné'}\n\n`;
+        let txt = `Trajet vers ${adresse}\n  Estimé : ${est != null ? durMin(est) : '—'} · Réel : ${real > 0 ? durMin(real) : (real === 0 ? 'à recalculer' : 'non renseigné')}\n\n`;
         txt += recapText(t.result, t);
         txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m, (t.payments || {})[cl0.clientId]) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
         try { await navigator.clipboard.writeText(txt); btn.textContent = 'Ticket copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); } catch { alert(txt); }
@@ -8624,6 +8647,8 @@ function modalHeureRdv(t, a) {
   $('mX').addEventListener('click', closeModal);
   $('hrOk').addEventListener('click', () => {
     box.querySelectorAll('[data-h]').forEach((inp) => { chs[+inp.dataset.h].cv.heure = inp.value || ''; });
+    // Ré-encoder une heure ici lève aussi le « à revoir » du client (cl.heureStale) : on reporte sur cl.heure et on efface le flag.
+    (a.clients || []).forEach((cl) => { const cvH = (cl.chevaux || []).map((cv) => cv.heure).filter(Boolean).sort()[0]; if (cvH) { cl.heure = cvH; delete cl.heureStale; } });
     const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
     scheduleCalPush(t); closeModal(); renderHomeTrajet();
   });
