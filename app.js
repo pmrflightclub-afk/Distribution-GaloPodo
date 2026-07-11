@@ -11,10 +11,24 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.31';
+const APP_VERSION = '1.2.32';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.32', date: '2026-07-11',
+    ajouts: [
+      'Badge « ✓ prête » des tournées : signifie maintenant que le PARAMÉTRAGE est complet (adresses localisées, itinéraire calculé, au moins un cheval présent par client, heure de RDV par client) — plus besoin d\'avoir coché les actes ou encaissé. Sinon « ⚠ à compléter », et « 🔄 recalculer itinéraire » en priorité si l\'ordre des arrêts a changé.',
+      'Éditeur de tournée : nouvelle section « 🏁 Retour » en bas (trajet de retour estimé + bouton « Route retour » pour le temps réel), comme dans le Trajet du jour.',
+      'Prise de RDV : au moins un cheval (avec date et heure) est désormais obligatoire pour enregistrer un rendez-vous (idem pour le 2ᵉ RDV de suivi pathologique).',
+    ],
+    corrections: [
+      'Les heures de RDV par client ne disparaissent plus à la réouverture de la tournée (la resynchronisation des chevaux/adresses les conservait mal).',
+      'Bouton « 🧭 Étape » : ouvre bien l\'itinéraire de l\'arrêt PRÉCÉDENT vers l\'arrêt courant (au lieu de courant → suivant).',
+      'Itinéraire : quand on change l\'ordre des arrêts, qu\'on en ajoute/retire un ou qu\'une adresse change, les temps de trajet réels déjà encodés passent en « 🔄 à recalculer » (boutons Route en orange, Retour en rouge) et ne faussent plus les statistiques de temps de travail.',
+      'Tournée « à venir » : les boutons 💶 Paiement et 📅 RDV sont grisés tant que le jour de la tournée n\'est pas arrivé (actifs le jour J, verts une fois faits).',
+    ],
+  },
   {
     version: '1.2.31', date: '2026-07-11',
     corrections: [
@@ -3222,7 +3236,11 @@ function tourListItem(t, showBadge) {
   const clientsLine = (t.arrets || []).flatMap((a) => (a.clients || []).map((cl) => clientName(cl.clientId))).filter(Boolean).join(' · '); // chaque client individuel (non groupé), même au même arrêt
   const badge = (showBadge && st !== 'avenir') ? ' · ' + STATUS_LBL[st] : ''; // « À venir » retiré (redondant avec la section À venir)
   const eta = tourEta(t.date, st); const etaHtml = eta ? ` <span class="${eta.cls}">${esc(eta.text)}</span>` : '';
-  const fin = st !== 'cloturee' ? (tourFinalizeBlock(t).length ? ' <span class="td-badge warn">⚠ à compléter</span>' : ' <span class="td-badge ok">✓ prête</span>') : ''; // clôture bloquée par un paramétrage manquant ?
+  let fin = ''; // badge « prête » = paramétrage complet (adresses + itinéraire + cheval présent + heure), PAS acte/paiement ; « recalculer » prioritaire
+  if (st !== 'cloturee') {
+    if (tourRouteStale(t)) fin = ' <span class="td-badge warn">🔄 recalculer itinéraire</span>';
+    else fin = tourReadyIssues(t).length ? ' <span class="td-badge warn">⚠ à compléter</span>' : ' <span class="td-badge ok">✓ prête</span>';
+  }
   el.innerHTML = `<div class="li-main"><b>${titre}${badge}${etaHtml}${fin}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act"><span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
@@ -3451,16 +3469,16 @@ function reconcileTour(tour) {
       const c = clients.find((x) => x.id === cl.clientId);
       if (!c) return; // client supprimé → retiré
       const actifs = activeChevaux(c);
-      if (!actifs.length) { const arr = findOrCreate(c.addr, a.type); if (!arr.clients.some((x) => x.clientId === cl.clientId)) arr.clients.push({ clientId: cl.clientId, chevaux: [] }); return; } // client sans cheval actif → déplacement seul, à l'adresse ACTUELLE du client
+      if (!actifs.length) { const arr = findOrCreate(c.addr, a.type); if (!arr.clients.some((x) => x.clientId === cl.clientId)) arr.clients.push({ clientId: cl.clientId, chevaux: [], heure: cl.heure || '' }); return; } // client sans cheval actif → déplacement seul, à l'adresse ACTUELLE du client
       if (!cl.chevaux.length) { // arrêt « déplacement seul » alors que le client a maintenant des chevaux actifs (ex. client créé à la récupération d'un item, chevaux ajoutés depuis) → on les rattache
-        actifs.forEach((h) => { const arr = findOrCreate(chevalAddr(c, h), a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [] }; arr.clients.push(ncl); } if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '' }); });
+        actifs.forEach((h) => { const arr = findOrCreate(chevalAddr(c, h), a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '' }; arr.clients.push(ncl); } if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '' }); });
         return;
       }
       cl.chevaux.forEach((cv) => {
         const h = (c.chevaux || []).find((x) => (cv.id && x.id === cv.id) || norm(x.nom) === norm(cv.nom));
         if (!h) return; // cheval supprimé → retiré
         const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
-        let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [] }; arr.clients.push(ncl); }
+        let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '' }; arr.clients.push(ncl); }
         if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null, parageOffert: !!cv.parageOffert, visiteOffert: !!cv.visiteOffert, fourbureOffert: !!cv.fourbureOffert, npasOffert: !!cv.npasOffert, infectionOffert: !!cv.infectionOffert });
       });
     });
@@ -3468,7 +3486,7 @@ function reconcileTour(tour) {
   newArrets.forEach((na) => { const old = oldArrets.find((o) => norm(addrStr(o.addr)) === norm(addrStr(na.addr))); if (old) { if (typeof old.realMin === 'number') na.realMin = old.realMin; if (typeof old.validatedAt === 'number') na.validatedAt = old.validatedAt; if (old.heure) na.heure = old.heure; if (old.rdvDone) na.rdvDone = old.rdvDone; } });
   tour.arrets = newArrets.filter((a) => a.clients.length);
   if (JSON.stringify(tour.arrets) !== beforeArrets) changed = true;
-  if (beforeAddr !== addrSig(tour.arrets)) tour.result = null; // adresses modifiées → recalcul géométrie au prochain ouvrir
+  if (beforeAddr !== addrSig(tour.arrets)) { tour.result = null; invalidateTourRoute(tour); } // adresses modifiées → recalcul géométrie + temps réels périmés
   // Articles : resync par id (renommage / suppression de cheval)
   (tour.articles || []).forEach((art) => {
     if (art.impaye) return; // impayé : rattaché au client, sans cheval → on n'y touche pas
@@ -3491,6 +3509,22 @@ function reconcileActiveTours() {
   let any = false;
   (tournees || []).forEach((t) => { if (statusOf(t) !== 'cloturee') { if (reconcileTour(t)) any = true; } });
   return any;
+}
+// ----- Itinéraire : temps réels périmés -----
+// Convention : realMin (et returnRealMin) === 0 = « à recalculer » (périmé), > 0 = temps réel encodé à jour, null/absent = jamais encodé.
+function tourRouteStale(t) { return !!t && ((t.arrets || []).some((a) => a.realMin === 0) || t.returnRealMin === 0); }
+// Invalide les temps réels DÉJÀ encodés (>0) → 0 (à recalculer) suite à un changement d'ordre/composition/adresse. Les segments jamais encodés (null) restent « à encoder ».
+function invalidateTourRoute(t) { if (!t) return false; let ch = false; (t.arrets || []).forEach((a) => { if (typeof a.realMin === 'number' && a.realMin > 0) { a.realMin = 0; ch = true; } }); if (typeof t.returnRealMin === 'number' && t.returnRealMin > 0) { t.returnRealMin = 0; ch = true; } return ch; }
+// « Prête » = paramétrage complet (PAS d'acte ni de paiement) : adresses localisées + itinéraire calculé + ≥1 cheval présent/client + heure de RDV/client. Renvoie la liste des manques (vide = prête). L'itinéraire périmé est signalé à part (tourRouteStale).
+function tourReadyIssues(t) {
+  const out = [];
+  if (!t || !(t.arrets || []).length) return ['aucun arrêt'];
+  if ((t.arrets || []).some((a) => !(a.addr && a.addr.lat != null && a.addr.lon != null))) out.push('adresse non localisée');
+  if (!t.result) out.push('itinéraire non calculé');
+  const byClient = {};
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { const e = byClient[cl.clientId] = byClient[cl.clientId] || { has: false, present: false }; (cl.chevaux || []).forEach((cv) => { e.has = true; if (!chevalCancelled(cv)) e.present = true; }); }));
+  Object.keys(byClient).forEach((cid) => { const e = byClient[cid]; if (e.has && !e.present) out.push(clientName(cid) + ' : aucun cheval présent'); else if (e.present && !clientRdvHeure(t, cid)) out.push(clientName(cid) + ' : heure de RDV manquante'); });
+  return out;
 }
 
 // Ce qui manque au paiement d'un client (chaîne) ou null si complet. Règle UNIQUE, partagée par le bouton « fait » et la clôture.
@@ -3696,6 +3730,7 @@ function addClientToTour(c, chevaux) {
     im.collected = true; im.collectedTourId = currentTour.id; addedImpaye = true;
   });
   if (addedImpaye) saveClients();
+  invalidateTourRoute(currentTour); persistCurrentTour(); // composition modifiée → temps réels périmés
 }
 
 // Dernière tournée CLÔTURÉE (avant `avantDate`) où ce cheval a eu un parage ou une visite (non annulé) → écart en jours depuis.
@@ -3714,6 +3749,7 @@ function dernierParageInfo(clientId, chevalNom, avantDate) {
 }
 function renderEditorArrets(locked) {
   if (locked === undefined) locked = statusOf(currentTour) === 'cloturee';
+  const futureTour = statusOf(currentTour) === 'avenir'; // tournée à venir → Paiement & RDV grisés (disponibles le jour J)
   const box = $('edArrets'); box.innerHTML = '';
   $('edArretsEmpty').style.display = currentTour.arrets.length ? 'none' : 'block';
   const N = currentTour.arrets.length;
@@ -3737,19 +3773,20 @@ function renderEditorArrets(locked) {
     const nav = document.createElement('div'); nav.className = 'a-nav';
     const estMin = segMins[i] != null ? Math.round(segMins[i]) : null; // temps du TRONÇON vers cet arrêt (pas cumulé)
     const realMin = (typeof a.realMin === 'number') ? a.realMin : null;
-    const routeDone = realMin != null; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
+    const routeStale = realMin === 0; const routeDone = realMin != null && realMin > 0; const hhv = arretHeure(a); const payDone = arretPaiementDone(currentTour, a);
+    const routeCls = routeStale ? ' pret-on' : (routeDone ? ' done' : ''); const routeSuffix = routeStale ? ' 🔄' : (routeDone ? ' ✓' : '');
     // Barre d'arrêt : temps de trajet + déplacement (Waze / Route / Étape) — communs à l'adresse. L'HEURE est PAR CLIENT (l'heure d'arrêt = celle du 1ᵉʳ client). Paiement / RDV / Prêt / Planche aussi par client (plus bas).
-    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${realMin != null ? ' · <b>' + durMin(realMin) + ' réel</b>' : ''}</span>${locked ? '' : `<span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeDone ? ' done' : ''}" data-route>Route${routeDone ? ' ✓' : ''}</button>${i > 0 ? ` <button class="btn small${routeDone ? ' done' : ''}" data-etape title="Itinéraire de cet arrêt vers l'arrêt suivant (ou le retour)">🧭 Étape${routeDone ? ' ✓' : ''}</button>` : ''}</span>`}`;
+    nav.innerHTML = `<span class="a-nav-t">🕒 ${estMin != null ? durMin(estMin) + ' est.' : '—'}${routeDone ? ' · <b>' + durMin(realMin) + ' réel</b>' : (routeStale ? ' · <b class="td-stale">🔄 à recalculer</b>' : '')}</span>${locked ? '' : `<span class="a-nav-b"><button class="btn small" data-waze>${navLabel()}</button> <button class="btn small${routeCls}" data-route>Route${routeSuffix}</button>${i > 0 ? ` <button class="btn small${routeCls}" data-etape title="Itinéraire de l'arrêt précédent vers cet arrêt">🧭 Étape${routeSuffix}</button>` : ''}</span>`}`;
     if (!locked) {
       nav.querySelector('[data-waze]').addEventListener('click', () => openNav(a.addr));
       nav.querySelector('[data-route]').addEventListener('click', () => modalRouteTime(currentTour, a, estMin, () => renderEditorArrets()));
-      { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const next = currentTour.arrets[i + 1]; const destAddr = next ? next.addr : ((currentTour.arrivee && addrStr(currentTour.arrivee).trim()) ? currentTour.arrivee : tourHome()); if (!destAddr || !addrStr(destAddr).trim()) { alert('Pas d\'arrêt suivant ni d\'arrivée définie.'); return; } openMapsRoute(addrQuery(a.addr), addrQuery(destAddr)); }); } // étape = arrêt courant → arrêt suivant (ou retour)
+      { const etB = nav.querySelector('[data-etape]'); if (etB) etB.addEventListener('click', () => { const prev = currentTour.arrets[i - 1]; const origAddr = prev ? prev.addr : tourHome(); if (!origAddr || !addrStr(origAddr).trim()) { alert('Pas d\'arrêt précédent ni de départ défini.'); return; } openMapsRoute(addrQuery(origAddr), addrQuery(a.addr)); }); } // étape = arrêt précédent → arrêt courant
     }
     el.appendChild(nav);
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
-      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; currentTour.arrets.splice(i, 1); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); }); // retrait arrêt → maj Google (retire les évènements des clients retirés)
+      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; currentTour.arrets.splice(i, 1); invalidateTourRoute(currentTour); persistCurrentTour(); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); }); // retrait arrêt → itinéraire périmé + maj Google
       // N° d'ordre saisi : déplace l'arrêt à la position demandée ; les autres se renumérotent tout seuls.
       const ord = el.querySelector('[data-order]');
       if (ord) ord.addEventListener('change', (e) => {
@@ -3759,6 +3796,7 @@ function renderEditorArrets(locked) {
         if (np === i) return;
         const [moved] = currentTour.arrets.splice(i, 1);
         currentTour.arrets.splice(np, 0, moved);
+        invalidateTourRoute(currentTour); persistCurrentTour();
         renderEditorArrets(locked); scheduleGeoRecalc();
       });
     }
@@ -3782,12 +3820,12 @@ function renderEditorArrets(locked) {
       {
         const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '', pretOn = ((((clients.find((x) => x.id === cl.clientId) || {}).prets) || []).length > 0), plCls = plancheBtnClass(plancheStateForClient(currentTour, cl.clientId));
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-acts"><button class="btn small" data-crdv>📅 RDV</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${clH ? ' done' : ''}" title="Heure de RDV de ce client (agenda)">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-acts"><button class="btn small${a.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) lab.classList.toggle('done', !!cl.heure); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); } // persistCurrentTour (pas saveTournees) : currentTour est une COPIE → il faut la réécrire dans le tableau, sinon l'heure est perdue
-          actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (arretPaiementDone(currentTour, a) && typeof a.validatedAt !== 'number') { a.validatedAt = Date.now(); persistCurrentTour(); } refreshEverywhere(); }, cl.clientId)); // paiement complet de l'arrêt → clôture l'arrêt (validatedAt) + rafraîchit le bandeau
-          actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
+          if (!futureTour) actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (arretPaiementDone(currentTour, a) && typeof a.validatedAt !== 'number') { a.validatedAt = Date.now(); persistCurrentTour(); } refreshEverywhere(); }, cl.clientId)); // paiement complet de l'arrêt → clôture l'arrêt (validatedAt) + rafraîchit le bandeau
+          if (!futureTour) actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
           actBar.querySelector('[data-cplanche]').addEventListener('click', () => modalArretPlanche(currentTour, a, cl.clientId));
           { const rd = actBar.querySelector('[data-creduc]'); if (rd) rd.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); }); }
@@ -3965,6 +4003,21 @@ function renderEditorArrets(locked) {
     }); // fin a.clients.forEach — un bloc complet par client
     box.appendChild(el);
   });
+  // ----- Section Retour (éditeur) : trajet de retour vers domicile/arrivée + Route retour (temps réel) -----
+  if (!locked && currentTour.arrets.length) {
+    const retAddr = returnAddrOf(currentTour);
+    const R = currentTour.result; const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
+    const estRet = (R && R.kmLastHome != null) ? Math.round(R.kmLastHome * mpk) : null;
+    const realRet = (typeof currentTour.returnRealMin === 'number') ? currentTour.returnRealMin : null;
+    const retStale = realRet === 0; const retDone = realRet != null && realRet > 0;
+    const retCls = retStale ? ' danger' : (retDone ? ' done' : ''); const retSuffix = retStale ? ' 🔄' : (retDone ? ' ✓' : '');
+    const rr = document.createElement('div'); rr.className = 'arret-retour-row';
+    rr.innerHTML = `<div class="a-top"><div class="grow"><b>🏁 Retour</b><div class="li-sub">📍 ${esc(addrStr(retAddr)) || 'domicile'}</div></div></div>
+      <div class="a-nav"><span class="a-nav-t">🕒 ${estRet != null ? durMin(estRet) + ' est.' : '—'}${retDone ? ' · <b>' + durMin(realRet) + ' réel</b>' : (retStale ? ' · <b class="td-stale">🔄 à recalculer</b>' : '')}</span><span class="a-nav-b"><button class="btn small" data-rwaze>${navLabel()}</button> <button class="btn small${retCls}" data-rroute>Route retour${retSuffix}</button></span></div>`;
+    rr.querySelector('[data-rwaze]').addEventListener('click', () => openNav(retAddr));
+    rr.querySelector('[data-rroute]').addEventListener('click', () => modalReturnTime(currentTour, estRet, () => renderEditorArrets(locked)));
+    box.appendChild(rr);
+  }
   if (!locked) enableDrag(box);
   renderArretInvoices();
 }
@@ -3983,6 +4036,7 @@ function enableDrag(listEl) {
         document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up);
         const order = [...listEl.querySelectorAll('.arret')].map((x) => +x.dataset.idx);
         currentTour.arrets = order.map((i) => currentTour.arrets[i]);
+        invalidateTourRoute(currentTour); persistCurrentTour();
         renderEditorArrets(false); scheduleGeoRecalc();
       };
       document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
@@ -4336,8 +4390,8 @@ function blendedTourMin(t) {
   const R = t && t.result; if (!R) return null;
   const mpk = (R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 50));
   let total = 0;
-  (t.arrets || []).forEach((a, i) => { total += (typeof a.realMin === 'number') ? a.realMin : ((R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) * mpk : 0); });
-  total += (typeof t.returnRealMin === 'number') ? t.returnRealMin : ((R.kmLastHome != null) ? R.kmLastHome * mpk : 0);
+  (t.arrets || []).forEach((a, i) => { total += (a.realMin > 0) ? a.realMin : ((R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) * mpk : 0); }); // realMin===0 = périmé → repli sur l'estimé
+  total += (t.returnRealMin > 0) ? t.returnRealMin : ((R.kmLastHome != null) ? R.kmLastHome * mpk : 0);
   return total;
 }
 function renderResultUI(R) {
@@ -4446,7 +4500,7 @@ function recapText(R, tour) {
   s += `Distance : ${km(R.totalKm)} · Durée estimée : ${durMin(R.totalMin)}\n`;
   // Temps de trajet RÉEL (encodé via le bouton Route) : total renseigné + arrêts sans temps réel.
   if (tour && Array.isArray(tour.arrets) && tour.arrets.length) {
-    const withReal = tour.arrets.filter((a) => typeof a.realMin === 'number');
+    const withReal = tour.arrets.filter((a) => a.realMin > 0);
     const realTot = withReal.reduce((acc, a) => acc + a.realMin, 0);
     const missing = tour.arrets.length - withReal.length;
     s += `Trajet réel renseigné : ${realTot} min (${withReal.length}/${tour.arrets.length} arrêt(s)${missing ? ` · ${missing} sans temps réel` : ''})\n`;
@@ -5057,7 +5111,7 @@ function renderTrajetTemps() {
   if ($('trajetTempsEmpty')) $('trajetTempsEmpty').style.display = list.length ? 'none' : 'block';
   list.forEach((t) => {
     const na = (t.arrets || []).length;
-    const withReal = (t.arrets || []).filter((a) => typeof a.realMin === 'number');
+    const withReal = (t.arrets || []).filter((a) => a.realMin > 0);
     const realTot = withReal.reduce((s, a) => s + a.realMin, 0);
     const missing = na - withReal.length;
     const estTot = t.result ? Math.round(t.result.totalMin) : null;
@@ -5066,7 +5120,7 @@ function renderTrajetTemps() {
     h += `<div class="inv-line"><span>Durée estimée (tournée)</span><span>${estTot != null ? durMin(estTot) : '—'}</span></div>`;
     h += `<div class="inv-line"><span>Temps réel renseigné (somme)</span><span>${withReal.length ? durMin(realTot) : '—'}</span></div>`;
     if (missing) h += `<div class="inv-line" style="color:var(--warn)"><span>Arrêts sans temps réel</span><span>${missing}</span></div>`;
-    (t.arrets || []).forEach((a, i) => { const r = (typeof a.realMin === 'number') ? durMin(a.realMin) : '<i>non renseigné</i>'; h += `<div class="fin-cheval"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}</span><span>réel : ${r}</span></div>`; });
+    (t.arrets || []).forEach((a, i) => { const r = (a.realMin > 0) ? durMin(a.realMin) : (a.realMin === 0 ? '<i>🔄 à recalculer</i>' : '<i>non renseigné</i>'); h += `<div class="fin-cheval"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}</span><span>réel : ${r}</span></div>`; });
     el.innerHTML = h; box.appendChild(el);
   });
 }
@@ -5079,7 +5133,7 @@ function travailForRecovered(t) {
   const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
   const per = []; let complete = true;
   (t.arrets || []).forEach((a, i) => {
-    const hasRoute = typeof a.realMin === 'number';
+    const hasRoute = a.realMin > 0;
     if (!hasRoute) complete = false;
     const travelMin = hasRoute ? a.realMin : ((R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) * mpk : 0);
     let consult = 0;
@@ -5087,7 +5141,7 @@ function travailForRecovered(t) {
     per.push({ travelMs: travelMin * 60000, visitMs: consult * 60000, arrival: null, dep: null });
   });
   const returnMinEst = (R && R.kmLastHome != null) ? R.kmLastHome * mpk : 0;
-  const hasRet = typeof t.returnRealMin === 'number';
+  const hasRet = t.returnRealMin > 0;
   if (!hasRet) complete = false;
   const returnMs = hasRet ? t.returnRealMin * 60000 : returnMinEst * 60000;
   const totalMs = per.reduce((s, p) => s + p.travelMs + p.visitMs, 0) + returnMs;
@@ -5099,7 +5153,7 @@ function travailForTour(t) {
   if (!t.startedAt) return null;
   const R = t.result;
   const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
-  const travelMin = (i) => { const a = t.arrets[i]; if (typeof a.realMin === 'number') return a.realMin; const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; return seg * mpk; };
+  const travelMin = (i) => { const a = t.arrets[i]; if (a.realMin > 0) return a.realMin; const seg = (R && R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) : 0; return seg * mpk; };
   const returnMinEst = (R && R.kmLastHome != null) ? R.kmLastHome * mpk : 0;
   const per = []; let prevDepart = t.startedAt; let complete = true;
   t.arrets.forEach((a, i) => {
@@ -5112,7 +5166,7 @@ function travailForTour(t) {
   });
   const lastDep = per.length ? per[per.length - 1].dep : null;
   // Retour : réel encodé (Route) en priorité, sinon mesuré (Clôturer), sinon estimé.
-  const returnMs = (typeof t.returnRealMin === 'number') ? t.returnRealMin * 60000 : ((t.endedAt && lastDep) ? Math.max(0, t.endedAt - lastDep) : returnMinEst * 60000);
+  const returnMs = (t.returnRealMin > 0) ? t.returnRealMin * 60000 : ((t.endedAt && lastDep) ? Math.max(0, t.endedAt - lastDep) : returnMinEst * 60000);
   const endTs = t.endedAt || (lastDep != null ? lastDep + returnMs : null);
   return { per, returnMs, complete, totalMs: endTs != null ? (endTs - t.startedAt) : null, endTs };
 }
@@ -7770,7 +7824,7 @@ function estimatedDepartureHM(t) {
   const heure0 = arretHeure(a0); if (!heure0) return '';
   const [h, mn] = heure0.split(':').map(Number); if (isNaN(h)) return '';
   const R = t.result; let travel = 0;
-  if (typeof a0.realMin === 'number') travel = a0.realMin;
+  if (a0.realMin > 0) travel = a0.realMin;
   else if (R && R.rows && R.rows[0]) { const mpk = (R.totalKm > 0 && R.totalMin) ? R.totalMin / R.totalKm : 60 / (S.vitesseKmh || 50); travel = (R.rows[0].segKm || 0) * mpk; }
   let dep = h * 60 + mn - Math.round(travel); if (dep < 0) dep = 0;
   return String(Math.floor(dep / 60)).padStart(2, '0') + ':' + String(dep % 60).padStart(2, '0');
@@ -7880,8 +7934,8 @@ function scanAdresse(a) {
 // Nb de champs de STATS manquants d'une tournée (heure/route par arrêt, consultation par cheval fait, retour).
 function tourMissingStats(t) {
   let n = 0;
-  (t.arrets || []).forEach((a) => { if (!arretHeure(a)) n++; if (typeof a.realMin !== 'number') n++; (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv) && typeof cv.consultMin !== 'number') n++; })); });
-  if (typeof t.returnRealMin !== 'number') n++;
+  (t.arrets || []).forEach((a) => { if (!arretHeure(a)) n++; if (!(a.realMin > 0)) n++; (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv) && typeof cv.consultMin !== 'number') n++; })); });
+  if (!(t.returnRealMin > 0)) n++;
   return n;
 }
 // Étape « fiche » (client OU adresse) : modale avec les champs vides éditables + Enregistrer (sauve + suivant) / Passer.
@@ -8187,9 +8241,10 @@ function renderHomeTrajet() {
       const hhArr = arretHeure(a); // heure de RDV de l'arrêt (1 par arrêt)
       const cl0 = (a.clients || [])[0] || {}; const c0 = clients.find((x) => x.id === cl0.clientId) || {};
       const est = mins[i] != null ? Math.round(mins[i]) : null;                       // temps estimé (précalculé)
-      const real = (typeof a.realMin === 'number') ? a.realMin : null;                 // temps réel encodé (bouton Route)
-      const trajet = real != null ? durMin(real) : (est != null ? durMin(est) : '—'); // SMS : réel si encodé, sinon estimé
-      const trajetLbl = (est != null ? durMin(est) + ' est.' : '—') + (real != null ? ' · <b>' + durMin(real) + ' réel</b>' : '');
+      const real = (typeof a.realMin === 'number') ? a.realMin : null;                 // temps réel encodé (bouton Route) ; 0 = périmé (à recalculer)
+      const rStale = real === 0; const rDone = real != null && real > 0;
+      const trajet = rDone ? durMin(real) : (est != null ? durMin(est) : '—'); // SMS : réel si encodé (à jour), sinon estimé
+      const trajetLbl = (est != null ? durMin(est) + ' est.' : '—') + (rDone ? ' · <b>' + durMin(real) + ' réel</b>' : (rStale ? ' · <b class="td-stale">🔄 à recalculer</b>' : ''));
       const el = document.createElement('div'); el.className = 'list-item';
       // « Paiement & clôture » : ouvre le paiement ; l'enregistrement (valide) clôture l'arrêt. Verrouillé si : non démarrée, arrêt précédent non finalisé, aucun cheval coché, ou déjà clôturé.
       const validated = typeof a.validatedAt === 'number';
@@ -8220,7 +8275,7 @@ function renderHomeTrajet() {
         modalActions('Actions — ' + (labelFor(a) || 'arrêt'), [
           { label: '🕘 Heure RDV', done: !!arretHeure(a), keepOpen: true, onClick: () => modalHeureRdv(t, a) },
           { label: navLabel(), onClick: () => openNav(a.addr) },
-          { label: 'Route (temps réel)', done: typeof a.realMin === 'number', onClick: () => modalRouteTime(t, a, est, renderHomeTrajet) },
+          { label: 'Route (temps réel)', done: rDone, orange: rStale, onClick: () => modalRouteTime(t, a, est, renderHomeTrajet) },
           { label: 'SMS', keepOpen: true, onClick: smsAction },
           { label: 'Ticket', keepOpen: true, onClick: ticketAction },
           { label: '＋ Prêt', orange: pretDone, onClick: () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, t); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, t) }))); } }, // orange si un prêt est en cours
@@ -8239,7 +8294,8 @@ function renderHomeTrajet() {
       const R = t.result; const mpk = (R && R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
       const estRet = (R && R.kmLastHome != null) ? Math.round(R.kmLastHome * mpk) : null;
       const realRet = (typeof t.returnRealMin === 'number') ? t.returnRealMin : null;
-      const retLbl = (estRet != null ? durMin(estRet) + ' est.' : '—') + (realRet != null ? ' · <b>' + durMin(realRet) + ' réel</b>' : '') + (t.endedAt ? ' · ✅ ' + hm(t.endedAt) : '');
+      const retRDone = realRet != null && realRet > 0; const retRStale = realRet === 0;
+      const retLbl = (estRet != null ? durMin(estRet) + ' est.' : '—') + (retRDone ? ' · <b>' + durMin(realRet) + ' réel</b>' : (retRStale ? ' · <b class="td-stale">🔄 à recalculer</b>' : '')) + (t.endedAt ? ' · ✅ ' + hm(t.endedAt) : '');
       const rr = document.createElement('div'); rr.className = 'list-item';
       const closeBtn = t.endedAt ? '<button class="btn small done" disabled>✅ Clôturée</button>' : ` <button class="btn small${started ? ' primary' : ''}" data-close${started ? '' : ' disabled'} title="${started ? 'Clôture la tournée (figée)' : 'Démarrez d\'abord la tournée'}">Clôturer tournée</button>`;
       rr.innerHTML = `<div class="li-main"><b>🏁 Retour</b><span class="li-sub">📍 ${esc(addrStr(retAddr)) || 'domicile'} · 🕒 ${retLbl}</span></div>
@@ -8291,7 +8347,7 @@ function modalRouteTime(tour, arret, estMin, after) {
   $('mX').addEventListener('click', closeModal);
   const rtConv = () => { const v = parseInt($('rtMin').value, 10); $('rtConv').innerHTML = (!isNaN(v) && v >= 0) ? '= <b>' + durMin(v) + '</b>' : ''; };
   $('rtMin').addEventListener('input', rtConv); rtConv();
-  $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete arret.realMin; else arret.realMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
+  $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v <= 0) delete arret.realMin; else arret.realMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); }); // 0 (ou vide) = effacer ; le 0 est réservé au marqueur « à recalculer »
   $('rtClear').addEventListener('click', () => { delete arret.realMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
 }
 // Adresse de retour d'une tournée : arrivée propre si définie, sinon départ propre, sinon domicile.
@@ -8312,7 +8368,7 @@ function modalReturnTime(t, estMin, after) {
   $('mX').addEventListener('click', closeModal);
   const rtConv = () => { const v = parseInt($('rtMin').value, 10); $('rtConv').innerHTML = (!isNaN(v) && v >= 0) ? '= <b>' + durMin(v) + '</b>' : ''; };
   $('rtMin').addEventListener('input', rtConv); rtConv();
-  $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v < 0) delete t.returnRealMin; else t.returnRealMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); });
+  $('rtOk').addEventListener('click', () => { const v = parseInt($('rtMin').value, 10); if (isNaN(v) || v <= 0) delete t.returnRealMin; else t.returnRealMin = v; persist(); closeModal(); (after || renderHomeTrajet)(); }); // 0 (ou vide) = effacer ; le 0 est réservé au marqueur « à recalculer »
   $('rtClear').addEventListener('click', () => { delete t.returnRealMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
 }
 // Prêt d'un objet à un client (mémoire par client, rappelée aux tournées suivantes jusqu'à récupération).
@@ -8881,6 +8937,10 @@ function modalRDV(t, arret, cid, onDone) {
       // Parage : regroupement par date (commune/séparée) → 1 heure par date (même client, même date = même arrêt = même heure).
       const byDate = {}; // date -> { ids:[], heure }
       entries.forEach((en) => { if (en.curType === 'patho' || en.ignore) return; const d = en.sep ? en.date : common.date; const hh = en.sep ? en.heure : common.heure; if (!d) return; const g = byDate[d] = byDate[d] || { ids: [], heure: '' }; g.ids.push(en.id); if (!g.heure && hh) g.heure = hh; });
+      // ≥1 cheval OBLIGATOIRE : au moins un parage (avec date) OU un 2ᵉ RDV patho maintenu (avec date).
+      const hasParage = Object.keys(byDate).length > 0;
+      const hasPathoMaint = entries.some((en) => en.hasPatho && en.pathoStatus === 'maintenir' && en.pathoDate);
+      if (!hasParage && !hasPathoMaint) { alert('📅 Sélectionnez au moins un cheval avec une date et une heure pour programmer un RDV.'); return; }
       // Heure OBLIGATOIRE pour CHAQUE RDV (parage + patho maintenu), même si la synchro Google est désactivée.
       const missParage = Object.keys(byDate).some((d) => !byDate[d].heure);
       const missPatho = entries.some((en) => en.hasPatho && en.pathoStatus === 'maintenir' && en.pathoDate && !en.pathoHeure);

@@ -132,6 +132,8 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 /* Arrêts */
 .arrets { display: flex; flex-direction: column; gap: 10px; }
 .arret { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: var(--bg); }
+.arret-retour-row { border: 1px dashed var(--line); border-radius: 12px; padding: 10px; background: var(--bg); margin-top: 8px; }
+.td-stale { color: var(--warn); }
 .a-top { display: flex; gap: 8px; align-items: center; }
 .a-top > .grow { min-width: 0; }
 .a-top > .grow b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
