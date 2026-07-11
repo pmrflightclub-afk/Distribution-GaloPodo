@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.23';
+const APP_VERSION = '1.2.24';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.24', date: '2026-07-11',
+    corrections: [
+      'Compta → Impayés : bouton « ✕ Supprimer » sur chaque impayé (en attente ET régularisé). Il retire définitivement l\'impayé de la fiche client ET la ligne « Impayé du… » de toutes les tournées — utile pour purger un impayé de test ou fantôme qui restait affiché en compta du mois.',
+      'Modale « ⚡ Agir » : le bouton « ＋ Prêt » passe en orange (comme dans la carte d\'arrêt) quand un prêt est en cours pour le client.',
+    ],
+  },
   {
     version: '1.2.23', date: '2026-07-11',
     corrections: [
@@ -5895,6 +5902,14 @@ function showCompta(sub) {
   window.scrollTo(0, 0);
 }
 // Sous-onglet Compta « Impayés » : tous les impayés clients, séparés « en attente » / « régularisés » (paiement reçu).
+// Supprime DÉFINITIVEMENT un impayé : retire le record de la fiche client ET la ligne « Impayé du… » de toutes les tournées.
+// Purge complète (utile pour un impayé de test ou fantôme) → la compta du mois se recalcule sans lui.
+function deleteImpayeFully(clientId, impayeId) {
+  const c = clients.find((x) => x.id === clientId); if (!c) return;
+  c.impayes = (c.impayes || []).filter((im) => im.id !== impayeId);
+  allTours().forEach((t) => { if (Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !(a.impaye && a.impayeId === impayeId)); });
+  saveClients(); saveTournees(); saveArchive();
+}
 function renderComptaImpayes() {
   const attente = $('impayesAttente'), regul = $('impayesRegul'); if (!attente || !regul) return;
   attente.innerHTML = ''; regul.innerHTML = '';
@@ -5909,14 +5924,16 @@ function renderComptaImpayes() {
   enAttente.forEach(({ c, im }) => {
     const el = document.createElement('div'); el.className = 'list-item stack-act';
     const sent = im.sentAt ? ' · <span class="badge">📧 envoyé le ' + esc(fmtDateFr(im.sentAt)) + '</span>' : '';
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b> <b class="li-amount">${eur(im.ttc)}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">en attente</span>${sent}</span></div><div class="li-act li-act-col"><button class="btn small${im.sentAt ? ' done' : ' primary'}" data-mail>📧 Email${im.sentAt ? ' ✓' : ''}</button></div>`;
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b> <b class="li-amount">${eur(im.ttc)}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">en attente</span>${sent}</span></div><div class="li-act li-act-col"><button class="btn small${im.sentAt ? ' done' : ' primary'}" data-mail>📧 Email${im.sentAt ? ' ✓' : ''}</button><button class="btn small danger" data-del>✕ Supprimer</button></div>`;
     el.querySelector('[data-mail]').addEventListener('click', () => { if (!c.email && !confirm('Ce client n\'a pas d\'adresse email en fiche. Continuer quand même (vous choisirez le destinataire dans le mail) ?')) return; sendClientDoc(c, impayePdfBlob(c, im), 'impaye-' + norm(fullName(c)).replace(/\s+/g, '-') + '.pdf', "facture d'impayé", () => { im.sentAt = todayStr(); saveClients(); renderComptaImpayes(); }); });
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer DÉFINITIVEMENT cet impayé de ' + fullName(c) + ' ? Sa ligne « Impayé du… » sera retirée des tournées et de la compta.')) return; deleteImpayeFully(c.id, im.id); renderComptaImpayes(); if (typeof renderComptaMois === 'function') renderComptaMois(); });
     attente.appendChild(el);
   });
   regularises.forEach(({ c, im }) => {
     const rt = im.collectedTourId ? tourById(im.collectedTourId) : null;
     const el = document.createElement('div'); el.className = 'list-item';
-    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">paiement reçu</span>${rt ? ' · régularisé le ' + esc(fmtDateFr(rt.date)) : ''}</span></div><div class="li-act"><b>${eur(im.ttc)}</b></div>`;
+    el.innerHTML = `<div class="li-main"><b>${esc(fullName(c))}</b><span class="li-sub">Impayé du ${esc(fmtDateFr(im.date))} · <span class="badge">paiement reçu</span>${rt ? ' · régularisé le ' + esc(fmtDateFr(rt.date)) : ''}</span></div><div class="li-act li-act-col"><b>${eur(im.ttc)}</b><button class="btn small danger" data-del>✕ Supprimer</button></div>`;
+    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer DÉFINITIVEMENT cet impayé de ' + fullName(c) + ' ? Sa ligne « Impayé du… » sera retirée des tournées et de la compta (à n\'utiliser que pour un impayé de test / fantôme).')) return; deleteImpayeFully(c.id, im.id); renderComptaImpayes(); if (typeof renderComptaMois === 'function') renderComptaMois(); });
     regul.appendChild(el);
   });
 }
@@ -8112,7 +8129,7 @@ function renderHomeTrajet() {
           { label: 'Route (temps réel)', done: typeof a.realMin === 'number', onClick: () => modalRouteTime(t, a, est, renderHomeTrajet) },
           { label: 'SMS', keepOpen: true, onClick: smsAction },
           { label: 'Ticket', keepOpen: true, onClick: ticketAction },
-          { label: '＋ Prêt', done: pretDone, onClick: () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, t); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, t) }))); } },
+          { label: '＋ Prêt', orange: pretDone, onClick: () => { if (a.clients.length === 1) modalPret(a.clients[0].clientId, t); else modalActions('Prêt — quel client ?', a.clients.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalPret(cl.clientId, t) }))); } }, // orange si un prêt est en cours
           { label: '💶 Paiement', done: arretPaiementDone(t, a), onClick: () => modalPayment(t, a, renderHomeTrajet, () => { if (typeof a.validatedAt !== 'number') a.validatedAt = Date.now(); persistTour(); }) },
           { label: '📅 RDV', done: !!a.rdvDone, onClick: () => { if (c0id) modalRDV(t, a, c0id, renderHomeTrajet); } },
           { label: '📧 Email au client', keepOpen: true, onClick: () => { const cls = a.clients || []; if (cls.length === 1) modalEmailClient(clients.find((x) => x.id === cls[0].clientId)); else if (cls.length) modalActions('Email — quel client ?', cls.map((cl) => ({ label: clientName(cl.clientId), onClick: () => modalEmailClient(clients.find((x) => x.id === cl.clientId)) }))); } },
@@ -8146,7 +8163,7 @@ function renderHomeTrajet() {
 // Chaque action : { label, onClick, keepOpen?, done? (✓ vert = élément déjà encodé/fait), disabled? }.
 function modalActions(title, actions) {
   openModal(`<div class="modal-head"><b>${esc(title)}</b><button class="x" id="mX">✕</button></div>
-    <div class="actions-col">${actions.map((a, idx) => `<button class="btn block${a.done ? ' done' : ''}" data-ai="${idx}"${a.disabled ? ' disabled' : ''}>${a.label}${a.done ? ' ✓' : ''}</button>`).join('')}</div>`);
+    <div class="actions-col">${actions.map((a, idx) => `<button class="btn block${a.done ? ' done' : ''}${a.orange ? ' pret-on' : ''}" data-ai="${idx}"${a.disabled ? ' disabled' : ''}>${a.label}${a.done ? ' ✓' : ''}</button>`).join('')}</div>`);
   $('mX').addEventListener('click', closeModal);
   actions.forEach((a, idx) => { const b = document.querySelector(`[data-ai="${idx}"]`); if (b && !a.disabled) b.addEventListener('click', () => { if (a.keepOpen) a.onClick(b); else { closeModal(); a.onClick(b); } }); });
 }
