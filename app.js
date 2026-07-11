@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.30';
+const APP_VERSION = '1.2.31';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.31', date: '2026-07-11',
+    corrections: [
+      'Paramétrage des planches (Gestion → Planche de contact) : réordonner (▲▼), ajouter ou supprimer une colonne (3/4/5), une ligne ou un stade est désormais enregistré immédiatement. Avant, seul le renommage était sauvegardé : l\'ordre était perdu au changement de page ou à la synchronisation.',
+    ],
+  },
   {
     version: '1.2.30', date: '2026-07-11',
     corrections: [
@@ -7050,13 +7056,13 @@ function plancheList(box, arr, onChange, addLabel, allowEmpty) {
     const row = document.createElement('div'); row.className = 'edit-row';
     row.innerHTML = `<div class="er-top"><input class="grow er-title" value="${esc(val)}" placeholder="Libellé"/><button class="btn small" data-up${i === 0 ? ' disabled' : ''}>▲</button><button class="btn small" data-down${i === arr.length - 1 ? ' disabled' : ''}>▼</button><button class="a-del" data-del title="Supprimer">✕</button></div>`;
     row.querySelector('.er-title').addEventListener('input', (e) => { arr[i] = e.target.value; saveSettings(); });
-    row.querySelector('[data-up]').addEventListener('click', () => { moveInArr(arr, i, -1); onChange(); });
-    row.querySelector('[data-down]').addEventListener('click', () => { moveInArr(arr, i, 1); onChange(); });
-    row.querySelector('[data-del]').addEventListener('click', () => { if (!allowEmpty && arr.length <= 1) { alert('Au moins un élément est requis.'); return; } arr.splice(i, 1); onChange(); });
+    row.querySelector('[data-up]').addEventListener('click', () => { moveInArr(arr, i, -1); saveSettings(); onChange(); });
+    row.querySelector('[data-down]').addEventListener('click', () => { moveInArr(arr, i, 1); saveSettings(); onChange(); });
+    row.querySelector('[data-del]').addEventListener('click', () => { if (!allowEmpty && arr.length <= 1) { alert('Au moins un élément est requis.'); return; } arr.splice(i, 1); saveSettings(); onChange(); });
     box.appendChild(row);
   });
   const add = document.createElement('button'); add.className = 'btn small'; add.style.marginTop = '6px'; add.textContent = addLabel || '+ Ajouter';
-  add.addEventListener('click', () => { arr.push('Nouveau'); onChange(); });
+  add.addEventListener('click', () => { arr.push('Nouveau'); saveSettings(); onChange(); });
   box.appendChild(add);
 }
 function renderPlancheConfig() {
