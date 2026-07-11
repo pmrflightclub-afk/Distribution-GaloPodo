@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.39';
+const APP_VERSION = '1.2.40';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.40', date: '2026-07-11',
+    ajouts: [
+      'Planche de contact — historique : chaque planche générée est mémorisée (client, cheval, date, type, note, cycle, modèle — jamais les photos). À la création, un menu déroulant « Historique » (au-dessus de la date, actif dès qu\'un cheval est choisi et mis à jour quand le cheval change) permet de reprendre une planche précédente du cheval : les champs se re-remplissent, il ne reste qu\'à replacer les photos et régénérer le PDF.',
+    ],
+  },
   {
     version: '1.2.39', date: '2026-07-11',
     corrections: [
@@ -1577,6 +1583,7 @@ if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {};
 // Chevaux en attente de planche photo (« Compte rendu photo » sur l'Accueil) : { id, clientId, chevalId, chevalNom, date, tourId, type(stade) }. Aucune image stockée.
 if (!Array.isArray(S.plancheTodo)) S.plancheTodo = [];
 if (!Array.isArray(S.plancheDone)) S.plancheDone = [];
+if (!Array.isArray(S.plancheHistory)) S.plancheHistory = []; // historique des planches de contact générées (métadonnées : client, cheval, date, stade, note, cycle, modèle) — jamais d'images
 // Tarifs « photos / planches » (supplément par cheval). 3 angles = référence ; 4 & 5 = manuels OU calculés en % (base/photo × (1−%) × nb photos).
 S.photoTarifs = Object.assign({ angle3HT: 10, angle4HT: 13, angle5HT: 16, pctMode: false, pct4: 0, pct5: 0 }, S.photoTarifs || {});
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
@@ -7510,8 +7517,8 @@ function plRenderDateSuggest() {
 function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
-  const modele = P.modeles[plancheModele] ? plancheModele : '4';
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: '', dureeCycleSem: 0, potView: 'grid', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
+  const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -7527,11 +7534,12 @@ function modalPlancheCreate(type, prefill) {
         <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+        ${type === 'contact' ? '<label id="plChistWrap">Historique (reprendre une planche du cheval)<select id="plChist" disabled></select></label>' : ''}
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>${plCreate.allowTourPick ? '<div id="plCdateSuggest"></div>' : ''}
         ${type === 'contact' ? `<label>Type de planche (stade) — <b>obligatoire</b><select id="plCstade">${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
         ${type === 'contact' && plCreate.hasChevalPage ? `<label class="chk2"><input type="checkbox" id="plCchevalPage" ${plCreate.chevalPageOn ? 'checked' : ''}/> ➕ Ajouter la page « Cheval »</label>` : ''}
         <label id="plCcycleWrap" style="${plancheStadeCareNeeded(plCreate.stade) ? '' : 'display:none'}">Durée du cycle précédent (semaines) — <b>obligatoire</b><input type="number" id="plCcycle" min="1" step="1" value="${plCreate.dureeCycleSem || ''}" placeholder="ex : 7"/></label>
-        <label class="pl-note-field">Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…"></textarea></label>
+        <label class="pl-note-field">Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…">${esc(plCreate.note || '')}</textarea></label>
       </section>
       <section class="card">
         <div class="card-head"><h3 class="rsub" style="margin:0">Photos</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCdateAll">📅 Tout dater à la planche</button><button class="btn small" id="plCimport">＋ Importer des photos</button></div></div>
@@ -7556,9 +7564,12 @@ function modalPlancheCreate(type, prefill) {
     $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.plcm === plCreate.modele));
     plRenderPot(); plRenderGrid();
   }));
-  $('plCcheval').addEventListener('input', (e) => { plCreate.cheval = e.target.value; });
+  $('plCcheval').addEventListener('input', (e) => { plCreate.cheval = e.target.value; plRenderHistory(); });
   // Flux Déclarer : cheval choisi → client propriétaire rempli automatiquement + dates de tournée suggérées (planches pas encore faites).
-  $('plCcheval').addEventListener('change', (e) => { plCreate.cheval = e.target.value; if (plCreate.allowTourPick) { const nn = norm(plCreate.cheval); const owner = nn ? clients.find((c) => (c.chevaux || []).some((h) => norm(h.nom) === nn)) : null; if (owner) { plCreate.client = fullName(owner); plCreate.clientId = owner.id; const ci = $('plCclient'); if (ci) ci.value = plCreate.client; } plRenderDateSuggest(); } });
+  $('plCcheval').addEventListener('change', (e) => { plCreate.cheval = e.target.value; if (plCreate.allowTourPick) { const nn = norm(plCreate.cheval); const owner = nn ? clients.find((c) => (c.chevaux || []).some((h) => norm(h.nom) === nn)) : null; if (owner) { plCreate.client = fullName(owner); plCreate.clientId = owner.id; const ci = $('plCclient'); if (ci) ci.value = plCreate.client; } plRenderDateSuggest(); } plRenderHistory(); });
+  // Historique : reprendre une planche précédente du cheval → ré-ouvre la création pré-remplie (métadonnées ; les photos sont à ré-importer).
+  { const hs = $('plChist'); if (hs) hs.addEventListener('change', (e) => { const h = (S.plancheHistory || []).find((x) => x.id === e.target.value); if (h) modalPlancheCreate('contact', { cheval: h.cheval, client: h.client, clientId: h.clientId, date: h.date, stade: h.stade, note: h.note, dureeCycleSem: h.dureeCycleSem, modele: h.modele, allowTourPick: plCreate.allowTourPick }); }); }
+  plRenderHistory();
   $('plCclient').addEventListener('input', (e) => { plCreate.client = e.target.value; });
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
   if (plCreate.allowTourPick) plRenderDateSuggest();
@@ -7580,7 +7591,7 @@ function modalPlancheCreate(type, prefill) {
     try {
       const blob = await planchePdfBlob();
       const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = plancheBaseName(plCreate) + '.pdf'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
-      plancheTodoDone(plCreate);
+      plancheTodoDone(plCreate); addPlancheHistory(plCreate);
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCpdf')) { btn.disabled = false; btn.textContent = old; }
   };
@@ -7592,7 +7603,7 @@ function modalPlancheCreate(type, prefill) {
     try {
       const blob = await planchePdfBlob();
       const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
-      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), () => plancheTodoDone(plCreate));
+      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), () => { plancheTodoDone(plCreate); addPlancheHistory(plCreate); });
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
   };
@@ -7830,6 +7841,24 @@ function planchePrint() {
 // Retire le cheval du « Compte rendu photo » (une planche a été produite pour lui).
 // Planche enregistrée/envoyée → on marque la planche FAITE (client|cheval|date) : le bouton Planche passe au vert et le cheval sort du « Compte rendu photo ».
 // On NE retire PLUS le « à faire » (il porte l'état « acte photo attendu ») ; renderComptePhoto filtre les faites.
+// Historique des planches de CONTACT générées : métadonnées réutilisables (pas d'images). Upsert par client·cheval·date·stade.
+function addPlancheHistory(st) {
+  if (!st || st.type !== 'contact') return;
+  if (!Array.isArray(S.plancheHistory)) S.plancheHistory = [];
+  const key = (y) => (y.clientId || '') + '|' + norm(y.client || '') + '|' + norm(y.cheval || '') + '|' + (y.date || '') + '|' + norm(y.stade || '');
+  const entry = { id: uid(), clientId: st.clientId || null, client: st.client || '', cheval: st.cheval || '', date: st.date || '', stade: st.stade || '', note: st.note || '', dureeCycleSem: st.dureeCycleSem || 0, modele: st.modele || '', createdAt: Date.now() };
+  const k = key(entry), i = S.plancheHistory.findIndex((y) => key(y) === k);
+  if (i >= 0) { const id = S.plancheHistory[i].id; S.plancheHistory[i] = Object.assign(entry, { id }); } else S.plancheHistory.push(entry);
+  saveSettings();
+}
+// Rendu du menu déroulant « Historique » (dans la création de planche) : filtré par le cheval sélectionné, inactif tant qu'aucun cheval.
+function plRenderHistory() {
+  const sel = $('plChist'); if (!sel) return;
+  const nn = norm(plCreate && plCreate.cheval);
+  const items = nn ? (S.plancheHistory || []).filter((x) => norm(x.cheval) === nn).sort((a, b) => (b.date || '').localeCompare(a.date || '')) : [];
+  sel.disabled = !items.length;
+  sel.innerHTML = '<option value="">' + (!nn ? 'Choisissez d\'abord un cheval' : (items.length ? 'Reprendre une planche précédente…' : 'Aucune planche précédente')) + '</option>' + items.map((x) => `<option value="${x.id}">${esc(fmtDateFr(x.date))}${x.stade ? ' · ' + esc(x.stade) : ''}${x.client ? ' · ' + esc(x.client) : ''}</option>`).join('');
+}
 function plancheTodoDone(st) {
   if (!st) return;
   let clientId = st.clientId || null, chevalNom = st.cheval || '', date = st.date || '', type = st.stade || '';
