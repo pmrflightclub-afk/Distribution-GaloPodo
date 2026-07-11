@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.51';
+const APP_VERSION = '1.2.52';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.52', date: '2026-07-12',
+    ajouts: [
+      'Recentrage automatique étendu à d\'autres listes : ajout d\'un élément lié à un frais véhicule, d\'une ligne de répartition analytique, d\'un cheval (fiche client), d\'un angle/stade (Gestion → Planche) et d\'une date de comparaison (avant/après) — l\'écran se recentre désormais sur le nouvel élément.',
+    ],
+  },
   {
     version: '1.2.51', date: '2026-07-12',
     ajouts: [
@@ -3432,7 +3438,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
   $('cTvaNum').addEventListener('input', (e) => { w.tvaNum = e.target.value; saveDraft(); });
   $('cEntNum').addEventListener('input', (e) => { w.entrepriseNum = e.target.value; saveDraft(); });
   $('cSocMeme').addEventListener('change', (e) => { w.societeMemeAdresse = e.target.checked; $('cSocAddrWrap').style.display = e.target.checked ? 'none' : ''; saveDraft(); });
-  $('cAddCheval').addEventListener('click', () => { w.chevaux.push({ id: uid(), nom: '', addrSource: 'specifique', addr: emptyAddr() }); renderCh(); saveDraft(); });
+  $('cAddCheval').addEventListener('click', () => { w.chevaux.push({ id: uid(), nom: '', addrSource: 'specifique', addr: emptyAddr() }); renderCh(); saveDraft(); revealNew('cChevaux'); });
   if (existing) $('cDel').addEventListener('click', () => { if (confirm('Supprimer ce client ?')) { DRAFTS.clear(key); clients = clients.filter((x) => x.id !== w.id); saveClients(); closeModal(); renderClients(); } });
   $('cSave').addEventListener('click', () => {
     if (!(w.nom || '').trim() && !(w.prenom || '').trim()) { $('cErr').textContent = 'Le nom (ou le prénom) est obligatoire.'; return; }
@@ -6272,7 +6278,7 @@ function renderRepartition() {
   ALLOC_BASES.forEach((b) => { html += `<section class="card"><h3 class="rsub">${esc(b.label)} — ${eur(tot[b.field])} <span class="li-sub">(${esc(b.hint)})</span></h3><div id="alloc-${b.key}"></div><div class="actions" style="margin-top:6px"><button class="btn small" data-addalloc="${b.key}">＋ Ligne</button></div><p class="hint" id="allocsum-${b.key}"></p></section>`; });
   box.innerHTML = html;
   ALLOC_BASES.forEach((b) => renderAllocRows(b.key, tot[b.field]));
-  box.querySelectorAll('[data-addalloc]').forEach((btn) => btn.addEventListener('click', () => { const k = btn.dataset.addalloc; S.analyticAlloc[k].push({ sousCompteId: null, pct: 0 }); saveSettings(); renderRepartition(); }));
+  box.querySelectorAll('[data-addalloc]').forEach((btn) => btn.addEventListener('click', () => { const k = btn.dataset.addalloc; S.analyticAlloc[k].push({ sousCompteId: null, pct: 0 }); saveSettings(); renderRepartition(); revealNew('alloc-' + k); }));
 }
 function renderAllocRows(key, montant) {
   const wrap = $('alloc-' + key); if (!wrap) return; wrap.innerHTML = '';
@@ -6929,7 +6935,7 @@ function renderFraisVehicule() {
     el.querySelector('[data-k="poste"]').addEventListener('input', (e) => { f.poste = e.target.value; saveSettings(); });
     { const de = el.querySelector('[data-k="date"]'); if (de) de.addEventListener('change', (e) => { f.date = e.target.value || ''; if (f.date) { const rel = (S.odoReleves || []).find((r) => r && r.date === f.date && typeof r.km === 'number'); if (rel) f.kmDebut = rel.km; else { const est = Math.round(estOdoAt(f.date)); if (est > 0) f.kmDebut = est; } } /* km repris d'un relevé de même date, sinon estimé (relevés + tournées) à cette date */ saveSettings(); renderFraisVehicule(); }); }
     { const pe = el.querySelector('[data-k="parentId"]'); if (pe) pe.addEventListener('change', (e) => { f.parentId = e.target.value || null; saveSettings(); renderFraisVehicule(); }); }
-    { const ae = el.querySelector('[data-add-elem]'); if (ae) ae.addEventListener('click', () => { S.frais.push({ id: uid(), poste: 'Nouvel élément', nature: 'exceptionnel', statut: 'actif', kmReport: 0, montantHT: 0, kmPrevus: f.kmPrevus || 0, kmDebut: Math.round(odometer()), date: todayStr(), parentId: f.id }); saveSettings(); renderFraisVehicule(); }); }
+    { const ae = el.querySelector('[data-add-elem]'); if (ae) ae.addEventListener('click', () => { S.frais.push({ id: uid(), poste: 'Nouvel élément', nature: 'exceptionnel', statut: 'actif', kmReport: 0, montantHT: 0, kmPrevus: f.kmPrevus || 0, kmDebut: Math.round(odometer()), date: todayStr(), parentId: f.id }); saveSettings(); renderFraisVehicule(); revealNew('fraisList'); }); }
     el.querySelector('[data-k="nature"]').addEventListener('change', (e) => { f.nature = e.target.value; saveSettings(); renderFraisVehicule(); });
     el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce frais véhicule ?')) return; S.frais = S.frais.filter((x) => x.id !== f.id); (S.frais || []).forEach((x) => { if (x.parentId === f.id) x.parentId = null; }); saveSettings(); renderFraisVehicule(); });
     box.appendChild(el);
@@ -7642,7 +7648,8 @@ function plancheList(box, arr, onChange, addLabel, allowEmpty) {
     box.appendChild(row);
   });
   const add = document.createElement('button'); add.className = 'btn small'; add.style.marginTop = '6px'; add.textContent = addLabel || '+ Ajouter';
-  add.addEventListener('click', () => { arr.push('Nouveau'); saveSettings(); onChange(); });
+  const boxId = box.id; // onChange reconstruit tout → on recentre par l'id du conteneur (s'il en a un)
+  add.addEventListener('click', () => { arr.push('Nouveau'); saveSettings(); onChange(); if (boxId) revealNew(boxId); });
   box.appendChild(add);
 }
 function renderPlancheConfig() {
@@ -8069,7 +8076,7 @@ function plRenderGrid() {
     wrap.innerHTML = `<div class="pl-page-lbl">Page ${pi + 1}${st.type === 'avantapres' && pi === 0 ? ' — comparaison (dates)' : ''}</div>`;
     // Avant/après, page 0 : barre de gestion des dates de comparaison (chaque date = une paire Avant/Après de lignes)
     if (st.type === 'avantapres' && pi === 0) {
-      const bar = document.createElement('div'); bar.className = 'pl-datebar';
+      const bar = document.createElement('div'); bar.className = 'pl-datebar'; bar.id = 'plDatebar';
       (st.compar || []).forEach((c, ci2) => {
         const chip = document.createElement('span'); chip.className = 'pl-datechip';
         chip.innerHTML = `<input type="date" value="${esc(c.date)}"/>${st.compar.length > 1 ? '<button class="pl-date-x" title="Retirer">✕</button>' : ''}`;
@@ -8083,7 +8090,7 @@ function plRenderGrid() {
         });
         bar.appendChild(chip);
       });
-      const add = document.createElement('button'); add.className = 'btn small'; add.textContent = '＋ Ajouter une date'; add.addEventListener('click', () => { st.compar.push({ id: uid(), date: todayStr() }); plRenderGrid(); });
+      const add = document.createElement('button'); add.className = 'btn small'; add.textContent = '＋ Ajouter une date'; add.addEventListener('click', () => { st.compar.push({ id: uid(), date: todayStr() }); plRenderGrid(); revealNew('plDatebar'); });
       bar.appendChild(add); wrap.appendChild(bar);
     }
     const rows = plPageRows(pi);
