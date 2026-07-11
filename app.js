@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.49';
+const APP_VERSION = '1.2.50';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.50', date: '2026-07-11',
+    ajouts: [
+      'Saisie des dates (tournée, RDV, frais, entretien, planches, relevés, etc.) : nouveau calendrier intégré à l\'app à la place du sélecteur de date du téléphone — navigation mois par mois, dates hors limites grisées, fermeture d\'une pression à côté, date affichée en gris au format JJ/MM/AAAA. Le format interne et les enregistrements restent inchangés.',
+    ],
+    corrections: [
+      'Menus déroulants / heure / date maison : un appui sur une zone neutre du menu ouvert (en-tête du calendrier, marge) ne le referme plus par erreur.',
+    ],
+  },
   {
     version: '1.2.49', date: '2026-07-11',
     ajouts: [
@@ -2880,7 +2889,7 @@ function enhanceSelect(sel) {
   sel.parentNode.insertBefore(w, sel); w.appendChild(sel); // le natif vit (masqué) dans le wrapper
   w._gpSel = sel; sel._gpWrap = w; gpSelSync(sel);
   btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (sel.disabled) return; w.classList.contains('open') ? gpSelClose() : gpSelOpen(w); });
-  pop.addEventListener('click', (e) => { const o = e.target.closest('.gp-sel-opt'); if (o) { e.preventDefault(); e.stopPropagation(); gpSelPick(w, +o.dataset.i); } }); // preventDefault : évite le re-clic synthétique du <label> parent sur le bouton
+  pop.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const o = e.target.closest('.gp-sel-opt'); if (o) gpSelPick(w, +o.dataset.i); }); // preventDefault : annule l'action par défaut du <label> parent (clic synthétique sur le bouton qui refermerait le popup) ; stopPropagation : évite le clic-dehors sur soi-même
   btn.addEventListener('keydown', (e) => gpSelKey(w, e));
   sel.addEventListener('change', () => gpSelSync(sel)); // resync si le code déclenche un change
   // intercepte l'écriture programmatique `sel.value = …` (ne déclenche pas 'change') → maj du libellé
@@ -2920,31 +2929,91 @@ function enhanceTime(inp) {
   inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
   w._gpInp = inp; inp._gpWrap = w; gpTimeSync(inp);
   btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (inp.disabled) return; w.classList.contains('open') ? gpSelClose() : gpTimeOpen(w); });
-  pop.addEventListener('click', (e) => { const o = e.target.closest('.gp-sel-opt'); if (o) { e.preventDefault(); e.stopPropagation(); gpTimePick(w, o.dataset.t, +o.dataset.v); } });
+  pop.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const o = e.target.closest('.gp-sel-opt'); if (o) gpTimePick(w, o.dataset.t, +o.dataset.v); });
   inp.addEventListener('change', () => gpTimeSync(inp));
   const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
   if (desc && desc.get && desc.set) Object.defineProperty(inp, 'value', { configurable: true, get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); gpTimeSync(this); } });
+}
+// ===== Calendrier « maison » (Item 4) : même principe. Le <input type=date> natif reste masqué (source de vérité) ; façade
+// `.gp-sel.gp-date` avec un mini-calendrier mensuel (navigation ‹ mois ›, respect min/max). Choisir un jour met à jour le
+// natif (format YYYY-MM-DD) + dispatch input/change → handlers intacts. Libellé affiché JJ/MM/AAAA en gris.
+const GP_MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+const GP_WD = ['Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa', 'Di'];
+function gpDateParse(v) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v || ''); return m ? { y: +m[1], mo: +m[2], d: +m[3] } : null; }
+function gpDateLabel(inp) { const p = gpDateParse(inp.value); return p ? `${gpPad2(p.d)}/${gpPad2(p.mo)}/${p.y}` : 'JJ/MM/AAAA'; }
+function gpDateSync(inp) { const w = inp._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpDateLabel(inp); }
+function gpDateCmp(a, b) { return a.y !== b.y ? a.y - b.y : (a.mo !== b.mo ? a.mo - b.mo : a.d - b.d); }
+function gpDateBuildPop(w) {
+  const inp = w._gpInp, pop = w.querySelector('.gp-sel-pop'), sel = gpDateParse(inp.value), now = new Date();
+  if (!w._gpYM) { const b = sel || { y: now.getFullYear(), mo: now.getMonth() + 1 }; w._gpYM = { y: b.y, m: b.mo }; }
+  const y = w._gpYM.y, m = w._gpYM.m;
+  const startIdx = (new Date(y, m - 1, 1).getDay() + 6) % 7, days = new Date(y, m, 0).getDate();
+  const min = gpDateParse(inp.min), max = gpDateParse(inp.max);
+  const tk = { y: now.getFullYear(), mo: now.getMonth() + 1, d: now.getDate() };
+  let cells = '';
+  for (let i = 0; i < startIdx; i++) cells += '<div class="gp-cal-d empty"></div>';
+  for (let d = 1; d <= days; d++) {
+    const cur = { y, mo: m, d }; let cls = 'gp-cal-d';
+    if (sel && sel.y === y && sel.mo === m && sel.d === d) cls += ' sel';
+    if (tk.y === y && tk.mo === m && tk.d === d) cls += ' today';
+    if ((min && gpDateCmp(cur, min) < 0) || (max && gpDateCmp(cur, max) > 0)) cls += ' disabled';
+    cells += `<div class="${cls}" data-d="${d}">${d}</div>`;
+  }
+  pop.innerHTML = `<div class="gp-cal-hd"><button type="button" class="gp-cal-nav" data-nav="-1">‹</button><div class="gp-cal-title">${GP_MONTHS[m - 1]} ${y}</div><button type="button" class="gp-cal-nav" data-nav="1">›</button></div>`
+    + `<div class="gp-cal-wd">${GP_WD.map((d) => `<span>${d}</span>`).join('')}</div><div class="gp-cal-grid">${cells}</div>`;
+}
+function gpDateOpen(w) { const inp = w._gpInp; if (!inp || inp.disabled) return; if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); const p = gpDateParse(inp.value); w._gpYM = p ? { y: p.y, m: p.mo } : null; gpDateBuildPop(w); w.classList.add('open'); _gpSelOpen = w; }
+function gpDateNav(w, delta) { if (!w._gpYM) return; let y = w._gpYM.y, m = w._gpYM.m + delta; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } w._gpYM = { y, m }; gpDateBuildPop(w); }
+function gpDatePick(w, d) {
+  const inp = w._gpInp; inp.value = `${w._gpYM.y}-${gpPad2(w._gpYM.m)}-${gpPad2(d)}`; gpDateSync(inp);
+  inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
+  gpSelClose();
+}
+function enhanceDate(inp) {
+  if (!inp || inp.dataset.gpEnhanced) return;
+  inp.dataset.gpEnhanced = '1'; inp.classList.add('gp-native');
+  const w = document.createElement('div'); w.className = 'gp-sel gp-date';
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'gp-sel-btn';
+  btn.setAttribute('aria-haspopup', 'dialog'); btn.setAttribute('aria-disabled', inp.disabled ? 'true' : 'false');
+  btn.innerHTML = '<span class="gp-sel-val"></span><span class="gp-sel-car">📅</span>';
+  const pop = document.createElement('div'); pop.className = 'gp-sel-pop';
+  w.appendChild(btn); w.appendChild(pop);
+  inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
+  w._gpInp = inp; inp._gpWrap = w; gpDateSync(inp);
+  btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (inp.disabled) return; w.classList.contains('open') ? gpSelClose() : gpDateOpen(w); });
+  pop.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation(); // preventDefault annule l'action par défaut du <label> parent (qui refermerait le calendrier via un clic synthétique sur le bouton)
+    const nav = e.target.closest('.gp-cal-nav'); if (nav) { gpDateNav(w, +nav.dataset.nav); return; }
+    const cell = e.target.closest('.gp-cal-d'); if (cell && !cell.classList.contains('empty') && !cell.classList.contains('disabled')) gpDatePick(w, +cell.dataset.d);
+  });
+  inp.addEventListener('change', () => gpDateSync(inp));
+  const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  if (desc && desc.get && desc.set) Object.defineProperty(inp, 'value', { configurable: true, get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); gpDateSync(this); } });
 }
 function enhanceControls(root) {
   const r = root || document;
   r.querySelectorAll('select:not([data-gp-enhanced])').forEach(enhanceSelect);
   r.querySelectorAll('input[type=time]:not([data-gp-enhanced])').forEach(enhanceTime);
+  r.querySelectorAll('input[type=date]:not([data-gp-enhanced])').forEach(enhanceDate);
 }
-// Observe le DOM : enhance les nouveaux <select> / <input type=time> (rendus/modales) et resync les <select> repeuplés.
+// Observe le DOM : enhance les nouveaux <select> / <input type=time|date> (rendus/modales), resync les <select> repeuplés,
+// et reflète l'état disabled (togglé sans re-render, ex. edDate quand la tournée est verrouillée).
 function startSelectObserver() {
   enhanceControls(document);
   new MutationObserver((recs) => {
     for (const r of recs) {
+      if (r.type === 'attributes') { const el = r.target; if (el && el._gpWrap) { const b = el._gpWrap.querySelector('.gp-sel-btn'); if (b) b.setAttribute('aria-disabled', el.disabled ? 'true' : 'false'); } continue; }
       const t = r.target;
       if (t && t.nodeType === 1) { const en = t.tagName === 'SELECT' && t.dataset.gpEnhanced ? t : (t.closest ? t.closest('select[data-gp-enhanced]') : null); if (en) { gpSelSync(en); const w = en._gpWrap; if (w && w.classList.contains('open')) gpSelBuildPop(w); } }
       for (const n of r.addedNodes) {
         if (n.nodeType !== 1) continue;
         if (n.tagName === 'SELECT') enhanceSelect(n);
         else if (n.tagName === 'INPUT' && n.type === 'time') enhanceTime(n);
+        else if (n.tagName === 'INPUT' && n.type === 'date') enhanceDate(n);
         else if (n.querySelectorAll) enhanceControls(n);
       }
     }
-  }).observe(document.body, { childList: true, subtree: true });
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
 }
 
 // ---------- Navigation ----------

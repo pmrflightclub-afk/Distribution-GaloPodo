@@ -91,6 +91,26 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 /* Contexte pastille .a-heure : façade compacte, sans bordure (comme l'ancien input inline) */
 .a-heure .gp-sel.gp-time { margin-top: 0; }
 .a-heure .gp-sel-btn { border: 0; background: transparent; padding: 2px; min-width: 68px; width: auto; font-size: .82rem; color: var(--muted); gap: 4px; }
+/* Calendrier maison (Item 4) — réutilise .gp-sel / .gp-sel-pop */
+.gp-date .gp-sel-pop { min-width: 250px; padding: 8px; }
+.gp-cal-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.gp-cal-title { font-weight: 700; color: var(--ink); font-size: .95rem; text-transform: capitalize; }
+.gp-cal-nav { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; width: 32px; height: 32px; font-size: 1.1rem; cursor: pointer; line-height: 1; }
+.gp-cal-wd { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 4px; }
+.gp-cal-wd span { text-align: center; font-size: .68rem; color: var(--muted); font-weight: 700; }
+.gp-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.gp-cal-d { text-align: center; padding: 8px 0; border-radius: 8px; cursor: pointer; color: var(--ink); font-size: .9rem; }
+.gp-cal-d.empty { visibility: hidden; cursor: default; }
+.gp-cal-d.today { outline: 1px solid var(--accent); }
+.gp-cal-d.sel { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.gp-cal-d.disabled { color: var(--muted); opacity: .35; pointer-events: none; }
+.gp-cal-d:not(.empty):not(.disabled):not(.sel):hover { background: var(--bg); }
+/* Contextes compacts date (planche : pot photos, chips de comparaison) */
+.pl-th-meta .gp-sel.gp-date { flex: 1 1 auto; margin-top: 0; min-width: 0; }
+.pl-th-meta .gp-sel-btn { padding: 6px; font-size: .85rem; }
+.pl-pot.grid .pl-th-meta .gp-sel-btn { padding: 1px 2px; font-size: .58rem; }
+.pl-datechip .gp-sel.gp-date { margin-top: 0; }
+.pl-datechip .gp-sel-btn { border: 0; background: transparent; padding: 0 2px; min-width: 92px; width: auto; font-size: .78rem; }
 /* Flash bref sur un élément nouvellement créé (recentrage) */
 @keyframes flashNew { 0% { background: color-mix(in srgb, var(--accent) 32%, transparent); } 100% { background: transparent; } }
 .flash-new { animation: flashNew 1.5s ease-out; }
