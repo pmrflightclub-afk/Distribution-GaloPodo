@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.27';
+const APP_VERSION = '1.2.28';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.28', date: '2026-07-11',
+    ajouts: [
+      'Gestion → Adresses chevaux : historique des adresses. Quand un cheval change d\'adresse (déménagement), l\'ancienne est conservée comme référence (« ancienne adresse (inactive) », avec le nom du client et du cheval) — les adresses s\'additionnent au lieu d\'être remplacées.',
+    ],
+  },
   {
     version: '1.2.27', date: '2026-07-11',
     ajouts: [
@@ -3020,6 +3026,12 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     chk(w.addr, 'Adresse du client'); if (w.societe && w.societeMemeAdresse === false) chk(w.societeAddr, 'Adresse société');
     (w.chevaux || []).forEach((h) => chk(chevalAddr(w, h), '🐴 ' + (h.nom || 'cheval')));
     if (noirs.length && !confirm('⚠ Adresse(s) en LISTE NOIRE détectée(s) :\n\n' + noirs.join('\n') + '\n\nEnregistrer ce client quand même ?')) return;
+    // Historique d'adresse : si un cheval a changé d'adresse (déménagement), on CONSERVE l'ancienne comme référence (« ancienne adresse » dans Adresses chevaux — les adresses s'additionnent, jamais corrigées).
+    if (existing) (w.chevaux || []).forEach((h) => {
+      const oldH = (existing.chevaux || []).find((x) => x.id === h.id); if (!oldH) return;
+      const oldA = chevalAddr(existing, oldH), newK = addrKey(chevalAddr(w, h)), oldK = addrKey(oldA);
+      if (oldK && oldK !== newK && addrStr(oldA).trim()) { if (!Array.isArray(h.addrHistory)) h.addrHistory = []; if (!h.addrHistory.some((a) => addrKey(a) === oldK)) h.addrHistory.push(toAddr(oldA)); }
+    });
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
     DRAFTS.clear(key); saveClients(); reconcileActiveTours(); closeModal();
     if (onSaved) onSaved(w); else renderClients();
@@ -3046,8 +3058,12 @@ function chevalAddressesByClient() {
   const out = [];
   clients.forEach((c) => {
     const byKey = {};
-    (c.chevaux || []).forEach((h) => { const a = chevalAddr(c, h); const k = addrKey(a); if (!k) return; if (!byKey[k]) byKey[k] = { addr: a, chevaux: [] }; byKey[k].chevaux.push(h); });
-    const addrs = Object.values(byKey);
+    (c.chevaux || []).forEach((h) => {
+      const a = chevalAddr(c, h); const k = addrKey(a);
+      if (k) { if (!byKey[k] || byKey[k].hist) byKey[k] = { addr: a, chevaux: [], hist: false }; byKey[k].chevaux.push(h); }
+      (h.addrHistory || []).forEach((ha) => { const hk = addrKey(ha); if (!hk || hk === k || byKey[hk]) return; byKey[hk] = { addr: ha, chevaux: [h], hist: true }; }); // anciennes adresses (déménagement) = référence inactive
+    });
+    const addrs = Object.values(byKey).sort((x, y) => (x.hist ? 1 : 0) - (y.hist ? 1 : 0)); // actuelles d'abord, anciennes ensuite
     if (addrs.length) out.push({ client: c, addrs });
   });
   return out;
@@ -3066,6 +3082,7 @@ function renderChevAddresses() {
     const specInputs = [], addrList = []; let body = '';
     e.addrs.forEach((grp) => {
       const chNoms = grp.chevaux.map((h) => h.nom || 'cheval').join(', ');
+      if (grp.hist) { body += `<div class="li-sub" style="margin-top:4px;opacity:.65">🕘 ${esc(addrStr(grp.addr))} <span class="badge">ancienne adresse (inactive)</span> · 🐴 ${esc(chNoms)}</div>`; return; } // référence historique (déménagement)
       const noir = isAddrNoir(grp.addr); const gi = addrList.length; addrList.push(grp.addr);
       body += `<div class="ac-ecurie"><div class="li-sub">📍 ${esc(addrStr(grp.addr))}${noir ? ' <span class="badge badge-noir">⛔ lieu refusé</span>' : ''} · 🐴 ${esc(chNoms)}</div><button class="btn small${noir ? '' : ' danger'}" data-ecurie="${gi}" title="Refuser / réautoriser ce LIEU (écurie), indépendamment du statut du client">${noir ? '✅ Réautoriser ce lieu' : '⛔ Refuser ce lieu'}</button></div>`;
       grp.chevaux.filter((h) => srcOf(h) === 'specifique' && !h.addrPrivee).forEach((h) => { const idx = specInputs.length; specInputs.push(h); body += `<label class="ac-nom"><span class="li-sub">🐴 ${esc(h.nom || 'cheval')} — nom de l'adresse</span><input type="text" data-nom="${idx}" value="${esc(h.addrNom || '')}" placeholder="ex. Écurie du Nord"/></label>`; });
