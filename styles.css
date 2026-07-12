@@ -684,6 +684,10 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 .addr-badge-off { background: #fde68a55; color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .addr-badge:hover { filter: brightness(1.05); }
 .addr-badge:active { transform: translateY(1px); }
+/* Bouton « Prévenir » (changement d'heure) : orange = à communiquer, vert = client prévenu (inactif) */
+.btn.prev-on { background: #e67e22; color: #fff; border-color: #cf711d; }
+.btn.prev-done { background: color-mix(in srgb, var(--ok, #2e9e5b) 18%, var(--card)); color: var(--ok, #2e9e5b); pointer-events: none; }
+.badge.prev-badge { background: #e67e2222; color: #cf711d; }
 
 /* Stats → Clientèle : tuiles de dénombrement */
 .cl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; margin: 6px 0 10px; }

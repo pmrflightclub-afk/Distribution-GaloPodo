@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.73';
+const APP_VERSION = '1.2.74';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.74', date: '2026-07-12',
+    ajouts: [
+      'Ajustement des horaires (2/3) — « Prévenir » : quand l\'heure d\'un client a été décalée, un badge « 🕘 heure modifiée » et un bouton orange « 🔔 Prévenir » apparaissent sur son bloc. Le bouton ouvre un SMS pré-rempli (ancienne → nouvelle heure) avec un bouton « Copier » ; après « ✓ Client prévenu », le bouton passe en vert (inactif). Il repasse orange si l\'heure change à nouveau.',
+      'Nouveau modèle de SMS « prévenir (changement d\'heure) » dans Gestion → SMS, paramétrable, avec les champs « ancienne heure » et « nouvelle heure ».',
+    ],
+  },
   {
     version: '1.2.73', date: '2026-07-12',
     ajouts: [
@@ -1773,6 +1780,7 @@ const DEFAULTS = {
   logoBg: 'transparent',                       // fond derrière le logo (transparent/blanc/noir/couleur)
   smsTemplate: 'Bonjour {prenom}, je passe aujourd\'hui pour {cheval}. J\'arrive dans environ {trajet}. À tout de suite !',
   smsTemplatePolitesse: 'Bonjour {civilite} {nom}, je passe aujourd\'hui pour {cheval}. J\'arrive dans environ {trajet}. À tout de suite !',
+  smsTemplatePrevenir: 'Bonjour {prenom}, petit changement : le rendez-vous pour {cheval} passe de {ancienneHeure} à {nouvelleHeure}. Merci de votre compréhension !',
   frais: [],                                   // frais véhicule : {id, poste, nature:'recurrent'|'exceptionnel', montantHT, kmPrevus, kmDebut}
   amortissement: { achatHT: 0, dureeVieKm: 0 },// achat & amortissement (réglé une fois)
   tempsKm: 0, urgenceSuppKm: 0.16,             // supplément urgence €/km
@@ -1938,6 +1946,7 @@ if (typeof S.topbarColor !== 'string') S.topbarColor = '';
 if (typeof S.navBarColor !== 'string') S.navBarColor = '';
 if (typeof S.smsTemplate !== 'string') S.smsTemplate = DEFAULTS.smsTemplate;
 if (typeof S.smsTemplatePolitesse !== 'string') S.smsTemplatePolitesse = DEFAULTS.smsTemplatePolitesse;
+if (typeof S.smsTemplatePrevenir !== 'string') S.smsTemplatePrevenir = DEFAULTS.smsTemplatePrevenir;
 if (!S.appBg) S.appBg = '#0d0d0d';
 if (!S.logoBg) S.logoBg = 'transparent';
 S.home = toAddr(S.home && S.home.adresse !== undefined ? { rue: S.home.adresse, lat: S.home.lat, lon: S.home.lon } : S.home);
@@ -4289,7 +4298,7 @@ function followingClients(t, afterAi, afterMin, excludeCl) {
   });
   return out;
 }
-function applyDecalage(impacted, deltaMin) { impacted.forEach(({ cl }) => { const m = hmToMin(cl.heure); if (m == null) return; cl.heure = minToHm(m + deltaMin); delete cl.heureStale; }); }
+function applyDecalage(impacted, deltaMin) { impacted.forEach(({ cl }) => { const m = hmToMin(cl.heure); if (m == null) return; if (!cl.aPrevenir) cl.heureAncienne = cl.heure; cl.heure = minToHm(m + deltaMin); cl.aPrevenir = true; delete cl.heureStale; }); } // décalé → à prévenir (mémorise l'heure connue du client)
 // Modale « Ajuster les horaires » — cas DELTA CONNU (édition d'heure, insertion) : propose de décaler les RDV suivants du même écart.
 function modalAdjustHoraires(t, ctx) {
   const impacted = followingClients(t, ctx.arretIdx, ctx.oldMin, ctx.cl);
@@ -4660,15 +4669,18 @@ function renderEditorArrets(locked) {
       // ===== En-tête du client EN TÊTE : nom · TTC · heure du client · Paiement/RDV/Prêt/Planche · réduction =====
       {
         const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '', pretOn = ((((clients.find((x) => x.id === cl.clientId) || {}).prets) || []).length > 0), plCls = plancheBtnClass(plancheStateForClient(currentTour, cl.clientId));
+        const prevBtn = cl.aPrevenir === true ? ' <button class="btn small prev-on" data-cprevenir>🔔 Prévenir</button>' : (cl.aPrevenir === false ? ' <span class="btn small prev-done">✓ Prévenu</span>' : ''); // orange = heure changée à communiquer ; vert = client prévenu (inactif)
+        const prevBadge = cl.aPrevenir === true ? ' <span class="badge prev-badge">🕘 heure modifiée</span>' : '';
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-acts"><button class="btn small${a.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button>${prevBtn}</div><div class="ac-acts"><button class="btn small${a.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
-          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
+          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; if (oldH && newH && oldH !== newH) { if (!cl.aPrevenir) cl.heureAncienne = oldH; cl.aPrevenir = true; } persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
           if (!futureTour) actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (arretPaiementDone(currentTour, a) && typeof a.validatedAt !== 'number') { a.validatedAt = Date.now(); persistCurrentTour(); } refreshEverywhere(); }, cl.clientId)); // paiement complet de l'arrêt → clôture l'arrêt (validatedAt) + rafraîchit le bandeau
           if (!futureTour) actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
           actBar.querySelector('[data-cplanche]').addEventListener('click', () => modalArretPlanche(currentTour, a, cl.clientId));
+          { const pb = actBar.querySelector('[data-cprevenir]'); if (pb) pb.addEventListener('click', () => modalPrevenir(currentTour, cl)); } // bouton orange « Prévenir » (heure modifiée)
           { const rd = actBar.querySelector('[data-creduc]'); if (rd) rd.addEventListener('input', (e) => { currentTour.reductions[cl.clientId] = parseFloat(e.target.value) || 0; saveTournees(); recomputeMoney(); }); }
           // Cases « 2ᵉ RDV » (une par cheval en pathologie) : activation + récurrence, portées par la FICHE cheval. Délégation (réinjectées à la bascule pathologie).
           actBar.addEventListener('change', (e) => {
@@ -8823,6 +8835,8 @@ const SMS_FIELDS = [
   { k: '{trajet}', label: 'Temps de trajet' },
   { k: '{adresse}', label: 'Adresse' },
 ];
+// Champs supplémentaires pour le modèle « Prévenir » (changement d'heure).
+const SMS_FIELDS_PREV = SMS_FIELDS.concat([{ k: '{ancienneHeure}', label: 'Ancienne heure' }, { k: '{nouvelleHeure}', label: 'Nouvelle heure' }]);
 // Remplace {champ} par les valeurs fournies (jeton connu mais vide → supprimé ; jeton inconnu → laissé tel quel) puis nettoie les espaces.
 function fillSms(tpl, data) { return String(tpl || '').replace(/\{(\w+)\}/g, (m, k) => (k in data ? (data[k] == null ? '' : String(data[k])) : m)).replace(/ {2,}/g, ' ').replace(/ ([,.!?])/g, '$1').trim(); }
 // Données de fusion SMS pour un client (toutes les clés, pour que les 2 modèles marchent).
@@ -8854,21 +8868,37 @@ function insertAtCursor(ta, text) {
   ta.selectionStart = ta.selectionEnd = s + text.length; ta.focus();
   // La sauvegarde (dans le bon modèle) est faite par l'appelant.
 }
-const SMS_SAMPLE = { civilite: 'Mme', prenom: 'Jean', nom: 'Dupont', client: 'Jean Dupont', societe: 'Écurie du Nord', cheval: 'Indianna', trajet: '15 min', adresse: 'Rue de l\'Exemple 1, 5000 Namur' };
+const SMS_SAMPLE = { civilite: 'Mme', prenom: 'Jean', nom: 'Dupont', client: 'Jean Dupont', societe: 'Écurie du Nord', cheval: 'Indianna', trajet: '15 min', adresse: 'Rue de l\'Exemple 1, 5000 Namur', ancienneHeure: '09:00', nouvelleHeure: '09:30' };
 function updateSmsPreview() {
   if ($('smsPreview')) $('smsPreview').innerHTML = '<b>Aperçu :</b> ' + esc(fillSms(S.smsTemplate, SMS_SAMPLE));
   if ($('smsPreviewPol')) $('smsPreviewPol').innerHTML = '<b>Aperçu :</b> ' + esc(fillSms(S.smsTemplatePolitesse, SMS_SAMPLE));
+  if ($('smsPreviewPrev')) $('smsPreviewPrev').innerHTML = '<b>Aperçu :</b> ' + esc(fillSms(S.smsTemplatePrevenir, SMS_SAMPLE));
 }
 function renderSMS() {
-  const wire = (taId, key, fieldsId) => {
+  const wire = (taId, key, fieldsId, fields) => {
     const ta = $(taId); if (!ta) return;
     ta.value = S[key] || '';
     ta.oninput = () => { S[key] = ta.value; saveSettings(); updateSmsPreview(); };
-    const box = $(fieldsId); if (box) { box.innerHTML = ''; SMS_FIELDS.forEach((f) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small'; b.textContent = '+ ' + f.label; b.addEventListener('click', () => { insertAtCursor(ta, f.k); S[key] = ta.value; saveSettings(); updateSmsPreview(); }); box.appendChild(b); }); }
+    const box = $(fieldsId); if (box) { box.innerHTML = ''; (fields || SMS_FIELDS).forEach((f) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small'; b.textContent = '+ ' + f.label; b.addEventListener('click', () => { insertAtCursor(ta, f.k); S[key] = ta.value; saveSettings(); updateSmsPreview(); }); box.appendChild(b); }); }
   };
   wire('smsTemplate', 'smsTemplate', 'smsFields');
   wire('smsTemplatePol', 'smsTemplatePolitesse', 'smsFieldsPol');
+  wire('smsTemplatePrev', 'smsTemplatePrevenir', 'smsFieldsPrev', SMS_FIELDS_PREV);
   updateSmsPreview();
+}
+// Modale « Prévenir » : SMS pré-rempli (ancienne → nouvelle heure), bouton Copier, puis « Prévenu » → coupe l'alerte du client.
+function modalPrevenir(t, cl) {
+  const c = clients.find((x) => x.id === cl.clientId) || {};
+  const chNoms = (cl.chevaux || []).map((cv) => cv.nom).filter(Boolean).join(', ');
+  const data = smsDataFor(c, { cheval: chNoms, ancienneHeure: cl.heureAncienne || '', nouvelleHeure: cl.heure || '' });
+  const msg = fillSms(S.smsTemplatePrevenir, data);
+  openModal(`<div class="modal-head"><b>🔔 Prévenir — ${esc(clientName(cl.clientId))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Le rendez-vous est passé de <b>${esc(cl.heureAncienne || '—')}</b> à <b>${esc(cl.heure || '—')}</b>. Envoyez un SMS pour prévenir le client, puis confirmez.</p>
+    <label>Message (modifiable)<textarea id="prevMsg" rows="4">${esc(msg)}</textarea></label>
+    <div class="actions two"><button class="btn" id="prevCopy">📋 Copier</button><button class="btn primary" id="prevOk">✓ Client prévenu</button></div>`);
+  $('mX').onclick = closeModal;
+  $('prevCopy').onclick = async () => { try { await navigator.clipboard.writeText($('prevMsg').value); const b = $('prevCopy'); if (b) { b.textContent = 'Copié ✔'; } } catch { alert($('prevMsg').value); } };
+  $('prevOk').onclick = () => { cl.aPrevenir = false; delete cl.heureAncienne; persistCurrentTour(); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); };
 }
 
 // ================= ACCUEIL =================
