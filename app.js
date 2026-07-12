@@ -11,10 +11,24 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.60';
+const APP_VERSION = '1.2.61';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.61', date: '2026-07-12',
+    ajouts: [
+      'Agenda : le choix de vue devient un curseur « Mode » (Agenda / Planning) en haut à droite ; le filtre devient un curseur 3 positions à droite (Tout / Privé / Tournée). La vue Planning va maintenant jusqu\'à 21h30 (fin 22h).',
+      'Tarifs photo : HT par défaut 9 € (4 angles) et 11 € (5 angles).',
+    ],
+    corrections: [
+      'Tarifs photo (mode %) : le HT calculé s\'affiche enfin (bug d\'affichage des montants à virgule). Les titres « N angles » sont en blanc.',
+      'Tarifs photo : en décochant le mode %, vos tarifs HT saisis manuellement sont conservés (ils n\'étaient plus restaurés) — comme les pourcentages.',
+      'Listes (tournées à venir & clôturées, clients) : la date/le titre remonte en haut de l\'item, avec un espace avant les lignes de détail. Pastilles « Complet / Mettre à jour » (clients) à la bonne taille.',
+      'Planche : « Remplir les cases » est un curseur (actif par défaut) ; « Rogner » n\'apparaît qu\'en mode « Éditer les images ».',
+      'Planche PDF : sous le nom du client, le type de planche et la date sont intervertis (type puis date).',
+    ],
+  },
   {
     version: '1.2.60', date: '2026-07-12',
     ajouts: [
@@ -1751,7 +1765,7 @@ if (!Array.isArray(S.plancheDone)) S.plancheDone = [];
 if (!Array.isArray(S.plancheHistory)) S.plancheHistory = []; // historique des planches de contact générées (métadonnées : client, cheval, date, stade, note, cycle, modèle) — jamais d'images
 if (!Array.isArray(S.lieuxRefs)) S.lieuxRefs = []; // adresses de référence saisies à la main (écuries connues, hors chevaux actuels) : { id, addr, clientRef, status } — statut répercuté dans S.addrStatus
 // Tarifs « photos / planches » (supplément par cheval). 3 angles = référence ; 4 & 5 = manuels OU calculés en % (base/photo × (1−%) × nb photos).
-S.photoTarifs = Object.assign({ angle3HT: 10, angle4HT: 13, angle5HT: 16, pctMode: false, pct4: 0, pct5: 0 }, S.photoTarifs || {});
+S.photoTarifs = Object.assign({ angle3HT: 10, angle4HT: 9, angle5HT: 11, pctMode: false, pct4: 0, pct5: 0 }, S.photoTarifs || {});
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
 if (!Array.isArray(S.mailKeywords) || !S.mailKeywords.length) S.mailKeywords = ['prise de contact'];
 if (!Array.isArray(S.contactMails)) S.contactMails = []; // { id(gmailMsgId), from, fromRaw, subject, date, fields{}, body, status:'nouveau'|'client'|'ignore', clientId, chevalNom }
@@ -1828,7 +1842,7 @@ if (typeof S.reducLiquide !== 'number' || S.reducLiquide < 0) S.reducLiquide = 2
 if (!S.agendaImported || typeof S.agendaImported !== 'object') S.agendaImported = {}; // { eventId: {clientId, title, start, location} }
 if (!S.agendaInactive || typeof S.agendaInactive !== 'object') S.agendaInactive = {}; // { eventId: true } — items masqués (section Inactifs)
 if (!S.agendaPrive || typeof S.agendaPrive !== 'object') S.agendaPrive = {}; // { eventId: {title, day, start, location} } — agenda privé (perso, non facturé)
-if (!S.agendaShow || typeof S.agendaShow !== 'object') S.agendaShow = { prive: true, tour: true }; // afficher/masquer agenda privé & tournée (indépendants)
+if (!['tout', 'prive', 'tour'].includes(S.agendaFilter)) S.agendaFilter = 'tout'; // filtre agenda : 'tout' / 'prive' (privé seul) / 'tour' (tournée seule)
 if (S.agendaView !== 'semaine' && S.agendaView !== 'mois') S.agendaView = 'mois'; // vue agenda : 'mois' (condensée) ou 'semaine' (planning horaire)
 if (!S.accentColor) S.accentColor = '#e8722a';
 if (typeof S.topbarColor !== 'string') S.topbarColor = '';
@@ -3219,8 +3233,8 @@ function dayAgendaEntries(day) {
     if (t.date !== day || statusOf(t) === 'cloturee') return; // tournées clôturées/passées exclues de l'agenda
     (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (!(cl.chevaux || []).some((cv) => !chevalCancelled(cv))) return; out.push({ heure: cl.heure || arretHeure(a), type: 'tour', label: clientLabel(cl.clientId) }); })); // 1 entrée PAR CLIENT avec SON heure (deux clients au même arrêt = deux RDV distincts) ; client entièrement annulé/reporté → retiré
   });
-  const show = S.agendaShow || { prive: true, tour: true };
-  return out.filter((e) => show[e.type] !== false).sort((x, y) => (x.heure || '~').localeCompare(y.heure || '~')); // masquage privé/tournée (indépendants)
+  const f = S.agendaFilter || 'tout';
+  return out.filter((e) => f === 'tout' || (f === 'prive' && e.type === 'prive') || (f === 'tour' && e.type === 'tour')).sort((x, y) => (x.heure || '~').localeCompare(y.heure || '~')); // filtre : tout / privé seul / tournée seule
 }
 // Décale un mois 'YYYY-MM' de delta mois.
 function shiftMonth(ym, delta) { let [y, m] = ym.split('-').map(Number); m += delta; while (m < 1) { m += 12; y--; } while (m > 12) { m -= 12; y++; } return y + '-' + String(m).padStart(2, '0'); }
@@ -3244,26 +3258,27 @@ function mondayOf(ds) { const [y, m, d] = ds.split('-').map(Number); const dt = 
 function weekLabel(ds) { const mon = mondayOf(ds), sun = addDaysStr(mon, 6); const f = (x) => { const p = x.split('-'); return p[2] + '/' + p[1]; }; return 'Sem. ' + f(mon) + ' – ' + f(sun); }
 function renderPlanning() {
   const host = $('planningBody'); if (!host) return;
-  if (!S.agendaShow) S.agendaShow = { prive: true, tour: true };
   const view = S.agendaView === 'semaine' ? 'semaine' : 'mois';
   if (!planningYm) planningYm = todayStr().slice(0, 7);
   if (!planningWeek) planningWeek = todayStr();
+  // Curseur « Mode » (Agenda / Planning) dans l'en-tête de la carte, à droite du titre.
+  const modeSlot = $('planModeSlot');
+  if (modeSlot) {
+    modeSlot.innerHTML = `<div class="seg seg-sm"><button type="button" class="seg-btn${view === 'mois' ? ' on' : ''}" data-mode="mois">🗓 Agenda</button><button type="button" class="seg-btn${view === 'semaine' ? ' on' : ''}" data-mode="semaine">📆 Planning</button></div>`;
+    modeSlot.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => { if (S.agendaView !== b.dataset.mode) { S.agendaView = b.dataset.mode; saveSettings(); renderPlanning(); } }));
+  }
   host.innerHTML = '';
-  const sh = S.agendaShow, title = view === 'semaine' ? weekLabel(planningWeek) : monthLabel(planningYm);
+  const f = S.agendaFilter || 'tout', title = view === 'semaine' ? weekLabel(planningWeek) : monthLabel(planningYm);
   const ctrl = document.createElement('div'); ctrl.className = 'row planning-ctrl';
-  ctrl.innerHTML = `<button class="btn small" id="plView">${view === 'semaine' ? '🗓 Vue mois' : '📆 Vue semaine'}</button>`
-    + `<button class="btn small" id="plPrev">◀</button><b class="planning-title">${esc(title)}</b><button class="btn small" id="plNext">▶</button>`
+  ctrl.innerHTML = `<button class="btn small" id="plPrev">◀</button><b class="planning-title">${esc(title)}</b><button class="btn small" id="plNext">▶</button>`
     + `<button class="btn small" id="plToday">${view === 'semaine' ? 'Cette semaine' : 'Ce mois'}</button>`
-    + `<button class="btn small ag-tgl${sh.tour !== false ? '' : ' ag-off'}" id="plShowTour">🗺 Tournées</button>`
-    + `<button class="btn small ag-tgl${sh.prive !== false ? '' : ' ag-off'}" id="plShowPrive">📅 Privé</button>`;
+    + `<div class="seg seg-sm ag-filtre" title="Filtre : tout / privé seul / tournée seule"><button type="button" class="seg-btn${f === 'tout' ? ' on' : ''}" data-fil="tout">Tout</button><button type="button" class="seg-btn${f === 'prive' ? ' on' : ''}" data-fil="prive">Privé</button><button type="button" class="seg-btn${f === 'tour' ? ' on' : ''}" data-fil="tour">Tournée</button></div>`;
   host.appendChild(ctrl);
   if (view === 'semaine') renderWeekGrid(host); else renderMonthGrid(host);
-  $('plView').addEventListener('click', () => { S.agendaView = view === 'semaine' ? 'mois' : 'semaine'; saveSettings(); renderPlanning(); });
   $('plPrev').addEventListener('click', () => { if (view === 'semaine') planningWeek = addDaysStr(planningWeek, -7); else planningYm = shiftMonth(planningYm, -1); renderPlanning(); });
   $('plNext').addEventListener('click', () => { if (view === 'semaine') planningWeek = addDaysStr(planningWeek, 7); else planningYm = shiftMonth(planningYm, 1); renderPlanning(); });
   $('plToday').addEventListener('click', () => { if (view === 'semaine') planningWeek = todayStr(); else planningYm = todayStr().slice(0, 7); renderPlanning(); });
-  $('plShowTour').addEventListener('click', () => { sh.tour = sh.tour === false; saveSettings(); renderPlanning(); });
-  $('plShowPrive').addEventListener('click', () => { sh.prive = sh.prive === false; saveSettings(); renderPlanning(); });
+  ctrl.querySelectorAll('[data-fil]').forEach((b) => b.addEventListener('click', () => { if (S.agendaFilter !== b.dataset.fil) { S.agendaFilter = b.dataset.fil; saveSettings(); renderPlanning(); } }));
 }
 function renderMonthGrid(host) {
   const [y, m] = planningYm.split('-').map(Number);
@@ -3294,7 +3309,7 @@ function renderMonthGrid(host) {
 function renderWeekGrid(host) {
   const mon = mondayOf(planningWeek), days = Array.from({ length: 7 }, (_, i) => addDaysStr(mon, i));
   const dayNames = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'], todayS = todayStr();
-  const startH = 7, endH = 21, slots = (endH - startH) * 2;
+  const startH = 7, endH = 22, slots = (endH - startH) * 2; // 07:00 → 21:30 (fin d'affichage 22:00)
   const scroll = document.createElement('div'); scroll.className = 'wk-scroll';
   const grid = document.createElement('div'); grid.className = 'wk-grid';
   let html = '<div class="wk-corner"></div>';
@@ -3424,7 +3439,7 @@ function renderClients() {
     const badge = isClientNoir(c) ? ' <span class="badge">liste noire</span>' : (c.actif === false ? ' <span class="badge">inactif</span>' : '');
     const nChev = (c.chevaux || []).length, nChevInact = (c.chevaux || []).filter((h) => h.actif === false).length;
     const valid = !scanClient(c); // pastille : fiche complète (tous les champs fonctionnels remplis) ?
-    const el = document.createElement('div'); el.className = 'list-item clickable' + (off ? ' item-off' : '');
+    const el = document.createElement('div'); el.className = 'list-item clickable li-top' + (off ? ' item-off' : '');
     const pastille = valid ? '<span class="cli-pill ok" title="Fiche complète">Complet</span>' : '<span class="cli-pill warn" title="Champs importants manquants (voir Assistant de vérification)">Mettre à jour</span>';
     el.innerHTML = `<div class="li-main"><b>${esc(fullName(c)) || '<i>sans nom</i>'}${soc}${badge}</b><span class="li-sub">${esc(addrStr(c.addr)) || '<i>adresse ?</i>'} · ${nChev} cheval(aux)${nChevInact ? ' (' + nChevInact + ' inactif' + (nChevInact > 1 ? 's' : '') + ')' : ''}${nAdr > 1 ? ' · ' + nAdr + ' adresses' : ''}${specNoms.length ? ' · 📍 ' + esc(specNoms.join(', ')) : ''}</span></div><div class="li-act li-act-badge">${pastille}<span class="li-chev">›</span></div>`;
     el.addEventListener('click', () => editClient(c));
@@ -3790,7 +3805,7 @@ function tourDisplayTTC(t) {
 }
 function tourListItem(t, showBadge) {
   const st = statusOf(t);
-  const el = document.createElement('div'); el.className = 'list-item clickable';
+  const el = document.createElement('div'); el.className = 'list-item clickable li-top';
   const titre = `<span class="tour-date">${fmtDateFr(t.date)}</span>` + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''); // date en couleur des boutons (accent)
   const clientsLine = (t.arrets || []).flatMap((a) => (a.clients || []).map((cl) => clientName(cl.clientId))).filter(Boolean).join(' · '); // chaque client individuel (non groupé), même au même arrêt
   const badge = (showBadge && st === 'active') ? ' · ' + STATUS_LBL[st] : ''; // « Aujourd'hui » reste dans le titre ; « À venir » retiré (redondant) ; « Clôturée » déplacé à droite
@@ -6585,8 +6600,8 @@ async function planchePageCanvas(pi) {
   const zcX = px(g.margin), zcW = px(g.gridW * 0.32); let cy = topY;
   ctx.textAlign = 'left';
   ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(4.2) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, st.client || '—', zcW), zcX, cy); cy += fs(5.2);
-  ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.0) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, fmtDateFr(st.date), zcW), zcX, cy); cy += fs(3.7);
-  ctx.fillStyle = '#333'; ctx.font = fs(2.9) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, titre, zcW), zcX, cy); cy += fs(3.5);
+  ctx.fillStyle = '#333'; ctx.font = fs(2.9) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, titre, zcW), zcX, cy); cy += fs(3.5); // type de planche (sous le nom)
+  ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.0) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, fmtDateFr(st.date), zcW), zcX, cy); cy += fs(3.7); // date (interverti avec le type)
   ctx.fillStyle = '#555'; ctx.font = fs(2.6) + 'px sans-serif'; plClientLines(st).forEach((l) => { ctx.fillText(plTrunc(ctx, l, zcW), zcX, cy); cy += fs(3.1); });
   // Zone cheval (centre)
   const zhX = px(g.margin + g.gridW * 0.34), zhW = px(g.gridW * 0.32), zhCx = zhX + zhW / 2; let vy = topY;
@@ -7116,15 +7131,17 @@ function renderPhotoTarifs() {
   const perPhoto = (ht, a) => PHOTO_NB[a] ? ht / PHOTO_NB[a] : 0;
   const row = (a) => {
     const editable = a === 3 || !P.pctMode;
+    const stored = a === 3 ? P.angle3HT : (a === 4 ? P.angle4HT : P.angle5HT);
+    const sv = (stored || stored === 0) ? stored : '';
     const htField = editable
-      ? `<input type="number" step="0.01" min="0" data-pht="${a}"/>`
-      : `<input type="number" data-pht="${a}" class="pht-lock" disabled value="${fmtNum(photoTariffHT(a), 2)}"/>`; // calculé : non focusable / non sélectionnable (disabled), valeur auto
+      ? `<input type="number" step="0.01" min="0" data-pht="${a}" value="${sv}"/>` // valeur brute (point) : valide pour un input number
+      : `<input type="text" data-pht="${a}" class="pht-lock" disabled/>`; // calculé : champ TEXTE (accepte la virgule) rempli par paint(), non focusable (disabled)
     return `<div class="card" style="margin:8px 0">
-      <div class="a-art-head"><span><b>${a} angles</b> · ${PHOTO_NB[a]} photos${a === 3 ? ' · <i>référence</i>' : ''}</span></div>
+      <div class="a-art-head pht-head"><span><b>${a} angles</b> · ${PHOTO_NB[a]} photos${a === 3 ? ' · <i>référence</i>' : ''}</span></div>
       <div class="er-grid er-grid-3">
         <label>HT${editable ? '' : ' <span class="li-sub">(auto)</span>'}${htField}</label>
-        <label>TTC<input data-pttc="${a}" class="pht-lock" disabled/></label>
-        <label>€/photo<input data-pphoto="${a}" class="pht-lock" disabled/></label>
+        <label>TTC<input type="text" data-pttc="${a}" class="pht-lock" disabled/></label>
+        <label>€/photo<input type="text" data-pphoto="${a}" class="pht-lock" disabled/></label>
       </div>
       ${(a !== 3 && P.pctMode) ? `<label>Réduction vs 3 angles (%)<input type="number" step="1" min="0" max="100" data-ppct="${a}" value="${(a === 4 ? P.pct4 : P.pct5) || ''}"/></label>` : ''}
     </div>`;
@@ -7135,18 +7152,14 @@ function renderPhotoTarifs() {
     ${row(5)}`;
   const paint = () => {
     [3, 4, 5].forEach((a) => {
-      const ht = photoTariffHT(a);
-      const hi = box.querySelector(`[data-pht="${a}"]`); if (hi) { const editable = a === 3 || !P.pctMode; if (editable) { if (document.activeElement !== hi) hi.value = ht ? fmtNum(ht, 2) : ''; } else hi.value = fmtNum(ht, 2); }
+      const ht = photoTariffHT(a), editable = a === 3 || !P.pctMode;
+      if (!editable) { const hi = box.querySelector(`[data-pht="${a}"]`); if (hi) hi.value = fmtNum(ht, 2) + ' €'; } // HT auto : champ texte (les champs éditables gardent la saisie de l'utilisateur, pas de reformatage → pas de bug virgule)
       const t = box.querySelector(`[data-pttc="${a}"]`); if (t) t.value = fmtNum(ttc(ht), 2) + ' € TTC';
       const pp = box.querySelector(`[data-pphoto="${a}"]`); if (pp) pp.value = fmtNum(perPhoto(ht, a), 2) + ' €';
     });
   };
-  box.querySelector('#photoPctMode').addEventListener('change', (e) => {
-    const chk = e.target.checked;
-    if (!chk) { const h4 = photoTariffHT(4), h5 = photoTariffHT(5); if (h4 > 0) P.angle4HT = Math.round(h4 * 100) / 100; if (h5 > 0) P.angle5HT = Math.round(h5 * 100) / 100; } // décochage : conserver les tarifs affichés (calculés en %) comme valeurs manuelles — jamais 0
-    P.pctMode = chk; saveSettings(); renderPhotoTarifs();
-  });
-  box.querySelectorAll('[data-pht]').forEach((inp) => inp.addEventListener('input', (e) => { const a = +inp.dataset.pht, v = parseNum(e.target.value); if (a === 3) P.angle3HT = v; else if (a === 4) P.angle4HT = v; else P.angle5HT = v; saveSettings(); paint(); }));
+  box.querySelector('#photoPctMode').addEventListener('change', (e) => { P.pctMode = e.target.checked; saveSettings(); renderPhotoTarifs(); }); // bascule seule : les HT manuels (angle4HT/5HT) ET les % (pct4/5) sont conservés indépendamment
+  box.querySelectorAll('[data-pht]').forEach((inp) => { if (inp.disabled) return; inp.addEventListener('input', (e) => { const a = +inp.dataset.pht, v = parseNum(e.target.value); if (a === 3) P.angle3HT = v; else if (a === 4) P.angle4HT = v; else P.angle5HT = v; saveSettings(); paint(); }); });
   box.querySelectorAll('[data-ppct]').forEach((inp) => inp.addEventListener('input', (e) => { const a = +inp.dataset.ppct, v = Math.max(0, Math.min(100, parseNum(e.target.value))); if (a === 4) P.pct4 = v; else P.pct5 = v; saveSettings(); paint(); }));
   paint();
 }
@@ -8107,8 +8120,9 @@ function modalPlancheCreate(type, prefill) {
         <div class="pl-pot grid" id="plCpot"></div>
       </section>
       <section class="card">
-        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCgridFit"></button><button class="btn small" id="plCgridCrop"></button><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
-        <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (zoom, déplacement, rotation). Le cadrillage n'apparaît pas sur le PDF. Rebasculez pour revenir au mode normal (toucher une image = la retirer).</p>
+        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
+        <div id="plCgridEditCtrls" style="display:none;margin:6px 0 0"><label style="display:inline-flex;align-items:center;gap:8px;margin:0"><span>✂️ Rogner</span><span class="seg seg-sm" id="plCgridCrop"></span></label></div>
+        <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (zoom, déplacement, rotation). Le cadrillage (repères) n'apparaît pas sur le PDF. « Rogner » agrandit chaque image pour que le 1ᵉʳ repère remplisse la case. Rebasculez pour revenir au mode normal (toucher une image = la retirer).</p>
         <div id="plCgrid"></div>
       </section>
       <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button>${plCreate.queueTotal ? '<button class="btn block primary" id="plCnext">' + (plCreate.queue && plCreate.queue.length ? '➡ Planche suivante' : '✅ Terminer') + '</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
@@ -8139,21 +8153,20 @@ function modalPlancheCreate(type, prefill) {
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
-  if ($('plCgridFit')) {
-    const updFit = () => { $('plCgridFit').textContent = plCreate.fitMode === 'contain' ? '🖼 Image entière' : '⛶ Remplir les cases'; $('plCgridFit').title = plCreate.fitMode === 'contain' ? 'Images entières (bandes blanches possibles) — cliquer pour remplir' : 'Images qui remplissent la case (excédent rogné) — cliquer pour images entières'; };
+  if ($('plCgridFit')) { // « Remplir les cases » = curseur (Remplir / Entière), Remplir actif par défaut
+    const updFit = () => { $('plCgridFit').innerHTML = `<button type="button" class="seg-btn${plCreate.fitMode !== 'contain' ? ' on' : ''}" data-fit="cover">⛶ Remplir</button><button type="button" class="seg-btn${plCreate.fitMode === 'contain' ? ' on' : ''}" data-fit="contain">🖼 Entière</button>`; $('plCgridFit').querySelectorAll('[data-fit]').forEach((b) => b.addEventListener('click', () => { if (plCreate.fitMode !== b.dataset.fit) { plCreate.fitMode = b.dataset.fit; S.planche.fitMode = b.dataset.fit; saveSettings(); updFit(); plRenderGrid(); } })); };
     updFit();
-    $('plCgridFit').addEventListener('click', () => { plCreate.fitMode = plCreate.fitMode === 'contain' ? 'cover' : 'contain'; S.planche.fitMode = plCreate.fitMode; saveSettings(); updFit(); plRenderGrid(); });
   }
-  if ($('plCgridCrop')) {
-    const updCrop = () => { $('plCgridCrop').textContent = plCreate.crop ? '✂️ Rogner : oui' : '✂️ Rogner : non'; $('plCgridCrop').classList.toggle('primary', plCreate.crop); $('plCgridCrop').title = 'Agrandit chaque image pour que le 1ᵉʳ repère remplisse la case (bordure constante, pas de bord visible). Alignez le sujet sur le 2ᵉ repère en mode « Éditer les images ».'; };
+  if ($('plCgridCrop')) { // « Rogner » = curseur (Non / Oui), visible seulement en mode édition
+    const updCrop = () => { $('plCgridCrop').innerHTML = `<button type="button" class="seg-btn${!plCreate.crop ? ' on' : ''}" data-crop="0">Non</button><button type="button" class="seg-btn${plCreate.crop ? ' on' : ''}" data-crop="1">Oui</button>`; $('plCgridCrop').querySelectorAll('[data-crop]').forEach((b) => b.addEventListener('click', () => { const v = b.dataset.crop === '1'; if (plCreate.crop !== v) { plCreate.crop = v; S.planche.crop = v; saveSettings(); updCrop(); plRenderGrid(); } })); };
     updCrop();
-    $('plCgridCrop').addEventListener('click', () => { plCreate.crop = !plCreate.crop; S.planche.crop = plCreate.crop; saveSettings(); updCrop(); plRenderGrid(); });
   }
   if ($('plCgridEdit')) $('plCgridEdit').addEventListener('click', () => {
     plCreate.gridEdit = !plCreate.gridEdit;
     $('plCgridEdit').classList.toggle('primary', plCreate.gridEdit);
     $('plCgridEdit').textContent = plCreate.gridEdit ? '✅ Terminer l\'édition' : '✏️ Éditer les images';
     if ($('plCgridEditHint')) $('plCgridEditHint').style.display = plCreate.gridEdit ? '' : 'none';
+    if ($('plCgridEditCtrls')) $('plCgridEditCtrls').style.display = plCreate.gridEdit ? '' : 'none'; // bouton Rogner uniquement en mode édition
     plRenderGrid();
   });
   // « Générer le PDF » = PDF propre (moteur canvas, en-tête/grille/pied) téléchargé. N'utilise PLUS window.print (qui imprimait l'interface de l'app).

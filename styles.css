@@ -144,6 +144,10 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .list { display: flex; flex-direction: column; gap: 8px; }
 .list-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
 .li-main { display: flex; flex-direction: column; min-width: 0; }
+/* Items « titre en haut + espace avant les sous-lignes » (tournées + clients) */
+.list-item.li-top { align-items: flex-start; }
+.list-item.li-top .li-main > b { margin-bottom: 4px; }
+.a-art-head.pht-head { color: var(--ink); } /* titres « N angles » en couleur de texte (pas accent) */
 .li-main b { overflow: hidden; text-overflow: ellipsis; }
 .li-sub { font-size: .76rem; color: var(--muted); font-weight: 400; }
 .li-act { flex: none; }
@@ -165,7 +169,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .cli-valid.ok { color: var(--ok, #2e9e5b); }
 .cli-valid.warn { color: var(--warn); }
 /* Pastille client bien visible : pilule ronde colorée avec icône (✓ complet / ⚠ à compléter) */
-.cli-pill { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 999px; font-size: .9rem; font-weight: 800; color: #fff; }
+.cli-pill { display: inline-flex; align-items: center; justify-content: center; padding: 1px 7px; border-radius: 999px; font-size: .68rem; font-weight: 700; color: #fff; white-space: nowrap; } /* même gabarit que .td-badge */
 .cli-pill.ok { background: var(--ok, #2e9e5b); }
 .cli-pill.warn { background: var(--warn); }
 /* Badge/pastille aligné à DROITE de l'item (colonne : badge au-dessus du chevron) */
@@ -245,7 +249,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .pl-more { font-size: .58rem; color: var(--muted); margin-top: 1px; font-weight: 700; }
 .pl-has { cursor: pointer; }
 /* Bascules afficher/masquer (agenda privé / tournée) */
-.ag-tgl.ag-off { opacity: .4; text-decoration: line-through; }
+.planning-ctrl .ag-filtre { margin-left: auto; } /* filtre poussé à droite */
 /* Vue « planning » : semaine × plage horaire (07:00→21:00, tranches 30 min) */
 .wk-scroll { overflow-x: auto; margin-top: 8px; -webkit-overflow-scrolling: touch; }
 .wk-grid { display: grid; grid-template-columns: 44px repeat(7, minmax(64px, 1fr)); min-width: 560px; border-left: 1px solid var(--line); }
@@ -510,6 +514,8 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .seg-btn { flex: 1; padding: 11px; border: 0; background: var(--card); color: var(--muted); font-weight: 700; cursor: pointer; font-size: .9rem; }
 .seg-btn + .seg-btn { border-left: 1px solid var(--line); }
 .seg-btn.on { background: var(--accent); color: var(--accent-ink); }
+.seg.seg-sm { display: inline-flex; margin: 0; width: auto; vertical-align: middle; }
+.seg.seg-sm .seg-btn { flex: 0 0 auto; padding: 6px 10px; font-size: .78rem; }
 
 /* Bloc paiement (par client, à la validation d'un arrêt) */
 .pay-block { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; background: var(--bg); }
