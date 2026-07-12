@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.76';
+const APP_VERSION = '1.2.77';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.77', date: '2026-07-12',
+    ajouts: [
+      'Intercalation étendue à TOUS les cas d\'ajout : la fenêtre « Intercaler » s\'ouvre maintenant aussi quand le client REJOINT un arrêt existant (fusion) et quand il ajoute PLUSIEURS arrêts d\'un coup. Chaque arrêt se règle individuellement (son heure, son délai visite+trajet, son bouton « 🧭 trajet réel »).',
+      'Décalage CUMULATIF : si plusieurs arrêts sont intercalés, chaque rendez-vous suivant est décalé de la somme des délais des arrêts placés avant lui. Un rendez-vous du même arrêt n\'est décalé que s\'il est plus tardif.',
+      'Recalcul général de la tournée (itinéraire + facture) déclenché automatiquement une fois l\'intercalation validée.',
+    ],
+  },
   {
     version: '1.2.76', date: '2026-07-12',
     ajouts: [
@@ -4351,52 +4359,73 @@ function modalRevoirHoraires(t) {
     persistCurrentTour(); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere();
   };
 }
-// Modale « Intercaler » — placer un nouvel arrêt à son HEURE dans une tournée existante + décaler les suivants du délai
-// (visite + trajet estimé par le pro). Bouton « Étape » : ouvre Google Maps (cet arrêt → arrêt suivant) pour lire le trajet
-// réel (masqué si intercalé en 1er ou en dernier — déjà connu). L'arrêt est déjà ajouté (en fin) ; ici on le repositionne.
-function modalIntercaler(t, arret) {
-  const cl0 = (arret.clients && arret.clients[0]); if (!cl0) return;
-  let delai = 30;
-  const persist = () => { if (t === currentTour) persistCurrentTour(); else saveTournees(); }; // +client : t = clone currentTour ; programmer-le-suivi : t = élément réel de tournees
-  const calc = () => {
-    const H = hmToMin(($('icHeure') || {}).value);
-    const others = t.arrets.filter((a) => a !== arret);
-    const insertIdx = (H == null) ? others.length : others.filter((a) => { const ah = hmToMin(arretHeure(a)); return ah != null && ah <= H; }).length;
-    const isFirst = insertIdx === 0, isLast = insertIdx >= others.length, nextA = (!isFirst && !isLast) ? others[insertIdx] : null;
-    const impacted = []; others.slice(insertIdx).forEach((a) => { if (typeof a.validatedAt === 'number') return; (a.clients || []).forEach((cl) => { if (cl.heure) impacted.push({ cl }); }); });
-    return { H, others, insertIdx, isFirst, isLast, nextA, impacted };
+// Modale « Intercaler » — pour CHAQUE arrêt où le +client vient d'ajouter le client (nouvel arrêt OU fusion) : régler l'heure,
+// placer le(s) nouvel(aux) arrêt(s) à leur heure, et décaler les RDV SUIVANTS du délai (visite + trajet estimé). Décalage
+// CUMULATIF si plusieurs arrêts. Bouton « 🧭 » = trajet réel Maps (nouvel arrêt → suivant, masqué si 1er/dernier).
+// Recalcul général de la tournée à la validation. Persistance : t===currentTour (clone) → persistCurrentTour, sinon saveTournees.
+function modalIntercaler(t, placements) {
+  placements = (placements || []).filter((p) => p && p.arret && p.cl);
+  if (!placements.length) return;
+  const persist = () => { if (t === currentTour) persistCurrentTour(); else saveTournees(); };
+  const recompute = () => { if (t === currentTour) scheduleGeoRecalc(); else recomputeTourGeo(t); }; // recalcul général une fois l'ajout validé
+  const st = placements.map((p) => ({ arret: p.arret, cl: p.cl, isNew: !!p.isNew, heure: p.cl.heure || arretHeure(p.arret) || '', delai: 30, _nextA: null }));
+  const hOf = (cl) => { const s = st.find((x) => x.cl === cl); return s ? hmToMin(s.heure) : hmToMin(cl.heure); }; // heure effective (placement = heure saisie)
+  const heureForArret = (a) => { const s = st.find((x) => x.arret === a && x.isNew); return s ? hmToMin(s.heure) : hmToMin(arretHeure(a)); };
+  // Simulation (lecture seule) : ordre final (nouveaux arrêts placés par heure) + décalages CUMULATIFS des suivants.
+  const simulate = () => {
+    const news = st.filter((s) => s.isNew && hmToMin(s.heure) != null).slice().sort((a, b) => hmToMin(a.heure) - hmToMin(b.heure));
+    const base = t.arrets.filter((a) => !news.some((s) => s.arret === a));
+    news.forEach((s) => { const H = hmToMin(s.heure); const idx = base.filter((a) => { const eh = heureForArret(a); return eh != null && eh <= H; }).length; base.splice(idx, 0, s.arret); });
+    const shifts = []; let acc = 0;
+    base.forEach((a) => {
+      if (typeof a.validatedAt === 'number') return; // arrêt clôturé (jour J) → figé
+      (a.clients || []).slice().sort((x, y) => { const hx = hOf(x), hy = hOf(y); return (hx == null ? 99999 : hx) - (hy == null ? 99999 : hy); }).forEach((cl) => {
+        const s = st.find((x) => x.cl === cl);
+        if (s) { acc += (+s.delai || 0); return; } // placement : ajoute son délai à l'accumulateur, n'est pas décalé
+        if (cl.heure && acc > 0) { const m = hmToMin(cl.heure); if (m != null) shifts.push({ cl, from: cl.heure, to: minToHm(m + acc) }); }
+      });
+    });
+    return { base, shifts };
   };
-  const refresh = () => {
-    const s = calc();
-    if ($('icPos')) $('icPos').innerHTML = s.H == null ? '⏰ Renseignez l\'heure pour placer l\'arrêt.' : `Position : <b>${s.insertIdx + 1}ᵉ arrêt</b>${s.isLast ? ' — en dernier (aucun décalage)' : (s.isFirst ? ' — en premier' : '')}`;
-    if ($('icEtape')) $('icEtape').innerHTML = s.nextA ? '<button type="button" class="btn small" id="icEtapeBtn">🧭 Voir le trajet réel (→ arrêt suivant)</button>' : '';
-    const eb = $('icEtapeBtn'); if (eb) eb.onclick = () => openMapsRoute(addrStr(arret.addr), addrStr(s.nextA.addr));
-    if ($('icPreview')) $('icPreview').innerHTML = (s.H == null || !s.impacted.length) ? '<div class="ts-line ts-muted">Aucun RDV suivant à décaler.</div>' : s.impacted.map(({ cl }) => `<div class="ts-line"><span>${esc(clientName(cl.clientId))}</span><span>${esc(cl.heure)} → <b>${esc(minToHm(hmToMin(cl.heure) + delai))}</b></span></div>`).join('');
-    if ($('icOk')) $('icOk').disabled = s.H == null;
-  };
-  const setHeure = (h) => { cl0.heure = h; (cl0.chevaux || []).forEach((cv) => cv.heure = h); };
-  openModal(`<div class="modal-head"><b>🔀 Intercaler le rendez-vous</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Placez ce RDV à son heure ; les rendez-vous <b>suivants</b> seront décalés du délai (visite + trajet estimé).</p>
-    <label>Heure du RDV<input type="time" id="icHeure" value="${esc(cl0.heure || arretHeure(arret) || '')}"/></label>
-    <p class="hint" id="icPos"></p>
-    <label>Délai à répercuter (minutes) — visite + trajet estimé<input type="number" id="icDelai" step="5" value="${delai}"/></label>
-    <div id="icEtape" style="margin:4px 0"></div>
-    <div class="card" id="icPreview" style="margin:8px 0"></div>
-    <div class="actions two"><button class="btn" id="icSkip">Ajouter sans décaler</button><button class="btn primary" id="icOk" disabled>Intercaler</button></div>`);
-  $('mX').onclick = closeModal;
-  $('icSkip').onclick = () => { const h = ($('icHeure') || {}).value; if (h) { setHeure(h); persist(); scheduleCalPush(t); } closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); };
-  $('icHeure').addEventListener('change', refresh); $('icHeure').addEventListener('input', refresh);
-  $('icDelai').addEventListener('input', (e) => { const v = parseInt(e.target.value, 10); delai = isNaN(v) ? 0 : v; refresh(); });
-  $('icOk').onclick = () => {
-    const s = calc(); if (s.H == null) return;
-    setHeure(($('icHeure')).value);
+  const renderPreview = () => { const box = $('icPreview'); if (!box) return; const { shifts } = simulate(); box.innerHTML = shifts.length ? shifts.map((x) => `<div class="ts-line"><span>${esc(clientName(x.cl.clientId))}</span><span>${esc(x.from)} → <b>${esc(x.to)}</b></span></div>`).join('') : '<div class="ts-line ts-muted">Aucun RDV suivant à décaler.</div>'; };
+  const onSkip = () => { st.forEach((s) => { if (s.heure) { s.cl.heure = s.heure; (s.cl.chevaux || []).forEach((cv) => cv.heure = s.heure); } }); persist(); scheduleCalPush(t); recompute(); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); };
+  const onOk = () => {
+    if (st.some((s) => s.isNew && hmToMin(s.heure) == null)) { alert('Renseignez l\'heure de chaque nouvel arrêt.'); return; }
     const oldOrder = t.arrets.map((a) => norm(addrStr(a.addr)));
-    t.arrets = s.others.slice(0, s.insertIdx).concat([arret], s.others.slice(s.insertIdx)); // repositionne par heure
-    invalidateTourRoute(oldOrder, t); applyDecalage(s.impacted, delai); delete cl0.heureStale; // décale les suivants + « à prévenir » ; le nouvel arrêt (heure fraîche) n'est pas « à revoir »
-    persist(); scheduleCalPush(t); closeModal();
+    st.forEach((s) => { if (s.heure) { s.cl.heure = s.heure; (s.cl.chevaux || []).forEach((cv) => cv.heure = s.heure); } }); // 1) heures posées
+    const sim = simulate(); // 2) ordre final + décalages (heures désormais réelles)
+    t.arrets = sim.base;
+    sim.shifts.forEach((x) => { if (!x.cl.aPrevenir) x.cl.heureAncienne = x.cl.heure; x.cl.heure = x.to; x.cl.aPrevenir = true; delete x.cl.heureStale; }); // 3) décalage + à prévenir
+    invalidateTourRoute(oldOrder, t);
+    st.forEach((s) => delete s.cl.heureStale); // placements : heures fraîches, jamais « à revoir »
+    persist(); scheduleCalPush(t); recompute(); closeModal();
     if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere();
   };
-  refresh();
+  const render = () => {
+    const rowsHtml = st.map((s, i) => {
+      let posTxt = 'rejoint un arrêt existant (fusion)'; let etape = ''; s._nextA = null;
+      if (s.isNew) {
+        const H = hmToMin(s.heure);
+        if (H == null) posTxt = '⏰ heure requise pour placer l\'arrêt';
+        else { const others = t.arrets.filter((a) => !st.some((x) => x.isNew && x.arret === a)); const idx = others.filter((a) => { const ah = hmToMin(arretHeure(a)); return ah != null && ah <= H; }).length; const isFirst = idx === 0, isLast = idx >= others.length; posTxt = isLast ? 'placé en dernier' : (isFirst ? 'placé en premier' : (idx + 1) + 'ᵉ position'); s._nextA = (!isFirst && !isLast) ? others[idx] : null; if (s._nextA) etape = `<button type="button" class="btn small" data-icet="${i}">🧭 Voir le trajet réel (→ arrêt suivant)</button>`; }
+      }
+      return `<div class="card" style="margin:6px 0"><div class="li-sub"><b>${esc(labelFor(s.arret)) || 'arrêt'}</b> · ${s.isNew ? 'nouvel arrêt' : 'fusion'} — ${posTxt}</div><div class="a-grid"><label class="grow">Heure<input type="time" data-ich="${i}" value="${esc(s.heure)}"/></label><label class="grow">Délai visite+trajet (min)<input type="number" data-icd="${i}" step="5" value="${s.delai}"/></label></div>${etape}</div>`;
+    }).join('');
+    openModal(`<div class="modal-head"><b>🔀 Intercaler le(s) rendez-vous</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Réglez l'heure de chaque arrêt ajouté ; les rendez-vous <b>suivants</b> sont décalés du délai (visite + trajet). Plusieurs arrêts → décalages cumulés. « 🧭 » ouvre Maps pour le trajet réel.</p>
+      ${rowsHtml}
+      <div id="icPreview" class="card" style="margin:8px 0"></div>
+      <div class="actions two"><button class="btn" id="icSkip">Ajouter sans décaler</button><button class="btn primary" id="icOk">Intercaler</button></div>`);
+    $('mX').onclick = closeModal; $('icSkip').onclick = onSkip; $('icOk').onclick = onOk;
+    st.forEach((s, i) => {
+      const hi = document.querySelector('[data-ich="' + i + '"]'); if (hi) hi.addEventListener('change', () => { s.heure = hi.value; render(); });
+      const di = document.querySelector('[data-icd="' + i + '"]'); if (di) di.addEventListener('input', () => { const v = parseInt(di.value, 10); s.delai = isNaN(v) ? 0 : v; renderPreview(); });
+      const et = document.querySelector('[data-icet="' + i + '"]'); if (et) et.onclick = () => { if (s._nextA) openMapsRoute(addrStr(s.arret.addr), addrStr(s._nextA.addr)); };
+    });
+    const okBtn = $('icOk'); if (okBtn) okBtn.disabled = st.some((s) => s.isNew && hmToMin(s.heure) == null);
+    renderPreview();
+  };
+  render();
 }
 // Modale récapitulative « à compléter » : centralise ce qui manque pour une tournée, SANS l'ouvrir ni défiler.
 // Deux blocs SÉPARÉS et distincts : ① Préparation (itinéraire/adresses/heures/chevaux) · ② Clôture (jour J : paiement).
@@ -4639,18 +4668,18 @@ function chooseClientTargets(c) {
   $('addSel').addEventListener('click', () => { const res = addClientToTour(c, chs.filter((_, i) => picked.has(i))); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); maybeIntercaler(res); });
 }
 // Après un +client : si un arrêt NOUVEAU a été ajouté à une tournée qui avait déjà des arrêts → proposer l'intercalation.
-function maybeIntercaler(res) { if (res && res.preExisting && res.created && res.created.length === 1) modalIntercaler(currentTour, res.created[0]); }
+function maybeIntercaler(res) { if (res && res.preExisting && res.placements && res.placements.length) modalIntercaler(currentTour, res.placements); }
 function addClientToTour(c, chevaux) {
   const oldAddrs = (currentTour.arrets || []).map((a) => norm(addrStr(a.addr))); // ordre AVANT ajout (invalidation chirurgicale)
-  const created = []; // arrêts NOUVEAUX (nouvelle adresse) → pour proposer l'intercalation
+  const placements = []; // arrêts où le client est AJOUTÉ (nouvel arrêt OU fusion avec client fraîchement ajouté) → intercalation
   const groups = {};
   const push = (addr, ch) => { const k = norm(addrStr(addr)); if (!groups[k]) groups[k] = { addr: toAddr(addr), chevaux: [] }; if (ch) groups[k].chevaux.push({ id: ch.id, nom: ch.nom || 'cheval', fourbure: false, npas: false, infection: false }); };
   if (!chevaux.length) push(c.addr, null);
   else chevaux.forEach((h) => push(chevalAddr(c, h), h));
   Object.values(groups).forEach((g) => {
     const ex = currentTour.arrets.find((a) => norm(addrStr(a.addr)) === norm(addrStr(g.addr)));
-    if (ex) { let cl = ex.clients.find((x) => x.clientId === c.id); if (!cl) { cl = { clientId: c.id, chevaux: [] }; ex.clients.push(cl); } g.chevaux.forEach((n) => cl.chevaux.push(n)); }
-    else { const na = { addr: JSON.parse(JSON.stringify(g.addr)), type: 'tournee', clients: [{ clientId: c.id, chevaux: g.chevaux.slice() }] }; currentTour.arrets.push(na); created.push(na); }
+    if (ex) { let cl = ex.clients.find((x) => x.clientId === c.id); const fresh = !cl; if (fresh) { cl = { clientId: c.id, chevaux: [] }; ex.clients.push(cl); } g.chevaux.forEach((n) => cl.chevaux.push(n)); if (fresh) placements.push({ arret: ex, cl, isNew: false }); } // fusion : client fraîchement ajouté à un arrêt existant
+    else { const na = { addr: JSON.parse(JSON.stringify(g.addr)), type: 'tournee', clients: [{ clientId: c.id, chevaux: g.chevaux.slice() }] }; currentTour.arrets.push(na); placements.push({ arret: na, cl: na.clients[0], isNew: true }); }
   });
   // Impayés reportés du client → ligne d'article « Impayé du … » mise en place directement dans cette tournée.
   if (!currentTour.articles) currentTour.articles = [];
@@ -4663,7 +4692,7 @@ function addClientToTour(c, chevaux) {
   });
   if (addedImpaye) saveClients();
   invalidateTourRoute(oldAddrs, currentTour); persistCurrentTour(); // composition modifiée → segments/heures suivantes périmés (rien si arrêt existant)
-  return { created, preExisting: oldAddrs.length > 0 };
+  return { placements, preExisting: oldAddrs.length > 0 };
 }
 
 // Dernière tournée CLÔTURÉE (avant `avantDate`) où ce cheval a eu un parage ou une visite (non annulé) → écart en jours depuis.
@@ -10079,7 +10108,7 @@ function scheduleClientOnDate(date, client, chevalObjs, heure, rdvType) {
   t.result = null; saveTournees();
   scheduleCalPush(t); // push automatique vers Google Agenda à la validation du RDV (no-op si l'option n'est pas activée)
   // Intercalation : nouvel arrêt ajouté à une tournée qui existait DÉJÀ → candidat au repositionnement par heure + décalage.
-  const intercale = (!created && addRes && addRes.created && addRes.created.length === 1) ? { tour: t, arret: addRes.created[0] } : null;
+  const intercale = (!created && addRes && addRes.placements && addRes.placements.length) ? { tour: t, placements: addRes.placements } : null;
   return { tour: t, created, intercale };
 }
 // Date proposée pour le 2ᵉ RDV « suivi pathologique » : baseDate + N jours ou N semaines (récurrence portée par la fiche cheval).
@@ -10202,7 +10231,7 @@ function modalRDV(t, arret, cid, onDone) {
       });
       if (scheduled && arret) { arret.rdvDone = true; saveTournees(); } // marque l'arrêt : RDV suivant programmé
       closeModal(); if (onDone) onDone();
-      if (pend.length) modalIntercaler(pend[0].tour, pend[0].arret); // tournée déjà existante à cette date → proposer l'intercalation par heure + décalage
+      if (pend.length) modalIntercaler(pend[0].tour, pend[0].placements); // tournée déjà existante à cette date → proposer l'intercalation par heure + décalage
     });
   };
   render();
