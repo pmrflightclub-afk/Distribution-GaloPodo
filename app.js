@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.82';
+const APP_VERSION = '1.2.83';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.83', date: '2026-07-12',
+    ajouts: [
+      'Planche de contact (via Déclarer) : nouveau bouton « 📋 Planches en attente ». Il liste toutes les planches photo demandées pendant une tournée (bouton 📷 Photo) et pas encore faites — par type, cheval et client, du plus récent au plus ancien, avec un filtre par type. Toucher un élément pré-remplit toute la planche (cheval, client, date, type, nombre d\'angles) ; il ne reste qu\'à placer les photos. Deux chevaux de même nom chez deux clients différents restent deux éléments distincts.',
+    ],
+  },
   {
     version: '1.2.82', date: '2026-07-12',
     corrections: [
@@ -8515,6 +8521,35 @@ function plRenderChevalOwner() {
     if (warn) { warn.style.display = ''; warn.innerHTML = '⚠ ' + matches.length + ' clients ont un cheval « ' + esc(plCreate.cheval) + ' » — choisissez le bon client.'; }
   } else if (warn) warn.style.display = 'none';
 }
+// Waiting list : planches PHOTO demandées pendant une tournée (bouton 📷 Photo) et pas encore générées.
+// Un item = date · type (stade) · cheval · client · nb angles ; la clé inclut le clientId → deux chevaux de même nom
+// chez deux clients différents restent DEUX items distincts. Clic → pré-remplit ENTIÈREMENT la planche de contact.
+function modalPlancheWaiting() {
+  let ft = ''; // filtre par type
+  const all = () => (S.plancheTodo || [])
+    .filter((x) => x.type ? !hasPlancheDone(x.clientId, x.chevalNom, x.date, x.type) : !hasAnyPlancheDone(x.clientId, x.chevalNom, x.date))
+    .slice()
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || norm(clientName(a.clientId)).localeCompare(norm(clientName(b.clientId)))); // chronologique, récent en haut
+  const render = () => {
+    const list = all();
+    const types = Array.from(new Set(list.map((x) => x.type).filter(Boolean)));
+    const shown = ft ? list.filter((x) => x.type === ft) : list;
+    const seg = `<div class="seg seg-sm" id="plwFilter" style="margin:6px 0;flex-wrap:wrap"><button type="button" class="seg-btn${ft ? '' : ' on'}" data-t="">Tout</button>${types.map((tp) => `<button type="button" class="seg-btn${ft === tp ? ' on' : ''}" data-t="${esc(tp)}">${esc(tp)}</button>`).join('')}</div>`;
+    const rows = shown.length ? shown.map((x) => `<div class="list-item clickable" data-id="${x.id}"><div class="li-main"><b>${esc(x.type || 'Planche')}</b> <span class="badge">${(x.angle || 3)} angles</span><span class="li-sub">🐴 ${esc(x.chevalNom || '')} · 👤 ${esc(clientName(x.clientId))}${x.date ? ' · ' + esc(fmtDateFr(x.date)) : ''}</span></div><span class="li-chev">›</span></div>`).join('') : '<p class="empty">Aucune planche en attente.</p>';
+    openModal(`<div class="modal-head"><b>📋 Planches en attente</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Planches demandées pendant une tournée (bouton 📷 Photo) et <b>pas encore faites</b>. Touchez-en une pour <b>pré-remplir</b> la planche de contact (cheval, client, date, type, angles).</p>
+      ${types.length ? seg : ''}
+      <div class="list">${rows}</div>`);
+    $('mX').onclick = closeModal;
+    document.querySelectorAll('#plwFilter .seg-btn').forEach((b) => b.addEventListener('click', () => { ft = b.dataset.t; render(); }));
+    document.querySelectorAll('#modal [data-id]').forEach((el) => el.addEventListener('click', () => {
+      const x = (S.plancheTodo || []).find((y) => y.id === el.dataset.id); if (!x) return;
+      closeModal();
+      modalPlancheCreate('contact', { cheval: x.chevalNom || '', client: clientName(x.clientId), clientId: x.clientId, date: x.date || todayStr(), stade: x.type || '', modele: String(x.angle || 4), todoId: x.id, allowTourPick: true });
+    }));
+  };
+  render();
+}
 function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
@@ -8536,6 +8571,7 @@ function modalPlancheCreate(type, prefill) {
         <p id="plCclientWarn" class="pl-owner-warn" style="display:none"></p>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+        ${type === 'contact' && plCreate.allowTourPick ? '<button class="btn small block" id="plCwaiting" style="margin:6px 0">📋 Planches en attente (à faire) — remplir depuis une tournée</button>' : ''}
         ${type === 'contact' ? '<label id="plChistWrap">Historique (reprendre une planche du cheval)<select id="plChist" disabled></select></label>' : ''}
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>${plCreate.allowTourPick ? '<div id="plCdateSuggest"></div>' : ''}
         ${type === 'contact' ? `<label>Type de planche (stade) — <b>obligatoire</b><select id="plCstade">${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
@@ -8573,6 +8609,7 @@ function modalPlancheCreate(type, prefill) {
   $('plCcheval').addEventListener('change', (e) => { plCreate.cheval = e.target.value; plRenderChevalOwner(); if (plCreate.allowTourPick) plRenderDateSuggest(); plRenderHistory(); });
   // Historique : reprendre une planche précédente du cheval → ré-ouvre la création pré-remplie (métadonnées ; les photos sont à ré-importer).
   { const hs = $('plChist'); if (hs) hs.addEventListener('change', (e) => { const h = (S.plancheHistory || []).find((x) => x.id === e.target.value); if (h) modalPlancheCreate('contact', { cheval: h.cheval, client: h.client, clientId: h.clientId, date: h.date, stade: h.stade, note: h.note, dureeCycleSem: h.dureeCycleSem, modele: h.modele, allowTourPick: plCreate.allowTourPick }); }); }
+  if ($('plCwaiting')) $('plCwaiting').onclick = () => modalPlancheWaiting();
   plRenderChevalOwner(); plRenderHistory();
   $('plCclient').addEventListener('input', (e) => { plCreate.client = e.target.value; });
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
