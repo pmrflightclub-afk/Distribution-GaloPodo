@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.65';
+const APP_VERSION = '1.2.66';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.66', date: '2026-07-12',
+    corrections: [
+      'Fenêtres (modales) : elles s\'ouvrent désormais juste sous le bandeau et la barre de navigation (avec un petit espace), sans jamais les recouvrir — on garde le repère de la page. Sur ordinateur, elles sont plus larges (couvrent mieux la page).',
+      'Ajouter une adresse (Adresses chevaux) : le champ associé s\'appelle « Client » (un client connu de l\'app) ; en créant un nouveau client depuis cette fenêtre, l\'adresse saisie est reprise automatiquement dans la fiche du client.',
+    ],
+  },
   {
     version: '1.2.65', date: '2026-07-12',
     corrections: [
@@ -3730,7 +3737,7 @@ function modalAddLieuRef(existing) {
     <label class="chk2"><input type="checkbox" id="lrEcuriePrivee" ${w.ecuriePrivee ? 'checked' : ''}/> 🔒 Écurie privée (pas de nom public)</label>
     <label>Nom de l'écurie<input type="text" id="lrEcurieNom" value="${esc(w.ecurieNom || '')}" placeholder="ex. Écurie du Nord" ${w.ecuriePrivee ? 'disabled' : ''}/></label>
     <div id="lrAddr"></div>
-    <label>Client de référence (facultatif)<input type="text" id="lrClient" list="lrClientList" value="${esc(w.clientRef || '')}" placeholder="ex. propriétaire / écurie"/></label>
+    <label>Client (connu de l'app, facultatif)<input type="text" id="lrClient" list="lrClientList" value="${esc(w.clientRef || '')}" placeholder="Nom d'un client existant"/></label>
     <datalist id="lrClientList">${clients.map((c) => `<option value="${esc(fullName(c))}"></option>`).join('')}</datalist>
     <div id="lrChevaux" style="margin:6px 0"></div>
     <label class="chk2"><input type="checkbox" id="lrNewClient"/> ➕ Créer un nouveau client (ouvre la fiche client)</label>
@@ -3752,7 +3759,11 @@ function modalAddLieuRef(existing) {
   };
   $('lrClient').addEventListener('input', (e) => { w.clientRef = e.target.value; w.chevaux = []; renderLrChevaux(); });
   renderLrChevaux();
-  $('lrNewClient').addEventListener('change', (e) => { if (e.target.checked) { closeModal(); editClient(); } }); // ferme cette modale et ouvre la création d'un client
+  $('lrNewClient').addEventListener('change', (e) => { // ferme cette modale et ouvre la création d'un client, avec l'adresse reprise automatiquement
+    if (!e.target.checked) return;
+    const a = w.addr || {}, pre = addrStr(a).trim() ? { rue: (a.rue || '') + (a.numero ? ' ' + a.numero : ''), cpVille: [a.cp, a.localite].filter(Boolean).join(' ') } : null;
+    closeModal(); editClient(null, null, '', pre);
+  });
 
   $('lrNoir').addEventListener('change', (e) => { if (e.target.checked) $('lrInactif').checked = false; }); // statuts exclusifs
   $('lrInactif').addEventListener('change', (e) => { if (e.target.checked) $('lrNoir').checked = false; });
