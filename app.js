@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.83';
+const APP_VERSION = '1.2.84';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.84', date: '2026-07-12',
+    corrections: [
+      'Planche — rotation d\'une image : elle remplit désormais TOUJOURS sa case, sans coins blancs ni image penchée (ex. le sabot « Solaire » pris de travers). Un zoom de couverture automatique compense la rotation, et l\'éditeur « Cadrer l\'image » montre exactement le rendu du PDF. Les repères (haut/bas/gauche/droite + axe rouge central) restent affichés pour centrer le sujet.',
+    ],
+  },
   {
     version: '1.2.83', date: '2026-07-12',
     ajouts: [
@@ -7072,10 +7078,11 @@ async function planchePageCanvas(pi) {
       const cz = (st.cellCrop && st.cellCrop[key]) ? cropZoom : 1; // « Rogner » actif sur CETTE case seulement
       ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip(); // toujours rogné à la case (cover peut déborder)
       if (cz !== 1) { ctx.translate(cx + colW / 2, ry + rowH / 2); ctx.scale(cz, cz); ctx.translate(-(cx + colW / 2), -(ry + rowH / 2)); } // zoom uniforme autour du centre (repère 1 → bord)
-      if (T) { // même transfo que l'éditeur (translate·scale·rotate, origine centre)
+      if (T) { // même transfo que l'éditeur (translate·scale·rotate, origine centre) + zoom-de-couverture rotation (zéro coin blanc)
+        const rc = cover ? plRotCover(T.rot, colW, rowH) : 1, dwr = dw * rc, dhr = dh * rc;
         ctx.translate(cx + colW / 2 + (T.x || 0) * colW, ry + rowH / 2 + (T.y || 0) * rowH);
         ctx.scale(T.zoom || 1, T.zoom || 1); ctx.rotate((T.rot || 0) * Math.PI / 180);
-        ctx.drawImage(im, -dw / 2, -dh / 2, dw, dh);
+        ctx.drawImage(im, -dwr / 2, -dhr / 2, dwr, dhr);
       } else { ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); } // base cover/contain centrée
       ctx.restore();
     });
@@ -8766,7 +8773,7 @@ function plRenderGrid() {
         const cz = (!st.gridEdit && st.cellCrop && st.cellCrop[key]) ? cropZoom : 1; // rognage par case, hors édition (en édition on voit tout + repères)
         const tParts = [];
         if (cz !== 1) tParts.push(`scale(${cz})`);
-        if (T) tParts.push(`translate(${(T.x || 0) * 100}%,${(T.y || 0) * 100}%) scale(${T.zoom || 1}) rotate(${T.rot || 0}deg)`);
+        if (T) tParts.push(`translate(${(T.x || 0) * 100}%,${(T.y || 0) * 100}%) scale(${(T.zoom || 1) * (fit === 'cover' ? plRotCover(T.rot, g.colW, g.rowH) : 1)}) rotate(${T.rot || 0}deg)`); // scale inclut le zoom-de-couverture rotation (fini les coins blancs)
         const imgStyle = `object-fit:${fit}` + (tParts.length ? `;transform:${tParts.join(' ')};transform-origin:center center` : '');
         const imgTag = ph && ph.url ? `<img src="${ph.url}" alt="" style="${imgStyle}"/>` : '<span class="pl-cell-ph">+</span>';
         const cropSel = st.gridEdit && st.cropMode && st.cropSel && st.cropSel.has(key); // sélectionnée pour le rognage → cadre rouge
@@ -8793,6 +8800,9 @@ function plRenderGrid() {
 
 // Cadrillage d'aide (mode édition) : 4 lignes de marge (gauche/droite/haut/bas, cm → % de la case) + axe central rouge.
 // SVG en pourcentages (viewBox 0-100, non-scaling-stroke) → même rendu sur la case de grille et dans l'éditeur, jamais sur le PDF.
+// Facteur d'agrandissement pour qu'une image TOURNÉE de `rotDeg` couvre encore TOUTE la case (colW×rowH) → zéro coin blanc.
+// = |cos| + max(colW/rowH, rowH/colW)·|sin| (exact pour une image qui couvre pile la case ; sinon rogne un peu plus, jamais de vide). 1 si rot=0.
+const plRotCover = (rotDeg, cw, ch) => { const r = (rotDeg || 0) * Math.PI / 180; const ar = (cw > 0 && ch > 0) ? Math.max(cw / ch, ch / cw) : 1; return Math.abs(Math.cos(r)) + ar * Math.abs(Math.sin(r)); };
 function plGuideSvg() {
   const st = plCreate; const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
   const gg = (S.planche && S.planche.gridGuide) || { marginLR: 0.5, marginTB: 0.5 };
@@ -8851,7 +8861,7 @@ function modalCellEdit(key) {
   const img = q('img'), frame = q('frame');
   img.style.objectFit = st.fitMode === 'contain' ? 'contain' : 'cover'; // même base que le PDF (cover = remplir / contain = entière)
   const close = () => { ov.remove(); };
-  const apply = () => { img.style.transform = `translate(${T.x * fw}px,${T.y * fh}px) scale(${T.zoom}) rotate(${T.rot}deg)`; };
+  const apply = () => { img.style.transform = `translate(${T.x * fw}px,${T.y * fh}px) scale(${T.zoom * (st.fitMode === 'contain' ? 1 : plRotCover(T.rot, fw, fh))}) rotate(${T.rot}deg)`; }; // zoom-de-couverture rotation → l'éditeur montre exactement le rendu PDF
   apply();
   q('zoom').addEventListener('input', (e) => { T.zoom = parseFloat(e.target.value) || 1; apply(); });
   q('rot').addEventListener('input', (e) => { T.rot = parseInt(e.target.value, 10) || 0; apply(); });
