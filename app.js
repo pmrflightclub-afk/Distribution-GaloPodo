@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.68';
+const APP_VERSION = '1.2.69';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.69', date: '2026-07-12',
+    corrections: [
+      'Tournée qui restait « à compléter » sans raison : si une adresse d\'arrêt n\'était pas encore localisée (GPS), la tournée restait bloquée en « à compléter » alors que les km/€ s\'affichaient. Désormais, à l\'ouverture, l\'app re-localise les adresses manquantes et recalcule l\'itinéraire automatiquement (plus besoin du bouton « ↻ Re-localiser »).',
+      'Message de fin de tournée reformulé : l\'ancien « Clôture bloquée » pouvait laisser croire que la préparation était incomplète. Il précise maintenant qu\'il s\'agit du stade « fin de tournée / jour J » (paiement & clôture), distinct de la préparation.',
+    ],
+  },
   {
     version: '1.2.68', date: '2026-07-12',
     corrections: [
@@ -4317,7 +4324,7 @@ function openEditor() {
   if ($('edChangeHome')) $('edChangeHome').style.display = locked ? 'none' : '';
   if ($('edChangeArrivee')) $('edChangeArrivee').style.display = locked ? 'none' : '';
   if ($('edCloseWrap')) $('edCloseWrap').style.display = locked ? 'none' : '';
-  if ($('edCloseWarn')) { const blk = locked ? [] : tourFinalizeBlock(currentTour); $('edCloseWarn').innerHTML = blk.length ? '🔒 Clôture bloquée — finalisez chaque arrêt dans « Trajet du jour » (💶 Paiement & clôture) :<br>• ' + blk.map(esc).join('<br>• ') : ''; $('edCloseWarn').classList.toggle('hidden', !blk.length); }
+  if ($('edCloseWarn')) { const blk = locked ? [] : tourFinalizeBlock(currentTour); $('edCloseWarn').innerHTML = blk.length ? '📋 Finalisation (le jour de la tournée) — la <b>préparation</b> peut être complète ; ceci concerne le <b>stade fin de tournée</b> : chaque arrêt se clôture le jour J une fois payé et validé dans « Trajet du jour » (💶 Paiement & clôture). Restera à finaliser :<br>• ' + blk.map(esc).join('<br>• ') : ''; $('edCloseWarn').classList.toggle('hidden', !blk.length); }
   const review = !!currentTour._review;
   $('edLockBanner').classList.toggle('hidden', !locked && !review);
   if ($('edLockBanner')) { if (review) $('edLockBanner').textContent = '📥 Tournée importée « à revalider » — vérifiez chaque arrêt puis « ✓ Valider » ci-dessous pour recalculer et figer.'; else if (locked) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.'; }
@@ -4329,9 +4336,11 @@ function openEditor() {
   $('edCalc').style.display = 'none'; // recalcul automatique — bouton masqué mais fonctionnel
   $('edDelete').style.display = '';
   renderEditorArrets(locked);
+  // Une adresse sans coordonnées ⇒ « à compléter » (adresse non localisée) SANS raison visible : on re-localise + recalcule AUTOMATIQUEMENT à l'ouverture (plus besoin du bouton « ↻ Re-localiser »).
+  const geoMissing = (currentTour.arrets || []).some((a) => !(a.addr && a.addr.lat != null && a.addr.lon != null));
   if (locked) renderResultUI(currentTour.result || null); // tournée figée : on affiche le résultat stocké, sans recalcul ni ré-enregistrement
-  else if (currentTour.result && currentTour.result.rows && currentTour.result.rows.length === currentTour.arrets.length) recomputeMoney();
-  else { renderResultUI(null); if (currentTour.arrets.length) scheduleGeoRecalc(); }
+  else if (currentTour.result && currentTour.result.rows && currentTour.result.rows.length === currentTour.arrets.length && !geoMissing) recomputeMoney();
+  else { renderResultUI(currentTour.result || null); if (currentTour.arrets.length) scheduleGeoRecalc(); } // géométrie absente/périmée OU adresse non localisée → re-localisation + recalcul automatiques
   $('edStatus').textContent = '';
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
   $('tab-editeur').classList.add('active'); window.scrollTo(0, 0);
