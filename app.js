@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.79';
+const APP_VERSION = '1.2.80';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.80', date: '2026-07-12',
+    corrections: [
+      'Intercalation : ajouter un ou plusieurs chevaux à un client DÉJÀ présent à un arrêt propose maintenant aussi le décalage des rendez-vous suivants (le temps de travail ajouté est pris en compte), pas seulement quand on ajoute un nouveau client.',
+    ],
+  },
   {
     version: '1.2.79', date: '2026-07-12',
     corrections: [
@@ -4699,7 +4705,7 @@ function addClientToTour(c, chevaux) {
   else chevaux.forEach((h) => push(chevalAddr(c, h), h));
   Object.values(groups).forEach((g) => {
     const ex = currentTour.arrets.find((a) => norm(addrStr(a.addr)) === norm(addrStr(g.addr)));
-    if (ex) { let cl = ex.clients.find((x) => x.clientId === c.id); const fresh = !cl; if (fresh) { cl = { clientId: c.id, chevaux: [] }; ex.clients.push(cl); } g.chevaux.forEach((n) => cl.chevaux.push(n)); if (fresh) placements.push({ arret: ex, cl, isNew: false }); } // fusion : client fraîchement ajouté à un arrêt existant
+    if (ex) { let cl = ex.clients.find((x) => x.clientId === c.id); const fresh = !cl; if (fresh) { cl = { clientId: c.id, chevaux: [] }; ex.clients.push(cl); } g.chevaux.forEach((n) => cl.chevaux.push(n)); if (fresh || g.chevaux.length) placements.push({ arret: ex, cl, isNew: false }); } // fusion : client fraîchement ajouté OU cheval(aux) ajouté(s) à un client déjà là → temps de travail en plus → décalage
     else { const na = { addr: JSON.parse(JSON.stringify(g.addr)), type: 'tournee', clients: [{ clientId: c.id, chevaux: g.chevaux.slice() }] }; currentTour.arrets.push(na); placements.push({ arret: na, cl: na.clients[0], isNew: true }); }
   });
   // Impayés reportés du client → ligne d'article « Impayé du … » mise en place directement dans cette tournée.
