@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.75';
+const APP_VERSION = '1.2.76';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.76', date: '2026-07-12',
+    ajouts: [
+      'Intercaler un rendez-vous dans une tournée existante : quand vous AJOUTEZ un client (＋ Client) — ou quand « programmer le suivi » tombe sur une tournée déjà prévue à cette date — une fenêtre « Intercaler » place le nouvel arrêt à SON HEURE dans la tournée et décale les rendez-vous suivants du délai que vous estimez (visite + trajet).',
+      'Bouton « 🧭 Voir le trajet réel » dans la fenêtre Intercaler : ouvre Google Maps pour l\'étape (nouvel arrêt → arrêt suivant) afin de lire le temps de route réel et affiner le délai. (Masqué si le RDV s\'intercale en 1er ou en dernier — déjà connu.) Un aperçu montre les heures avant/après.',
+    ],
+  },
   {
     version: '1.2.75', date: '2026-07-12',
     ajouts: [
@@ -4344,6 +4351,53 @@ function modalRevoirHoraires(t) {
     persistCurrentTour(); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere();
   };
 }
+// Modale « Intercaler » — placer un nouvel arrêt à son HEURE dans une tournée existante + décaler les suivants du délai
+// (visite + trajet estimé par le pro). Bouton « Étape » : ouvre Google Maps (cet arrêt → arrêt suivant) pour lire le trajet
+// réel (masqué si intercalé en 1er ou en dernier — déjà connu). L'arrêt est déjà ajouté (en fin) ; ici on le repositionne.
+function modalIntercaler(t, arret) {
+  const cl0 = (arret.clients && arret.clients[0]); if (!cl0) return;
+  let delai = 30;
+  const persist = () => { if (t === currentTour) persistCurrentTour(); else saveTournees(); }; // +client : t = clone currentTour ; programmer-le-suivi : t = élément réel de tournees
+  const calc = () => {
+    const H = hmToMin(($('icHeure') || {}).value);
+    const others = t.arrets.filter((a) => a !== arret);
+    const insertIdx = (H == null) ? others.length : others.filter((a) => { const ah = hmToMin(arretHeure(a)); return ah != null && ah <= H; }).length;
+    const isFirst = insertIdx === 0, isLast = insertIdx >= others.length, nextA = (!isFirst && !isLast) ? others[insertIdx] : null;
+    const impacted = []; others.slice(insertIdx).forEach((a) => { if (typeof a.validatedAt === 'number') return; (a.clients || []).forEach((cl) => { if (cl.heure) impacted.push({ cl }); }); });
+    return { H, others, insertIdx, isFirst, isLast, nextA, impacted };
+  };
+  const refresh = () => {
+    const s = calc();
+    if ($('icPos')) $('icPos').innerHTML = s.H == null ? '⏰ Renseignez l\'heure pour placer l\'arrêt.' : `Position : <b>${s.insertIdx + 1}ᵉ arrêt</b>${s.isLast ? ' — en dernier (aucun décalage)' : (s.isFirst ? ' — en premier' : '')}`;
+    if ($('icEtape')) $('icEtape').innerHTML = s.nextA ? '<button type="button" class="btn small" id="icEtapeBtn">🧭 Voir le trajet réel (→ arrêt suivant)</button>' : '';
+    const eb = $('icEtapeBtn'); if (eb) eb.onclick = () => openMapsRoute(addrStr(arret.addr), addrStr(s.nextA.addr));
+    if ($('icPreview')) $('icPreview').innerHTML = (s.H == null || !s.impacted.length) ? '<div class="ts-line ts-muted">Aucun RDV suivant à décaler.</div>' : s.impacted.map(({ cl }) => `<div class="ts-line"><span>${esc(clientName(cl.clientId))}</span><span>${esc(cl.heure)} → <b>${esc(minToHm(hmToMin(cl.heure) + delai))}</b></span></div>`).join('');
+    if ($('icOk')) $('icOk').disabled = s.H == null;
+  };
+  const setHeure = (h) => { cl0.heure = h; (cl0.chevaux || []).forEach((cv) => cv.heure = h); };
+  openModal(`<div class="modal-head"><b>🔀 Intercaler le rendez-vous</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Placez ce RDV à son heure ; les rendez-vous <b>suivants</b> seront décalés du délai (visite + trajet estimé).</p>
+    <label>Heure du RDV<input type="time" id="icHeure" value="${esc(cl0.heure || arretHeure(arret) || '')}"/></label>
+    <p class="hint" id="icPos"></p>
+    <label>Délai à répercuter (minutes) — visite + trajet estimé<input type="number" id="icDelai" step="5" value="${delai}"/></label>
+    <div id="icEtape" style="margin:4px 0"></div>
+    <div class="card" id="icPreview" style="margin:8px 0"></div>
+    <div class="actions two"><button class="btn" id="icSkip">Ajouter sans décaler</button><button class="btn primary" id="icOk" disabled>Intercaler</button></div>`);
+  $('mX').onclick = closeModal;
+  $('icSkip').onclick = () => { const h = ($('icHeure') || {}).value; if (h) { setHeure(h); persist(); scheduleCalPush(t); } closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); };
+  $('icHeure').addEventListener('change', refresh); $('icHeure').addEventListener('input', refresh);
+  $('icDelai').addEventListener('input', (e) => { const v = parseInt(e.target.value, 10); delai = isNaN(v) ? 0 : v; refresh(); });
+  $('icOk').onclick = () => {
+    const s = calc(); if (s.H == null) return;
+    setHeure(($('icHeure')).value);
+    const oldOrder = t.arrets.map((a) => norm(addrStr(a.addr)));
+    t.arrets = s.others.slice(0, s.insertIdx).concat([arret], s.others.slice(s.insertIdx)); // repositionne par heure
+    invalidateTourRoute(oldOrder, t); applyDecalage(s.impacted, delai); delete cl0.heureStale; // décale les suivants + « à prévenir » ; le nouvel arrêt (heure fraîche) n'est pas « à revoir »
+    persist(); scheduleCalPush(t); closeModal();
+    if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere();
+  };
+  refresh();
+}
 // Modale récapitulative « à compléter » : centralise ce qui manque pour une tournée, SANS l'ouvrir ni défiler.
 // Deux blocs SÉPARÉS et distincts : ① Préparation (itinéraire/adresses/heures/chevaux) · ② Clôture (jour J : paiement).
 function modalTourStatus(t) {
@@ -4574,7 +4628,7 @@ function chevalAddresses() {
 function chooseClientTargets(c) {
   const chs = activeChevaux(c); // seuls les chevaux actifs (hors inactif / liste noire) sont proposés
   const distinct = new Set(chs.map((h) => norm(addrStr(chevalAddr(c, h)))));
-  if (!chs.length || distinct.size <= 1) { addClientToTour(c, chs); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); return; }
+  if (!chs.length || distinct.size <= 1) { const res = addClientToTour(c, chs); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); maybeIntercaler(res); return; }
   const picked = new Set(chs.map((_, i) => i));
   openModal(`<div class="modal-head"><b>Chevaux — ${esc(fullName(c))}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Ce client a des chevaux à des adresses différentes. Cochez ceux à visiter (un arrêt par adresse).</p>
@@ -4582,10 +4636,13 @@ function chooseClientTargets(c) {
   $('mX').addEventListener('click', closeModal);
   const box = $('chList');
   chs.forEach((h, i) => { const row = document.createElement('label'); row.className = 'chk'; row.style.marginBottom = '8px'; row.innerHTML = `<input type="checkbox" checked/> <b>${esc(h.nom || 'cheval')}</b> — ${esc(addrStr(chevalAddr(c, h)))}`; row.querySelector('input').addEventListener('change', (e) => { e.target.checked ? picked.add(i) : picked.delete(i); }); box.appendChild(row); });
-  $('addSel').addEventListener('click', () => { addClientToTour(c, chs.filter((_, i) => picked.has(i))); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); });
+  $('addSel').addEventListener('click', () => { const res = addClientToTour(c, chs.filter((_, i) => picked.has(i))); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); maybeIntercaler(res); });
 }
+// Après un +client : si un arrêt NOUVEAU a été ajouté à une tournée qui avait déjà des arrêts → proposer l'intercalation.
+function maybeIntercaler(res) { if (res && res.preExisting && res.created && res.created.length === 1) modalIntercaler(currentTour, res.created[0]); }
 function addClientToTour(c, chevaux) {
   const oldAddrs = (currentTour.arrets || []).map((a) => norm(addrStr(a.addr))); // ordre AVANT ajout (invalidation chirurgicale)
+  const created = []; // arrêts NOUVEAUX (nouvelle adresse) → pour proposer l'intercalation
   const groups = {};
   const push = (addr, ch) => { const k = norm(addrStr(addr)); if (!groups[k]) groups[k] = { addr: toAddr(addr), chevaux: [] }; if (ch) groups[k].chevaux.push({ id: ch.id, nom: ch.nom || 'cheval', fourbure: false, npas: false, infection: false }); };
   if (!chevaux.length) push(c.addr, null);
@@ -4593,7 +4650,7 @@ function addClientToTour(c, chevaux) {
   Object.values(groups).forEach((g) => {
     const ex = currentTour.arrets.find((a) => norm(addrStr(a.addr)) === norm(addrStr(g.addr)));
     if (ex) { let cl = ex.clients.find((x) => x.clientId === c.id); if (!cl) { cl = { clientId: c.id, chevaux: [] }; ex.clients.push(cl); } g.chevaux.forEach((n) => cl.chevaux.push(n)); }
-    else currentTour.arrets.push({ addr: JSON.parse(JSON.stringify(g.addr)), type: 'tournee', clients: [{ clientId: c.id, chevaux: g.chevaux.slice() }] });
+    else { const na = { addr: JSON.parse(JSON.stringify(g.addr)), type: 'tournee', clients: [{ clientId: c.id, chevaux: g.chevaux.slice() }] }; currentTour.arrets.push(na); created.push(na); }
   });
   // Impayés reportés du client → ligne d'article « Impayé du … » mise en place directement dans cette tournée.
   if (!currentTour.articles) currentTour.articles = [];
@@ -4606,6 +4663,7 @@ function addClientToTour(c, chevaux) {
   });
   if (addedImpaye) saveClients();
   invalidateTourRoute(oldAddrs, currentTour); persistCurrentTour(); // composition modifiée → segments/heures suivantes périmés (rien si arrêt existant)
+  return { created, preExisting: oldAddrs.length > 0 };
 }
 
 // Dernière tournée CLÔTURÉE (avant `avantDate`) où ce cheval a eu un parage ou une visite (non annulé) → écart en jours depuis.
@@ -10014,13 +10072,15 @@ function scheduleClientOnDate(date, client, chevalObjs, heure, rdvType) {
   let created = false;
   if (!t) { t = { id: uid(), date, nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, payments: {}, result: null, createdAt: Date.now() }; tournees.push(t); created = true; }
   const prev = currentTour; currentTour = t;
-  addClientToTour(client, chevalObjs);
+  const addRes = addClientToTour(client, chevalObjs);
   currentTour = prev;
   if (rdvType) { const ids = new Set((chevalObjs || []).map((h) => h.id)); (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== client.id) return; (cl.chevaux || []).forEach((cv) => { if (ids.has(cv.id)) cv.rdvType = rdvType; }); })); }
   if (heure) setChevalHeure(t, client.id, chevalObjs, heure);
   t.result = null; saveTournees();
   scheduleCalPush(t); // push automatique vers Google Agenda à la validation du RDV (no-op si l'option n'est pas activée)
-  return { tour: t, created };
+  // Intercalation : nouvel arrêt ajouté à une tournée qui existait DÉJÀ → candidat au repositionnement par heure + décalage.
+  const intercale = (!created && addRes && addRes.created && addRes.created.length === 1) ? { tour: t, arret: addRes.created[0] } : null;
+  return { tour: t, created, intercale };
 }
 // Date proposée pour le 2ᵉ RDV « suivi pathologique » : baseDate + N jours ou N semaines (récurrence portée par la fiche cheval).
 function proposedPathoDate(baseDate, sp) {
@@ -10132,16 +10192,17 @@ function modalRDV(t, arret, cid, onDone) {
       const missParage = Object.keys(byDate).some((d) => !byDate[d].heure);
       const missPatho = entries.some((en) => en.hasPatho && en.pathoStatus === 'maintenir' && en.pathoDate && !en.pathoHeure);
       if (missParage || missPatho) { alert('⏰ L\'heure de RDV est obligatoire pour chaque rendez-vous (parage et/ou suivi pathologique).'); return; }
-      let scheduled = false;
-      Object.keys(byDate).forEach((d) => { const g = byDate[d]; const chevalObjs = (client.chevaux || []).filter((h) => g.ids.includes(h.id)); if (chevalObjs.length) { scheduleClientOnDate(d, client, chevalObjs, g.heure, 'parage'); scheduled = true; } });
+      let scheduled = false; const pend = []; // candidats à l'intercalation (nouvel arrêt dans une tournée déjà existante)
+      Object.keys(byDate).forEach((d) => { const g = byDate[d]; const chevalObjs = (client.chevaux || []).filter((h) => g.ids.includes(h.id)); if (chevalObjs.length) { const r = scheduleClientOnDate(d, client, chevalObjs, g.heure, 'parage'); if (r && r.intercale) pend.push(r.intercale); scheduled = true; } });
       // Suivi pathologique : 2ᵉ RDV (Maintenir) ou arrêt du suivi (statut porté par la fiche cheval).
       entries.forEach((en) => {
         if (!en.hasPatho) return;
         if (en.pathoStatus === 'arreter') { if (en.fiche && en.fiche.suiviPatho) { en.fiche.suiviPatho.actif = false; saveClients(); } return; }
-        if (en.pathoStatus === 'maintenir' && en.pathoDate && en.pathoHeure) { const h = (client.chevaux || []).find((x) => x.id === en.id); if (h) { scheduleClientOnDate(en.pathoDate, client, [h], en.pathoHeure, 'patho'); scheduled = true; } }
+        if (en.pathoStatus === 'maintenir' && en.pathoDate && en.pathoHeure) { const h = (client.chevaux || []).find((x) => x.id === en.id); if (h) { const r = scheduleClientOnDate(en.pathoDate, client, [h], en.pathoHeure, 'patho'); if (r && r.intercale) pend.push(r.intercale); scheduled = true; } }
       });
       if (scheduled && arret) { arret.rdvDone = true; saveTournees(); } // marque l'arrêt : RDV suivant programmé
       closeModal(); if (onDone) onDone();
+      if (pend.length) modalIntercaler(pend[0].tour, pend[0].arret); // tournée déjà existante à cette date → proposer l'intercalation par heure + décalage
     });
   };
   render();
