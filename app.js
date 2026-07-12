@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.80';
+const APP_VERSION = '1.2.81';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.81', date: '2026-07-12',
+    corrections: [
+      '« Ajouter sans décaler » (intercalation) : les vues Accueil/Agenda se rafraîchissent bien tout de suite après l\'ajout.',
+    ],
+  },
   {
     version: '1.2.80', date: '2026-07-12',
     corrections: [
@@ -4413,7 +4419,7 @@ function modalIntercaler(t, placements, onDone) {
     return { base, shifts };
   };
   const renderPreview = () => { const box = $('icPreview'); if (!box) return; const { shifts } = simulate(); box.innerHTML = shifts.length ? shifts.map((x) => `<div class="ts-line"><span>${esc(clientName(x.cl.clientId))}</span><span>${esc(x.from)} → <b>${esc(x.to)}</b></span></div>`).join('') : '<div class="ts-line ts-muted">Aucun RDV suivant à décaler.</div>'; };
-  const onSkip = () => { const oldOrder = t.arrets.map((a) => norm(addrStr(a.addr))); st.forEach((s) => { if (s.heure) { s.cl.heure = s.heure; (s.cl.chevaux || []).forEach((cv) => cv.heure = s.heure); } }); t.arrets = simulate().base; invalidateTourRoute(oldOrder, t); persist(); scheduleCalPush(t); recompute(); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); if (onDone) onDone(); }; // repositionne par heure (mais ne décale pas → suivants « à revoir »)
+  const onSkip = () => { const oldOrder = t.arrets.map((a) => norm(addrStr(a.addr))); st.forEach((s) => { if (s.heure) { s.cl.heure = s.heure; (s.cl.chevaux || []).forEach((cv) => cv.heure = s.heure); } }); t.arrets = simulate().base; invalidateTourRoute(oldOrder, t); persist(); scheduleCalPush(t); recompute(); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere(); if (onDone) onDone(); }; // repositionne par heure (mais ne décale pas → suivants « à revoir »)
   const onOk = () => {
     if (st.some((s) => s.isNew && hmToMin(s.heure) == null)) { alert('Renseignez l\'heure de chaque nouvel arrêt.'); return; }
     const oldOrder = t.arrets.map((a) => norm(addrStr(a.addr)));
@@ -5395,7 +5401,7 @@ async function calcTour(silent) {
 
 // Recalcul « sans écran » (headless) d'une tournée QUELCONQUE : géocode les adresses manquantes + itinéraire + facture,
 // sans dépendre de l'éditeur ouvert. Utilisé par la modale « à compléter » (bouton « Calculer maintenant »).
-// Même logique que calcTour, mais sans DOM ; swap temporaire de currentTour pour réutiliser tourHome()/homeXY()/tourArrivee().
+// Même logique que calcTour, mais sans DOM et SANS toucher à currentTour (départ/arrivée calculés depuis t) → aucune interférence avec l'éditeur ouvert.
 async function recomputeTourGeo(t) {
   if (!t || !(t.arrets || []).length) return { ok: false, error: 'aucun arrêt' };
   // IMPORTANT : ne swappe PAS currentTour (sinon écriture croisée si l'utilisateur édite l'éditeur pendant l'await).
