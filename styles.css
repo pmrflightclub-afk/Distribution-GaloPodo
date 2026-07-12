@@ -81,13 +81,17 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 /* Contextes compacts : la façade reprend la taille du <select> natif qu'elle remplace */
 .cm-filters .gp-sel { flex: 1 1 160px; min-width: 0; }
 .cm-filters .gp-sel-btn { padding: 8px 10px; font-size: .9rem; }
-/* Sélecteur d'heure maison (Item 5) — réutilise .gp-sel / .gp-sel-pop */
-.gp-time .gp-sel-pop { left: 0; right: auto; min-width: 132px; }
-.gp-time-hd { display: flex; gap: 4px; padding: 2px 6px 4px; font-size: .7rem; color: var(--muted); }
+/* Sélecteur d'heure maison — molette/roue (HH:MM, chiffres glissables de haut en bas) */
+.gp-time .gp-sel-pop { left: 0; right: auto; min-width: 158px; max-height: none; overflow: visible; padding: 6px 10px 10px; }
+.gp-time-hd { display: flex; justify-content: space-around; padding: 0 0 4px; font-size: .7rem; color: var(--muted); }
 .gp-time-hd span { flex: 1; text-align: center; }
-.gp-time-cols { display: flex; gap: 4px; }
-.gp-time-col { flex: 1; max-height: 220px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.gp-time-col .gp-sel-opt { text-align: center; padding: 8px 6px; }
+.gp-roll-wrap { position: relative; display: flex; align-items: center; justify-content: center; gap: 4px; }
+.gp-roll { position: relative; height: 200px; overflow-y: auto; padding: 80px 0; scroll-snap-type: y mandatory; -webkit-overflow-scrolling: touch; touch-action: pan-y; scrollbar-width: none; }
+.gp-roll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.gp-roll-opt { height: 40px; line-height: 40px; min-width: 46px; text-align: center; scroll-snap-align: center; font-size: 18px; color: var(--muted); cursor: pointer; user-select: none; }
+.gp-roll-opt.sel { color: var(--ink); font-weight: 800; font-size: 21px; }
+.gp-roll-colon { font-size: 21px; font-weight: 800; color: var(--ink); }
+.gp-roll-band { position: absolute; left: 0; right: 0; top: 80px; height: 40px; pointer-events: none; border-radius: 8px; border-top: 1px solid var(--accent); border-bottom: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 /* Contexte pastille .a-heure : façade compacte, sans bordure (comme l'ancien input inline) */
 .a-heure .gp-sel.gp-time { margin-top: 0; }
 .a-heure .gp-sel-btn { border: 0; background: transparent; padding: 2px; min-width: 68px; width: auto; font-size: .82rem; color: var(--muted); gap: 4px; }
@@ -177,7 +181,10 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .rdv-patho .rdv-ch-opt { margin-left: -10px; } /* Maintenir/Arrêter collés au bord gauche malgré l'indentation de la section */
 .ac-ecurie { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
 .ac-ecurie .li-sub { flex: 1 1 auto; min-width: 0; }
-.ac-ecurie .btn { flex: none; margin-left: auto; }
+.ac-ecurie .btn { flex: none; }
+.ac-stbtns { flex: none; margin-left: auto; display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.ac-hist { opacity: .7; }
+.ac-hist .li-sub { font-style: italic; }
 .btn.pl-red { border-color: var(--danger); color: #fff; background: var(--danger); }
 .btn.pl-orange { border-color: var(--warn); color: #fff; background: var(--warn); }
 .btn.pl-green { border-color: var(--ok, #2e9e5b); color: #fff; background: var(--ok, #2e9e5b); }
@@ -659,6 +666,12 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 .pro-logo-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .badge-noir { background: #c0392b; color: #fff; }
+/* Badge interactif de statut d'adresse dans une fiche (client / cheval) */
+.addr-badge { display: block; width: 100%; text-align: left; margin: 4px 0 8px; padding: 8px 12px; border-radius: 10px; font-size: .82rem; font-weight: 700; cursor: pointer; border: 1px solid transparent; }
+.addr-badge-noir { background: #c0392b; color: #fff; border-color: #a5281b; }
+.addr-badge-off { background: #fde68a55; color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.addr-badge:hover { filter: brightness(1.05); }
+.addr-badge:active { transform: translateY(1px); }
 
 /* Stats → Clientèle : tuiles de dénombrement */
 .cl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; margin: 6px 0 10px; }

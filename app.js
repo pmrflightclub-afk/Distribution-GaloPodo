@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.66';
+const APP_VERSION = '1.2.67';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.67', date: '2026-07-12',
+    corrections: [
+      'Heure d\'un rendez-vous : le sélecteur ne se referme plus tout seul quand on le règle. Nouveau réglage en « molette » — un champ HH:MM avec deux roues (heures · minutes) que l\'on fait glisser de haut en bas ; la valeur centrée est celle retenue. Fini les petites barres de défilement en deux colonnes.',
+    ],
+    ajouts: [
+      'Fiche client : un badge ROUGE « ⛔ Adresse en liste noire » (ou « 💤 Lieu inactif ») apparaît automatiquement dans la section concernée — l\'adresse du client, un cheval, ou les deux chevaux s\'ils partagent la même adresse — dès qu\'un lieu passe en liste noire / inactif dans Gestion → Adresses chevaux. Cliquer le badge amène directement au champ adresse pour en encoder une nouvelle (l\'ancienne reste en mémoire).',
+      'Gestion → Adresses chevaux : on peut désormais mettre en liste noire / inactif AUSSI les anciennes adresses (déménagements). Chaque lieu a ses deux boutons « ⛔ Refuser ce lieu » et « 💤 Marquer inactif ».',
+      'Adresses chevaux : une adresse ne se crée plus « à la main » (bouton « Ajouter une adresse de référence » retiré). Toute adresse provient d\'une fiche client/cheval ; on ne fait que changer son statut. Rien n\'est supprimé — les adresses connues restent en mémoire.',
+    ],
+  },
   {
     version: '1.2.66', date: '2026-07-12',
     corrections: [
@@ -2976,7 +2987,10 @@ document.addEventListener('focusout', (e) => {
 let _gpSelOpen = null; // wrapper .gp-sel actuellement ouvert (un seul à la fois)
 function gpSelLabel(sel) { const o = sel.options[sel.selectedIndex]; return o ? (o.textContent || '').trim() : ''; }
 function gpSelSync(sel) { const w = sel._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpSelLabel(sel) || '—'; }
-function gpSelClose() { if (!_gpSelOpen) return; gpResetPop(_gpSelOpen); _gpSelOpen.classList.remove('open'); _gpSelOpen = null; window.removeEventListener('scroll', gpSelClose, true); }
+function gpSelClose() { if (!_gpSelOpen) return; gpResetPop(_gpSelOpen); _gpSelOpen.classList.remove('open'); _gpSelOpen._gpTouched = false; _gpSelOpen = null; window.removeEventListener('scroll', gpOnScrollClose, true); }
+// Ferme au scroll de PAGE seulement : un scroll qui provient de l'intérieur du popup (molette d'heure, liste d'options)
+// ne doit PAS refermer le menu (sinon le picker « s'affiche et part aussitôt » dès qu'on règle l'heure).
+function gpOnScrollClose(e) { if (_gpSelOpen && e && e.target && e.target.nodeType === 1 && _gpSelOpen.contains(e.target)) return; gpSelClose(); }
 // Positionne le popup en `position:fixed` calculé sur le rect du bouton → il échappe au clipping de tout ancêtre `overflow`
 // (vignettes `.pl-thumb`, bas de modale…), comme le picker natif s'affichait en top-layer. Ouvre vers le haut s'il manque de place.
 function gpPlacePop(w) {
@@ -2984,7 +2998,7 @@ function gpPlacePop(w) {
   const r = btn.getBoundingClientRect();
   pop.style.position = 'fixed'; pop.style.right = 'auto'; pop.style.bottom = 'auto'; pop.style.top = '0'; pop.style.left = '0';
   if (w.classList.contains('gp-date')) pop.style.width = '';
-  else if (w.classList.contains('gp-time')) pop.style.width = Math.max(r.width, 132) + 'px';
+  else if (w.classList.contains('gp-time')) pop.style.width = Math.max(r.width, 158) + 'px';
   else pop.style.width = r.width + 'px';
   const pw = pop.offsetWidth, phh = pop.offsetHeight;
   const left = Math.max(8, Math.min(r.left, window.innerWidth - pw - 8));
@@ -2993,7 +3007,7 @@ function gpPlacePop(w) {
   pop.style.left = left + 'px'; pop.style.top = top + 'px';
 }
 function gpResetPop(w) { const pop = w && w.querySelector('.gp-sel-pop'); if (!pop) return; ['position', 'top', 'left', 'right', 'bottom', 'width'].forEach((p) => { pop.style[p] = ''; }); }
-function gpAfterOpen(w) { gpPlacePop(w); window.addEventListener('scroll', gpSelClose, true); } // referme au scroll (le popup fixed ne suit pas)
+function gpAfterOpen(w) { gpPlacePop(w); window.addEventListener('scroll', gpOnScrollClose, true); } // referme au scroll de PAGE (le popup fixed ne suit pas) — pas au scroll interne
 function gpSelBuildPop(w) {
   const sel = w._gpSel, pop = w.querySelector('.gp-sel-pop'); pop.innerHTML = '';
   Array.from(sel.options).forEach((o, i) => {
@@ -3060,19 +3074,42 @@ function gpPad2(n) { return (n < 10 ? '0' : '') + n; }
 function gpTimeParse(v) { const m = /^(\d{1,2}):(\d{2})$/.exec(v || ''); return m ? { h: +m[1], mn: +m[2] } : { h: null, mn: null }; }
 function gpTimeLabel(inp) { return /^\d{1,2}:\d{2}$/.test(inp.value || '') ? inp.value : 'HH:MM'; }
 function gpTimeSync(inp) { const w = inp._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpTimeLabel(inp); }
-function gpTimeBuildPop(w, scroll) {
+// Molette (roue) : deux colonnes défilantes h · min séparées par « : ». On fait glisser les chiffres de haut en bas
+// (défilement tactile natif + accroche « scroll-snap ») ; la valeur centrée dans la bande = valeur choisie.
+function gpTimeBuildPop(w) {
   const inp = w._gpInp, p = gpTimeParse(inp.value), pop = w.querySelector('.gp-sel-pop');
-  const col = (type, n, cur) => { let s = ''; for (let i = 0; i < n; i++) s += `<div class="gp-sel-opt${i === cur ? ' sel' : ''}" data-t="${type}" data-v="${i}">${gpPad2(i)}</div>`; return s; };
-  pop.innerHTML = `<div class="gp-time-hd"><span>h</span><span>min</span></div><div class="gp-time-cols"><div class="gp-time-col" data-col="h">${col('h', 24, p.h)}</div><div class="gp-time-col" data-col="m">${col('m', 60, p.mn)}</div></div>`;
-  if (scroll) requestAnimationFrame(() => { pop.querySelectorAll('.gp-sel-opt.sel').forEach((o) => { try { o.scrollIntoView({ block: 'center' }); } catch { } }); }); // centre à l'ouverture seulement (pas de resaut de la 2ᵉ colonne à chaque choix)
+  const h0 = p.h == null ? 0 : p.h, m0 = p.mn == null ? 0 : p.mn;
+  const col = (type, n, cur) => { let s = ''; for (let i = 0; i < n; i++) s += `<div class="gp-roll-opt${i === cur ? ' sel' : ''}" data-t="${type}" data-v="${i}">${gpPad2(i)}</div>`; return s; };
+  pop.innerHTML = `<div class="gp-time-hd"><span>heure</span><span>min</span></div>`
+    + `<div class="gp-roll-wrap"><div class="gp-roll" data-col="h">${col('h', 24, h0)}</div><span class="gp-roll-colon">:</span><div class="gp-roll" data-col="m">${col('m', 60, m0)}</div><div class="gp-roll-band"></div></div>`;
 }
-function gpTimeOpen(w) { const inp = w._gpInp; if (!inp || inp.disabled) return; if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); gpTimeBuildPop(w, true); w.classList.add('open'); _gpSelOpen = w; gpAfterOpen(w); }
-function gpTimePick(w, type, val) {
+function gpRollItemH(roll) { const o = roll.querySelector('.gp-roll-opt'); return (o && o.offsetHeight) || 40; }
+function gpRollCenter(roll, idx, smooth) { const ih = gpRollItemH(roll); try { roll.scrollTo({ top: idx * ih, behavior: smooth ? 'smooth' : 'auto' }); } catch { roll.scrollTop = idx * ih; } }
+function gpRollIndex(roll) { const ih = gpRollItemH(roll), n = roll.querySelectorAll('.gp-roll-opt').length; return Math.max(0, Math.min(n - 1, Math.round(roll.scrollTop / ih))); }
+function gpRollApply(w, roll, fireChange) { // lit la valeur centrée, met à jour le natif + surbrillance + dispatch
   const inp = w._gpInp, p = gpTimeParse(inp.value); let h = p.h == null ? 0 : p.h, mn = p.mn == null ? 0 : p.mn;
-  if (type === 'h') h = val; else mn = val;
-  inp.value = gpPad2(h) + ':' + gpPad2(mn); gpTimeSync(inp);
-  inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true }));
-  gpTimeBuildPop(w); // maj surbrillance, reste ouvert (l'utilisateur peut régler l'autre colonne)
+  const idx = gpRollIndex(roll); if (roll.dataset.col === 'h') h = idx; else mn = idx;
+  roll.querySelectorAll('.gp-roll-opt').forEach((o, i) => o.classList.toggle('sel', i === idx));
+  inp.value = gpPad2(h) + ':' + gpPad2(mn); // setter → met à jour le libellé HH:MM
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
+  if (fireChange) inp.dispatchEvent(new Event('change', { bubbles: true }));
+}
+function gpTimeOpen(w) {
+  const inp = w._gpInp; if (!inp || inp.disabled) return;
+  if (_gpSelOpen && _gpSelOpen !== w) gpSelClose();
+  gpTimeBuildPop(w); w.classList.add('open'); w._gpTouched = false; _gpSelOpen = w; gpAfterOpen(w);
+  const p = gpTimeParse(inp.value), init = { h: p.h == null ? 0 : p.h, m: p.mn == null ? 0 : p.mn };
+  w.querySelectorAll('.gp-roll').forEach((roll) => {
+    requestAnimationFrame(() => gpRollCenter(roll, init[roll.dataset.col], false)); // centre la valeur courante à l'ouverture
+    const touch = () => { w._gpTouched = true; };
+    roll.addEventListener('pointerdown', touch); roll.addEventListener('wheel', touch, { passive: true }); roll.addEventListener('keydown', touch);
+    roll.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const o = e.target.closest('.gp-roll-opt'); if (o) { w._gpTouched = true; gpRollCenter(roll, +o.dataset.v, true); } }); // tap sur un chiffre → il vient au centre (preventDefault : neutralise le clic synthétique du <label> parent)
+    roll.addEventListener('scroll', () => { // ne valide QUE si l'utilisateur a agi (pas au recentrage programmatique d'ouverture → n'écrase pas une heure vide par 00:00)
+      if (!w._gpTouched) return;
+      if (roll._raf) cancelAnimationFrame(roll._raf);
+      roll._raf = requestAnimationFrame(() => gpRollApply(w, roll, true)); // met à jour + enregistre à chaque cran (pas de perte si on ferme aussitôt)
+    });
+  });
 }
 function enhanceTime(inp) {
   if (!inp || inp.dataset.gpEnhanced) return;
@@ -3086,7 +3123,6 @@ function enhanceTime(inp) {
   inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
   w._gpInp = inp; inp._gpWrap = w; gpTimeSync(inp);
   btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (inp.disabled) return; w.classList.contains('open') ? gpSelClose() : gpTimeOpen(w); });
-  pop.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const o = e.target.closest('.gp-sel-opt'); if (o) gpTimePick(w, o.dataset.t, +o.dataset.v); });
   inp.addEventListener('change', () => gpTimeSync(inp));
   const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
   if (desc && desc.get && desc.set) Object.defineProperty(inp, 'value', { configurable: true, get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); gpTimeSync(this); } });
@@ -3537,6 +3573,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     </div>
     <div class="form-sec">
       <div class="form-sec-h">Adresse du client</div>
+      <div id="cAddrBadge"></div>
       <div id="cAddr"></div>
     </div>
     <div id="cLegal" class="form-sec">
@@ -3552,8 +3589,16 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     ${existing ? '<button class="btn small danger" id="cDel">Supprimer ce client</button>' : ''}
     <div class="actions"><button class="btn primary block" id="cSave">Enregistrer</button></div>
     <p class="status err" id="cErr"></p>`);
-  mountAddress($('cAddr'), w.addr, (a) => { w.addr = a; saveDraft(); });
+  // Badge de statut du LIEU (liste noire / inactif) sur la section adresse client — réactif au statut fixé dans Adresses chevaux.
+  const refreshCAddrBadge = () => {
+    const box = $('cAddrBadge'); if (!box) return;
+    box.innerHTML = addrStatusBadgeHtml(w.addr);
+    const b = box.querySelector('[data-addrfix]');
+    if (b) b.addEventListener('click', () => { const el = $('cAddr') && $('cAddr').querySelector('input'); if (el) { try { el.scrollIntoView({ block: 'center' }); } catch { } el.focus(); } });
+  };
+  mountAddress($('cAddr'), w.addr, (a) => { w.addr = a; saveDraft(); refreshCAddrBadge(); });
   mountAddress($('cSocAddr'), w.societeAddr, (a) => { w.societeAddr = a; saveDraft(); });
+  refreshCAddrBadge();
   // Section légale grisée/inactive tant que la société est vide.
   const updateLegalState = () => {
     const on = !!(w.societe && w.societe.trim());
@@ -3587,6 +3632,7 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       </div>
       <div class="form-sub">
         <div class="form-sub-h">Adresse du cheval</div>
+        <div class="ch-addr-badge"></div>
         <label>Type d'adresse<select data-src>
           <option value="client">Même adresse que le client</option>
           <option value="societe">Adresse de la société</option>
@@ -3615,7 +3661,18 @@ function editClient(existing, onSaved, prefillNom, prefill) {
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
       { const pv = row.querySelector('[data-priv]'); if (pv) pv.addEventListener('change', (e) => { h.addrPrivee = e.target.checked; renderCh(); saveDraft(); }); }
       { const an = row.querySelector('[data-addrnom]'); if (an) an.addEventListener('input', (e) => { h.addrNom = e.target.value; saveDraft(); }); }
-      if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; saveDraft(); });
+      // Badge de statut du LIEU sur la section adresse du cheval (à l'endroit exact où l'adresse refusée est détectée).
+      const refreshChBadge = () => {
+        const bb = row.querySelector('.ch-addr-badge'); if (!bb) return;
+        bb.innerHTML = addrStatusBadgeHtml(chevalAddr(w, h));
+        const b = bb.querySelector('[data-addrfix]');
+        if (b) b.addEventListener('click', () => { // amène au champ adresse : le champ propre si spécifique, sinon le sélecteur de type (pour passer en « adresse spécifique »)
+          const tgt = row.querySelector('[data-addrmount] input') || row.querySelector('[data-src]');
+          if (tgt) { try { tgt.scrollIntoView({ block: 'center' }); } catch { } tgt.focus(); }
+        });
+      };
+      if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; saveDraft(); refreshChBadge(); });
+      refreshChBadge();
       box.appendChild(row);
     });
   };
@@ -3691,23 +3748,29 @@ function chevalAddressesByClient() {
 function renderChevAddresses() {
   const seg = $('adrChevFilterSeg'); if (seg) seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._afw) { b._afw = true; b.addEventListener('click', () => { adrChevFilter = b.dataset.af; renderChevAddresses(); }); } b.classList.toggle('on', b.dataset.af === adrChevFilter); });
   const box = $('adrChevList'); if (!box) return; box.innerHTML = '';
-  const addBtn = document.createElement('button'); addBtn.className = 'btn small block'; addBtn.style.marginBottom = '8px'; addBtn.textContent = '＋ Ajouter une adresse de référence'; addBtn.addEventListener('click', () => modalAddLieuRef()); box.appendChild(addBtn);
   const all = chevalAddressesByClient();
   const wantSt = adrChevFilter === 'noir' ? 'noir' : adrChevFilter === 'inactifs' ? 'inactif' : 'actif';
   const shown = all.filter((e) => clientState(e.client) === wantSt).sort((a, b) => fullName(a.client).localeCompare(fullName(b.client)));
   const refs = (S.lieuxRefs || []).filter((lr) => (addrStatusOf(lr.addr) || 'actif') === wantSt);
   if ($('adrChevEmpty')) { $('adrChevEmpty').style.display = (shown.length || refs.length) ? 'none' : 'block'; $('adrChevEmpty').textContent = (all.length || (S.lieuxRefs || []).length) ? 'Aucune adresse dans cette catégorie.' : 'Aucune adresse.'; }
   const srcOf = (h) => h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
-  // Adresses de référence saisies à la main (écuries) — EN TÊTE de liste (avant les clients) pour être visibles + supprimables.
+  // Boutons de statut d'un LIEU (adresse physique) : liste noire / inactif, indépendants du statut du client. On ne crée
+  // ni ne supprime jamais d'adresse ici — les adresses proviennent des fiches client/cheval (actuelles + anciennes) ; on ne
+  // fait que changer leur statut. `data-st` = index dans la liste d'adresses de l'item, `data-to` = statut visé.
+  const stBtns = (idx, addr) => {
+    const st = addrStatusOf(addr);
+    return `<div class="ac-stbtns"><button class="btn small${st === 'noir' ? '' : ' danger'}" data-st="${idx}" data-to="noir" title="Refuser / réautoriser ce LIEU (indépendant du statut du client)">${st === 'noir' ? '✅ Réautoriser' : '⛔ Refuser ce lieu'}</button><button class="btn small" data-st="${idx}" data-to="inactif">${st === 'inactif' ? '✅ Réactiver le lieu' : '💤 Marquer inactif'}</button></div>`;
+  };
+  const wireSt = (el, list) => el.querySelectorAll('[data-st]').forEach((b) => b.addEventListener('click', () => { const a = list[+b.dataset.st]; const to = b.dataset.to; setAddrStatus(a, addrStatusOf(a) === to ? 'actif' : to); renderChevAddresses(); }));
+  // Adresses de référence héritées (anciennes saisies « à la main ») — conservées en MÉMOIRE, non supprimables ; seul le statut est modifiable.
   refs.forEach((lr) => {
     const stt = addrStatusOf(lr.addr);
     const b = stt === 'noir' ? ' <span class="badge badge-noir">⛔ liste noire</span>' : stt === 'inactif' ? ' <span class="badge">💤 inactif</span>' : '';
     const el = document.createElement('div'); el.className = 'list-item stack-act' + (stt !== 'actif' ? ' item-off' : '');
     const ecu = lr.ecuriePrivee ? '🔒 Écurie privée' : (lr.ecurieNom ? '🏠 ' + esc(lr.ecurieNom) : '📍 Adresse de référence');
     const chev = (lr.chevaux && lr.chevaux.length) ? ' · 🐴 ' + esc(lr.chevaux.join(', ')) : '';
-    el.innerHTML = `<div class="li-main"><b>${ecu}${b}</b><div class="li-sub">${esc(addrStr(lr.addr)) || '<i>adresse ?</i>'}${lr.clientRef ? ' · 👤 ' + esc(lr.clientRef) : ''}${chev}</div></div><div class="li-act li-act-col"><button class="btn small" data-lredit>Modifier</button><button class="btn small danger" data-lrdel>Supprimer</button></div>`;
-    el.querySelector('[data-lredit]').addEventListener('click', () => modalAddLieuRef(lr));
-    el.querySelector('[data-lrdel]').addEventListener('click', () => { if (!confirm('Supprimer cette adresse de référence ?')) return; S.lieuxRefs = (S.lieuxRefs || []).filter((x) => x.id !== lr.id); setAddrStatus(lr.addr, 'actif'); saveSettings(); renderChevAddresses(); });
+    el.innerHTML = `<div class="li-main"><b>${ecu}${b}</b><div class="li-sub">${esc(addrStr(lr.addr)) || '<i>adresse ?</i>'}${lr.clientRef ? ' · 👤 ' + esc(lr.clientRef) : ''}${chev}</div>${stBtns(0, lr.addr)}</div>`;
+    wireSt(el, [lr.addr]);
     box.appendChild(el);
   });
   shown.forEach((e) => {
@@ -3716,69 +3779,25 @@ function renderChevAddresses() {
     const specInputs = [], addrList = []; let body = '';
     e.addrs.forEach((grp) => {
       const chNoms = grp.chevaux.map((h) => h.nom || 'cheval').join(', ');
-      if (grp.hist) { body += `<div class="li-sub" style="margin-top:4px;opacity:.65">🕘 ${esc(addrStr(grp.addr))} <span class="badge">ancienne adresse (inactive)</span> · 🐴 ${esc(chNoms)}</div>`; return; } // référence historique (déménagement)
-      const noir = isAddrNoir(grp.addr); const gi = addrList.length; addrList.push(grp.addr);
-      body += `<div class="ac-ecurie"><div class="li-sub">📍 ${esc(addrStr(grp.addr))}${noir ? ' <span class="badge badge-noir">⛔ lieu refusé</span>' : ''} · 🐴 ${esc(chNoms)}</div><button class="btn small${noir ? '' : ' danger'}" data-ecurie="${gi}" title="Refuser / réautoriser ce LIEU (écurie), indépendamment du statut du client">${noir ? '✅ Réautoriser ce lieu' : '⛔ Refuser ce lieu'}</button></div>`;
+      const gi = addrList.length; addrList.push(grp.addr); const stA = addrStatusOf(grp.addr);
+      const bdg = stA === 'noir' ? ' <span class="badge badge-noir">⛔ lieu refusé</span>' : stA === 'inactif' ? ' <span class="badge">💤 lieu inactif</span>' : '';
+      if (grp.hist) { // ancienne adresse (déménagement) — conservée en mémoire, statut modifiable (base liste noire)
+        body += `<div class="ac-ecurie ac-hist"><div class="li-sub">🕘 ${esc(addrStr(grp.addr))} <span class="badge">ancienne adresse</span>${bdg} · 🐴 ${esc(chNoms)}</div>${stBtns(gi, grp.addr)}</div>`;
+        return;
+      }
+      body += `<div class="ac-ecurie"><div class="li-sub">📍 ${esc(addrStr(grp.addr))}${bdg} · 🐴 ${esc(chNoms)}</div>${stBtns(gi, grp.addr)}</div>`;
       grp.chevaux.filter((h) => srcOf(h) === 'specifique' && !h.addrPrivee).forEach((h) => { const idx = specInputs.length; specInputs.push(h); body += `<label class="ac-nom"><span class="li-sub">🐴 ${esc(h.nom || 'cheval')} — nom de l'adresse</span><input type="text" data-nom="${idx}" value="${esc(h.addrNom || '')}" placeholder="ex. Écurie du Nord"/></label>`; });
     });
     const el = document.createElement('div'); el.className = 'list-item stack-act' + (st !== 'actif' ? ' item-off' : '');
     el.innerHTML = `<div class="li-main"><b>👤 ${esc(fullName(c))}${c.societe ? ' — ' + esc(c.societe) : ''}${badge}</b>${body}</div>`;
-    el.querySelectorAll('[data-ecurie]').forEach((b) => b.addEventListener('click', () => { const a = addrList[+b.dataset.ecurie]; setAddrStatus(a, isAddrNoir(a) ? 'actif' : 'noir'); renderChevAddresses(); })); // refus de LIEU (écurie), séparé du statut client
+    wireSt(el, addrList); // statut de LIEU (liste noire / inactif), séparé du statut client — actuelles ET anciennes adresses
     el.querySelectorAll('[data-nom]').forEach((inp) => { const h = specInputs[+inp.dataset.nom]; inp.addEventListener('input', (ev) => { h.addrNom = ev.target.value; saveClients(); }); inp.addEventListener('change', () => renderChevAddresses()); });
     box.appendChild(el);
   });
 }
-// Ajout/édition d'une adresse de référence (écurie connue) : adresse + client de référence (facultatif) + statut (liste noire / inactif).
-function modalAddLieuRef(existing) {
-  const w = existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), addr: emptyAddr(), clientRef: '', status: 'noir', ecurieNom: '', ecuriePrivee: false, chevaux: [] };
-  w.addr = toAddr(w.addr); if (!Array.isArray(w.chevaux)) w.chevaux = [];
-  openModal(`<div class="modal-head"><b>📍 ${existing ? 'Modifier' : 'Ajouter'} une adresse de référence</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Enregistrez un lieu connu (écurie) même sans cheval actuel — pour garder une trace et être averti s'il réapparaît. Décochez les deux cases du bas pour l'ajouter dans les adresses <b>actives</b>.</p>
-    <label class="chk2"><input type="checkbox" id="lrEcuriePrivee" ${w.ecuriePrivee ? 'checked' : ''}/> 🔒 Écurie privée (pas de nom public)</label>
-    <label>Nom de l'écurie<input type="text" id="lrEcurieNom" value="${esc(w.ecurieNom || '')}" placeholder="ex. Écurie du Nord" ${w.ecuriePrivee ? 'disabled' : ''}/></label>
-    <div id="lrAddr"></div>
-    <label>Client (connu de l'app, facultatif)<input type="text" id="lrClient" list="lrClientList" value="${esc(w.clientRef || '')}" placeholder="Nom d'un client existant"/></label>
-    <datalist id="lrClientList">${clients.map((c) => `<option value="${esc(fullName(c))}"></option>`).join('')}</datalist>
-    <div id="lrChevaux" style="margin:6px 0"></div>
-    <label class="chk2"><input type="checkbox" id="lrNewClient"/> ➕ Créer un nouveau client (ouvre la fiche client)</label>
-    <label class="chk2"><input type="checkbox" id="lrNoir" ${w.status === 'noir' ? 'checked' : ''}/> ⛔ Refuser ce lieu (liste noire)</label>
-    <label class="chk2"><input type="checkbox" id="lrInactif" ${w.status === 'inactif' ? 'checked' : ''}/> 💤 Marquer inactif</label>
-    <div class="actions two"><button class="btn" id="lrCancel">Annuler</button><button class="btn primary" id="lrOk">Enregistrer</button></div>`);
-  mountAddress($('lrAddr'), w.addr, (a) => { w.addr = a; });
-  $('mX').onclick = closeModal; $('lrCancel').onclick = closeModal;
-  $('lrEcuriePrivee').addEventListener('change', (e) => { w.ecuriePrivee = e.target.checked; $('lrEcurieNom').disabled = e.target.checked; }); // privée → pas de nom public
-  $('lrEcurieNom').addEventListener('input', (e) => { w.ecurieNom = e.target.value; });
-  const refClient = () => clients.find((c) => w.clientRef && norm(fullName(c)) === norm(w.clientRef));
-  const renderLrChevaux = () => {
-    const box = $('lrChevaux'); if (!box) return; const cli = refClient();
-    const noms = cli ? (cli.chevaux || []).map((h) => h.nom).filter(Boolean) : [];
-    if (!noms.length) { box.innerHTML = cli ? '<p class="hint" style="margin:0">Ce client n\'a aucun cheval enregistré.</p>' : ''; return; }
-    if (!w.chevaux.length || w.chevaux.some((n) => !noms.includes(n))) w.chevaux = noms.slice(); // client (re)choisi → tous cochés par défaut
-    box.innerHTML = `<div class="li-sub" style="margin-bottom:2px">Chevaux concernés (au moins un) :</div>` + noms.map((n) => `<label class="chk" style="display:flex"><input type="checkbox" data-lrchev="${esc(n)}" ${w.chevaux.includes(n) ? 'checked' : ''}/> 🐴 ${esc(n)}</label>`).join('');
-    box.querySelectorAll('[data-lrchev]').forEach((inp) => inp.addEventListener('change', (e) => { const n = inp.dataset.lrchev; if (e.target.checked) { if (!w.chevaux.includes(n)) w.chevaux.push(n); } else w.chevaux = w.chevaux.filter((x) => x !== n); }));
-  };
-  $('lrClient').addEventListener('input', (e) => { w.clientRef = e.target.value; w.chevaux = []; renderLrChevaux(); });
-  renderLrChevaux();
-  $('lrNewClient').addEventListener('change', (e) => { // ferme cette modale et ouvre la création d'un client, avec l'adresse reprise automatiquement
-    if (!e.target.checked) return;
-    const a = w.addr || {}, pre = addrStr(a).trim() ? { rue: (a.rue || '') + (a.numero ? ' ' + a.numero : ''), cpVille: [a.cp, a.localite].filter(Boolean).join(' ') } : null;
-    closeModal(); editClient(null, null, '', pre);
-  });
-
-  $('lrNoir').addEventListener('change', (e) => { if (e.target.checked) $('lrInactif').checked = false; }); // statuts exclusifs
-  $('lrInactif').addEventListener('change', (e) => { if (e.target.checked) $('lrNoir').checked = false; });
-  $('lrOk').addEventListener('click', () => {
-    if (!addrStr(w.addr).trim()) { alert('Renseignez l\'adresse.'); return; }
-    if (!w.ecuriePrivee && !w.ecurieNom.trim() && !w.clientRef.trim()) { alert('Donnez un nom d\'écurie, ou cochez « Écurie privée », ou choisissez un client de référence.'); return; }
-    if (refClient() && (refClient().chevaux || []).some((h) => h.nom) && !w.chevaux.length) { alert('Choisissez au moins un cheval pour ce client de référence.'); return; }
-    w.status = $('lrNoir').checked ? 'noir' : ($('lrInactif').checked ? 'inactif' : 'actif');
-    if (!Array.isArray(S.lieuxRefs)) S.lieuxRefs = [];
-    if (existing && addrKey(existing.addr) !== addrKey(w.addr) && !(S.lieuxRefs || []).some((x) => x.id !== w.id && addrKey(x.addr) === addrKey(existing.addr))) setAddrStatus(existing.addr, 'actif'); // adresse modifiée → nettoie l'ancien statut orphelin
-    const i = S.lieuxRefs.findIndex((x) => x.id === w.id); if (i >= 0) S.lieuxRefs[i] = w; else S.lieuxRefs.push(w);
-    setAddrStatus(w.addr, w.status); // répercute le statut sur le LIEU → badge dans les tournées si l'adresse réapparaît
-    saveSettings(); closeModal(); renderChevAddresses();
-  });
-}
+// (Retiré) Ajout d'une adresse de référence « nue » : on ne crée plus d'adresse hors fiche client/cheval. Toute adresse
+// provient d'un client + cheval ; on ne fait qu'en changer le statut (liste noire / inactif) depuis Gestion → Adresses chevaux.
+// Les entrées historiques `S.lieuxRefs` restent affichées en lecture seule (mémoire), statut modifiable, jamais supprimées.
 // ================= GESTION → MES ADRESSES (départ) =================
 // Identité pro (documents) : coordonnées d'activité, dans Gestion → Configuration activité.
 function renderProIdent() {
@@ -4378,6 +4397,15 @@ function addrStatusOf(a) { const k = addrKey(a); return (k && S.addrStatus && S.
 function setAddrStatus(a, st) { const k = addrKey(a); if (!k) return; if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {}; if (st === 'actif') delete S.addrStatus[k]; else S.addrStatus[k] = st; saveSettings(); }
 const isAddrNoir = (a) => addrStatusOf(a) === 'noir';
 const isAddrInactif = (a) => addrStatusOf(a) === 'inactif';
+// Badge interactif du statut d'un LIEU, affiché dans une fiche (section client / section cheval) à l'endroit où l'adresse
+// refusée est détectée. Rouge = liste noire, discret = inactif. Cliquable → amène au champ adresse pour en encoder une nouvelle.
+function addrStatusBadgeHtml(addr) {
+  if (!addr || !addrStr(addr).trim()) return '';
+  const st = addrStatusOf(addr);
+  if (st === 'noir') return '<button type="button" class="addr-badge addr-badge-noir" data-addrfix>⛔ Adresse en liste noire — cliquez pour encoder une nouvelle adresse</button>';
+  if (st === 'inactif') return '<button type="button" class="addr-badge addr-badge-off" data-addrfix>💤 Lieu inactif — cliquez pour encoder une nouvelle adresse</button>';
+  return '';
+}
 // Toutes les adresses de chevaux répertoriées, agrégées par adresse physique.
 function chevalAddresses() {
   const map = {};
