@@ -770,6 +770,7 @@
         <button class="subtab" data-rsub="analyse">Analyse</button>
         <button class="subtab" data-rsub="statistiques">Statistiques</button>
         <button class="subtab" data-rsub="theme">Thème</button>
+        <button class="subtab" data-rsub="faq">FAQ</button>
         <button class="subtab" data-rsub="calcul">Calcul</button>
         <button class="subtab" data-rsub="changelog">Changelog</button>
         <button class="subtab" data-rsub="sauvegarde">Sauvegarde</button>
@@ -986,6 +987,72 @@
       </details>
     </section>
     </div><!-- /rsub-synchro -->
+
+    <div id="rsub-faq" class="subpanel">
+      <p class="hint">Comment l'app fonctionne, étape par étape : ce dont elle tient compte et à quel moment. (Les calculs de facture/km sont détaillés dans l'onglet « Calcul ».)</p>
+
+      <section class="card"><h2>1 · Les tournées</h2>
+        <p>Une tournée a <b>trois états</b> automatiques selon sa date :</p>
+        <div class="cr-line">• <b>À venir</b> — vous la préparez.</div>
+        <div class="cr-line">• <b>Aujourd'hui</b> — le jour J : paiement &amp; clôture deviennent possibles.</div>
+        <div class="cr-line">• <b>Clôturée</b> — figée (lecture seule), elle ne bouge plus.</div>
+        <p style="margin-top:8px">Le <b>badge</b> d'une tournée non clôturée résume sa <b>préparation</b> (pas le paiement) :</p>
+        <div class="cr-line">• <b>✓ prête</b> — adresses localisées, itinéraire calculé, au moins un cheval présent par client, et une heure de RDV par client.</div>
+        <div class="cr-line">• <b>⚠ à compléter</b> — il manque un de ces éléments. <b>Touchez le badge</b> : une fenêtre liste ce qui reste (Préparation / Fin de tournée) sans ouvrir la tournée.</div>
+        <div class="cr-line">• <b>🔄 recalculer itinéraire</b> / <b>heures à revoir</b> — un changement d'ordre/adresse a rendu des temps de route ou des heures périmés.</div>
+        <p class="hint">La <b>préparation</b> (avant la tournée) et la <b>clôture</b> (le jour J : paiement) sont deux stades <b>distincts</b> — une tournée peut être « prête » tout en n'étant pas encore clôturée.</p></section>
+
+      <section class="card"><h2>2 · Arrêts, clients, chevaux</h2>
+        <div class="cr-line">• <b>Un arrêt = une adresse.</b> Plusieurs clients peuvent partager un arrêt (même écurie) ; chacun garde sa facture et son heure.</div>
+        <div class="cr-line">• <b>L'heure de RDV est par client</b> (pas par arrêt) — elle alimente l'agenda. L'ordre des clients d'un même arrêt suit leur heure.</div>
+        <div class="cr-line">• <b>Les numéros d'arrêt</b> = l'ordre de passage (modifiable : glisser, ou changer le numéro).</div>
+        <div class="cr-line">• <b>Chevaux</b> : chacun peut avoir sa propre adresse (client / société / spécifique). Un cheval déménage → l'ancienne adresse est <b>conservée en mémoire</b> (jamais supprimée).</div>
+        <div class="cr-line">• <b>Lieux refusés</b> : une adresse passée en « liste noire » ou « inactif » (Gestion → Adresses chevaux) affiche un badge rouge/gris dans la fiche et sur l'arrêt concerné, pour vous avertir.</div></section>
+
+      <section class="card"><h2>3 · Actes &amp; articles</h2>
+        <div class="cr-line">• <b>Parage &amp; équilibrage</b> : l'acte de base ; il déclenche aussi le <b>matériel</b> (consommable).</div>
+        <div class="cr-line">• <b>Pathologies</b> (fourbure / NPAS / infection), <b>cheval difficile</b>, <b>cheval lourd</b> : suppléments par cheval, chacun en ligne séparée.</div>
+        <div class="cr-line">• <b>Photo → planche</b> : cocher « Photo » facture le tarif d'angles par type de planche (parage/ferrage/déferrage…). La <b>radio</b> est suivie mais jamais facturée.</div>
+        <div class="cr-line">• <b>Articles manuels</b> : produits/prestations ajoutés à la main (ex. plaque orthopédique).</div>
+        <div class="cr-line">• <b>Type d'arrêt</b> : Tournée / Visite / Urgence → change le tarif au km du <b>déplacement</b> (pas les actes).</div>
+        <p class="hint">« Offrir » un acte le met à 0 € en gardant la trace. Détail chiffré : onglet « Calcul ».</p></section>
+
+      <section class="card"><h2>4 · RDV &amp; paiement</h2>
+        <div class="cr-line">• <b>Prendre un RDV</b> : la <b>date</b> puis l'<b>heure</b> sont obligatoires. L'heure structure l'arrêt et l'agenda.</div>
+        <div class="cr-line">• <b>Paiement</b> (jour J uniquement) : <b>liquide</b> ou <b>virement</b> ; option <b>paiement partiel</b> (reste à percevoir → « impayé » reporté à la prochaine tournée).</div>
+        <div class="cr-line">• <b>Réduction liquide</b> : appliquée automatiquement aux lignes éligibles quand le client paie en liquide (jamais en virement/facture).</div>
+        <div class="cr-line">• <b>Clôture d'un arrêt</b> : possible une fois chaque client de l'arrêt payé/validé. La tournée se clôture quand tous les arrêts sont finalisés.</div>
+        <p class="hint">Paiement &amp; RDV sont <b>grisés avant le jour J</b> : ils s'activent le jour de la tournée.</p></section>
+
+      <section class="card"><h2>5 · Prêts</h2>
+        <p>Le bouton « ＋ Prêt » (par client) note un objet prêté. Il est <b>rappelé</b> aux prochaines tournées de ce client, sous les articles (hors facture), avec « Maintenir » ou « Récupéré ». Une fois récupéré, la mémoire du prêt disparaît. C'est une fonction <b>liée au client</b>, indépendante du montant de la tournée.</p></section>
+
+      <section class="card"><h2>6 · Planches</h2>
+        <div class="cr-line">• <b>Trois types</b> : planche de <b>contact</b> (grille angles×membres), <b>avant/après</b>, et <b>comparaison</b> de documents.</div>
+        <div class="cr-line">• <b>Les photos ne sont JAMAIS enregistrées</b> dans l'app (ni synchronisées) : elles servent à générer le PDF, puis sont oubliées.</div>
+        <div class="cr-line">• <b>Historique</b> : seules les <b>métadonnées</b> de chaque planche générée sont mémorisées (client, cheval, date, type, cycle, modèle) — pour reprendre une planche précédente.</div>
+        <p class="hint">Les planches restent accessibles indépendamment d'une tournée (Gestion → Planche, ou Compte rendu photo).</p></section>
+
+      <section class="card"><h2>7 · ⭐ Programmer le suivi (le RDV suivant)</h2>
+        <p>Après un parage, l'app propose automatiquement le <b>prochain RDV</b> :</p>
+        <div class="cr-line">• <b>Cycle</b> : par défaut à <b>5 semaines</b> (réglable), le même jour de la semaine.</div>
+        <div class="cr-line">• <b>RDV commun</b> : tous les chevaux du client sur la même date, ou <b>date différente</b> / <b>ne pas replacer</b> par cheval.</div>
+        <div class="cr-line">• <b>Suivi pathologique</b> : un cheval en fourbure/NPAS/infection a un <b>2ᵉ RDV rapproché</b> distinct (récurrence propre), avec « Maintenir » ou « Arrêter ».</div>
+        <div class="cr-line">• La tournée de la date choisie est <b>créée si besoin</b>, sinon le client/cheval y est <b>ajouté</b>. Date et heure obligatoires.</div>
+        <p class="hint">Une alerte prévient si le cheval a déjà un RDV à moins de 5 semaines.</p></section>
+
+      <section class="card"><h2>8 · ⭐ Itinéraire &amp; carte</h2>
+        <div class="cr-line">• <b>Itinéraire estimé</b> : la carte/API mesure la boucle réelle domicile → arrêts → domicile → <b>km, durée estimée et facture</b>. Il se (re)calcule tout seul (adresses localisées automatiquement).</div>
+        <div class="cr-line">• <b>Temps réel</b> (bouton « Route » / « Étape ») : ce que vous <b>chronométrez</b> réellement, pour les statistiques de temps de travail. C'est <b>indépendant</b> de l'itinéraire estimé.</div>
+        <div class="cr-line">• <b>Carte interactive</b> : départ/retour 🏠 + arrêts numérotés + tracé.</div>
+        <div class="cr-line">• <b>Recalcul CIBLÉ</b> : changer l'ordre ou une adresse ne périme que les <b>tronçons concernés</b> (« 🔄 à recalculer »), et le retour seulement si le dernier arrêt change. Changer une simple <b>heure</b> ne touche <b>aucune</b> route.</div></section>
+
+      <section class="card"><h2>9 · ⭐ Agenda de l'app &amp; Google Agenda</h2>
+        <div class="cr-line">• L'app tient un <b>agenda</b> interne (RDV à venir, tournées) et peut <b>importer</b> votre Google Agenda.</div>
+        <div class="cr-line">• <b>Miroir automatique</b> : quand un RDV est pris/modifié (avec heure), il est <b>poussé vers Google Agenda</b> — <b>1 événement par client</b>, avec son heure et son adresse. Rien à faire manuellement.</div>
+        <div class="cr-line">• Vous pouvez donc <b>travailler en parallèle</b> dans l'app et dans Google Agenda ; l'app se charge de refléter ses RDV côté Google.</div>
+        <p class="hint">Le push automatique nécessite d'avoir activé la synchro Google (Réglages → Synchro / Calendrier) et une reconnexion Google la première fois.</p></section>
+    </div>
 
     <div id="rsub-calcul" class="subpanel"><div id="calculBody"></div></div>
 

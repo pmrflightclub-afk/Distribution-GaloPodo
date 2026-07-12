@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.71';
+const APP_VERSION = '1.2.72';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.72', date: '2026-07-12',
+    ajouts: [
+      'Nouvelle page « FAQ » (Réglages → FAQ, avant « Calcul ») : explique comment l\'app fonctionne, étape par étape — tournées & statuts, arrêts/clients/chevaux, actes & articles, RDV & paiement, prêts, planches, programmer le suivi, itinéraire estimé vs réel & carte, et le miroir automatique avec Google Agenda. La page « Calcul » reste dédiée au détail des montants.',
+    ],
+  },
   {
     version: '1.2.71', date: '2026-07-12',
     ajouts: [
