@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.77';
+const APP_VERSION = '1.2.78';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.78', date: '2026-07-12',
+    ajouts: [
+      'Page FAQ (Réglages → FAQ) complétée : nouvelle section « Décaler & intercaler des rendez-vous » (changer une heure, intercaler un RDV avec le délai visite+trajet et le bouton trajet réel, supprimer/réorganiser → horaires à revoir, et le bouton « Prévenir » + SMS). La section « Programmer le suivi » précise l\'intercalation dans une tournée déjà prévue.',
+    ],
+  },
   {
     version: '1.2.77', date: '2026-07-12',
     ajouts: [

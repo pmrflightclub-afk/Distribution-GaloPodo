@@ -1046,6 +1046,7 @@
         <div class="cr-line">• <b>RDV commun</b> : tous les chevaux du client sur la même date, ou <b>date différente</b> / <b>ne pas replacer</b> par cheval.</div>
         <div class="cr-line">• <b>Suivi pathologique</b> : un cheval en fourbure/NPAS/infection a un <b>2ᵉ RDV rapproché</b> distinct (récurrence propre), avec « Maintenir » ou « Arrêter ».</div>
         <div class="cr-line">• La tournée de la date choisie est <b>créée si besoin</b>, sinon le client/cheval y est <b>ajouté</b>. Date et heure obligatoires.</div>
+        <div class="cr-line">• Si cette tournée <b>existe déjà</b>, le RDV s'<b>intercale</b> à son heure et décale les suivants (voir §10 « Décaler &amp; intercaler »).</div>
         <p class="hint">Une alerte prévient si le cheval a déjà un RDV à moins de 5 semaines.</p></section>
 
       <section class="card"><h2>8 · ⭐ Itinéraire &amp; carte</h2>
@@ -1059,6 +1060,14 @@
         <div class="cr-line">• <b>Miroir automatique</b> : quand un RDV est pris/modifié (avec heure), il est <b>poussé vers Google Agenda</b> — <b>1 événement par client</b>, avec son heure et son adresse. Rien à faire manuellement.</div>
         <div class="cr-line">• Vous pouvez donc <b>travailler en parallèle</b> dans l'app et dans Google Agenda ; l'app se charge de refléter ses RDV côté Google.</div>
         <p class="hint">Le push automatique nécessite d'avoir activé la synchro Google (Réglages → Synchro / Calendrier) et une reconnexion Google la première fois.</p></section>
+
+      <section class="card"><h2>10 · ⭐ Décaler &amp; intercaler des rendez-vous</h2>
+        <p>Une tournée prévue reste <b>cohérente dans le temps</b> : dès qu'un changement ajoute ou déplace du temps de travail, l'app propose d'ajuster les heures des rendez-vous <b>suivants</b>. Les arrêts <b>déjà clôturés</b> le jour J ne sont jamais touchés.</p>
+        <div class="cr-line">• <b>Changer une heure</b> : si vous avancez ou retardez le RDV d'un client, une fenêtre propose de <b>décaler d'autant</b> les rendez-vous suivants. Vous confirmez, ajustez le décalage, ou choisissez « ne rien décaler ».</div>
+        <div class="cr-line">• <b>Intercaler un RDV</b> — quand vous faites <b>＋ Client</b>, ou quand « programmer le suivi » tombe sur une tournée <b>déjà prévue</b> à cette date : une fenêtre « Intercaler » place chaque arrêt ajouté <b>à son heure</b> et décale les suivants du <b>délai</b> que vous estimez (<b>visite + trajet</b>). Plusieurs arrêts d'un coup → décalages <b>cumulés</b>, réglés un par un. Un bouton <b>« 🧭 Voir le trajet réel »</b> ouvre Google Maps pour l'étape (nouvel arrêt → arrêt suivant) afin d'affiner le délai.</div>
+        <div class="cr-line">• <b>Supprimer un arrêt / réorganiser l'ordre</b> : les heures suivantes passent <b>« à revoir »</b> et une fenêtre s'ouvre pour les corriger (tout décaler d'un coup, ou heure par heure).</div>
+        <div class="cr-line">• <b>Prévenir le client</b> : dès qu'une heure a été décalée, un badge <b>« 🕘 heure modifiée »</b> et un bouton orange <b>« 🔔 Prévenir »</b> apparaissent sur le client. Le bouton ouvre un <b>SMS pré-rempli</b> (ancienne → nouvelle heure) avec un bouton <b>Copier</b> ; après « ✓ Client prévenu » il passe au <b>vert</b>. Il repasse orange si l'heure change à nouveau. Le modèle SMS « prévenir » se règle dans <b>Gestion → SMS</b>.</div>
+        <p class="hint">Après un décalage ou une intercalation, l'<b>itinéraire</b> (km/facture) et les heures dans <b>Google Agenda</b> se mettent à jour automatiquement.</p></section>
     </div>
 
     <div id="rsub-calcul" class="subpanel"><div id="calculBody"></div></div>
