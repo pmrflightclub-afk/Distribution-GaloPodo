@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.67';
+const APP_VERSION = '1.2.68';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.68', date: '2026-07-12',
+    corrections: [
+      'Heure d\'un rendez-vous : le réglage s\'ouvre maintenant dans une VRAIE fenêtre au centre de l\'écran (plus le petit menu qui se refermait tout seul). Deux molettes « heure » et « minute » à faire tourner, puis « Valider ». Boutons « Effacer » (vider l\'heure) et « Annuler ».',
+    ],
+  },
   {
     version: '1.2.67', date: '2026-07-12',
     corrections: [
@@ -2987,7 +2993,7 @@ document.addEventListener('focusout', (e) => {
 let _gpSelOpen = null; // wrapper .gp-sel actuellement ouvert (un seul à la fois)
 function gpSelLabel(sel) { const o = sel.options[sel.selectedIndex]; return o ? (o.textContent || '').trim() : ''; }
 function gpSelSync(sel) { const w = sel._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpSelLabel(sel) || '—'; }
-function gpSelClose() { if (!_gpSelOpen) return; gpResetPop(_gpSelOpen); _gpSelOpen.classList.remove('open'); _gpSelOpen._gpTouched = false; _gpSelOpen = null; window.removeEventListener('scroll', gpOnScrollClose, true); }
+function gpSelClose() { if (!_gpSelOpen) return; gpResetPop(_gpSelOpen); _gpSelOpen.classList.remove('open'); _gpSelOpen = null; window.removeEventListener('scroll', gpOnScrollClose, true); }
 // Ferme au scroll de PAGE seulement : un scroll qui provient de l'intérieur du popup (molette d'heure, liste d'options)
 // ne doit PAS refermer le menu (sinon le picker « s'affiche et part aussitôt » dès qu'on règle l'heure).
 function gpOnScrollClose(e) { if (_gpSelOpen && e && e.target && e.target.nodeType === 1 && _gpSelOpen.contains(e.target)) return; gpSelClose(); }
@@ -3076,40 +3082,47 @@ function gpTimeLabel(inp) { return /^\d{1,2}:\d{2}$/.test(inp.value || '') ? inp
 function gpTimeSync(inp) { const w = inp._gpWrap; if (!w) return; const v = w.querySelector('.gp-sel-val'); if (v) v.textContent = gpTimeLabel(inp); }
 // Molette (roue) : deux colonnes défilantes h · min séparées par « : ». On fait glisser les chiffres de haut en bas
 // (défilement tactile natif + accroche « scroll-snap ») ; la valeur centrée dans la bande = valeur choisie.
-function gpTimeBuildPop(w) {
-  const inp = w._gpInp, p = gpTimeParse(inp.value), pop = w.querySelector('.gp-sel-pop');
-  const h0 = p.h == null ? 0 : p.h, m0 = p.mn == null ? 0 : p.mn;
-  const col = (type, n, cur) => { let s = ''; for (let i = 0; i < n; i++) s += `<div class="gp-roll-opt${i === cur ? ' sel' : ''}" data-t="${type}" data-v="${i}">${gpPad2(i)}</div>`; return s; };
-  pop.innerHTML = `<div class="gp-time-hd"><span>heure</span><span>min</span></div>`
-    + `<div class="gp-roll-wrap"><div class="gp-roll" data-col="h">${col('h', 24, h0)}</div><span class="gp-roll-colon">:</span><div class="gp-roll" data-col="m">${col('m', 60, m0)}</div><div class="gp-roll-band"></div></div>`;
-}
+function gpTimeCol(n, cur) { let s = ''; for (let i = 0; i < n; i++) s += `<div class="gp-roll-opt${i === cur ? ' sel' : ''}" data-v="${i}">${gpPad2(i)}</div>`; return s; }
 function gpRollItemH(roll) { const o = roll.querySelector('.gp-roll-opt'); return (o && o.offsetHeight) || 40; }
 function gpRollCenter(roll, idx, smooth) { const ih = gpRollItemH(roll); try { roll.scrollTo({ top: idx * ih, behavior: smooth ? 'smooth' : 'auto' }); } catch { roll.scrollTop = idx * ih; } }
 function gpRollIndex(roll) { const ih = gpRollItemH(roll), n = roll.querySelectorAll('.gp-roll-opt').length; return Math.max(0, Math.min(n - 1, Math.round(roll.scrollTop / ih))); }
-function gpRollApply(w, roll, fireChange) { // lit la valeur centrée, met à jour le natif + surbrillance + dispatch
-  const inp = w._gpInp, p = gpTimeParse(inp.value); let h = p.h == null ? 0 : p.h, mn = p.mn == null ? 0 : p.mn;
-  const idx = gpRollIndex(roll); if (roll.dataset.col === 'h') h = idx; else mn = idx;
-  roll.querySelectorAll('.gp-roll-opt').forEach((o, i) => o.classList.toggle('sel', i === idx));
-  inp.value = gpPad2(h) + ':' + gpPad2(mn); // setter → met à jour le libellé HH:MM
-  inp.dispatchEvent(new Event('input', { bubbles: true }));
-  if (fireChange) inp.dispatchEvent(new Event('change', { bubbles: true }));
+// Sélecteur d'heure = MODALE centrée (dialog) avec deux roues h · min glissables. Elle se superpose à toute fenêtre déjà
+// ouverte (élément appendu au body, z-index élevé) → ni ancrage sous le champ, ni fermeture au scroll : on règle les deux
+// roues tranquillement puis « Valider ». Le champ natif (masqué) reste la source de vérité, mis à jour seulement à Valider.
+let _gpTimeModal = null, _gpTimeInp = null;
+function gpTimeModalClose() { if (_gpTimeModal) _gpTimeModal.style.display = 'none'; _gpTimeInp = null; }
+function gpTimeModalCommit(clear) {
+  if (_gpTimeInp) {
+    if (clear) _gpTimeInp.value = '';
+    else { const hi = gpRollIndex(_gpTimeModal.querySelector('[data-col="h"]')), mi = gpRollIndex(_gpTimeModal.querySelector('[data-col="m"]')); _gpTimeInp.value = gpPad2(hi) + ':' + gpPad2(mi); }
+    _gpTimeInp.dispatchEvent(new Event('input', { bubbles: true })); _gpTimeInp.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  gpTimeModalClose();
 }
-function gpTimeOpen(w) {
-  const inp = w._gpInp; if (!inp || inp.disabled) return;
-  if (_gpSelOpen && _gpSelOpen !== w) gpSelClose();
-  gpTimeBuildPop(w); w.classList.add('open'); w._gpTouched = false; _gpSelOpen = w; gpAfterOpen(w);
-  const p = gpTimeParse(inp.value), init = { h: p.h == null ? 0 : p.h, m: p.mn == null ? 0 : p.mn };
-  w.querySelectorAll('.gp-roll').forEach((roll) => {
-    requestAnimationFrame(() => gpRollCenter(roll, init[roll.dataset.col], false)); // centre la valeur courante à l'ouverture
-    const touch = () => { w._gpTouched = true; };
-    roll.addEventListener('pointerdown', touch); roll.addEventListener('wheel', touch, { passive: true }); roll.addEventListener('keydown', touch);
-    roll.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const o = e.target.closest('.gp-roll-opt'); if (o) { w._gpTouched = true; gpRollCenter(roll, +o.dataset.v, true); } }); // tap sur un chiffre → il vient au centre (preventDefault : neutralise le clic synthétique du <label> parent)
-    roll.addEventListener('scroll', () => { // ne valide QUE si l'utilisateur a agi (pas au recentrage programmatique d'ouverture → n'écrase pas une heure vide par 00:00)
-      if (!w._gpTouched) return;
-      if (roll._raf) cancelAnimationFrame(roll._raf);
-      roll._raf = requestAnimationFrame(() => gpRollApply(w, roll, true)); // met à jour + enregistre à chaque cran (pas de perte si on ferme aussitôt)
-    });
+function gpTimeModalEl() {
+  if (_gpTimeModal) return _gpTimeModal;
+  const bd = document.createElement('div'); bd.className = 'gp-tm-backdrop'; bd.style.display = 'none';
+  bd.innerHTML = `<div class="gp-tm-dialog" role="dialog" aria-modal="true"><div class="gp-tm-title">Choisir l'heure</div>`
+    + `<div class="gp-roll-wrap"><div class="gp-roll" data-col="h"></div><span class="gp-roll-colon">:</span><div class="gp-roll" data-col="m"></div><div class="gp-roll-band"></div></div>`
+    + `<div class="gp-tm-actions"><button type="button" class="btn" data-tm="clear">Effacer</button><button type="button" class="btn" data-tm="cancel">Annuler</button><button type="button" class="btn primary" data-tm="ok">Valider</button></div></div>`;
+  document.body.appendChild(bd);
+  bd.addEventListener('click', (e) => { if (e.target === bd) gpTimeModalClose(); }); // clic sur le fond = annuler
+  bd.querySelector('[data-tm="cancel"]').addEventListener('click', gpTimeModalClose);
+  bd.querySelector('[data-tm="ok"]').addEventListener('click', () => gpTimeModalCommit(false));
+  bd.querySelector('[data-tm="clear"]').addEventListener('click', () => gpTimeModalCommit(true));
+  bd.querySelectorAll('.gp-roll').forEach((roll) => {
+    roll.addEventListener('scroll', () => { if (roll._raf) cancelAnimationFrame(roll._raf); roll._raf = requestAnimationFrame(() => { const idx = gpRollIndex(roll); roll.querySelectorAll('.gp-roll-opt').forEach((o, i) => o.classList.toggle('sel', i === idx)); }); });
+    roll.addEventListener('click', (e) => { const o = e.target.closest('.gp-roll-opt'); if (o) gpRollCenter(roll, +o.dataset.v, true); }); // tap sur un chiffre → il vient au centre
   });
+  _gpTimeModal = bd; return bd;
+}
+function gpTimeModalOpen(inp) {
+  const bd = gpTimeModalEl(); _gpTimeInp = inp;
+  const p = gpTimeParse(inp.value), h0 = p.h == null ? 8 : p.h, m0 = p.mn == null ? 0 : p.mn; // heure vide → défaut 08:00 (modifiable), appliqué seulement si « Valider »
+  const rollH = bd.querySelector('[data-col="h"]'), rollM = bd.querySelector('[data-col="m"]');
+  rollH.innerHTML = gpTimeCol(24, h0); rollM.innerHTML = gpTimeCol(60, m0);
+  bd.style.display = 'flex';
+  requestAnimationFrame(() => { gpRollCenter(rollH, h0, false); gpRollCenter(rollM, m0, false); });
 }
 function enhanceTime(inp) {
   if (!inp || inp.dataset.gpEnhanced) return;
@@ -3117,12 +3130,11 @@ function enhanceTime(inp) {
   const w = document.createElement('div'); w.className = 'gp-sel gp-time';
   const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'gp-sel-btn';
   btn.setAttribute('aria-haspopup', 'dialog'); btn.setAttribute('aria-disabled', inp.disabled ? 'true' : 'false');
-  btn.innerHTML = '<span class="gp-sel-val"></span><span class="gp-sel-car">▾</span>';
-  const pop = document.createElement('div'); pop.className = 'gp-sel-pop';
-  w.appendChild(btn); w.appendChild(pop);
+  btn.innerHTML = '<span class="gp-sel-val"></span><span class="gp-sel-car">🕒</span>';
+  w.appendChild(btn);
   inp.parentNode.insertBefore(w, inp); w.appendChild(inp);
   w._gpInp = inp; inp._gpWrap = w; gpTimeSync(inp);
-  btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (inp.disabled) return; w.classList.contains('open') ? gpSelClose() : gpTimeOpen(w); });
+  btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (inp.disabled) return; gpTimeModalOpen(inp); });
   inp.addEventListener('change', () => gpTimeSync(inp));
   const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
   if (desc && desc.get && desc.set) Object.defineProperty(inp, 'value', { configurable: true, get() { return desc.get.call(this); }, set(v) { desc.set.call(this, v); gpTimeSync(this); } });
