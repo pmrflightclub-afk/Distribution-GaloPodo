@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.55';
+const APP_VERSION = '1.2.56';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.56', date: '2026-07-12',
+    ajouts: [
+      'Planche — images : nouveau choix « ⛶ Remplir les cases » (par défaut) / « 🖼 Image entière » dans l\'écran de création. « Remplir » agrandit chaque photo pour occuper toute sa case (fini les bandes blanches ; l\'excédent est rogné — ajustable image par image via « Éditer les images »). « Image entière » garde la photo complète (des bandes blanches restent possibles quand la photo n\'a pas la forme de la case).',
+    ],
+    corrections: [
+      'Planche PDF — en-tête : votre logo est désormais aligné au bord droit de la grille (bien affiché, non rogné, sans déborder) ; votre nom reste centré juste dessous.',
+      'Planche PDF — pied de page : le logo GaloPodo est agrandi et collé au texte (société · contact · TVA), l\'ensemble centré — fini le petit logo isolé en bas à gauche.',
+    ],
+  },
   {
     version: '1.2.55', date: '2026-07-12',
     corrections: [
@@ -1689,6 +1699,8 @@ if (!Array.isArray(S.planche.stades)) S.planche.stades = ['Ferrage', 'Parage', '
 else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', 'Déferrage', 'Après parage'])) S.planche.stades = ['Ferrage', 'Parage', 'Déferrage', 'Radio'];
 // Cadrillage d'aide au cadrage des images (mode édition) : marges en cm (gauche/droite liées + haut/bas). Aperçu seulement — jamais dans le PDF.
 if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 };
+// Ajustement des images dans les cases : 'cover' = remplir (rogne l'excédent, pas de bande blanche) · 'contain' = image entière (bandes blanches si proportions ≠).
+if (S.planche.fitMode !== 'contain' && S.planche.fitMode !== 'cover') S.planche.fitMode = 'cover';
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
 // { data:dataURL, zoom:multiplicateur, x/y:décalage en FRACTION du cadre (pan) } — cadrage repris à l'identique dans l'en-tête PDF.
 if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
@@ -6488,9 +6500,9 @@ async function planchePageCanvas(pi) {
   plChevalLines(st).forEach((l) => { ctx.font = (/^Âge/.test(l) ? 'bold ' : '') + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, l, zhW), zhCx, vy); vy += fs(3.1); }); // ligne « Âge » en gras
   if (st.note) { ctx.font = 'italic ' + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, 'Note : ' + st.note, zhW), zhCx, vy); }
   // Zone pro (droite) : logo en haut à droite + NOM du pro centré dessous (gras). La société est reportée dans le pied de page.
-  const zpX = px(g.margin + g.gridW * 0.68), zpW = px(g.gridW * 0.32), zpCx = zpX + zpW / 2; let py = topY;
-  if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(10), lw = Math.min(zpW, lg.width * (lh / lg.height)); ctx.drawImage(lg, zpCx - lw / 2, py, lw, lh); py += lh + fs(1.5); } } // logo CENTRÉ dans la zone (plus collé au bord droit → plus rogné par la marge de page)
-  { const p = S.proIdent || {}; const proName = [p.prenom, p.nom].filter(Boolean).join(' '); if (proName) { ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.1) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, proName, zpW), zpCx, py); } } // nom centré, sous le logo
+  const zpW = px(g.gridW * 0.32), rightEdge = px(g.pageW - g.margin); let py = topY, logoCx = rightEdge - zpW / 2;
+  if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(10), lw = Math.min(zpW, lg.width * (lh / lg.height)); const lx = rightEdge - lw; ctx.drawImage(lg, lx, py, lw, lh); logoCx = lx + lw / 2; py += lh + fs(1.5); } } // logo aligné au BORD DROIT de la grille (drawImage met à l'échelle → jamais rogné ; lw ≤ zpW → ne déborde pas)
+  { const p = S.proIdent || {}; const proName = [p.prenom, p.nom].filter(Boolean).join(' '); if (proName) { ctx.font = 'bold ' + fs(3.1) + 'px sans-serif'; const tw = Math.min(ctx.measureText(proName).width, zpW); let cxT = logoCx; if (cxT + tw / 2 > rightEdge) cxT = rightEdge - tw / 2; ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.fillText(plTrunc(ctx, proName, zpW), cxT, py); } } // nom centré SOUS le logo (recalé vers la gauche s'il déborderait à droite)
   ctx.textAlign = 'left';
   // Grille (cellules fixes)
   const gx = px(g.gridLeft), gtop = px(g.gridTop), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH);
@@ -6506,14 +6518,17 @@ async function planchePageCanvas(pi) {
     ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.fillText(plTrunc(ctx, plRowShort(r), labelW - 4), gx + labelW / 2, ry + rowH / 2 - fs(1.6));
     angles.forEach((a, ci) => {
       const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (!im) return;
-      const s = Math.min(colW / im.width, rowH / im.height), dw = im.width * s, dh = im.height * s; // base « contain »
+      const cover = st.fitMode !== 'contain'; // défaut : « remplir » (cover) → pas de bande blanche ; sinon « image entière » (contain)
+      const s = cover ? Math.max(colW / im.width, rowH / im.height) : Math.min(colW / im.width, rowH / im.height);
+      const dw = im.width * s, dh = im.height * s;
       const T = st.cellT && st.cellT[plCellKey(pi, r, ci)];
-      if (T) { // même transfo que l'éditeur (translate·scale·rotate, origine centre), rognée à la case
-        ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip();
+      ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip(); // toujours rogné à la case (cover peut déborder)
+      if (T) { // même transfo que l'éditeur (translate·scale·rotate, origine centre)
         ctx.translate(cx + colW / 2 + (T.x || 0) * colW, ry + rowH / 2 + (T.y || 0) * rowH);
         ctx.scale(T.zoom || 1, T.zoom || 1); ctx.rotate((T.rot || 0) * Math.PI / 180);
-        ctx.drawImage(im, -dw / 2, -dh / 2, dw, dh); ctx.restore();
-      } else { ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); } // contain : image entière centrée
+        ctx.drawImage(im, -dw / 2, -dh / 2, dw, dh);
+      } else { ctx.drawImage(im, cx + (colW - dw) / 2, ry + (rowH - dh) / 2, dw, dh); } // base cover/contain centrée
+      ctx.restore();
     });
   });
   ctx.textAlign = 'left';
@@ -6523,13 +6538,16 @@ async function planchePageCanvas(pi) {
   ctx.moveTo(gx, gtop); ctx.lineTo(gx, gridBottom);
   for (let ri = 0; ri <= rows.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
   ctx.moveTo(gx, gtop); ctx.lineTo(gx + px(g.gridW), gtop); ctx.stroke();
-  // Pied de page : vrai logo GaloPodo (transparent) en bas à gauche + société · contact · TVA centré, descendu et aligné sur le BAS du logo.
+  // Pied de page : logo GaloPodo AGRANDI, COLLÉ au texte (société · contact · TVA), l'ensemble logo+texte centré sous la grille.
   const fy = px(g.pageH - g.margin - g.footerH);
-  const flg = await plLoadImg(GALOPODO_LOGO_FILE), fh = px(5), lTop = fy + px(1.4); // logo descendu (écarté du cadre de la grille)
-  if (flg) { const fw = flg.width * (fh / flg.height); ctx.drawImage(flg, px(g.margin), lTop, fw, fh); }
-  ctx.fillStyle = '#222'; ctx.font = 'bold ' + fs(2.8) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText(plTrunc(ctx, plProFooter(), px(g.gridW) - px(24)), px(g.margin + g.gridW / 2), lTop + fh - px(0.6)); // bas du texte ≈ bas du logo
-  ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  const flg = await plLoadImg(GALOPODO_LOGO_FILE), fh = px(6.5), lTop = fy + px(0.3); // logo 5 → 6,5 mm
+  ctx.fillStyle = '#222'; ctx.font = 'bold ' + fs(2.9) + 'px sans-serif'; ctx.textBaseline = 'alphabetic';
+  const flabel = plTrunc(ctx, plProFooter(), px(g.gridW) - px(20));
+  const tw = ctx.measureText(flabel).width, fw = flg ? flg.width * (fh / flg.height) : 0, gap = px(2);
+  const startX = px(g.margin + g.gridW / 2) - (fw + gap + tw) / 2; // logo + texte centrés ENSEMBLE
+  if (flg) ctx.drawImage(flg, startX, lTop, fw, fh);
+  ctx.textAlign = 'left'; ctx.fillText(flabel, startX + fw + gap, lTop + fh * 0.72); // texte collé au logo, aligné à sa moitié
+  ctx.textBaseline = 'top';
   return cv;
 }
 async function planchePdfBlob() {
@@ -7950,7 +7968,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, gridEdit: false, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, gridEdit: false, fitMode: S.planche.fitMode || 'cover', sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -7983,7 +8001,7 @@ function modalPlancheCreate(type, prefill) {
         <div class="pl-pot grid" id="plCpot"></div>
       </section>
       <section class="card">
-        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div>
+        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCgridFit"></button><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
         <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (zoom, déplacement, rotation). Le cadrillage n'apparaît pas sur le PDF. Rebasculez pour revenir au mode normal (toucher une image = la retirer).</p>
         <div id="plCgrid"></div>
       </section>
@@ -8015,6 +8033,11 @@ function modalPlancheCreate(type, prefill) {
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
+  if ($('plCgridFit')) {
+    const updFit = () => { $('plCgridFit').textContent = plCreate.fitMode === 'contain' ? '🖼 Image entière' : '⛶ Remplir les cases'; $('plCgridFit').title = plCreate.fitMode === 'contain' ? 'Images entières (bandes blanches possibles) — cliquer pour remplir' : 'Images qui remplissent la case (excédent rogné) — cliquer pour images entières'; };
+    updFit();
+    $('plCgridFit').addEventListener('click', () => { plCreate.fitMode = plCreate.fitMode === 'contain' ? 'cover' : 'contain'; S.planche.fitMode = plCreate.fitMode; saveSettings(); updFit(); plRenderGrid(); });
+  }
   if ($('plCgridEdit')) $('plCgridEdit').addEventListener('click', () => {
     plCreate.gridEdit = !plCreate.gridEdit;
     $('plCgridEdit').classList.toggle('primary', plCreate.gridEdit);
@@ -8142,7 +8165,9 @@ function plRenderGrid() {
       html += `<tr><th class="pl-mem${r.pj === 1 ? ' pl-after' : ''}">${esc(r.label)}</th>` + angles.map((a, ci) => {
         const key = plCellKey(pi, r, ci), pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
         const T = st.cellT && st.cellT[key];
-        const imgTag = ph && ph.url ? `<img src="${ph.url}" alt=""${T ? ` class="pl-tr" style="transform:translate(${(T.x || 0) * 100}%,${(T.y || 0) * 100}%) scale(${T.zoom || 1}) rotate(${T.rot || 0}deg)"` : ''}/>` : '<span class="pl-cell-ph">+</span>';
+        const fit = st.fitMode === 'contain' ? 'contain' : 'cover';
+        const imgStyle = `object-fit:${fit}` + (T ? `;transform:translate(${(T.x || 0) * 100}%,${(T.y || 0) * 100}%) scale(${T.zoom || 1}) rotate(${T.rot || 0}deg);transform-origin:center` : '');
+        const imgTag = ph && ph.url ? `<img src="${ph.url}" alt=""${T ? ' class="pl-tr"' : ''} style="${imgStyle}"/>` : '<span class="pl-cell-ph">+</span>';
         return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}${st.gridEdit ? ' pl-cell-edit' : ''}" data-key="${key}"><div class="pl-cellbox" style="aspect-ratio:${g.colW} / ${g.rowH}">${imgTag}${st.gridEdit ? plGuideSvg() : ''}</div></td>`;
       }).join('') + '</tr>';
     });
@@ -8199,6 +8224,7 @@ function modalCellEdit(key) {
   document.body.appendChild(ov);
   const q = (n) => ov.querySelector(`[data-ce="${n}"]`);
   const img = q('img'), frame = q('frame');
+  img.style.objectFit = st.fitMode === 'contain' ? 'contain' : 'cover'; // même base que le PDF (cover = remplir / contain = entière)
   const close = () => { ov.remove(); };
   const apply = () => { img.style.transform = `translate(${T.x * fw}px,${T.y * fh}px) scale(${T.zoom}) rotate(${T.rot}deg)`; };
   apply();
