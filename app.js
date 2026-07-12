@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.74';
+const APP_VERSION = '1.2.75';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.75', date: '2026-07-12',
+    ajouts: [
+      'Ajustement des horaires (3/3) : quand vous SUPPRIMEZ un arrêt ou RÉORGANISEZ l\'ordre (glisser ou changer le numéro), les heures de RDV suivantes passent « à revoir » et une fenêtre de correction s\'ouvre — vous décalez tout d\'un coup, ou corrigez chaque heure. À la validation, les clients concernés reçoivent le bouton « Prévenir ».',
+    ],
+  },
   {
     version: '1.2.74', date: '2026-07-12',
     ajouts: [
@@ -4318,6 +4324,26 @@ function modalAdjustHoraires(t, ctx) {
   $('ahYes').onclick = () => { applyDecalage(impacted, delta); persistCurrentTour(); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere(); };
   preview();
 }
+// Modale « Horaires à revoir » — cas DELTA INCONNU (suppression, réordonnancement) : l'ordre a changé, l'utilisateur
+// corrige chaque heure (ou décale tout d'un coup). À la validation : heures concrètes posées, « à revoir » effacé, « Prévenir » activé.
+function modalRevoirHoraires(t) {
+  const stale = [];
+  (t.arrets || []).forEach((a, ai) => (a.clients || []).forEach((cl) => { if (cl.heureStale) stale.push({ ai, cl }); }));
+  if (!stale.length) return;
+  openModal(`<div class="modal-head"><b>🕘 Horaires à revoir</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">L'ordre ou la composition a changé — vérifiez les heures de RDV concernées. Décalez tout d'un coup, ou corrigez chaque heure.</p>
+    <label>Décaler tous de (minutes)<input type="number" id="rvBulk" step="5" value="0"/></label>
+    <div id="rvList" class="card" style="margin:8px 0"></div>
+    <div class="actions two"><button class="btn" id="rvCancel">Plus tard</button><button class="btn primary" id="rvOk">Valider les heures</button></div>`);
+  const list = $('rvList');
+  list.innerHTML = stale.map((s, idx) => `<label class="ts-line"><span>${s.ai + 1}. ${esc(clientName(s.cl.clientId))}</span><input type="time" data-rv="${idx}" value="${esc(s.cl.heure || '')}"/></label>`).join('');
+  $('mX').onclick = closeModal; $('rvCancel').onclick = closeModal;
+  $('rvBulk').addEventListener('input', (e) => { const d = parseInt(e.target.value, 10) || 0; stale.forEach((s, idx) => { const inp = list.querySelector('[data-rv="' + idx + '"]'); const base = hmToMin(s.cl.heure); if (inp && base != null) inp.value = minToHm(base + d); }); });
+  $('rvOk').onclick = () => {
+    stale.forEach((s, idx) => { const inp = list.querySelector('[data-rv="' + idx + '"]'); if (!inp) return; const nv = inp.value || ''; if (nv && nv !== s.cl.heure) { if (!s.cl.aPrevenir) s.cl.heureAncienne = s.cl.heure; s.cl.aPrevenir = true; } s.cl.heure = nv; delete s.cl.heureStale; });
+    persistCurrentTour(); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere();
+  };
+}
 // Modale récapitulative « à compléter » : centralise ce qui manque pour une tournée, SANS l'ouvrir ni défiler.
 // Deux blocs SÉPARÉS et distincts : ① Préparation (itinéraire/adresses/heures/chevaux) · ② Clôture (jour J : paiement).
 function modalTourStatus(t) {
@@ -4635,7 +4661,7 @@ function renderEditorArrets(locked) {
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
-      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; const oldA = currentTour.arrets.map((x) => norm(addrStr(x.addr))); currentTour.arrets.splice(i, 1); invalidateTourRoute(oldA, currentTour); persistCurrentTour(); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); }); // retrait arrêt → segments/heures suivants périmés + maj Google
+      el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; const oldA = currentTour.arrets.map((x) => norm(addrStr(x.addr))); currentTour.arrets.splice(i, 1); invalidateTourRoute(oldA, currentTour); persistCurrentTour(); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); if (tourHeureStale(currentTour)) modalRevoirHoraires(currentTour); }); // retrait arrêt → segments/heures suivants périmés + maj Google ; heures suivantes « à revoir » → modale de correction
       // N° d'ordre saisi : déplace l'arrêt à la position demandée ; les autres se renumérotent tout seuls.
       const ord = el.querySelector('[data-order]');
       if (ord) ord.addEventListener('change', (e) => {
@@ -4648,6 +4674,7 @@ function renderEditorArrets(locked) {
         currentTour.arrets.splice(np, 0, moved);
         invalidateTourRoute(oldA, currentTour); persistCurrentTour();
         renderEditorArrets(locked); scheduleGeoRecalc();
+        if (tourHeureStale(currentTour)) modalRevoirHoraires(currentTour); // réordonnancement → heures suivantes « à revoir » → modale de correction
       });
     }
     const R = currentTour.result;
@@ -4900,6 +4927,7 @@ function enableDrag(listEl) {
         currentTour.arrets = order.map((i) => currentTour.arrets[i]);
         invalidateTourRoute(oldA, currentTour); persistCurrentTour();
         renderEditorArrets(false); scheduleGeoRecalc();
+        if (tourHeureStale(currentTour)) modalRevoirHoraires(currentTour); // glisser-réordonner → heures suivantes « à revoir » → modale de correction
       };
       document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
     });
