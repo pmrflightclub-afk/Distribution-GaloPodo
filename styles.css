@@ -172,6 +172,14 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .td-badge { font-size: .68rem; font-weight: 700; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
 .td-badge.warn { color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); }
 .td-badge.ok { color: var(--ok, #2e9e5b); background: color-mix(in srgb, var(--ok, #2e9e5b) 13%, transparent); }
+.td-badge[data-tstatus] { cursor: pointer; text-decoration: underline dotted; }
+/* Modale récap statut de tournée (« à compléter ») */
+.ts-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 2px; border-top: 1px solid var(--line); font-size: .9rem; }
+.ts-line:first-child { border-top: 0; }
+.ts-line .btn { flex: none; }
+.ts-warn > span { color: var(--danger); }
+.ts-ok { color: var(--ok, #2e9e5b); font-weight: 600; }
+.ts-muted { color: var(--muted); }
 .cli-valid { font-size: 1.05rem; vertical-align: middle; line-height: 1; }
 .cli-valid.ok { color: var(--ok, #2e9e5b); }
 .cli-valid.warn { color: var(--warn); }

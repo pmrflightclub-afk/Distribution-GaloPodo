@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.69';
+const APP_VERSION = '1.2.70';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.70', date: '2026-07-12',
+    ajouts: [
+      'Badge « ⚠ à compléter » (et « 🔄 recalculer » / « heures à revoir ») des tournées : il est maintenant CLIQUABLE. Il ouvre une fenêtre récapitulative qui liste, regroupé et sans ouvrir la tournée, tout ce qu\'il reste — séparé en deux : ① Préparation (itinéraire, adresses, heures, chevaux) et ② Fin de tournée (paiement & clôture, le jour J).',
+      'Dans cette fenêtre, un bouton « 🔄 Calculer maintenant » relance la localisation des adresses et le calcul de l\'itinéraire directement, sans ouvrir la tournée.',
+    ],
+  },
   {
     version: '1.2.69', date: '2026-07-12',
     corrections: [
@@ -3930,12 +3937,14 @@ function tourListItem(t, showBadge) {
   const eta = tourEta(t.date, st); const etaHtml = eta ? ` <span class="${eta.cls}">${esc(eta.text)}</span>` : '';
   let fin = ''; // badge « prête » = paramétrage complet (adresses + itinéraire + cheval présent + heure), PAS acte/paiement ; « recalculer » prioritaire
   if (st !== 'cloturee') {
-    if (tourRouteStale(t)) fin = ' <span class="td-badge warn">🔄 recalculer itinéraire</span>';
-    else if (tourHeureStale(t)) fin = ' <span class="td-badge warn">⚠ heures à revoir</span>';
-    else fin = tourReadyIssues(t).length ? ' <span class="td-badge warn">⚠ à compléter</span>' : ' <span class="td-badge ok">✓ prête</span>';
+    const warn = (txt) => ` <span class="td-badge warn" data-tstatus role="button" title="Voir ce qu'il reste à compléter">${txt}</span>`; // cliquable → modale récap
+    if (tourRouteStale(t)) fin = warn('🔄 recalculer itinéraire');
+    else if (tourHeureStale(t)) fin = warn('⚠ heures à revoir');
+    else fin = tourReadyIssues(t).length ? warn('⚠ à compléter') : ' <span class="td-badge ok">✓ prête</span>';
   }
   el.innerHTML = `<div class="li-main"><b>${titre}${badge}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act li-act-badge">${clotHtml}${etaHtml}${fin}<span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
+  const sb = el.querySelector('[data-tstatus]'); if (sb) sb.addEventListener('click', (e) => { e.stopPropagation(); modalTourStatus(t); }); // badge → récap sans ouvrir la tournée
   return el;
 }
 let trYear = null; // filtre année de la section « Clôturées »
@@ -4243,6 +4252,39 @@ function invalidateTourRoute(oldAddrs, t) {
   return ch;
 }
 const tourHeureStale = (t) => !!t && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.heureStale));
+// Modale récapitulative « à compléter » : centralise ce qui manque pour une tournée, SANS l'ouvrir ni défiler.
+// Deux blocs SÉPARÉS et distincts : ① Préparation (itinéraire/adresses/heures/chevaux) · ② Clôture (jour J : paiement).
+function modalTourStatus(t) {
+  const render = () => {
+    const st = statusOf(t), jourJ = st === 'active';
+    const geoMissing = (t.arrets || []).some((a) => !(a.addr && a.addr.lat != null && a.addr.lon != null));
+    const noItin = !t.result || geoMissing;
+    let prep = '';
+    if (noItin || tourRouteStale(t)) prep += `<div class="ts-line ts-warn"><span>🗺 Itinéraire ${noItin ? 'non calculé' : 'à recalculer'}${geoMissing ? ' · adresse à localiser' : ''}</span><button class="btn small primary" id="tsCalc">🔄 Calculer maintenant</button></div>`;
+    if (tourHeureStale(t)) prep += `<div class="ts-line ts-warn"><span>🕘 Des heures de RDV sont « à revoir » (l'ordre a changé)</span><button class="btn small" data-tsopen>Ouvrir</button></div>`;
+    tourReadyIssues(t).filter((x) => !/itinéraire|localisée/i.test(x)).forEach((x) => { prep += `<div class="ts-line ts-warn"><span>⚠ ${esc(x)}</span><button class="btn small" data-tsopen>Ouvrir</button></div>`; });
+    if (!prep) prep = `<div class="ts-line ts-ok">✅ Préparation complète (itinéraire, adresses, heures, chevaux).</div>`;
+    let clo;
+    if (!jourJ) clo = `<div class="ts-line ts-muted">💤 Le paiement & la clôture se font le jour de la tournée.</div>`;
+    else { const blk = tourFinalizeBlock(t); clo = blk.length ? blk.map((x) => `<div class="ts-line ts-warn"><span>💶 ${esc(x)}</span></div>`).join('') : `<div class="ts-line ts-ok">✅ Tous les arrêts finalisés.</div>`; }
+    openModal(`<div class="modal-head"><b>📋 ${esc(fmtDateFr(t.date))}${t.nom ? ' — ' + esc(t.nom) : ''}</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Ce qu'il reste à faire, regroupé — sans ouvrir la tournée.</p>
+      <div class="card"><div class="form-sec-h">① Préparation (avant la tournée)</div>${prep}</div>
+      <div class="card"><div class="form-sec-h">② Fin de tournée (le jour J)</div>${clo}</div>
+      <div class="actions"><button class="btn block" id="tsOpen">Ouvrir la tournée</button></div>`);
+    $('mX').onclick = closeModal;
+    $('tsOpen').onclick = () => { closeModal(); openTour(t); };
+    document.querySelectorAll('[data-tsopen]').forEach((b) => b.addEventListener('click', () => { closeModal(); openTour(t); }));
+    const cb = $('tsCalc');
+    if (cb) cb.addEventListener('click', async () => {
+      cb.disabled = true; cb.textContent = 'Calcul…';
+      const r = await recomputeTourGeo(t);
+      if (r.ok) { render(); if (typeof renderTours === 'function') renderTours(); if ($('tab-accueil') && $('tab-accueil').classList.contains('active') && typeof renderHome === 'function') renderHome(); }
+      else { cb.disabled = false; cb.textContent = '🔄 Réessayer'; alert('Recalcul impossible : ' + (r.error || 'erreur') + '.\nVérifiez l\'adresse de départ et la connexion internet.'); }
+    });
+  };
+  render();
+}
 // « Prête » = paramétrage complet (PAS d'acte ni de paiement) : adresses localisées + itinéraire calculé + ≥1 cheval présent/client + heure de RDV/client. Renvoie la liste des manques (vide = prête). L'itinéraire périmé est signalé à part (tourRouteStale).
 function tourReadyIssues(t) {
   const out = [];
@@ -5138,6 +5180,37 @@ async function calcTour(silent) {
     st.className = 'status ok'; st.textContent = silent ? 'À jour ✔' : 'Frais calculés et enregistrés.';
     scheduleCalPush(currentTour); // miroir RDV → Google Agenda (si activé)
   } catch (e) { st.className = 'status err'; st.textContent = 'Erreur : ' + e.message; }
+}
+
+// Recalcul « sans écran » (headless) d'une tournée QUELCONQUE : géocode les adresses manquantes + itinéraire + facture,
+// sans dépendre de l'éditeur ouvert. Utilisé par la modale « à compléter » (bouton « Calculer maintenant »).
+// Même logique que calcTour, mais sans DOM ; swap temporaire de currentTour pour réutiliser tourHome()/homeXY()/tourArrivee().
+async function recomputeTourGeo(t) {
+  if (!t || !(t.arrets || []).length) return { ok: false, error: 'aucun arrêt' };
+  const prev = currentTour; currentTour = t;
+  try {
+    const H = tourHome();
+    if (!H.lat && addrStr(H).trim()) { try { const g = await geocode(H); H.lat = g.lat; H.lon = g.lon; if (currentTour.home) saveTournees(); else saveSettings(); } catch { /* localisation impossible */ } }
+    if (!H.lat) return { ok: false, error: 'départ non localisé' };
+    for (const a of t.arrets) { if (!a.addr.lat) { const g = await geocode(a.addr); a.addr.lat = g.lat; a.addr.lon = g.lon; if (S.provider === 'osm') await sleep(1100); } }
+    const home = homeXY();
+    const stops = t.arrets.map((a) => ({ lat: a.addr.lat, lon: a.addr.lon }));
+    const fallbackDirect = (s) => haversineKm(home, s) * (S.roadFactor || 1.3);
+    let directs;
+    try { directs = await directMatrix(home, stops); directs = directs.map((d, i) => (d != null ? d : fallbackDirect(stops[i]))); }
+    catch { directs = []; for (const s of stops) { try { const dr = await route([home, s]); directs.push(dr.totalKm); if (S.provider === 'osm') await sleep(1100); } catch { directs.push(fallbackDirect(s)); } } }
+    const A = tourArrivee();
+    if (A.lat == null && addrStr(A).trim()) { try { const g = await geocode(A); A.lat = g.lat; A.lon = g.lon; if (t.arrivee) saveTournees(); if (S.provider === 'osm') await sleep(1100); } catch { /* repli sur le départ */ } }
+    const arrXY = (A.lat != null) ? { lat: A.lat, lon: A.lon } : home;
+    const rt = await route([home, ...stops, arrXY]); const legs = rt.legsKm;
+    const rows = t.arrets.map((a, i) => rowFromArret(a, { segKm: legs[i] != null ? legs[i] : 0, directKm: directs[i] }));
+    const totalMin = (S.dureeAuto && rt.totalMin) ? rt.totalMin : (rt.totalKm * 60 / (S.vitesseKmh || 50));
+    t.result = computeResultMoney(rows, { totalKm: rt.totalKm, kmHomeFirst: legs.length ? legs[0] : 0, kmLastHome: legs.length ? legs[legs.length - 1] : 0, totalMin });
+    t.result.providerMin = rt.totalMin || totalMin; t.result.routeGeo = rt.geo || [];
+    saveTournees(); scheduleCalPush(t);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+  finally { currentTour = prev; }
 }
 
 // Répartition facture FUSIONNÉE dans l'éditeur : le bloc de chaque client s'affiche juste sous son arrêt.
