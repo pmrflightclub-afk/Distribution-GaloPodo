@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.63';
+const APP_VERSION = '1.2.64';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.64', date: '2026-07-12',
+    corrections: [
+      'Navigation (surtout sur ordinateur) : plus de barre de défilement horizontale sur le menu principal ni les sous-onglets. Les barres s\'affichent en entier tant qu\'elles tiennent sur la largeur ; si elles ne tiennent pas, elles basculent automatiquement en menu déroulant (comme sur téléphone).',
+    ],
+  },
   {
     version: '1.2.63', date: '2026-07-12',
     ajouts: [
@@ -3159,6 +3165,19 @@ function updateStickyOffsets() {
   if (tb) root.setProperty('--topbar-h', tb.offsetHeight + 'px');
   if (tabs) root.setProperty('--tabs-h', tabs.offsetHeight + 'px');
 }
+// Bascule barre pleine ↔ menu déroulant selon que le contenu tient sur une ligne (par barre : nav principale + sous-onglets visibles).
+// On mesure hors mode compact (débordement réel), puis on repose la classe → pas de scintillement (pas de repaint entre les deux).
+function updateNavCompact() {
+  const check = (bar, inner) => {
+    if (!bar || !inner) return;
+    bar.classList.remove('compact');
+    const overflow = inner.clientWidth > 0 && inner.scrollWidth > inner.clientWidth + 1;
+    if (overflow) bar.classList.add('compact'); else bar.classList.remove('open');
+  };
+  check($('mainTabs'), $('tabsInner'));
+  document.querySelectorAll('.subtabs').forEach((sb) => check(sb, sb.querySelector('.subtabs-list'))); // les sous-onglets cachés ont clientWidth 0 → non compactés
+  updateStickyOffsets();
+}
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
@@ -3173,6 +3192,7 @@ function showTab(name) {
   if (name === 'gestion') showGestion(currentGsub);
   if (name === 'stats') renderStats();
   if (name === 'reglages') showReglages(currentRsub);
+  requestAnimationFrame(updateNavCompact); // recalcule la compacité (les sous-onglets de l'onglet actif deviennent mesurables)
 }
 
 // Sous-navigation Agenda : Planning / Items
@@ -10623,8 +10643,8 @@ window.addEventListener('DOMContentLoaded', () => {
     if (_gpSelOpen && !_gpSelOpen.contains(e.target)) gpSelClose(); // menu <select> maison : fermeture au clic-dehors
   });
   startSelectObserver(); // Item 3 : façade maison pour tous les <select> (enhance + resync)
-  window.addEventListener('resize', updateStickyOffsets);
-  updateStickyOffsets(); setTimeout(updateStickyOffsets, 300);
+  window.addEventListener('resize', updateNavCompact);
+  updateNavCompact(); setTimeout(updateNavCompact, 300);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !_lockModal) closeModal(); }); // config initiale = non fermable par clic sur le fond
 
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)

@@ -32,20 +32,18 @@ body {
 .fuel-chip { display: flex; align-items: center; justify-content: center; gap: 5px; background: rgba(255,255,255,.20); padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
 @media (max-width: 480px) { .brand-name { display: none; } .fuel-chip { padding: 5px 9px; gap: 4px; } .chip-val { font-size: .72rem; } }
 .tabs { background: var(--navbar, var(--card)); border-bottom: 1px solid var(--line); position: sticky; top: var(--topbar-h, 88px); z-index: 20; padding: 7px 10px; }
-.tabs-inner { display: flex; gap: 6px; max-width: 680px; margin: 0 auto; justify-content: center; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tabs-inner { display: flex; gap: 6px; margin: 0 auto; justify-content: center; flex-wrap: nowrap; overflow: hidden; }
 .tab { flex: 0 0 auto; white-space: nowrap; padding: 16px 20px; border: 0; background: transparent; color: var(--navbar-ink, var(--muted)); opacity: .62; font-weight: 700; border-radius: 12px; font-size: 1.05rem; }
 .tab.active { background: var(--bg); color: var(--accent); opacity: 1; }
-/* Menu déroulant de navigation (mobile) */
+/* Menu déroulant de navigation — activé (classe .compact posée par JS) quand la barre ne tient pas sur une ligne (PC étroit / mobile). Sinon barre pleine. */
 .nav-current { display: none; }
 .nav-caret { transition: transform .15s ease; }
-@media (max-width: 640px) {
-  .tabs { padding: 0; }
-  .nav-current { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 15px 18px; border: 0; background: transparent; color: var(--navbar-ink, var(--muted)); font-weight: 700; font-size: 1.1rem; cursor: pointer; }
-  .tabs.open .nav-caret { transform: rotate(180deg); }
-  .tabs-inner { position: absolute; top: 100%; left: 0; right: 0; flex-direction: column; gap: 3px; display: none; background: var(--navbar, var(--card)); border-bottom: 1px solid var(--line); box-shadow: var(--shadow); max-height: 72vh; overflow-y: auto; padding: 6px 8px 10px; }
-  .tabs.open .tabs-inner { display: flex; }
-  .tabs-inner .tab { width: 100%; text-align: left; opacity: 1; padding: 14px 16px; }
-}
+.tabs.compact { padding: 0; }
+.tabs.compact .nav-current { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 15px 18px; border: 0; background: transparent; color: var(--navbar-ink, var(--muted)); font-weight: 700; font-size: 1.1rem; cursor: pointer; }
+.tabs.compact.open .nav-caret { transform: rotate(180deg); }
+.tabs.compact .tabs-inner { position: absolute; top: 100%; left: 0; right: 0; flex-direction: column; gap: 3px; display: none; background: var(--navbar, var(--card)); border-bottom: 1px solid var(--line); box-shadow: var(--shadow); max-height: 72vh; overflow-y: auto; padding: 6px 8px 10px; }
+.tabs.compact.open .tabs-inner { display: flex; }
+.tabs.compact .tabs-inner .tab { width: 100%; text-align: left; opacity: 1; padding: 14px 16px; }
 .swatch.sw-trans { background: repeating-conic-gradient(#bbb 0% 25%, #fff 0% 50%) 50% / 12px 12px; }
 .tab-panel { display: none; padding: 12px; max-width: 640px; margin: 0 auto; }
 .tab-panel.active { display: block; }
@@ -338,16 +336,15 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 
 /* Sous-onglets éditeur */
 .subtabs { position: sticky; top: calc(var(--topbar-h, 88px) + var(--tabs-h, 64px)); z-index: 15; background: var(--bg); padding: 8px 12px; margin: 0 -12px 12px; }
-.subtabs-list { display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.subtabs-list { display: flex; gap: 6px; justify-content: center; overflow: hidden; }
 .subtabs-list .subtab { flex: 0 0 auto; white-space: nowrap; }
 .subnav-current { display: none; }
-@media (max-width: 640px) {
-  .subnav-current { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); font-weight: 700; font-size: 1rem; cursor: pointer; }
-  .subtabs.open .nav-caret { transform: rotate(180deg); }
-  .subtabs-list { position: absolute; top: 100%; left: 8px; right: 8px; flex-direction: column; display: none; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); max-height: 66vh; overflow-y: auto; padding: 6px; z-index: 16; }
-  .subtabs.open .subtabs-list { display: flex; }
-  .subtabs-list .subtab { width: 100%; text-align: left; }
-}
+.subtabs.compact { position: sticky; } /* garde le containing block pour le menu absolu */
+.subtabs.compact .subnav-current { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); font-weight: 700; font-size: 1rem; cursor: pointer; }
+.subtabs.compact.open .nav-caret { transform: rotate(180deg); }
+.subtabs.compact .subtabs-list { position: absolute; top: 100%; left: 8px; right: 8px; flex-direction: column; display: none; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); max-height: 66vh; overflow-y: auto; padding: 6px; z-index: 16; }
+.subtabs.compact.open .subtabs-list { display: flex; }
+.subtabs.compact .subtabs-list .subtab { width: 100%; text-align: left; }
 .swatches { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 /* appearance:none = INDISPENSABLE sur iOS (sinon la pastille prend le style bouton système gris et ignore la couleur).
    Anneau gris neutre visible sur fond clair comme sombre, sans teinter la couleur. */
