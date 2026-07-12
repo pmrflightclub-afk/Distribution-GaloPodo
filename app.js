@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.56';
+const APP_VERSION = '1.2.57';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.57', date: '2026-07-12',
+    corrections: [
+      'Gestion → Articles : la section « Photos (planches) » est remontée entre « Tarifs par type » et « Articles (catalogue) ».',
+      'Tarifs photo — mode pourcentage : les champs HT des tarifs 4 et 5 angles sont maintenant calculés automatiquement et affichés (HT + TTC), et verrouillés (non cliquables/sélectionnables, plus de cadre au clic).',
+      'Tarifs photo : en décochant le mode pourcentage, les tarifs 4 et 5 angles conservent leur dernière valeur (calculée) au lieu de se remettre à zéro — modifiables ensuite.',
+    ],
+  },
   {
     version: '1.2.56', date: '2026-07-12',
     ajouts: [
@@ -7020,12 +7028,15 @@ function renderPhotoTarifs() {
   const perPhoto = (ht, a) => PHOTO_NB[a] ? ht / PHOTO_NB[a] : 0;
   const row = (a) => {
     const editable = a === 3 || !P.pctMode;
+    const htField = editable
+      ? `<input type="number" step="0.01" min="0" data-pht="${a}"/>`
+      : `<input type="number" data-pht="${a}" class="pht-lock" disabled value="${fmtNum(photoTariffHT(a), 2)}"/>`; // calculé : non focusable / non sélectionnable (disabled), valeur auto
     return `<div class="card" style="margin:8px 0">
       <div class="a-art-head"><span><b>${a} angles</b> · ${PHOTO_NB[a]} photos${a === 3 ? ' · <i>référence</i>' : ''}</span></div>
       <div class="er-grid er-grid-3">
-        <label>HT<input type="number" step="0.01" min="0" data-pht="${a}"${editable ? '' : ' readonly'}/></label>
-        <label>TTC<input data-pttc="${a}" readonly/></label>
-        <label>€/photo<input data-pphoto="${a}" readonly/></label>
+        <label>HT${editable ? '' : ' <span class="li-sub">(auto)</span>'}${htField}</label>
+        <label>TTC<input data-pttc="${a}" class="pht-lock" disabled/></label>
+        <label>€/photo<input data-pphoto="${a}" class="pht-lock" disabled/></label>
       </div>
       ${(a !== 3 && P.pctMode) ? `<label>Réduction vs 3 angles (%)<input type="number" step="1" min="0" max="100" data-ppct="${a}" value="${(a === 4 ? P.pct4 : P.pct5) || ''}"/></label>` : ''}
     </div>`;
@@ -7042,7 +7053,11 @@ function renderPhotoTarifs() {
       const pp = box.querySelector(`[data-pphoto="${a}"]`); if (pp) pp.value = fmtNum(perPhoto(ht, a), 2) + ' €';
     });
   };
-  box.querySelector('#photoPctMode').addEventListener('change', (e) => { P.pctMode = e.target.checked; if (!P.pctMode) { P.angle4HT = 0; P.angle5HT = 0; } saveSettings(); renderPhotoTarifs(); });
+  box.querySelector('#photoPctMode').addEventListener('change', (e) => {
+    const chk = e.target.checked;
+    if (!chk) { const h4 = photoTariffHT(4), h5 = photoTariffHT(5); if (h4 > 0) P.angle4HT = Math.round(h4 * 100) / 100; if (h5 > 0) P.angle5HT = Math.round(h5 * 100) / 100; } // décochage : conserver les tarifs affichés (calculés en %) comme valeurs manuelles — jamais 0
+    P.pctMode = chk; saveSettings(); renderPhotoTarifs();
+  });
   box.querySelectorAll('[data-pht]').forEach((inp) => inp.addEventListener('input', (e) => { const a = +inp.dataset.pht, v = parseNum(e.target.value); if (a === 3) P.angle3HT = v; else if (a === 4) P.angle4HT = v; else P.angle5HT = v; saveSettings(); paint(); }));
   box.querySelectorAll('[data-ppct]').forEach((inp) => inp.addEventListener('input', (e) => { const a = +inp.dataset.ppct, v = Math.max(0, Math.min(100, parseNum(e.target.value))); if (a === 4) P.pct4 = v; else P.pct5 = v; saveSettings(); paint(); }));
   paint();

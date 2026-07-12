@@ -63,6 +63,8 @@ input, select { display: block; width: 100%; margin-top: 5px; padding: 11px 12px
 /* Valeur mémorisée affichée en GRIS (A+) — champs éditables texte/nombre ; exclut lecture seule, cases, couleurs, etc. */
 input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=range]):not([type=file]):not([readonly]):not(.ro), textarea:not([readonly]):not(.ro) { color: var(--muted); }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
+/* Champ calculé, verrouillé (ex. tarif HT auto en mode %) : non focusable/sélectionnable (disabled) mais valeur bien lisible */
+.pht-lock:disabled { background: var(--ro-bg); color: var(--ink); -webkit-text-fill-color: var(--ink); opacity: 1; cursor: default; }
 /* ===== Menu déroulant « maison » (remplace l'ouverture native des <select>, qui ne se ferme pas au clic-dehors sur mobile).
    Le <select> natif reste dans le DOM (masqué, .gp-native) comme source de vérité ; une façade cliquable est superposée. */
 .gp-native { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; }
