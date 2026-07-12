@@ -153,6 +153,10 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .list-item.stack-act > .li-main { flex: 1 1 auto; } /* remplit la largeur de l'item → la barre écurie (Refuser ce lieu) s'aligne à droite */
 .td-eta { color: var(--ok, #2e9e5b); font-weight: 700; font-size: .82em; white-space: nowrap; }
 .td-eta.td-past { color: var(--danger); }
+.td-cloturee { color: color-mix(in srgb, var(--accent) 55%, #fff); font-weight: 700; font-size: .82em; white-space: nowrap; } /* statut clôturé, à droite, orange clair */
+.tr-month { margin-top: 10px; }
+.tr-month:first-child { margin-top: 0; }
+.tr-month-h { font-weight: 700; color: var(--muted); font-size: .82rem; text-transform: capitalize; margin: 2px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
 .tour-date { color: var(--accent); }
 .td-badge { font-size: .68rem; font-weight: 700; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
 .td-badge.warn { color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); }

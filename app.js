@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.57';
+const APP_VERSION = '1.2.58';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.58', date: '2026-07-12',
+    ajouts: [
+      'Tournées → Clôturées : les tournées sont désormais regroupées par mois (une section par mois, la plus récente en haut), avec un filtre par année au-dessus pour consulter les années précédentes. Fini les sections « 4 dernières semaines » / « Archives ».',
+    ],
+    corrections: [
+      'Tournées clôturées : le statut « Clôturée » est déplacé à droite de la ligne (en orange clair), la date et le nom restant à gauche.',
+    ],
+  },
   {
     version: '1.2.57', date: '2026-07-12',
     corrections: [
@@ -3722,7 +3731,8 @@ function tourListItem(t, showBadge) {
   const el = document.createElement('div'); el.className = 'list-item clickable';
   const titre = `<span class="tour-date">${fmtDateFr(t.date)}</span>` + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''); // date en couleur des boutons (accent)
   const clientsLine = (t.arrets || []).flatMap((a) => (a.clients || []).map((cl) => clientName(cl.clientId))).filter(Boolean).join(' · '); // chaque client individuel (non groupé), même au même arrêt
-  const badge = (showBadge && st !== 'avenir') ? ' · ' + STATUS_LBL[st] : ''; // « À venir » retiré (redondant avec la section À venir)
+  const badge = (showBadge && st === 'active') ? ' · ' + STATUS_LBL[st] : ''; // « Aujourd'hui » reste dans le titre ; « À venir » retiré (redondant) ; « Clôturée » déplacé à droite
+  const clotHtml = (showBadge && st === 'cloturee') ? '<span class="td-cloturee">Clôturée</span>' : ''; // statut à DROITE, en orange clair
   const eta = tourEta(t.date, st); const etaHtml = eta ? ` <span class="${eta.cls}">${esc(eta.text)}</span>` : '';
   let fin = ''; // badge « prête » = paramétrage complet (adresses + itinéraire + cheval présent + heure), PAS acte/paiement ; « recalculer » prioritaire
   if (st !== 'cloturee') {
@@ -3730,19 +3740,33 @@ function tourListItem(t, showBadge) {
     else if (tourHeureStale(t)) fin = ' <span class="td-badge warn">⚠ heures à revoir</span>';
     else fin = tourReadyIssues(t).length ? ' <span class="td-badge warn">⚠ à compléter</span>' : ' <span class="td-badge ok">✓ prête</span>';
   }
-  el.innerHTML = `<div class="li-main"><b>${titre}${badge}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act li-act-badge">${etaHtml}${fin}<span class="li-chev">›</span></div>`;
+  el.innerHTML = `<div class="li-main"><b>${titre}${badge}</b><span class="li-sub">${t.arrets.length} arrêt(s) · ${t.result ? km(t.result.totalKm) + ' · ' + eur(tourDisplayTTC(t)) + ' TTC' : 'non calculée'}</span>${clientsLine ? '<span class="li-sub">👤 ' + esc(clientsLine) + '</span>' : ''}</div><div class="li-act li-act-badge">${clotHtml}${etaHtml}${fin}<span class="li-chev">›</span></div>`;
   el.addEventListener('click', () => openTour(t));
   return el;
 }
+let trYear = null; // filtre année de la section « Clôturées »
 function renderTours() {
-  const d = new Date(); d.setDate(d.getDate() - 28); const fourWeeksAgo = d.toISOString().slice(0, 10);
   const asc = (a, b) => (a.date || '').localeCompare(b.date || ''), desc = (a, b) => (b.date || '').localeCompare(a.date || '');
   const closed = allTours().filter((x) => statusOf(x) === 'cloturee'); // inclut les archivées (store séparé)
   const fill = (listId, emptyId, items) => { const box = $(listId); if (!box) return; box.innerHTML = ''; $(emptyId).style.display = items.length ? 'none' : 'block'; items.forEach((x) => box.appendChild(tourListItem(x, true))); };
-  // « À venir » regroupe désormais aujourd'hui (non clôturée) + les tournées futures.
+  // « À venir » regroupe aujourd'hui (non clôturée) + les tournées futures.
   fill('trUpcoming', 'trUpcomingEmpty', tournees.filter((x) => { const s = statusOf(x); return s === 'active' || s === 'avenir'; }).sort(asc));
-  fill('trClosed', 'trClosedEmpty', closed.filter((x) => (x.date || '') >= fourWeeksAgo).sort(desc));
-  fill('trArchive', 'trArchiveEmpty', closed.filter((x) => (x.date || '') < fourWeeksAgo).sort(desc));
+  // Clôturées : filtre par ANNÉE, puis une sous-section par MOIS (mois le plus récent en premier).
+  const yearSel = $('trYear'), box = $('trClosedByMonth'), empty = $('trClosedEmpty'); if (!box) return;
+  const years = [...new Set(closed.map((t) => (t.date || '').slice(0, 4)).filter(Boolean))].sort().reverse();
+  if (trYear == null || !years.includes(trYear)) trYear = years[0] || String(new Date().getFullYear());
+  if (yearSel) { yearSel.innerHTML = years.length ? years.map((y) => `<option value="${y}"${y === trYear ? ' selected' : ''}>${y}</option>`).join('') : `<option>${trYear}</option>`; yearSel.onchange = () => { trYear = yearSel.value; renderTours(); }; }
+  box.innerHTML = '';
+  const yearClosed = closed.filter((t) => (t.date || '').slice(0, 4) === trYear);
+  if (empty) empty.style.display = yearClosed.length ? 'none' : 'block';
+  const months = [...new Set(yearClosed.map((t) => (t.date || '').slice(0, 7)))].sort().reverse();
+  months.forEach((m) => {
+    const sec = document.createElement('div'); sec.className = 'tr-month';
+    const lab = monthLabel(m), h = document.createElement('div'); h.className = 'tr-month-h'; h.textContent = lab.charAt(0).toUpperCase() + lab.slice(1);
+    sec.appendChild(h);
+    yearClosed.filter((t) => (t.date || '').slice(0, 7) === m).sort(desc).forEach((t) => sec.appendChild(tourListItem(t, true)));
+    box.appendChild(sec);
+  });
 }
 function newTour() { currentTour = { id: uid(), date: todayStr(), nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, result: null, createdAt: Date.now() }; openEditor(); }
 // ---------- Onglet Tournée : sous-onglets [Tournées] [Replacer un RDV] [Annulations] ----------

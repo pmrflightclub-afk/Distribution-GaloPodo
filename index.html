@@ -115,8 +115,7 @@
     <div id="tsub-liste" class="subpanel active">
       <div class="actions"><button class="btn primary block" id="btnNewTour2">➕ Créer une tournée</button></div>
       <section class="card"><h2>À venir</h2><div id="trUpcoming" class="list"></div><p class="empty" id="trUpcomingEmpty">Aucune tournée à venir.</p></section>
-      <section class="card"><h2>Clôturées (4 dernières semaines)</h2><div id="trClosed" class="list"></div><p class="empty" id="trClosedEmpty">Aucune.</p></section>
-      <section class="card"><h2>Archives (plus de 4 semaines)</h2><div id="trArchive" class="list"></div><p class="empty" id="trArchiveEmpty">Aucune.</p></section>
+      <section class="card"><div class="card-head"><h2 style="margin:0">Clôturées</h2><label style="margin:0;flex:0 0 auto">Année<select id="trYear"></select></label></div><div id="trClosedByMonth"></div><p class="empty" id="trClosedEmpty">Aucune tournée clôturée.</p></section>
     </div>
     <div id="tsub-replacer" class="subpanel">
       <section class="card">
