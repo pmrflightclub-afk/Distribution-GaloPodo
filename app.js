@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.72';
+const APP_VERSION = '1.2.73';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.73', date: '2026-07-12',
+    ajouts: [
+      'Ajustement des horaires (1/3) : quand vous modifiez l\'heure d\'un rendez-vous dans une tournée, l\'app vous propose de DÉCALER d\'autant tous les rendez-vous suivants (avance ou retard). Une fenêtre récapitule le décalage (modifiable) et la liste des RDV impactés avant/après ; vous confirmez ou choisissez « Ne rien décaler ». Les arrêts déjà clôturés (jour J) ne sont jamais touchés.',
+    ],
+  },
   {
     version: '1.2.72', date: '2026-07-12',
     ajouts: [
@@ -4265,6 +4271,44 @@ function invalidateTourRoute(oldAddrs, t) {
   return ch;
 }
 const tourHeureStale = (t) => !!t && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.heureStale));
+// ===== Ajustement des horaires (décalage en cascade des RDV) =====
+function hmToMin(h) { const m = /^(\d{1,2}):(\d{2})$/.exec(h || ''); return m ? +m[1] * 60 + +m[2] : null; }
+function minToHm(x) { x = Math.max(0, Math.min(1439, Math.round(x))); return gpPad2(Math.floor(x / 60)) + ':' + gpPad2(x % 60); } // borné [00:00, 23:59]
+// Clients visités APRÈS un point (arrêt afterAi + heure afterMin) : arrêts suivants (tous) + même arrêt à heure postérieure.
+// Exclut le client édité, les arrêts finalisés (jour J, figés) et les clients sans heure.
+function followingClients(t, afterAi, afterMin, excludeCl) {
+  const out = [];
+  (t.arrets || []).forEach((a, ai) => {
+    if (ai < afterAi) return;
+    if (typeof a.validatedAt === 'number') return; // arrêt clôturé le jour J → figé, jamais décalé
+    (a.clients || []).forEach((cl) => {
+      if (cl === excludeCl || !cl.heure) return;
+      if (ai === afterAi) { const m = hmToMin(cl.heure); if (m == null || m <= afterMin) return; } // même arrêt : uniquement ceux visités APRÈS
+      out.push({ ai, a, cl });
+    });
+  });
+  return out;
+}
+function applyDecalage(impacted, deltaMin) { impacted.forEach(({ cl }) => { const m = hmToMin(cl.heure); if (m == null) return; cl.heure = minToHm(m + deltaMin); delete cl.heureStale; }); }
+// Modale « Ajuster les horaires » — cas DELTA CONNU (édition d'heure, insertion) : propose de décaler les RDV suivants du même écart.
+function modalAdjustHoraires(t, ctx) {
+  const impacted = followingClients(t, ctx.arretIdx, ctx.oldMin, ctx.cl);
+  let delta = ctx.deltaMin;
+  const sgn = (d) => (d >= 0 ? '+' : '−') + Math.abs(d);
+  openModal(`<div class="modal-head"><b>🕘 Ajuster les horaires</b><button class="x" id="mX">✕</button></div>
+    <p class="hint"><b>${esc(clientName(ctx.cl.clientId))}</b> déplacé à <b>${esc(minToHm(ctx.newMin))}</b> (${sgn(ctx.deltaMin)} min). Décaler d'autant les rendez-vous <b>suivants</b> de la tournée ?</p>
+    <label>Décalage à appliquer (minutes)<input type="number" id="ahDelta" step="5" value="${delta}"/></label>
+    <div class="card" style="margin:8px 0" id="ahPreview"></div>
+    <div class="actions two"><button class="btn" id="ahNo">Ne rien décaler</button><button class="btn primary" id="ahYes">Décaler</button></div>`);
+  const preview = () => {
+    $('ahPreview').innerHTML = impacted.length ? impacted.map(({ ai, cl }) => `<div class="ts-line"><span>${ai + 1}. ${esc(clientName(cl.clientId))}</span><span>${esc(cl.heure)} → <b>${esc(minToHm(hmToMin(cl.heure) + delta))}</b></span></div>`).join('') : '<div class="ts-line ts-muted">Aucun RDV suivant à décaler.</div>';
+    const y = $('ahYes'); if (y) { y.textContent = 'Décaler ' + sgn(delta) + ' min'; y.disabled = !impacted.length || delta === 0; }
+  };
+  $('mX').onclick = closeModal; $('ahNo').onclick = closeModal;
+  $('ahDelta').addEventListener('input', (e) => { const v = parseInt(e.target.value, 10); delta = isNaN(v) ? 0 : v; preview(); });
+  $('ahYes').onclick = () => { applyDecalage(impacted, delta); persistCurrentTour(); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere(); };
+  preview();
+}
 // Modale récapitulative « à compléter » : centralise ce qui manque pour une tournée, SANS l'ouvrir ni défiler.
 // Deux blocs SÉPARÉS et distincts : ① Préparation (itinéraire/adresses/heures/chevaux) · ② Clôture (jour J : paiement).
 function modalTourStatus(t) {
@@ -4620,7 +4664,7 @@ function renderEditorArrets(locked) {
         actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b><span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-acts"><button class="btn small${a.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${a.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
-          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { cl.heure = e.target.value || ''; delete cl.heureStale; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } }); } // ré-encodage → l'heure n'est plus « à revoir » ; persistCurrentTour (copie) sinon l'heure est perdue
+          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
           if (!futureTour) actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (arretPaiementDone(currentTour, a) && typeof a.validatedAt !== 'number') { a.validatedAt = Date.now(); persistCurrentTour(); } refreshEverywhere(); }, cl.clientId)); // paiement complet de l'arrêt → clôture l'arrêt (validatedAt) + rafraîchit le bandeau
           if (!futureTour) actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
