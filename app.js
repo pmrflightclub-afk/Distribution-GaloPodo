@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.61';
+const APP_VERSION = '1.2.62';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.62', date: '2026-07-12',
+    ajouts: [
+      'Planche — rognage par image : en mode « Éditer les images », activez « ✂️ Rogner des images », touchez les images à rogner (cadre rouge), puis « Valider ». Seules les images choisies sont agrandies (le rognage n\'est plus global).',
+    ],
+    corrections: [
+      'Boutons inactifs (ex. RDV / Paiement avant le jour de la tournée) : ils apparaissent désormais grisés pour montrer qu\'ils ne sont pas encore disponibles.',
+    ],
+  },
   {
     version: '1.2.61', date: '2026-07-12',
     ajouts: [
@@ -1750,7 +1759,6 @@ if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.g
 { const gg = S.planche.gridGuide; if (!(gg.marginLR2 > 0)) gg.marginLR2 = 1.0; if (!(gg.marginTB2 > 0)) gg.marginTB2 = 1.0; } // 2ᵉ repère (cible d'alignement du sujet), défaut 1 cm
 // Ajustement des images dans les cases : 'cover' = remplir (rogne l'excédent, pas de bande blanche) · 'contain' = image entière (bandes blanches si proportions ≠).
 if (S.planche.fitMode !== 'contain' && S.planche.fitMode !== 'cover') S.planche.fitMode = 'cover';
-if (typeof S.planche.crop !== 'boolean') S.planche.crop = false; // « Rogner » : zoom uniforme pour que le 1ᵉʳ repère remplisse la case (bordure constante, pas de bord visible)
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
 // { data:dataURL, zoom:multiplicateur, x/y:décalage en FRACTION du cadre (pan) } — cadrage repris à l'identique dans l'en-tête PDF.
 if (!S.proLogo || typeof S.proLogo !== 'object') S.proLogo = { data: '', zoom: 1, x: 0, y: 0 };
@@ -6631,9 +6639,10 @@ async function planchePageCanvas(pi) {
       const cover = st.fitMode !== 'contain'; // défaut : « remplir » (cover) → pas de bande blanche ; sinon « image entière » (contain)
       const s = cover ? Math.max(colW / im.width, rowH / im.height) : Math.min(colW / im.width, rowH / im.height);
       const dw = im.width * s, dh = im.height * s;
-      const T = st.cellT && st.cellT[plCellKey(pi, r, ci)];
+      const key = plCellKey(pi, r, ci), T = st.cellT && st.cellT[key];
+      const cz = (st.cellCrop && st.cellCrop[key]) ? cropZoom : 1; // « Rogner » actif sur CETTE case seulement
       ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip(); // toujours rogné à la case (cover peut déborder)
-      if (cropZoom !== 1) { ctx.translate(cx + colW / 2, ry + rowH / 2); ctx.scale(cropZoom, cropZoom); ctx.translate(-(cx + colW / 2), -(ry + rowH / 2)); } // « Rogner » : zoom uniforme autour du centre (repère 1 → bord)
+      if (cz !== 1) { ctx.translate(cx + colW / 2, ry + rowH / 2); ctx.scale(cz, cz); ctx.translate(-(cx + colW / 2), -(ry + rowH / 2)); } // zoom uniforme autour du centre (repère 1 → bord)
       if (T) { // même transfo que l'éditeur (translate·scale·rotate, origine centre)
         ctx.translate(cx + colW / 2 + (T.x || 0) * colW, ry + rowH / 2 + (T.y || 0) * rowH);
         ctx.scale(T.zoom || 1, T.zoom || 1); ctx.rotate((T.rot || 0) * Math.PI / 180);
@@ -8087,7 +8096,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, gridEdit: false, fitMode: S.planche.fitMode || 'cover', crop: !!S.planche.crop, sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -8121,8 +8130,8 @@ function modalPlancheCreate(type, prefill) {
       </section>
       <section class="card">
         <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
-        <div id="plCgridEditCtrls" style="display:none;margin:6px 0 0"><label style="display:inline-flex;align-items:center;gap:8px;margin:0"><span>✂️ Rogner</span><span class="seg seg-sm" id="plCgridCrop"></span></label></div>
-        <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (zoom, déplacement, rotation). Le cadrillage (repères) n'apparaît pas sur le PDF. « Rogner » agrandit chaque image pour que le 1ᵉʳ repère remplisse la case. Rebasculez pour revenir au mode normal (toucher une image = la retirer).</p>
+        <div id="plCgridEditCtrls" class="pl-edit-ctrls" style="display:none"><button class="btn small" id="plCgridCropMode">✂️ Rogner des images</button><button class="btn small primary" id="plCgridCropOk" style="display:none">✅ Valider le rognage (<span id="plCropN">0</span>)</button><button class="btn small" id="plCgridCropCancel" style="display:none">Annuler</button></div>
+        <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (zoom, déplacement, rotation). Le cadrillage (repères) n'apparaît pas sur le PDF. <b>Rogner des images</b> : activez, touchez les images à rogner (cadre rouge), puis <b>Valider</b> — elles seront agrandies pour que le 1ᵉʳ repère remplisse la case. Rebasculez pour revenir au mode normal (toucher une image = la retirer).</p>
         <div id="plCgrid"></div>
       </section>
       <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button>${plCreate.queueTotal ? '<button class="btn block primary" id="plCnext">' + (plCreate.queue && plCreate.queue.length ? '➡ Planche suivante' : '✅ Terminer') + '</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
@@ -8132,7 +8141,7 @@ function modalPlancheCreate(type, prefill) {
   if ($('plCfromTour')) $('plCfromTour').onclick = () => modalPlancheFromTour();
   if ($('plCnext')) $('plCnext').onclick = () => { const q = plCreate.queue || []; if (q.length) modalPlancheCreate('contact', { cheval: q[0].cheval, client: q[0].client, date: q[0].date, stade: q[0].stade || '', queue: q.slice(1), queueTotal: plCreate.queueTotal, queueIdx: plCreate.queueIdx + 1 }); else close(); };
   $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((b) => b.addEventListener('click', () => {
-    plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.cellT = {}; plCreate.sel = null;
+    plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.cellT = {}; plCreate.cellCrop = {}; plCreate.sel = null;
     $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.plcm === plCreate.modele));
     plRenderPot(); plRenderGrid();
   }));
@@ -8148,7 +8157,7 @@ function modalPlancheCreate(type, prefill) {
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
   if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; const w = $('plCcycleWrap'); if (w) w.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; }); // le champ « durée du cycle » suit le stade (parage/ferrage/déferrage)
-  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); if (plCreate.cellT) Object.keys(plCreate.cellT).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellT[k]; }); plRenderPot(); plRenderGrid(); });
+  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); if (plCreate.cellT) Object.keys(plCreate.cellT).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellT[k]; }); if (plCreate.cellCrop) Object.keys(plCreate.cellCrop).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCrop[k]; }); plRenderPot(); plRenderGrid(); });
   $('plCimport').onclick = () => $('plCfiles').click();
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
@@ -8157,16 +8166,19 @@ function modalPlancheCreate(type, prefill) {
     const updFit = () => { $('plCgridFit').innerHTML = `<button type="button" class="seg-btn${plCreate.fitMode !== 'contain' ? ' on' : ''}" data-fit="cover">⛶ Remplir</button><button type="button" class="seg-btn${plCreate.fitMode === 'contain' ? ' on' : ''}" data-fit="contain">🖼 Entière</button>`; $('plCgridFit').querySelectorAll('[data-fit]').forEach((b) => b.addEventListener('click', () => { if (plCreate.fitMode !== b.dataset.fit) { plCreate.fitMode = b.dataset.fit; S.planche.fitMode = b.dataset.fit; saveSettings(); updFit(); plRenderGrid(); } })); };
     updFit();
   }
-  if ($('plCgridCrop')) { // « Rogner » = curseur (Non / Oui), visible seulement en mode édition
-    const updCrop = () => { $('plCgridCrop').innerHTML = `<button type="button" class="seg-btn${!plCreate.crop ? ' on' : ''}" data-crop="0">Non</button><button type="button" class="seg-btn${plCreate.crop ? ' on' : ''}" data-crop="1">Oui</button>`; $('plCgridCrop').querySelectorAll('[data-crop]').forEach((b) => b.addEventListener('click', () => { const v = b.dataset.crop === '1'; if (plCreate.crop !== v) { plCreate.crop = v; S.planche.crop = v; saveSettings(); updCrop(); plRenderGrid(); } })); };
-    updCrop();
+  if ($('plCgridCropMode')) { // « Rogner des images » : sélection par image (cadre rouge) + Valider
+    $('plCgridCropMode').addEventListener('click', () => { plCreate.cropMode = !plCreate.cropMode; plCreate.cropSel = plCreate.cropMode ? new Set(Object.keys(plCreate.cellCrop || {})) : null; plUpdateCropCtrls(); plRenderGrid(); });
+    $('plCgridCropOk').addEventListener('click', () => { const nc = {}; (plCreate.cropSel || new Set()).forEach((k) => { if (plCreate.cells[k]) nc[k] = true; }); plCreate.cellCrop = nc; plCreate.cropMode = false; plCreate.cropSel = null; plUpdateCropCtrls(); plRenderGrid(); });
+    $('plCgridCropCancel').addEventListener('click', () => { plCreate.cropMode = false; plCreate.cropSel = null; plUpdateCropCtrls(); plRenderGrid(); });
   }
   if ($('plCgridEdit')) $('plCgridEdit').addEventListener('click', () => {
     plCreate.gridEdit = !plCreate.gridEdit;
+    if (!plCreate.gridEdit) { plCreate.cropMode = false; plCreate.cropSel = null; } // sortie d'édition → quitte aussi le mode rognage
     $('plCgridEdit').classList.toggle('primary', plCreate.gridEdit);
     $('plCgridEdit').textContent = plCreate.gridEdit ? '✅ Terminer l\'édition' : '✏️ Éditer les images';
     if ($('plCgridEditHint')) $('plCgridEditHint').style.display = plCreate.gridEdit ? '' : 'none';
-    if ($('plCgridEditCtrls')) $('plCgridEditCtrls').style.display = plCreate.gridEdit ? '' : 'none'; // bouton Rogner uniquement en mode édition
+    if ($('plCgridEditCtrls')) $('plCgridEditCtrls').style.display = plCreate.gridEdit ? '' : 'none'; // contrôles de rognage uniquement en mode édition
+    plUpdateCropCtrls();
     plRenderGrid();
   });
   // « Générer le PDF » = PDF propre (moteur canvas, en-tête/grille/pied) téléchargé. N'utilise PLUS window.print (qui imprimait l'interface de l'app).
@@ -8234,10 +8246,10 @@ function plRenderPot() {
     t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta') || ev.target.closest('.pl-th-assign')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
     if (showAssign) { const mb = t.querySelector('.pl-th-mb'), ang = t.querySelector('.pl-th-ang'); if (mb && ang) {
       // FIX : on NE re-dessine PAS le pot au changement (sinon la sélection partielle se réinitialisait) — on mémorise ph._mb/_ang, on place quand les deux sont choisis, et on met à jour la grille + le badge « placé » de cette vignette.
-      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; if (!plCreate.cellT) plCreate.cellT = {}; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; delete plCreate.cellT[k]; } }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); const tk = pr[0] + '_' + pr[1] + '_' + ang.value; delete plCreate.cellT[tk]; plCreate.cells[tk] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); };
+      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; if (!plCreate.cellT) plCreate.cellT = {}; if (!plCreate.cellCrop) plCreate.cellCrop = {}; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; delete plCreate.cellT[k]; delete plCreate.cellCrop[k]; } }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); const tk = pr[0] + '_' + pr[1] + '_' + ang.value; delete plCreate.cellT[tk]; delete plCreate.cellCrop[tk]; plCreate.cells[tk] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); };
       mb.addEventListener('change', applyAssign); ang.addEventListener('change', applyAssign);
     } }
-    t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; if (plCreate.cellT) delete plCreate.cellT[k]; } }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
+    t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; if (plCreate.cellT) delete plCreate.cellT[k]; if (plCreate.cellCrop) delete plCreate.cellCrop[k]; } }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
     t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; }); // pas de re-render (garde le focus)
     t.querySelector('.pl-th-setdate').addEventListener('click', () => { ph.date = plCreate.date; const di = t.querySelector('.pl-th-date'); if (di) di.value = ph.date; });
     box.appendChild(t);
@@ -8246,9 +8258,9 @@ function plRenderPot() {
 
 function plPlace(key) {
   if (!plCreate.sel) return;
-  if (!plCreate.cellT) plCreate.cellT = {};
-  Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === plCreate.sel) { delete plCreate.cells[k]; delete plCreate.cellT[k]; } }); // une photo = une seule case (elle déménage → sa transfo tombe)
-  delete plCreate.cellT[key]; // nouvelle photo dans la case → repart en « contain »
+  if (!plCreate.cellT) plCreate.cellT = {}; if (!plCreate.cellCrop) plCreate.cellCrop = {};
+  Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === plCreate.sel) { delete plCreate.cells[k]; delete plCreate.cellT[k]; delete plCreate.cellCrop[k]; } }); // une photo = une seule case (elle déménage → sa transfo/rognage tombe)
+  delete plCreate.cellT[key]; delete plCreate.cellCrop[key]; // nouvelle photo dans la case → repart neuf
   plCreate.cells[key] = plCreate.sel; plCreate.sel = null; plRenderPot(); plRenderGrid();
 }
 
@@ -8257,7 +8269,7 @@ function plRenderGrid() {
   box.innerHTML = '';
   const st = plCreate, pages = st.pages || [], angles = st.angles || [];
   const g = plGeom(st.orientation !== 'portrait', angles.length, plRefRows(st)); // géométrie PDF → ratio de case (colW:rowH) pour l'aperçu fidèle
-  const cropZoom = st.gridEdit ? 1 : plCropZoom(); // en édition : pas de crop (on voit tout + repères) ; sinon rendu final rogné
+  const cropZoom = plCropZoom(); // facteur de rognage (appliqué par case selon cellCrop, hors mode édition)
   if (!pages.length) { box.innerHTML = '<p class="hint">Aucune page configurée. Configurez la planche dans Gestion → Planche.</p>'; return; }
   pages.forEach((pg, pi) => {
     const wrap = document.createElement('div'); wrap.className = 'pl-grid-wrap';
@@ -8274,7 +8286,7 @@ function plRenderGrid() {
           st.compar.splice(ci2, 1);
           // ré-indexe cellules ET transfos de la page 0 (les lignes après celle retirée se décalent) — sinon les cadrages se déphasent
           const remap = (src) => { const out = {}; Object.keys(src || {}).forEach((k) => { const pp = k.split('_'); if (pp[0] !== '0') { out[k] = src[k]; return; } const ri = parseInt(pp[1], 10); if (ri === ci2) return; out['0_' + (ri > ci2 ? ri - 1 : ri) + '_' + pp[2] + '_' + pp[3]] = src[k]; }); return out; };
-          st.cells = remap(st.cells); if (st.cellT) st.cellT = remap(st.cellT);
+          st.cells = remap(st.cells); if (st.cellT) st.cellT = remap(st.cellT); if (st.cellCrop) st.cellCrop = remap(st.cellCrop);
           plRenderPot(); plRenderGrid();
         });
         bar.appendChild(chip);
@@ -8291,12 +8303,14 @@ function plRenderGrid() {
         const key = plCellKey(pi, r, ci), pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
         const T = st.cellT && st.cellT[key];
         const fit = st.fitMode === 'contain' ? 'contain' : 'cover';
-        const tParts = []; // en mode édition : image NON rognée + repères (pour aligner) ; sinon rendu final (rogné)
-        if (cropZoom !== 1) tParts.push(`scale(${cropZoom})`);
+        const cz = (!st.gridEdit && st.cellCrop && st.cellCrop[key]) ? cropZoom : 1; // rognage par case, hors édition (en édition on voit tout + repères)
+        const tParts = [];
+        if (cz !== 1) tParts.push(`scale(${cz})`);
         if (T) tParts.push(`translate(${(T.x || 0) * 100}%,${(T.y || 0) * 100}%) scale(${T.zoom || 1}) rotate(${T.rot || 0}deg)`);
         const imgStyle = `object-fit:${fit}` + (tParts.length ? `;transform:${tParts.join(' ')};transform-origin:center center` : '');
         const imgTag = ph && ph.url ? `<img src="${ph.url}" alt="" style="${imgStyle}"/>` : '<span class="pl-cell-ph">+</span>';
-        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}${st.gridEdit ? ' pl-cell-edit' : ''}" data-key="${key}"><div class="pl-cellbox" style="aspect-ratio:${g.colW} / ${g.rowH}">${imgTag}${st.gridEdit ? plGuideSvg() : ''}</div></td>`;
+        const cropSel = st.gridEdit && st.cropMode && st.cropSel && st.cropSel.has(key); // sélectionnée pour le rognage → cadre rouge
+        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}${st.gridEdit ? ' pl-cell-edit' : ''}${cropSel ? ' crop-sel' : ''}" data-key="${key}"><div class="pl-cellbox" style="aspect-ratio:${g.colW} / ${g.rowH}">${imgTag}${st.gridEdit ? plGuideSvg() : ''}</div></td>`;
       }).join('') + '</tr>';
     });
     html += '</tbody>';
@@ -8304,8 +8318,11 @@ function plRenderGrid() {
     tbl.querySelectorAll('.pl-cell').forEach((td) => {
       const key = td.dataset.key;
       td.addEventListener('click', () => {
-        if (st.gridEdit) { if (st.cells[key]) modalCellEdit(key); else plPlace(key); return; } // mode édition : cadrer l'image (jamais de suppression)
-        if (st.cells[key]) { delete st.cells[key]; if (st.cellT) delete st.cellT[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); }
+        if (st.gridEdit) {
+          if (st.cropMode) { if (st.cells[key]) { if (!st.cropSel) st.cropSel = new Set(); if (st.cropSel.has(key)) st.cropSel.delete(key); else st.cropSel.add(key); plRenderGrid(); plUpdateCropCtrls(); } return; } // sélection pour le rognage (cadre rouge)
+          if (st.cells[key]) modalCellEdit(key); else plPlace(key); return; // mode édition : cadrer l'image (jamais de suppression)
+        }
+        if (st.cells[key]) { delete st.cells[key]; if (st.cellT) delete st.cellT[key]; if (st.cellCrop) delete st.cellCrop[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); }
       });
       td.addEventListener('dragover', (e) => e.preventDefault());
       td.addEventListener('drop', (e) => { e.preventDefault(); plPlace(key); });
@@ -8329,12 +8346,22 @@ function plGuideSvg() {
 }
 // Facteur de zoom « Rogner » : agrandit uniformément pour que le 1ᵉʳ repère (marges) remplisse la case (le côté le plus contraint touche le bord → l'autre rogne un peu plus). 1 = pas de crop.
 function plCropZoom() {
-  const st = plCreate; if (!st || !st.crop) return 1;
+  const st = plCreate; if (!st) return 1;
   const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
   const gg = (S.planche && S.planche.gridGuide) || { marginLR: 0.5, marginTB: 0.5 };
   const mLR = 10 * (+gg.marginLR || 0), mTB = 10 * (+gg.marginTB || 0);
   const sx = g.colW > 2 * mLR ? g.colW / (g.colW - 2 * mLR) : 1, sy = g.rowH > 2 * mTB ? g.rowH / (g.rowH - 2 * mTB) : 1;
   return Math.max(1, sx, sy);
+}
+// Met à jour les boutons de rognage (libellé du bouton mode, visibilité de Valider/Annuler, compteur).
+function plUpdateCropCtrls() {
+  const st = plCreate, md = $('plCgridCropMode'); if (!st || !md) return;
+  const on = st.cropMode, n = st.cropSel ? st.cropSel.size : 0;
+  md.classList.toggle('primary', on);
+  md.textContent = on ? '✂️ Touchez les images à rogner' : '✂️ Rogner des images';
+  const okb = $('plCgridCropOk'); if (okb) okb.style.display = (on && n >= 1) ? '' : 'none';
+  const cxb = $('plCgridCropCancel'); if (cxb) cxb.style.display = on ? '' : 'none';
+  if ($('plCropN')) $('plCropN').textContent = n;
 }
 // Éditeur de cadrage d'une case (zoom + déplacement + rotation) — réutilise le moteur de renderProLogoEditor (fractions + drag pointer),
 // avec en plus la rotation. Enregistre st.cellT[key] = { zoom, x, y, rot } ; le PDF applique la même transfo, rognée à la case.
