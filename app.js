@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.81';
+const APP_VERSION = '1.2.82';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.82', date: '2026-07-12',
+    corrections: [
+      'Intercaler plusieurs nouveaux arrêts d\'un coup : le bouton « 🧭 trajet réel » vise maintenant le vrai arrêt suivant (y compris un autre arrêt intercalé), pour une estimation de délai juste.',
+      'Ordre des arrêts : un arrêt dont l\'heure est ANTÉRIEURE à celle de l\'arrêt précédent affiche « ⏱ ordre à vérifier » (heure = retour dans le temps) — pour corriger l\'ordre. L\'heure reste obligatoire et sert de repère.',
+      'Robustesse : un ajustement d\'horaires visant une tournée archivée est désormais correctement enregistré.',
+    ],
+  },
   {
     version: '1.2.81', date: '2026-07-12',
     corrections: [
@@ -4351,6 +4359,8 @@ function followingClients(t, afterAi, afterMin, excludeCl) {
   return out;
 }
 function applyDecalage(impacted, deltaMin) { impacted.forEach(({ cl }) => { const m = hmToMin(cl.heure); if (m == null) return; if (!cl.aPrevenir) cl.heureAncienne = cl.heure; cl.heure = minToHm(m + deltaMin); cl.aPrevenir = true; delete cl.heureStale; }); } // décalé → à prévenir (mémorise l'heure connue du client)
+// Persiste la BONNE tournée depuis une fenêtre d'ajustement : ouverte (clone) → persistCurrentTour ; sinon élément réel de tournees OU d'archive (B6).
+function persistTourEdit(t) { if (t === currentTour) persistCurrentTour(); else if ((archive || []).some((x) => x.id === t.id)) saveArchive(); else saveTournees(); }
 // Modale « Ajuster les horaires » — cas DELTA CONNU (édition d'heure, insertion) : propose de décaler les RDV suivants du même écart.
 function modalAdjustHoraires(t, ctx) {
   const impacted = followingClients(t, ctx.arretIdx, ctx.oldMin, ctx.cl);
@@ -4367,7 +4377,7 @@ function modalAdjustHoraires(t, ctx) {
   };
   $('mX').onclick = closeModal; $('ahNo').onclick = closeModal;
   $('ahDelta').addEventListener('input', (e) => { const v = parseInt(e.target.value, 10); delta = isNaN(v) ? 0 : v; preview(); });
-  $('ahYes').onclick = () => { applyDecalage(impacted, delta); (t === currentTour ? persistCurrentTour() : saveTournees()); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere(); };
+  $('ahYes').onclick = () => { applyDecalage(impacted, delta); persistTourEdit(t); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere(); };
   preview();
 }
 // Modale « Horaires à revoir » — cas DELTA INCONNU (suppression, réordonnancement) : l'ordre a changé, l'utilisateur
@@ -4387,7 +4397,7 @@ function modalRevoirHoraires(t) {
   $('rvBulk').addEventListener('input', (e) => { const d = parseInt(e.target.value, 10) || 0; stale.forEach((s, idx) => { const inp = list.querySelector('[data-rv="' + idx + '"]'); const base = hmToMin(s.cl.heure); if (inp && base != null) inp.value = minToHm(base + d); }); });
   $('rvOk').onclick = () => {
     stale.forEach((s, idx) => { const inp = list.querySelector('[data-rv="' + idx + '"]'); if (!inp) return; const nv = inp.value || ''; if (nv && nv !== s.cl.heure) { if (!s.cl.aPrevenir) s.cl.heureAncienne = s.cl.heure; s.cl.aPrevenir = true; } s.cl.heure = nv; delete s.cl.heureStale; });
-    (t === currentTour ? persistCurrentTour() : saveTournees()); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere();
+    persistTourEdit(t); scheduleCalPush(t); closeModal(); if (currentTour && currentTour.id === t.id) renderEditorArrets(); refreshEverywhere();
   };
 }
 // Modale « Intercaler » — pour CHAQUE arrêt où le +client vient d'ajouter le client (nouvel arrêt OU fusion) : régler l'heure,
@@ -4397,7 +4407,7 @@ function modalRevoirHoraires(t) {
 function modalIntercaler(t, placements, onDone) {
   placements = (placements || []).filter((p) => p && p.arret && p.cl);
   if (!placements.length) { if (onDone) onDone(); return; }
-  const persist = () => { if (t === currentTour) persistCurrentTour(); else saveTournees(); };
+  const persist = () => persistTourEdit(t);
   const recompute = () => { if (t === currentTour) scheduleGeoRecalc(); else recomputeTourGeo(t); }; // recalcul général une fois l'ajout validé
   const st = placements.map((p) => ({ arret: p.arret, cl: p.cl, isNew: !!p.isNew, heure: p.cl.heure || arretHeure(p.arret) || '', delai: 30, _nextA: null }));
   const hOf = (cl) => { const s = st.find((x) => x.cl === cl); return s ? hmToMin(s.heure) : hmToMin(cl.heure); }; // heure effective (placement = heure saisie)
@@ -4435,12 +4445,13 @@ function modalIntercaler(t, placements, onDone) {
     if (onDone) onDone();
   };
   const render = () => {
+    const { base } = simulate(); // ordre FINAL (nouveaux arrêts placés par heure) → « arrêt suivant » exact, même si c'est un autre nouvel arrêt (F4)
     const rowsHtml = st.map((s, i) => {
       let posTxt = 'rejoint un arrêt existant (fusion)'; let etape = ''; s._nextA = null;
       if (s.isNew) {
         const H = hmToMin(s.heure);
         if (H == null) posTxt = '⏰ heure requise pour placer l\'arrêt';
-        else { const others = t.arrets.filter((a) => !st.some((x) => x.isNew && x.arret === a)); const idx = others.filter((a) => { const ah = hmToMin(arretHeure(a)); return ah != null && ah <= H; }).length; const isFirst = idx === 0, isLast = idx >= others.length; posTxt = isLast ? 'placé en dernier' : (isFirst ? 'placé en premier' : (idx + 1) + 'ᵉ position'); s._nextA = (!isFirst && !isLast) ? others[idx] : null; if (s._nextA) etape = `<button type="button" class="btn small" data-icet="${i}">🧭 Voir le trajet réel (→ arrêt suivant)</button>`; }
+        else { const pos = base.indexOf(s.arret); const isFirst = pos === 0, isLast = pos === base.length - 1; posTxt = pos < 0 ? '—' : (isLast ? 'placé en dernier' : (isFirst ? 'placé en premier' : (pos + 1) + 'ᵉ position')); s._nextA = (pos > 0 && pos < base.length - 1) ? base[pos + 1] : null; if (s._nextA) etape = `<button type="button" class="btn small" data-icet="${i}">🧭 Voir le trajet réel (→ arrêt suivant)</button>`; }
       }
       return `<div class="card" style="margin:6px 0"><div class="li-sub"><b>${esc(labelFor(s.arret)) || 'arrêt'}</b> · ${s.isNew ? 'nouvel arrêt' : 'fusion'} — ${posTxt}</div><div class="a-grid"><label class="grow">Heure<input type="time" data-ich="${i}" value="${esc(s.heure)}"/></label><label class="grow">Délai visite+trajet (min)<input type="number" data-icd="${i}" step="5" value="${s.delai}"/></label></div>${etape}</div>`;
     }).join('');
@@ -4754,12 +4765,13 @@ function renderEditorArrets(locked) {
     const single = a.clients.length === 1 ? a.clients[0] : null; // réduction dans l'en-tête si 1 seul client
     const aFinal = !locked && arretFinalise(currentTour, a); // arrêt finalisé dans une tournée encore ouverte → figé (lecture seule), les autres restent modifiables
     const addrNoir = isAddrNoir(a.addr);
+    const _hp = i > 0 ? hmToMin(arretHeure(currentTour.arrets[i - 1])) : null, _hc = hmToMin(arretHeure(a)); const heureIncoh = (_hc != null && _hp != null && _hc < _hp); // heure de CET arrêt antérieure à celle de l'arrêt PRÉCÉDENT = retour dans le temps → ordre à vérifier (M2)
     const el = document.createElement('div'); el.className = 'arret' + (aFinal ? ' arret-locked' : '') + (addrNoir ? ' arret-noir' : ''); el.dataset.idx = i;
     el.innerHTML = `
       <div class="a-top">
         ${(locked || aFinal) ? '' : '<div class="a-drag" title="Glisser pour réordonner">⠿</div>'}
         ${(locked || aFinal) ? `<span class="a-num">${i + 1}</span>` : `<input class="a-num-in" data-order type="number" min="1" max="${N}" value="${i + 1}" title="N° d'ordre de passage (modifiable)"/>`}
-        <div class="grow"><b>${esc(labelFor(a))}</b>${aFinal ? ' <span class="badge badge-lock">🔒 clôturé</span>' : ''}${addrNoir ? ' <span class="badge badge-noir">⛔ adresse liste noire</span>' : ''}${isAddrInactif(a.addr) ? ' <span class="badge">💤 lieu inactif (référence)</span>' : ''}<div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
+        <div class="grow"><b>${esc(labelFor(a))}</b>${aFinal ? ' <span class="badge badge-lock">🔒 clôturé</span>' : ''}${addrNoir ? ' <span class="badge badge-noir">⛔ adresse liste noire</span>' : ''}${isAddrInactif(a.addr) ? ' <span class="badge">💤 lieu inactif (référence)</span>' : ''}${heureIncoh ? ' <span class="td-badge warn" title="L\'heure de cet arrêt est antérieure à celle de l\'arrêt précédent — vérifiez l\'ordre des arrêts.">⏱ ordre à vérifier</span>' : ''}<div class="li-sub">${esc(addrStr(a.addr))}${nb > 1 ? ' · <span class="badge">' + nb + ' clients ici</span>' : ''}</div></div>
         ${(locked || aFinal) ? '' : '<button class="a-del" data-del title="Retirer">✕</button>'}
       </div>
       <div class="a-grid"><label class="grow">Tarif appliqué<select data-type ${locked ? 'disabled' : ''}><option value="tournee">Tournée</option><option value="visite">Visite</option><option value="urgence">Urgence</option></select></label></div>`;
