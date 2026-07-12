@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.85';
+const APP_VERSION = '1.2.86';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.86', date: '2026-07-12',
+    ajouts: [
+      'Planche — nouvel éditeur de recadrage : l\'image entière est affichée, avec un CADRE au format de la case que vous déplacez et redimensionnez (poignées aux 4 coins) directement sur l\'image ; tout ce qui est en dehors (assombri) sera coupé. Repères + axe rouge central pour centrer le sujet, et rotation de l\'image (bouton « Cadre plein » pour réinitialiser). À « Valider (découper) », la zone du cadre devient une vraie nouvelle image qui remplit exactement la case — aperçu et PDF identiques.',
+    ],
+  },
   {
     version: '1.2.85', date: '2026-07-12',
     ajouts: [
@@ -8860,54 +8866,86 @@ function plUpdateCropCtrls() {
   const cxb = $('plCgridCropCancel'); if (cxb) cxb.style.display = on ? '' : 'none';
   if ($('plCropN')) $('plCropN').textContent = n;
 }
-// Éditeur de cadrage d'une case (zoom + déplacement + rotation) — réutilise le moteur de renderProLogoEditor (fractions + drag pointer),
-// avec en plus la rotation. Enregistre st.cellT[key] = { zoom, x, y, rot } ; le PDF applique la même transfo, rognée à la case.
+// Éditeur de recadrage : IMAGE ENTIÈRE visible + un CADRE (ratio exact de la case) qu'on déplace/redimensionne (poignées) ;
+// l'extérieur est assombri ; repères + axe rouge central pour centrer le sujet ; rotation de l'image. À Valider on DÉCOUPE
+// réellement (canvas) la zone du cadre → nouvelle image au ratio de la case (aperçu = PDF par construction).
 function modalCellEdit(key) {
   const st = plCreate; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
   if (!ph || !ph.url) return;
-  if (!st.cellT) st.cellT = {}; if (!st.cellImg) st.cellImg = {}; if (!st.cellCropDef) st.cellCropDef = {};
-  const t0 = (st.cellCropDef && st.cellCropDef[key]) || st.cellT[key] || {}; const T = { zoom: t0.zoom || 1, x: t0.x || 0, y: t0.y || 0, rot: t0.rot || 0 };
+  if (!st.cellImg) st.cellImg = {}; if (!st.cellCropDef) st.cellCropDef = {};
   const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
-  // Cadre au RATIO EXACT de la case (colW:rowH) — garantit la correspondance éditeur↔PDF — borné dans une boîte 300×380 (évite un cadre géant en portrait ou aplati si beaucoup de lignes).
-  const boxW = 300, boxH = 380; let fw, fh;
-  if (g.colW / g.rowH >= boxW / boxH) { fw = boxW; fh = Math.max(60, Math.round(boxW * g.rowH / g.colW)); }
-  else { fh = boxH; fw = Math.max(60, Math.round(boxH * g.colW / g.rowH)); }
-  // Overlay DÉDIÉ empilé au-dessus de la modale de création (openModal est mono-niveau : l'utiliser détruirait l'écran de création).
-  const ov = document.createElement('div'); ov.className = 'modal-overlay pl-ce-overlay';
-  ov.innerHTML = `<div class="modal"><div class="modal-head"><b>✏️ Cadrer l'image</b><button class="x" data-ce="x">✕</button></div>
-    <div class="pl-ce-wrap">
-      <div class="pl-ce-frame" data-ce="frame" style="width:${fw}px;height:${fh}px;max-width:100%"><img data-ce="img" src="${ph.url}" alt="" draggable="false"/>${plGuideSvg()}</div>
-      <label class="pro-logo-zoom">Zoom<input type="range" data-ce="zoom" min="0.3" max="4" step="0.02" value="${T.zoom}"/></label>
-      <label class="pro-logo-zoom">Rotation<input type="range" data-ce="rot" min="-180" max="180" step="1" value="${T.rot}"/></label>
-      <div class="pro-logo-btns"><button class="btn small" data-ce="rotL">⟲ −90°</button><button class="btn small" data-ce="rotR">⟳ +90°</button><button class="btn small" data-ce="center">Recentrer</button></div>
-      <p class="hint">Glissez l'image pour la déplacer. Le cadrillage (aperçu seulement) aide à aligner le haut du pied et l'axe central.</p>
-    </div>
-    <div class="actions"><button class="btn primary block" data-ce="ok">Valider</button><button class="btn block" data-ce="cancel">Annuler</button></div></div>`;
-  document.body.appendChild(ov);
-  const q = (n) => ov.querySelector(`[data-ce="${n}"]`);
-  const img = q('img'), frame = q('frame');
-  img.style.objectFit = st.fitMode === 'contain' ? 'contain' : 'cover'; // même base que le PDF (cover = remplir / contain = entière)
-  const close = () => { ov.remove(); };
-  const apply = () => { img.style.transform = `translate(${T.x * fw}px,${T.y * fh}px) scale(${T.zoom * (st.fitMode === 'contain' ? 1 : plRotCover(T.rot, fw, fh))}) rotate(${T.rot}deg)`; }; // zoom-de-couverture rotation → l'éditeur montre exactement le rendu PDF
-  apply();
-  q('zoom').addEventListener('input', (e) => { T.zoom = parseFloat(e.target.value) || 1; apply(); });
-  q('rot').addEventListener('input', (e) => { T.rot = parseInt(e.target.value, 10) || 0; apply(); });
-  q('rotL').onclick = () => { T.rot = ((T.rot - 90 + 540) % 360) - 180; q('rot').value = T.rot; apply(); };
-  q('rotR').onclick = () => { T.rot = ((T.rot + 90 + 540) % 360) - 180; q('rot').value = T.rot; apply(); };
-  q('center').onclick = () => { T.x = 0; T.y = 0; T.zoom = 1; T.rot = 0; q('zoom').value = 1; q('rot').value = 0; apply(); };
-  let drag = null;
-  frame.addEventListener('pointerdown', (e) => { drag = { sx: e.clientX, sy: e.clientY, ox: T.x, oy: T.y }; try { frame.setPointerCapture(e.pointerId); } catch (err) { } e.preventDefault(); });
-  frame.addEventListener('pointermove', (e) => { if (!drag) return; T.x = Math.max(-2, Math.min(2, drag.ox + (e.clientX - drag.sx) / fw)); T.y = Math.max(-2, Math.min(2, drag.oy + (e.clientY - drag.sy) / fh)); apply(); });
-  frame.addEventListener('pointerup', () => { drag = null; });
-  frame.addEventListener('pointercancel', () => { drag = null; });
-  q('x').onclick = q('cancel').onclick = close;
-  ov.addEventListener('click', (e) => { if (e.target === ov) close(); }); // clic sur le fond
-  q('ok').onclick = () => { // CUIT le recadrage : nouvelle image découpée au ratio de la case → remplace celle de la case (plus aucune transfo au rendu)
-    st.cellCropDef[key] = { zoom: T.zoom, x: T.x, y: T.y, rot: T.rot };
-    const baked = plBakeCrop(img, g.colW / g.rowH, T, st.fitMode !== 'contain');
-    if (baked) st.cellImg[key] = baked; delete st.cellT[key]; if (st.cellCrop) delete st.cellCrop[key];
-    close(); plRenderGrid();
-  };
+  const cellAR = g.colW / g.rowH;
+  const src = new Image(); src.onload = () => build(); src.onerror = () => {}; src.src = ph.url;
+  function build() {
+    const iw = src.naturalWidth, ih = src.naturalHeight; if (!iw || !ih) return;
+    const def = (st.cellCropDef[key] && st.cellCropDef[key].relW != null) ? st.cellCropDef[key] : null;
+    let rot = def ? (def.rot || 0) : 0;
+    let fr = null; // cadre en px du plan de travail {fx,fy,fw,fh} ; null = défaut (max centré)
+    const ov = document.createElement('div'); ov.className = 'modal-overlay pl-ce-overlay';
+    ov.innerHTML = `<div class="modal"><div class="modal-head"><b>✏️ Cadrer l'image</b><button class="x" data-ce="x">✕</button></div>
+      <div class="pl-ce-work" data-ce="work"><img class="pl-ce-img2" data-ce="img" src="${ph.url}" alt="" draggable="false"/><div class="pl-ce-cropframe" data-ce="fr">${plGuideSvg()}<span class="pl-ce-h" data-h="nw"></span><span class="pl-ce-h" data-h="ne"></span><span class="pl-ce-h" data-h="sw"></span><span class="pl-ce-h" data-h="se"></span></div></div>
+      <label class="pro-logo-zoom">Rotation<input type="range" data-ce="rot" min="-180" max="180" step="1" value="${rot}"/></label>
+      <div class="pro-logo-btns"><button class="btn small" data-ce="rotL">⟲ −90°</button><button class="btn small" data-ce="rotR">⟳ +90°</button><button class="btn small" data-ce="reset">Cadre plein</button></div>
+      <p class="hint">Déplacez / redimensionnez le <b>cadre</b> (poignées) sur l'image ; tournez l'image si besoin. Ce qui est <b>hors du cadre (assombri) sera coupé</b>. Les repères + <b>axe rouge central</b> aident à centrer le sujet.</p>
+      <div class="actions"><button class="btn primary block" data-ce="ok">Valider (découper)</button><button class="btn block" data-ce="cancel">Annuler</button></div></div>`;
+    document.body.appendChild(ov);
+    const q = (n) => ov.querySelector(`[data-ce="${n}"]`);
+    const work = q('work'), imgEl = q('img'), frEl = q('fr');
+    let ox = 0, oy = 0, dW = 0, dH = 0; // bbox affichée de l'image tournée
+    const bbox = (deg) => { const r = deg * Math.PI / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r)); return { W: iw * c + ih * s, H: iw * s + ih * c }; };
+    const clampFrame = () => { fr.fw = Math.min(fr.fw, dW); fr.fh = fr.fw / cellAR; if (fr.fh > dH) { fr.fh = dH; fr.fw = fr.fh * cellAR; } fr.fx = Math.max(ox, Math.min(fr.fx, ox + dW - fr.fw)); fr.fy = Math.max(oy, Math.min(fr.fy, oy + dH - fr.fh)); };
+    const paintFrame = () => { frEl.style.left = fr.fx + 'px'; frEl.style.top = fr.fy + 'px'; frEl.style.width = fr.fw + 'px'; frEl.style.height = fr.fh + 'px'; };
+    const layout = () => {
+      const workW = work.clientWidth, workH = work.clientHeight; if (!workW || !workH) { requestAnimationFrame(layout); return; }
+      const bb = bbox(rot), ds = Math.min(workW / bb.W, workH / bb.H);
+      dW = bb.W * ds; dH = bb.H * ds; ox = (workW - dW) / 2; oy = (workH - dH) / 2;
+      imgEl.style.width = (iw * ds) + 'px'; imgEl.style.height = (ih * ds) + 'px';
+      imgEl.style.left = ((workW - iw * ds) / 2) + 'px'; imgEl.style.top = ((workH - ih * ds) / 2) + 'px';
+      imgEl.style.transform = `rotate(${rot}deg)`;
+      if (!fr) { if (def) { fr = { fx: ox + def.relX * dW, fy: oy + def.relY * dH, fw: def.relW * dW, fh: def.relH * dH }; } else { let fw, fh; if (dW / dH >= cellAR) { fh = dH; fw = cellAR * dH; } else { fw = dW; fh = dW / cellAR; } fr = { fx: ox + (dW - fw) / 2, fy: oy + (dH - fh) / 2, fw, fh }; } }
+      clampFrame(); paintFrame();
+    };
+    const close = () => ov.remove();
+    q('x').onclick = q('cancel').onclick = close;
+    ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+    q('rot').addEventListener('input', (e) => { rot = parseInt(e.target.value, 10) || 0; layout(); });
+    q('rotL').onclick = () => { rot = ((rot - 90 + 540) % 360) - 180; q('rot').value = rot; layout(); };
+    q('rotR').onclick = () => { rot = ((rot + 90 + 540) % 360) - 180; q('rot').value = rot; layout(); };
+    q('reset').onclick = () => { fr = null; layout(); };
+    // Déplacer le cadre
+    frEl.addEventListener('pointerdown', (e) => {
+      if (e.target.classList.contains('pl-ce-h')) return;
+      const s0 = { x: e.clientX, y: e.clientY, fx: fr.fx, fy: fr.fy }; try { frEl.setPointerCapture(e.pointerId); } catch (err) {}
+      const mv = (ev) => { fr.fx = s0.fx + (ev.clientX - s0.x); fr.fy = s0.fy + (ev.clientY - s0.y); clampFrame(); paintFrame(); };
+      const up = () => { frEl.removeEventListener('pointermove', mv); frEl.removeEventListener('pointerup', up); };
+      frEl.addEventListener('pointermove', mv); frEl.addEventListener('pointerup', up); e.preventDefault(); e.stopPropagation();
+    });
+    // Redimensionner par les poignées (ratio verrouillé, ancré au coin opposé)
+    ov.querySelectorAll('.pl-ce-h').forEach((h) => h.addEventListener('pointerdown', (e) => {
+      e.stopPropagation(); const cn = h.dataset.h;
+      const ax = (cn === 'nw' || cn === 'sw') ? fr.fx + fr.fw : fr.fx, ay = (cn === 'nw' || cn === 'ne') ? fr.fy + fr.fh : fr.fy;
+      try { h.setPointerCapture(e.pointerId); } catch (err) {}
+      const mv = (ev) => { let nw = Math.max(30, Math.abs(ev.clientX - ax)); let nh = nw / cellAR; if (nw > dW) { nw = dW; nh = nw / cellAR; } if (nh > dH) { nh = dH; nw = nh * cellAR; } fr.fw = nw; fr.fh = nh; fr.fx = (cn === 'nw' || cn === 'sw') ? ax - nw : ax; fr.fy = (cn === 'nw' || cn === 'ne') ? ay - nh : ay; clampFrame(); paintFrame(); };
+      const up = () => { h.removeEventListener('pointermove', mv); h.removeEventListener('pointerup', up); };
+      h.addEventListener('pointermove', mv); h.addEventListener('pointerup', up); e.preventDefault();
+    }));
+    q('ok').onclick = () => { // DÉCOUPE réelle : image tournée → région du cadre → nouvelle image au ratio de la case
+      const bb = bbox(rot), tw = Math.max(1, Math.round(bb.W)), th = Math.max(1, Math.round(bb.H));
+      const tc = document.createElement('canvas'); tc.width = tw; tc.height = th;
+      const tctx = tc.getContext('2d'); tctx.translate(tw / 2, th / 2); tctx.rotate(rot * Math.PI / 180); tctx.drawImage(src, -iw / 2, -ih / 2, iw, ih);
+      const relX = (fr.fx - ox) / dW, relY = (fr.fy - oy) / dH, relW = fr.fw / dW, relH = fr.fh / dH;
+      const outH = 900, outW = Math.max(1, Math.round(outH * cellAR));
+      const oc = document.createElement('canvas'); oc.width = outW; oc.height = outH;
+      const octx = oc.getContext('2d'); octx.fillStyle = '#fff'; octx.fillRect(0, 0, outW, outH);
+      octx.drawImage(tc, relX * tw, relY * th, relW * tw, relH * th, 0, 0, outW, outH);
+      let data = ''; try { data = oc.toDataURL('image/jpeg', 0.9); } catch (err) {}
+      if (data) st.cellImg[key] = data;
+      st.cellCropDef[key] = { rot, relX, relY, relW, relH };
+      if (st.cellT) delete st.cellT[key]; if (st.cellCrop) delete st.cellCrop[key];
+      close(); plRenderGrid();
+    };
+    requestAnimationFrame(layout);
+  }
 }
 
 // Nom de fichier d'une planche : planche-<cheval>-<date>[-<stade>].
