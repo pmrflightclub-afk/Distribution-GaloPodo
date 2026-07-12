@@ -241,9 +241,21 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .pl-num { font-weight: 700; font-size: .72rem; line-height: 1; margin-bottom: 2px; }
 .pl-ev { font-size: .6rem; line-height: 1.25; border-radius: 4px; padding: 1px 3px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-tour { background: rgba(232, 114, 42, .20); }
-.pl-prive { background: rgba(120, 120, 120, .24); }
+.pl-prive { background: rgba(220, 38, 38, .22); color: var(--danger); } /* agenda privé en rouge */
 .pl-more { font-size: .58rem; color: var(--muted); margin-top: 1px; font-weight: 700; }
 .pl-has { cursor: pointer; }
+/* Bascules afficher/masquer (agenda privé / tournée) */
+.ag-tgl.ag-off { opacity: .4; text-decoration: line-through; }
+/* Vue « planning » : semaine × plage horaire (07:00→21:00, tranches 30 min) */
+.wk-scroll { overflow-x: auto; margin-top: 8px; -webkit-overflow-scrolling: touch; }
+.wk-grid { display: grid; grid-template-columns: 44px repeat(7, minmax(64px, 1fr)); min-width: 560px; border-left: 1px solid var(--line); }
+.wk-corner { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: 1px solid var(--line); }
+.wk-dayhd { position: sticky; top: 0; z-index: 2; background: var(--card); text-align: center; font-size: .72rem; font-weight: 700; color: var(--muted); padding: 5px 2px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); cursor: pointer; }
+.wk-dayhd.wk-today { color: var(--accent); }
+.wk-time { font-size: .58rem; color: var(--muted); text-align: right; padding: 0 4px; height: 22px; line-height: 22px; }
+.wk-slot { min-height: 22px; border-top: 1px solid color-mix(in srgb, var(--line) 45%, transparent); border-right: 1px solid var(--line); padding: 0 1px; }
+.wk-slot.wk-hour, .wk-time.wk-hour { border-top: 1px solid var(--line); }
+.wk-ev { font-size: .58rem; line-height: 1.2; border-radius: 3px; padding: 1px 3px; margin: 0 0 1px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .item-off { opacity: .55; }
 .fin-detail { display: flex; justify-content: space-between; gap: 8px; font-size: .72rem; color: var(--muted); padding: 1px 0 1px 10px; }
 .badge { font-size: .7rem; padding: 2px 7px; border-radius: 999px; background: #fde68a55; color: var(--warn); font-weight: 700; }

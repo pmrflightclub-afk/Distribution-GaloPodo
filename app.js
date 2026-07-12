@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.58';
+const APP_VERSION = '1.2.59';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.59', date: '2026-07-12',
+    ajouts: [
+      'Agenda : nouvelle vue « Planning » (bouton 📆) — une semaine détaillée en tranches de 30 min de 07:00 à 21:00, chaque rendez-vous placé à son heure. Flèches ◀ ▶ pour changer de semaine, bouton « Cette semaine ». La vue « Mois » condensée reste disponible (bouton 🗓).',
+      'Agenda : deux boutons pour afficher/masquer indépendamment les rendez-vous de tournée (🗺) et l\'agenda privé (📅).',
+    ],
+    corrections: [
+      'Agenda : les événements de l\'agenda privé s\'affichent maintenant en rouge.',
+    ],
+  },
   {
     version: '1.2.58', date: '2026-07-12',
     ajouts: [
@@ -1809,6 +1819,8 @@ if (typeof S.reducLiquide !== 'number' || S.reducLiquide < 0) S.reducLiquide = 2
 if (!S.agendaImported || typeof S.agendaImported !== 'object') S.agendaImported = {}; // { eventId: {clientId, title, start, location} }
 if (!S.agendaInactive || typeof S.agendaInactive !== 'object') S.agendaInactive = {}; // { eventId: true } — items masqués (section Inactifs)
 if (!S.agendaPrive || typeof S.agendaPrive !== 'object') S.agendaPrive = {}; // { eventId: {title, day, start, location} } — agenda privé (perso, non facturé)
+if (!S.agendaShow || typeof S.agendaShow !== 'object') S.agendaShow = { prive: true, tour: true }; // afficher/masquer agenda privé & tournée (indépendants)
+if (S.agendaView !== 'semaine' && S.agendaView !== 'mois') S.agendaView = 'mois'; // vue agenda : 'mois' (condensée) ou 'semaine' (planning horaire)
 if (!S.accentColor) S.accentColor = '#e8722a';
 if (typeof S.topbarColor !== 'string') S.topbarColor = '';
 if (typeof S.navBarColor !== 'string') S.navBarColor = '';
@@ -3198,7 +3210,8 @@ function dayAgendaEntries(day) {
     if (t.date !== day || statusOf(t) === 'cloturee') return; // tournées clôturées/passées exclues de l'agenda
     (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (!(cl.chevaux || []).some((cv) => !chevalCancelled(cv))) return; out.push({ heure: cl.heure || arretHeure(a), type: 'tour', label: clientLabel(cl.clientId) }); })); // 1 entrée PAR CLIENT avec SON heure (deux clients au même arrêt = deux RDV distincts) ; client entièrement annulé/reporté → retiré
   });
-  return out.sort((x, y) => (x.heure || '~').localeCompare(y.heure || '~'));
+  const show = S.agendaShow || { prive: true, tour: true };
+  return out.filter((e) => show[e.type] !== false).sort((x, y) => (x.heure || '~').localeCompare(y.heure || '~')); // masquage privé/tournée (indépendants)
 }
 // Décale un mois 'YYYY-MM' de delta mois.
 function shiftMonth(ym, delta) { let [y, m] = ym.split('-').map(Number); m += delta; while (m < 1) { m += 12; y--; } while (m > 12) { m -= 12; y++; } return y + '-' + String(m).padStart(2, '0'); }
@@ -3216,22 +3229,41 @@ function modalDay(ds) {
   $('dDate').addEventListener('change', (e) => { if (e.target.value) modalDay(e.target.value); });
 }
 // ================= PLANNING (agenda mensuel : 7 colonnes × semaines) =================
-let planningYm = null; // 'YYYY-MM' affiché
+let planningYm = null;   // 'YYYY-MM' affiché (vue mois)
+let planningWeek = null; // date (YYYY-MM-DD) dans la semaine affichée (vue semaine)
+function mondayOf(ds) { const [y, m, d] = ds.split('-').map(Number); const dt = new Date(Date.UTC(y, m - 1, d)); dt.setUTCDate(dt.getUTCDate() - ((dt.getUTCDay() + 6) % 7)); return dt.toISOString().slice(0, 10); }
+function weekLabel(ds) { const mon = mondayOf(ds), sun = addDaysStr(mon, 6); const f = (x) => { const p = x.split('-'); return p[2] + '/' + p[1]; }; return 'Sem. ' + f(mon) + ' – ' + f(sun); }
 function renderPlanning() {
   const host = $('planningBody'); if (!host) return;
+  if (!S.agendaShow) S.agendaShow = { prive: true, tour: true };
+  const view = S.agendaView === 'semaine' ? 'semaine' : 'mois';
   if (!planningYm) planningYm = todayStr().slice(0, 7);
-  const [y, m] = planningYm.split('-').map(Number);
+  if (!planningWeek) planningWeek = todayStr();
   host.innerHTML = '';
+  const sh = S.agendaShow, title = view === 'semaine' ? weekLabel(planningWeek) : monthLabel(planningYm);
   const ctrl = document.createElement('div'); ctrl.className = 'row planning-ctrl';
-  ctrl.innerHTML = `<button class="btn small" id="plPrev">◀</button><b class="planning-title">${monthLabel(planningYm)}</b><button class="btn small" id="plNext">▶</button><input type="month" id="plMonth" value="${planningYm}"/><button class="btn small" id="plToday">Ce mois</button>`;
+  ctrl.innerHTML = `<button class="btn small" id="plView">${view === 'semaine' ? '🗓 Vue mois' : '📆 Vue semaine'}</button>`
+    + `<button class="btn small" id="plPrev">◀</button><b class="planning-title">${esc(title)}</b><button class="btn small" id="plNext">▶</button>`
+    + `<button class="btn small" id="plToday">${view === 'semaine' ? 'Cette semaine' : 'Ce mois'}</button>`
+    + `<button class="btn small ag-tgl${sh.tour !== false ? '' : ' ag-off'}" id="plShowTour">🗺 Tournées</button>`
+    + `<button class="btn small ag-tgl${sh.prive !== false ? '' : ' ag-off'}" id="plShowPrive">📅 Privé</button>`;
   host.appendChild(ctrl);
+  if (view === 'semaine') renderWeekGrid(host); else renderMonthGrid(host);
+  $('plView').addEventListener('click', () => { S.agendaView = view === 'semaine' ? 'mois' : 'semaine'; saveSettings(); renderPlanning(); });
+  $('plPrev').addEventListener('click', () => { if (view === 'semaine') planningWeek = addDaysStr(planningWeek, -7); else planningYm = shiftMonth(planningYm, -1); renderPlanning(); });
+  $('plNext').addEventListener('click', () => { if (view === 'semaine') planningWeek = addDaysStr(planningWeek, 7); else planningYm = shiftMonth(planningYm, 1); renderPlanning(); });
+  $('plToday').addEventListener('click', () => { if (view === 'semaine') planningWeek = todayStr(); else planningYm = todayStr().slice(0, 7); renderPlanning(); });
+  $('plShowTour').addEventListener('click', () => { sh.tour = sh.tour === false; saveSettings(); renderPlanning(); });
+  $('plShowPrive').addEventListener('click', () => { sh.prive = sh.prive === false; saveSettings(); renderPlanning(); });
+}
+function renderMonthGrid(host) {
+  const [y, m] = planningYm.split('-').map(Number);
   const scroll = document.createElement('div'); scroll.className = 'planning-scroll';
   const grid = document.createElement('div'); grid.className = 'planning-grid';
   ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].forEach((d) => { const h = document.createElement('div'); h.className = 'pl-head'; h.textContent = d; grid.appendChild(h); });
-  const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7; // blancs avant le 1er (lundi = 0)
+  const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7;
   const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const total = Math.ceil((lead + daysInMonth) / 7) * 7;
-  const todayS = todayStr();
+  const total = Math.ceil((lead + daysInMonth) / 7) * 7, todayS = todayStr();
   for (let i = 0; i < total; i++) {
     const dayNum = i - lead + 1;
     const cell = document.createElement('div'); cell.className = 'pl-cell';
@@ -3244,14 +3276,35 @@ function renderPlanning() {
     if (entries.length > 3) hh += `<div class="pl-more">+${entries.length - 3} autre(s)</div>`;
     cell.innerHTML = hh;
     if (entries.length) cell.classList.add('pl-has');
-    cell.addEventListener('click', () => modalDay(ds)); // détail complet du jour
+    cell.addEventListener('click', () => modalDay(ds));
     grid.appendChild(cell);
   }
   scroll.appendChild(grid); host.appendChild(scroll);
-  $('plPrev').addEventListener('click', () => { planningYm = shiftMonth(planningYm, -1); renderPlanning(); });
-  $('plNext').addEventListener('click', () => { planningYm = shiftMonth(planningYm, 1); renderPlanning(); });
-  $('plToday').addEventListener('click', () => { planningYm = todayStr().slice(0, 7); renderPlanning(); });
-  $('plMonth').addEventListener('change', (e) => { if (e.target.value) { planningYm = e.target.value; renderPlanning(); } });
+}
+// Vue « planning » : une semaine, plage 07:00→21:00 par tranches de 30 min. Les événements se placent dans leur créneau de début.
+function renderWeekGrid(host) {
+  const mon = mondayOf(planningWeek), days = Array.from({ length: 7 }, (_, i) => addDaysStr(mon, i));
+  const dayNames = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'], todayS = todayStr();
+  const startH = 7, endH = 21, slots = (endH - startH) * 2;
+  const scroll = document.createElement('div'); scroll.className = 'wk-scroll';
+  const grid = document.createElement('div'); grid.className = 'wk-grid';
+  let html = '<div class="wk-corner"></div>';
+  days.forEach((ds, i) => { html += `<div class="wk-dayhd${ds === todayS ? ' wk-today' : ''}" data-day="${ds}">${dayNames[i]} ${+ds.slice(8, 10)}</div>`; });
+  for (let s = 0; s < slots; s++) {
+    const mins = startH * 60 + s * 30, isHour = (mins % 60) === 0;
+    html += `<div class="wk-time${isHour ? ' wk-hour' : ''}">${isHour ? String(Math.floor(mins / 60)).padStart(2, '0') + ':00' : ''}</div>`;
+    days.forEach((ds) => { html += `<div class="wk-slot${isHour ? ' wk-hour' : ''}" data-day="${ds}" data-slot="${s}"></div>`; });
+  }
+  grid.innerHTML = html; scroll.appendChild(grid); host.appendChild(scroll);
+  days.forEach((ds) => dayAgendaEntries(ds).forEach((e) => {
+    let idx = 0;
+    if (e.heure && /^\d{1,2}:\d{2}$/.test(e.heure)) { const [H, M] = e.heure.split(':').map(Number); idx = Math.round(((H * 60 + M) - startH * 60) / 30); }
+    idx = Math.max(0, Math.min(slots - 1, idx));
+    const cell = grid.querySelector(`.wk-slot[data-day="${ds}"][data-slot="${idx}"]`);
+    if (cell) { const ev = document.createElement('div'); ev.className = `wk-ev pl-${e.type}`; ev.innerHTML = `${e.heure ? '<b>' + esc(e.heure) + '</b> ' : ''}${esc(e.label)}`; ev.title = (e.heure ? e.heure + ' ' : '') + e.label; cell.appendChild(ev); }
+  }));
+  grid.querySelectorAll('.wk-dayhd').forEach((hd) => hd.addEventListener('click', () => modalDay(hd.dataset.day)));
+  requestAnimationFrame(() => { const now = new Date(); const cur = grid.querySelector(`.wk-slot[data-slot="${Math.max(0, Math.min(slots - 1, Math.round(((now.getHours() * 60 + now.getMinutes()) - startH * 60) / 30)))}"]`); if (cur) try { cur.scrollIntoView({ block: 'center' }); } catch { } });
 }
 // Crée un client si besoin, crée la tournée du jour si aucune n'existe (en cours / à venir), sinon ajoute le client
 // à la tournée déjà prévue à cette date ; puis l'item quitte la liste. (Jamais les tournées clôturées.)
