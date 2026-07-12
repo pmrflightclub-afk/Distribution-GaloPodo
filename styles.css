@@ -620,7 +620,9 @@ table.pl-egrid th.pl-mem { font-size: .68rem; font-weight: 700; color: var(--str
 .pl-cellbox img.pl-tr { object-fit: contain; transform-origin: center center; } /* case cadrée (cellT) : contain + transfo, comme le PDF */
 /* Cadrillage d'aide (mode édition) — aperçu seulement, jamais sur le PDF */
 .pl-guide { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.pl-guide line { stroke: rgba(20, 20, 20, .5); stroke-width: .8; vector-effect: non-scaling-stroke; }
+.pl-guide line { stroke: rgba(20, 20, 20, .45); stroke-width: .8; vector-effect: non-scaling-stroke; }
+.pl-guide line.g1 { stroke: rgba(20, 20, 20, .6); } /* repère 1 = ligne de coupe (crop) */
+.pl-guide line.g2 { stroke: #2b7bd6; stroke-dasharray: 3 2; } /* repère 2 = cible d'alignement du sujet */
 .pl-guide line.c { stroke: #e11; stroke-width: 1.2; }
 /* Éditeur de cadrage d'une case (zoom / déplacement / rotation) */
 .pl-ce-overlay { z-index: 3100; } /* au-dessus de la modale de création de planche (3000) */
