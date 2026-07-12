@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.70';
+const APP_VERSION = '1.2.71';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.71', date: '2026-07-12',
+    ajouts: [
+      'Page « Comment ça marche » (Réglages → Calcul) complétée : nouvelles étapes expliquant les actes & suppléments par cheval (parage, matériel, fourbure/NPAS/infection, difficile, lourd), les photos/planches (tarifs 3/4/5 angles, radio non facturée) et l\'urgence (tarif au km majoré) — avec vos tarifs réels.',
+      'Facture détaillée (exemple) enrichie : elle met désormais en scène une planche photo, un cheval difficile, un cheval lourd, NPAS, infection et un arrêt urgence, pour voir comment chaque ligne apparaît.',
+    ],
+  },
   {
     version: '1.2.70', date: '2026-07-12',
     ajouts: [
@@ -5432,16 +5439,17 @@ function factureDetailHtml(R) {
 }
 // Jeu de données FICTIF pour la facture détaillée (illustration) — calculé avec vos tarifs réels.
 function exampleResult() {
-  // parage coché par défaut (sinon le matériel n'est pas facturé) — illustre le couplage matériel⇄parage.
-  const ch = (nom, fourbure, npas) => ({ nom, fourbure: !!fourbure, npas: !!npas, parage: true });
+  // parage coché par défaut (sinon le matériel n'est pas facturé) ; chaque cheval illustre un supplément différent (fourbure, lourd, difficile, NPAS, infection, planche photo) + un arrêt urgence.
+  const ch = (nom, o) => Object.assign({ nom, parage: true }, o || {});
   const mk = (adresse, type, clients, segKm, directKm) => ({
     label: clients.map((c) => c.nom + (c.chevaux.length ? ' (' + c.chevaux.map((x) => x.nom).join(', ') + ')' : '')).join(' + '),
     adresse, lat: null, lon: null, type, nbClients: clients.length, clients, segKm, directKm,
   });
   const rows = [
-    mk('Rue de l\'Exemple 1, 5000 Ville-A', 'tournee', [{ clientId: 'd', nom: 'Client Dupont (ex.)', chevaux: [ch('Bella', true, false)] }], 15, 35),
-    mk('Chemin Fictif 2, 5100 Ville-B', 'tournee', [{ clientId: 'd', nom: 'Client Dupont (ex.)', chevaux: [ch('Filou')] }], 12, 30),
-    mk('Route Modèle 3, 5200 Ville-C', 'visite', [{ clientId: 'm', nom: 'Client Martin (ex.)', chevaux: [ch('Rex')] }, { clientId: 'l', nom: 'Client Leroy (ex.)', chevaux: [ch('Nala'), ch('Étoile')] }], 20, 40),
+    mk('Rue de l\'Exemple 1, 5000 Ville-A', 'tournee', [{ clientId: 'd', nom: 'Client Dupont (ex.)', chevaux: [ch('Bella', { fourbure: true, photo: { angle: 3, stades: ['Ferrage'] } })] }], 15, 35),
+    mk('Chemin Fictif 2, 5100 Ville-B', 'tournee', [{ clientId: 'd', nom: 'Client Dupont (ex.)', chevaux: [ch('Filou', { lourd: true })] }], 12, 30),
+    mk('Route Modèle 3, 5200 Ville-C', 'visite', [{ clientId: 'm', nom: 'Client Martin (ex.)', chevaux: [ch('Rex', { difficile: true })] }, { clientId: 'l', nom: 'Client Leroy (ex.)', chevaux: [ch('Nala', { npas: true }), ch('Étoile', { infection: true })] }], 20, 40),
+    mk('Avenue Urgence 4, 5300 Ville-D', 'urgence', [{ clientId: 'u', nom: 'Client Urgent (ex.)', chevaux: [ch('Tonnerre')] }], 18, 45),
   ];
   const kmLastHome = 28;
   const totalKm = rows.reduce((s, r) => s + r.segKm, 0) + kmLastHome;
@@ -10519,6 +10527,28 @@ function renderCalcul() {
       ${modesHtml}
       <p class="hint">Méthode active : « <b>${S.repartition}</b> ». La règle « parts égales » est le partage <b>équitable</b> d'une tournée commune : chaque client restant paie la même part du chemin, quel que soit son éloignement, une fois les clients proches sortis.</p></section>
     <section class="card"><h2><span class="step-n">5</span>Par client, par cheval, + TVA</h2><p>Frais d'un arrêt ÷ nombre de clients = part de chaque client. La part est ensuite ÷ nombre de chevaux de ce client à cet endroit = coût par cheval. La <b>TVA (${S.tvaRate}%)</b> est appliquée pour obtenir le TTC.</p></section>
+    <section class="card"><h2><span class="step-n">6</span>Les actes &amp; suppléments (par cheval)</h2>
+      <p>En plus du déplacement, chaque cheval facture ses actes — chacun en <b>ligne séparée</b> sur la facture, avec la TVA :</p>
+      <div class="table-wrap"><table><thead><tr><th>Ligne</th><th>Quand</th><th>TTC</th></tr></thead><tbody>
+        <tr><td>Parage &amp; équilibrage</td><td>cheval paré</td><td class="strong">${eur(ttc(S.parage.prixHT))}</td></tr>
+        <tr><td>Matériel (consommable)</td><td>avec chaque parage</td><td>${eur(ttc(baseMateriel()))}</td></tr>
+        <tr><td>Fourbure</td><td>pathologie cochée</td><td>${eur(ttc(S.fourbureHT))}</td></tr>
+        <tr><td>NPAS</td><td>pathologie cochée</td><td>${eur(ttc(S.npasHT))}</td></tr>
+        <tr><td>Infection</td><td>pathologie cochée</td><td>${eur(ttc(S.infectionHT))}</td></tr>
+        <tr><td>Cheval difficile</td><td>option cochée</td><td>${eur(ttc(S.difficileHT))}</td></tr>
+        <tr><td>Cheval lourd</td><td>fiche du cheval</td><td>${eur(ttc(S.lourdHT))}</td></tr>
+      </tbody></table></div>
+      <p class="hint">« Offrir » un acte le met à 0 € (mais garde la trace pour les stats). Le <b>parage</b> est remisable (remise liquide) ; les pathologies ne le sont pas. Un montant propre par cheval (difficile/lourd) l'emporte sur le tarif par défaut.</p></section>
+    <section class="card"><h2><span class="step-n">7</span>Photos / planches</h2>
+      <p>Cocher « Photo » sur un cheval facture <b>une fois le tarif du nombre d'angles PAR type de planche</b> facturable (parage, ferrage, déferrage…). La <b>radio</b> est suivie mais <b>jamais facturée</b>.</p>
+      <div class="table-wrap"><table><thead><tr><th>Nombre d'angles</th><th>HT</th><th>TTC</th></tr></thead><tbody>
+        <tr><td>3 angles</td><td>${eur(photoTariffHT(3))}</td><td class="strong">${eur(ttc(photoTariffHT(3)))}</td></tr>
+        <tr><td>4 angles</td><td>${eur(photoTariffHT(4))}</td><td class="strong">${eur(ttc(photoTariffHT(4)))}</td></tr>
+        <tr><td>5 angles</td><td>${eur(photoTariffHT(5))}</td><td class="strong">${eur(ttc(photoTariffHT(5)))}</td></tr>
+      </tbody></table></div>
+      <p class="hint">Ex. : un cheval avec 2 planches facturables (parage + ferrage) en 3 angles = 2 × ${eur(ttc(photoTariffHT(3)))} = <b>${eur(ttc(photoTariffHT(3) * 2))} TTC</b>.</p></section>
+    <section class="card"><h2><span class="step-n">8</span>Urgence</h2>
+      <p>Un arrêt de type <b>urgence</b> applique un tarif au km majoré sur le <b>déplacement</b> : <b>${eurkm(tarifHT('urgence'))} HT/km</b> (contre ${eurkm(tarifHT('tournee'))} en tournée), incluant le temps et le supplément d'urgence réglés. Les actes du cheval, eux, restent identiques.</p></section>
     <section class="card"><h2>Exemple chiffré (TTC, avec vos tarifs)</h2><p class="hint">3 arrêts, boucle de ${km(ex.total)} (dont ${km(ex.kmRetour)} de retour). A proche → forfait ; B partagé par 2 clients ; C urgence.</p>
       <div class="table-wrap"><table><thead><tr><th>Arrêt</th><th>Proche</th><th>Km attribué</th><th>Tarif TTC/km</th><th>Frais TTC</th></tr></thead><tbody>${exRows}</tbody></table></div>
       <div class="formula">Km partagé = ${km(ex.total)} − ${km(ex.kmProches)} = <b>${km(ex.kmRestant)}</b> · Total TTC = <b>${eur(totEx)}</b></div></section>`;
