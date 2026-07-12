@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.64';
+const APP_VERSION = '1.2.65';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.65', date: '2026-07-12',
+    corrections: [
+      'Adresses chevaux : les adresses de référence (avec leur bouton « Supprimer ») s\'affichent maintenant EN HAUT de la liste, avant les clients — elles étaient reléguées tout en bas et passaient inaperçues.',
+    ],
+    ajouts: [
+      'Ajouter une adresse de référence : case « ➕ Créer un nouveau client » — la ferme et ouvre directement la fiche de création d\'un client.',
+    ],
+  },
   {
     version: '1.2.64', date: '2026-07-12',
     corrections: [
@@ -3682,6 +3691,18 @@ function renderChevAddresses() {
   const refs = (S.lieuxRefs || []).filter((lr) => (addrStatusOf(lr.addr) || 'actif') === wantSt);
   if ($('adrChevEmpty')) { $('adrChevEmpty').style.display = (shown.length || refs.length) ? 'none' : 'block'; $('adrChevEmpty').textContent = (all.length || (S.lieuxRefs || []).length) ? 'Aucune adresse dans cette catégorie.' : 'Aucune adresse.'; }
   const srcOf = (h) => h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
+  // Adresses de référence saisies à la main (écuries) — EN TÊTE de liste (avant les clients) pour être visibles + supprimables.
+  refs.forEach((lr) => {
+    const stt = addrStatusOf(lr.addr);
+    const b = stt === 'noir' ? ' <span class="badge badge-noir">⛔ liste noire</span>' : stt === 'inactif' ? ' <span class="badge">💤 inactif</span>' : '';
+    const el = document.createElement('div'); el.className = 'list-item stack-act' + (stt !== 'actif' ? ' item-off' : '');
+    const ecu = lr.ecuriePrivee ? '🔒 Écurie privée' : (lr.ecurieNom ? '🏠 ' + esc(lr.ecurieNom) : '📍 Adresse de référence');
+    const chev = (lr.chevaux && lr.chevaux.length) ? ' · 🐴 ' + esc(lr.chevaux.join(', ')) : '';
+    el.innerHTML = `<div class="li-main"><b>${ecu}${b}</b><div class="li-sub">${esc(addrStr(lr.addr)) || '<i>adresse ?</i>'}${lr.clientRef ? ' · 👤 ' + esc(lr.clientRef) : ''}${chev}</div></div><div class="li-act li-act-col"><button class="btn small" data-lredit>Modifier</button><button class="btn small danger" data-lrdel>Supprimer</button></div>`;
+    el.querySelector('[data-lredit]').addEventListener('click', () => modalAddLieuRef(lr));
+    el.querySelector('[data-lrdel]').addEventListener('click', () => { if (!confirm('Supprimer cette adresse de référence ?')) return; S.lieuxRefs = (S.lieuxRefs || []).filter((x) => x.id !== lr.id); setAddrStatus(lr.addr, 'actif'); saveSettings(); renderChevAddresses(); });
+    box.appendChild(el);
+  });
   shown.forEach((e) => {
     const c = e.client, st = clientState(c);
     const badge = st === 'noir' ? ' <span class="badge badge-noir">liste noire</span>' : st === 'inactif' ? ' <span class="badge">inactif</span>' : '';
@@ -3699,18 +3720,6 @@ function renderChevAddresses() {
     el.querySelectorAll('[data-nom]').forEach((inp) => { const h = specInputs[+inp.dataset.nom]; inp.addEventListener('input', (ev) => { h.addrNom = ev.target.value; saveClients(); }); inp.addEventListener('change', () => renderChevAddresses()); });
     box.appendChild(el);
   });
-  // Adresses de référence saisies à la main (écuries connues, hors chevaux actuels).
-  refs.forEach((lr) => {
-    const stt = addrStatusOf(lr.addr);
-    const b = stt === 'noir' ? ' <span class="badge badge-noir">⛔ liste noire</span>' : stt === 'inactif' ? ' <span class="badge">💤 inactif</span>' : '';
-    const el = document.createElement('div'); el.className = 'list-item stack-act' + (stt !== 'actif' ? ' item-off' : '');
-    const ecu = lr.ecuriePrivee ? '🔒 Écurie privée' : (lr.ecurieNom ? '🏠 ' + esc(lr.ecurieNom) : '📍 Adresse de référence');
-    const chev = (lr.chevaux && lr.chevaux.length) ? ' · 🐴 ' + esc(lr.chevaux.join(', ')) : '';
-    el.innerHTML = `<div class="li-main"><b>${ecu}${b}</b><div class="li-sub">${esc(addrStr(lr.addr)) || '<i>adresse ?</i>'}${lr.clientRef ? ' · 👤 ' + esc(lr.clientRef) : ''}${chev}</div></div><div class="li-act li-act-col"><button class="btn small" data-lredit>Modifier</button><button class="btn small danger" data-lrdel>Supprimer</button></div>`;
-    el.querySelector('[data-lredit]').addEventListener('click', () => modalAddLieuRef(lr));
-    el.querySelector('[data-lrdel]').addEventListener('click', () => { if (!confirm('Supprimer cette adresse de référence ?')) return; S.lieuxRefs = (S.lieuxRefs || []).filter((x) => x.id !== lr.id); setAddrStatus(lr.addr, 'actif'); saveSettings(); renderChevAddresses(); });
-    box.appendChild(el);
-  });
 }
 // Ajout/édition d'une adresse de référence (écurie connue) : adresse + client de référence (facultatif) + statut (liste noire / inactif).
 function modalAddLieuRef(existing) {
@@ -3724,6 +3733,7 @@ function modalAddLieuRef(existing) {
     <label>Client de référence (facultatif)<input type="text" id="lrClient" list="lrClientList" value="${esc(w.clientRef || '')}" placeholder="ex. propriétaire / écurie"/></label>
     <datalist id="lrClientList">${clients.map((c) => `<option value="${esc(fullName(c))}"></option>`).join('')}</datalist>
     <div id="lrChevaux" style="margin:6px 0"></div>
+    <label class="chk2"><input type="checkbox" id="lrNewClient"/> ➕ Créer un nouveau client (ouvre la fiche client)</label>
     <label class="chk2"><input type="checkbox" id="lrNoir" ${w.status === 'noir' ? 'checked' : ''}/> ⛔ Refuser ce lieu (liste noire)</label>
     <label class="chk2"><input type="checkbox" id="lrInactif" ${w.status === 'inactif' ? 'checked' : ''}/> 💤 Marquer inactif</label>
     <div class="actions two"><button class="btn" id="lrCancel">Annuler</button><button class="btn primary" id="lrOk">Enregistrer</button></div>`);
@@ -3742,6 +3752,8 @@ function modalAddLieuRef(existing) {
   };
   $('lrClient').addEventListener('input', (e) => { w.clientRef = e.target.value; w.chevaux = []; renderLrChevaux(); });
   renderLrChevaux();
+  $('lrNewClient').addEventListener('change', (e) => { if (e.target.checked) { closeModal(); editClient(); } }); // ferme cette modale et ouvre la création d'un client
+
   $('lrNoir').addEventListener('change', (e) => { if (e.target.checked) $('lrInactif').checked = false; }); // statuts exclusifs
   $('lrInactif').addEventListener('change', (e) => { if (e.target.checked) $('lrNoir').checked = false; });
   $('lrOk').addEventListener('click', () => {
