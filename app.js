@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.62';
+const APP_VERSION = '1.2.63';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.63', date: '2026-07-12',
+    ajouts: [
+      'Adresses chevaux — ajouter une adresse de référence : nom de l\'écurie (au-dessus de l\'adresse) + case « Écurie privée » (si cochée, pas de nom public). Quand un client de référence est choisi, la liste de ses chevaux apparaît (à cocher ; au moins un requis). En laissant décochées « Refuser ce lieu » et « Marquer inactif », l\'adresse est ajoutée dans la liste active.',
+    ],
+    corrections: [
+      'Fiche client — adresse propre d\'un cheval : terminologie « Écurie privée » / « Nom de l\'écurie » (cohérente avec les adresses de référence).',
+    ],
+  },
   {
     version: '1.2.62', date: '2026-07-12',
     ajouts: [
@@ -3548,9 +3557,9 @@ function editClient(existing, onSaved, prefillNom, prefill) {
           <option value="specifique">Adresse spécifique</option>
         </select></label>
         ${h.addrSource === 'specifique'
-    ? `<label class="chk2 chk-wrap"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> Adresse privée (nom = nom du client)</label>
-        <label>Reprendre une adresse connue<input type="text" data-addrfind list="chevAddrList" placeholder="Nom client / société / adresse déjà connue…"/></label>${h.addrPrivee ? '' : `<label>Nom de l'adresse<input type="text" data-addrnom value="${esc(h.addrNom || '')}" placeholder="Écurie du Nord, pré de…"/></label>`}`
-    : `<p class="hint">Nom de l'adresse : <b>${esc(chevalAddrNom(w, h))}</b> (repris ${h.addrSource === 'societe' ? 'de la société' : 'du client'}).</p>`}
+    ? `<label class="chk2 chk-wrap"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> 🔒 Écurie privée (nom = nom du client)</label>
+        <label>Reprendre une adresse connue<input type="text" data-addrfind list="chevAddrList" placeholder="Nom client / société / adresse déjà connue…"/></label>${h.addrPrivee ? '' : `<label>Nom de l'écurie<input type="text" data-addrnom value="${esc(h.addrNom || '')}" placeholder="Écurie du Nord, pré de…"/></label>`}`
+    : `<p class="hint">Nom de l'écurie : <b>${esc(chevalAddrNom(w, h))}</b> (repris ${h.addrSource === 'societe' ? 'de la société' : 'du client'}).</p>`}
         <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>
       </div>`;
       row.querySelector('[data-src]').value = h.addrSource;
@@ -3675,7 +3684,9 @@ function renderChevAddresses() {
     const stt = addrStatusOf(lr.addr);
     const b = stt === 'noir' ? ' <span class="badge badge-noir">⛔ liste noire</span>' : stt === 'inactif' ? ' <span class="badge">💤 inactif</span>' : '';
     const el = document.createElement('div'); el.className = 'list-item stack-act' + (stt !== 'actif' ? ' item-off' : '');
-    el.innerHTML = `<div class="li-main"><b>📍 Adresse de référence${b}</b><div class="li-sub">${esc(addrStr(lr.addr)) || '<i>adresse ?</i>'}${lr.clientRef ? ' · 👤 ' + esc(lr.clientRef) : ''}</div></div><div class="li-act li-act-col"><button class="btn small" data-lredit>Modifier</button><button class="btn small danger" data-lrdel>Supprimer</button></div>`;
+    const ecu = lr.ecuriePrivee ? '🔒 Écurie privée' : (lr.ecurieNom ? '🏠 ' + esc(lr.ecurieNom) : '📍 Adresse de référence');
+    const chev = (lr.chevaux && lr.chevaux.length) ? ' · 🐴 ' + esc(lr.chevaux.join(', ')) : '';
+    el.innerHTML = `<div class="li-main"><b>${ecu}${b}</b><div class="li-sub">${esc(addrStr(lr.addr)) || '<i>adresse ?</i>'}${lr.clientRef ? ' · 👤 ' + esc(lr.clientRef) : ''}${chev}</div></div><div class="li-act li-act-col"><button class="btn small" data-lredit>Modifier</button><button class="btn small danger" data-lrdel>Supprimer</button></div>`;
     el.querySelector('[data-lredit]').addEventListener('click', () => modalAddLieuRef(lr));
     el.querySelector('[data-lrdel]').addEventListener('click', () => { if (!confirm('Supprimer cette adresse de référence ?')) return; S.lieuxRefs = (S.lieuxRefs || []).filter((x) => x.id !== lr.id); setAddrStatus(lr.addr, 'actif'); saveSettings(); renderChevAddresses(); });
     box.appendChild(el);
@@ -3683,26 +3694,43 @@ function renderChevAddresses() {
 }
 // Ajout/édition d'une adresse de référence (écurie connue) : adresse + client de référence (facultatif) + statut (liste noire / inactif).
 function modalAddLieuRef(existing) {
-  const w = existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), addr: emptyAddr(), clientRef: '', status: 'noir' };
-  w.addr = toAddr(w.addr);
+  const w = existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), addr: emptyAddr(), clientRef: '', status: 'noir', ecurieNom: '', ecuriePrivee: false, chevaux: [] };
+  w.addr = toAddr(w.addr); if (!Array.isArray(w.chevaux)) w.chevaux = [];
   openModal(`<div class="modal-head"><b>📍 ${existing ? 'Modifier' : 'Ajouter'} une adresse de référence</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Enregistrez un lieu connu (écurie) même sans cheval actuel — pour garder une trace et être averti s'il réapparaît (déménagement d'un cheval, nouveau client). Vous pouvez le passer en liste noire ou inactif.</p>
+    <p class="hint">Enregistrez un lieu connu (écurie) même sans cheval actuel — pour garder une trace et être averti s'il réapparaît. Décochez les deux cases du bas pour l'ajouter dans les adresses <b>actives</b>.</p>
+    <label class="chk2"><input type="checkbox" id="lrEcuriePrivee" ${w.ecuriePrivee ? 'checked' : ''}/> 🔒 Écurie privée (pas de nom public)</label>
+    <label>Nom de l'écurie<input type="text" id="lrEcurieNom" value="${esc(w.ecurieNom || '')}" placeholder="ex. Écurie du Nord" ${w.ecuriePrivee ? 'disabled' : ''}/></label>
     <div id="lrAddr"></div>
-    <label>Client de référence (facultatif)<input type="text" id="lrClient" list="lrClientList" value="${esc(w.clientRef || '')}" placeholder="ex. ancien propriétaire / écurie"/></label>
+    <label>Client de référence (facultatif)<input type="text" id="lrClient" list="lrClientList" value="${esc(w.clientRef || '')}" placeholder="ex. propriétaire / écurie"/></label>
     <datalist id="lrClientList">${clients.map((c) => `<option value="${esc(fullName(c))}"></option>`).join('')}</datalist>
+    <div id="lrChevaux" style="margin:6px 0"></div>
     <label class="chk2"><input type="checkbox" id="lrNoir" ${w.status === 'noir' ? 'checked' : ''}/> ⛔ Refuser ce lieu (liste noire)</label>
     <label class="chk2"><input type="checkbox" id="lrInactif" ${w.status === 'inactif' ? 'checked' : ''}/> 💤 Marquer inactif</label>
     <div class="actions two"><button class="btn" id="lrCancel">Annuler</button><button class="btn primary" id="lrOk">Enregistrer</button></div>`);
   mountAddress($('lrAddr'), w.addr, (a) => { w.addr = a; });
   $('mX').onclick = closeModal; $('lrCancel').onclick = closeModal;
-  $('lrClient').addEventListener('input', (e) => { w.clientRef = e.target.value; });
+  $('lrEcuriePrivee').addEventListener('change', (e) => { w.ecuriePrivee = e.target.checked; $('lrEcurieNom').disabled = e.target.checked; }); // privée → pas de nom public
+  $('lrEcurieNom').addEventListener('input', (e) => { w.ecurieNom = e.target.value; });
+  const refClient = () => clients.find((c) => w.clientRef && norm(fullName(c)) === norm(w.clientRef));
+  const renderLrChevaux = () => {
+    const box = $('lrChevaux'); if (!box) return; const cli = refClient();
+    const noms = cli ? (cli.chevaux || []).map((h) => h.nom).filter(Boolean) : [];
+    if (!noms.length) { box.innerHTML = cli ? '<p class="hint" style="margin:0">Ce client n\'a aucun cheval enregistré.</p>' : ''; return; }
+    if (!w.chevaux.length || w.chevaux.some((n) => !noms.includes(n))) w.chevaux = noms.slice(); // client (re)choisi → tous cochés par défaut
+    box.innerHTML = `<div class="li-sub" style="margin-bottom:2px">Chevaux concernés (au moins un) :</div>` + noms.map((n) => `<label class="chk" style="display:flex"><input type="checkbox" data-lrchev="${esc(n)}" ${w.chevaux.includes(n) ? 'checked' : ''}/> 🐴 ${esc(n)}</label>`).join('');
+    box.querySelectorAll('[data-lrchev]').forEach((inp) => inp.addEventListener('change', (e) => { const n = inp.dataset.lrchev; if (e.target.checked) { if (!w.chevaux.includes(n)) w.chevaux.push(n); } else w.chevaux = w.chevaux.filter((x) => x !== n); }));
+  };
+  $('lrClient').addEventListener('input', (e) => { w.clientRef = e.target.value; w.chevaux = []; renderLrChevaux(); });
+  renderLrChevaux();
   $('lrNoir').addEventListener('change', (e) => { if (e.target.checked) $('lrInactif').checked = false; }); // statuts exclusifs
   $('lrInactif').addEventListener('change', (e) => { if (e.target.checked) $('lrNoir').checked = false; });
   $('lrOk').addEventListener('click', () => {
     if (!addrStr(w.addr).trim()) { alert('Renseignez l\'adresse.'); return; }
+    if (!w.ecuriePrivee && !w.ecurieNom.trim() && !w.clientRef.trim()) { alert('Donnez un nom d\'écurie, ou cochez « Écurie privée », ou choisissez un client de référence.'); return; }
+    if (refClient() && (refClient().chevaux || []).some((h) => h.nom) && !w.chevaux.length) { alert('Choisissez au moins un cheval pour ce client de référence.'); return; }
     w.status = $('lrNoir').checked ? 'noir' : ($('lrInactif').checked ? 'inactif' : 'actif');
     if (!Array.isArray(S.lieuxRefs)) S.lieuxRefs = [];
-    if (existing && addrKey(existing.addr) !== addrKey(w.addr) && !(S.lieuxRefs || []).some((x) => x.id !== w.id && addrKey(x.addr) === addrKey(existing.addr))) setAddrStatus(existing.addr, 'actif'); // adresse modifiée → nettoie l'ancien statut orphelin (si plus aucune réf ne l'utilise)
+    if (existing && addrKey(existing.addr) !== addrKey(w.addr) && !(S.lieuxRefs || []).some((x) => x.id !== w.id && addrKey(x.addr) === addrKey(existing.addr))) setAddrStatus(existing.addr, 'actif'); // adresse modifiée → nettoie l'ancien statut orphelin
     const i = S.lieuxRefs.findIndex((x) => x.id === w.id); if (i >= 0) S.lieuxRefs[i] = w; else S.lieuxRefs.push(w);
     setAddrStatus(w.addr, w.status); // répercute le statut sur le LIEU → badge dans les tournées si l'adresse réapparaît
     saveSettings(); closeModal(); renderChevAddresses();
