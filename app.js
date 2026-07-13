@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.9';
+const APP_VERSION = '1.4.0';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.4.0', date: '2026-07-13',
+    corrections: [
+      'Ajouter un client (＋ Client) qui a plusieurs chevaux à la MÊME adresse : vous pouvez enfin cocher lesquels seront vus (au moins un). Avant, le choix n\'apparaissait que si les chevaux étaient à des adresses différentes — sinon TOUS les chevaux étaient ajoutés d\'office. Le bouton « Intercaler » utilise cette même sélection (il ne gère que les horaires, pas les chevaux).',
+    ],
+    modifs: [
+      'Synchronisation Google Drive moins fréquente : elle ne se déclenche plus à chaque saisie (c\'était trop). Elle a lieu au DÉMARRAGE de l\'app, à sa FERMETURE (mise en arrière-plan), et aux moments importants (paiement enregistré, clôture de tournée, fusion de données). Vos données restent enregistrées en permanence sur l\'appareil — rien n\'est perdu ; l\'app met le Drive à jour à la prochaine synchro.',
+    ],
+  },
   {
     version: '1.3.9', date: '2026-07-13',
     corrections: [
@@ -2556,7 +2565,7 @@ const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'so
 function saveSettings() {
   S.updatedAt = Date.now();
   SETTINGS_COLLECTIONS.forEach((k) => { if (Array.isArray(S[k])) syncStamp('set:' + k, S[k]); }); // horodatage + tombstones par enregistrement (survit à la fusion multi-appareils)
-  LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); scheduleDrivePush(); bgSaveFlash();
+  LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); markSyncDirty(); bgSaveFlash();
 }
 // Sauvegarde d'une personnalisation de couleur (thème / badges) : horodatage DÉDIÉ pour que la fusion Drive garde la
 // couleur la PLUS récente au lieu de suivre l'objet réglages « gagnant » global (sinon une couleur changée sur un
@@ -2691,9 +2700,9 @@ function syncStamp(kind, arr) {
   Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = now; delete m.hash[kind][id]; } }); // disparu → tombstone
   saveSyncMeta(m);
 }
-function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); scheduleDrivePush(); bgSaveFlash(); }
-function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); scheduleDrivePush(); bgSaveFlash(); }
-function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); scheduleDrivePush(); bgSaveFlash(); }
+function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); markSyncDirty(); bgSaveFlash(); }
+function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); markSyncDirty(); bgSaveFlash(); }
+function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); markSyncDirty(); bgSaveFlash(); }
 
 // ---------- Synchro D1 : fusion idempotente (moteur pur — utilisé par l'import fichier et, plus tard, Drive) ----------
 // Union de deux collections par id : garde le updatedAt le plus élevé ; un tombstone plus récent supprime l'enregistrement.
@@ -3078,7 +3087,7 @@ async function googleSync(interactive, statusEl, reload) {
     }
     const snap = exportSnapshot(); const sz = await snapshotUploadSize(snap);
     setS('', 'Envoi… ' + humanSize(sz.gz || sz.json) + (sz.gz ? ' (compressé)' : ''));
-    await driveUpload(token, f ? f.id : null, snap); _lastPushHash = snapshotHash(snap);
+    await driveUpload(token, f ? f.id : null, snap); _lastPushHash = snapshotHash(snap); _syncDirty = false;
     if (reload) { setS('ok', 'Synchronisé ✔ Rechargement…'); setTimeout(() => location.reload(), 800); }
     else { setS('ok', 'Synchronisé ✔'); refreshEverywhere(); if ($('tab-accueil').classList.contains('active')) renderHome(); if ($('tab-agenda') && $('tab-agenda').classList.contains('active')) renderAgendaItems(); }
   } catch (e) { setS('err', 'Erreur : ' + e.message); }
@@ -3101,11 +3110,24 @@ function applySyncMode(mode) {
 // Envoi automatique vers Drive à CHAQUE modification utilisateur (débattu ~4 s pour regrouper les rafales de saisie).
 // Toujours une fusion (télécharge → fusionne → renvoie) : ne perd pas les modifs faites sur l'autre appareil. Silencieux.
 let _drivePushTimer = null;
+let _syncDirty = false; // des modifications locales attendent d'être envoyées au Drive. L'envoi est DIFFÉRÉ (fermeture de l'app + jalons) pour éviter une synchro à chaque frappe — les données sont TOUJOURS déjà écrites en local, donc rien n'est perdu.
+// Marque « à synchroniser » sans déclencher d'envoi (utilisé par les enregistrements de routine).
+function markSyncDirty() { _syncDirty = true; }
+// Programme un envoi Drive (débounce 4 s) — réservé aux JALONS importants (paiement, clôture, fusion) où l'on veut propager vite.
 function scheduleDrivePush() {
   if (S.syncMode !== 'drive') return;                  // mode fichier actif → pas d'envoi Drive automatique
   if (!(S.googleAutoSync && S.googleClientId)) return; // synchro auto désactivée ou non configurée
+  markSyncDirty();
   if (_drivePushTimer) clearTimeout(_drivePushTimer);
   _drivePushTimer = setTimeout(() => { _drivePushTimer = null; drivePushNow(); }, 4000);
+}
+// Synchro « à la fermeture » : l'app passe en arrière-plan / se ferme → on tente d'envoyer TOUT DE SUITE ce qui attend (best-effort ;
+// le navigateur peut couper l'onglet avant la fin, mais la synchro au prochain démarrage rattrapera — les données locales sont intactes).
+function driveSyncOnExit() {
+  if (!_syncDirty) return;
+  if (S.syncMode !== 'drive' || !(S.googleAutoSync && S.googleClientId)) return;
+  if (_drivePushTimer) { clearTimeout(_drivePushTimer); _drivePushTimer = null; }
+  drivePushNow();
 }
 async function drivePushNow() {
   if (S.syncMode !== 'drive') return;
@@ -3117,9 +3139,9 @@ async function drivePushNow() {
     const f = await driveFindFile(token);
     if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); }
     const snap = exportSnapshot(); const h = snapshotHash(snap);
-    if (h === _lastPushHash) return; // E2 : rien de neuf depuis le dernier envoi → on évite un aller-retour inutile
-    await driveUpload(token, f ? f.id : null, snap); _lastPushHash = h;
-  } catch { /* hors-ligne ou jeton non consenti : la synchro au prochain boot rattrapera */ }
+    if (h === _lastPushHash) { _syncDirty = false; return; } // E2 : rien de neuf depuis le dernier envoi → on évite un aller-retour inutile
+    await driveUpload(token, f ? f.id : null, snap); _lastPushHash = h; _syncDirty = false; // envoyé → plus rien en attente
+  } catch { /* hors-ligne ou jeton non consenti : la synchro au prochain boot rattrapera (on garde _syncDirty pour réessayer) */ }
   finally { bgOp('drive', null); }
 }
 // D3 (mode fichier) : lit un fichier de synchro et le FUSIONNE (sans écraser).
@@ -5181,16 +5203,23 @@ function chevalAddresses() {
 }
 function chooseClientTargets(c) {
   const chs = activeChevaux(c); // seuls les chevaux actifs (hors inactif / liste noire) sont proposés
+  // 0 ou 1 cheval → rien à choisir : on ajoute directement.
+  if (chs.length <= 1) { const res = addClientToTour(c, chs); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); maybeIntercaler(res); return; }
+  // Plusieurs chevaux → on laisse TOUJOURS choisir lesquels seront vus (au moins un), même s'ils sont à la même adresse
+  // (avant : la sélection n'apparaissait que pour des adresses différentes → on ne pouvait pas ne visiter qu'une partie des chevaux).
   const distinct = new Set(chs.map((h) => norm(addrStr(chevalAddr(c, h)))));
-  if (!chs.length || distinct.size <= 1) { const res = addClientToTour(c, chs); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); maybeIntercaler(res); return; }
+  const multiAddr = distinct.size > 1;
   const picked = new Set(chs.map((_, i) => i));
   openModal(`<div class="modal-head"><b>Chevaux — ${esc(fullName(c))}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Ce client a des chevaux à des adresses différentes. Cochez ceux à visiter (un arrêt par adresse).</p>
+    <p class="hint">Cochez le(s) cheval(aux) à visiter (au moins un).${multiAddr ? ' Les chevaux à des adresses différentes créent un arrêt par adresse.' : ''}</p>
     <div id="chList"></div><div class="actions"><button class="btn primary block" id="addSel">Ajouter la sélection</button></div>`);
   $('mX').addEventListener('click', closeModal);
   const box = $('chList');
-  chs.forEach((h, i) => { const row = document.createElement('label'); row.className = 'chk'; row.style.marginBottom = '8px'; row.innerHTML = `<input type="checkbox" checked/> <b>${esc(h.nom || 'cheval')}</b> — ${esc(addrStr(chevalAddr(c, h)))}`; row.querySelector('input').addEventListener('change', (e) => { e.target.checked ? picked.add(i) : picked.delete(i); }); box.appendChild(row); });
-  $('addSel').addEventListener('click', () => { const res = addClientToTour(c, chs.filter((_, i) => picked.has(i))); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); maybeIntercaler(res); });
+  const okBtn = $('addSel');
+  const refreshOk = () => { okBtn.disabled = picked.size === 0; }; // au moins un cheval requis
+  chs.forEach((h, i) => { const row = document.createElement('label'); row.className = 'chk'; row.style.marginBottom = '8px'; row.innerHTML = `<input type="checkbox" checked/> <b>${esc(h.nom || 'cheval')}</b>${multiAddr ? ' — ' + esc(addrStr(chevalAddr(c, h))) : ''}`; row.querySelector('input').addEventListener('change', (e) => { e.target.checked ? picked.add(i) : picked.delete(i); refreshOk(); }); box.appendChild(row); });
+  refreshOk();
+  okBtn.addEventListener('click', () => { if (picked.size === 0) return; const res = addClientToTour(c, chs.filter((_, i) => picked.has(i))); closeModal(); renderEditorArrets(); scheduleGeoRecalc(); maybeIntercaler(res); });
 }
 // Après un +client : si un arrêt NOUVEAU a été ajouté à une tournée qui avait déjà des arrêts → proposer l'intercalation.
 function maybeIntercaler(res) { if (res && res.preExisting && res.placements && res.placements.length) modalIntercaler(currentTour, res.placements); }
@@ -6782,7 +6811,7 @@ function autoCloseOverdueTours() {
       t.endedAt = deadline; t.closed = true; t.autoClosedAt = deadline; changed = true;
     }
   });
-  if (changed) saveTournees();
+  if (changed) { saveTournees(); scheduleDrivePush(); } // clôture (auto) = JALON → synchro Drive rapide
 }
 function renderTravail() {
   const box = $('travailList'); if (!box) return; box.innerHTML = '';
@@ -9868,7 +9897,7 @@ function persistTourAnywhere(t) {
 function recoverTour(t) {
   if (!confirm('Récupérer l\'ancienne tournée du ' + fmtDateFr(t.date) + ' ? Elle est figée à sa date (arrêts non modifiables). Vous pourrez compléter ses données manquantes (heures de RDV, temps de route, durées de consultation) pour des statistiques complètes.')) return;
   t.recovered = true; t.closed = true;
-  persistTourAnywhere(t);
+  persistTourAnywhere(t); scheduleDrivePush(); // récupération/clôture = JALON → synchro Drive rapide
   renderHome();
   modalRecoverStats(t);
 }
@@ -10365,7 +10394,7 @@ function renderHomeTrajet() {
         { label: navLabel(), onClick: () => openNav(retAddr) },
         { label: 'Route (temps réel du retour)', onClick: () => modalReturnTime(t, estRet, renderHomeTrajet) },
       ]));
-      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourFinalizeBlock(t); if (blk.length) { alert('🔒 Clôture impossible — chaque arrêt doit être finalisé (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); renderHome(); });
+      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourFinalizeBlock(t); if (blk.length) { alert('🔒 Clôture impossible — chaque arrêt doit être finalisé (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); scheduleDrivePush(); renderHome(); }); // clôture = JALON → synchro Drive rapide
       box.appendChild(rr);
     }
   });
@@ -10827,7 +10856,7 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
   };
   // Bouton « RDV » (programmer le suivi) : sauvegarde d'abord le paiement en cours, puis ouvre la planification ; retour au paiement à la fermeture.
   document.querySelectorAll('[data-rdv]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalRDV(t, arret, b.dataset.rdv, () => modalPayment(t, arret, after, onCommit)); }));
-  $('payOk').addEventListener('click', () => { if ($('payOk').disabled) return; commitPayments(); if (onCommit) onCommit(); closeModal(); if (after) after(); }); // payOk désactivé si incomplet → pas de validation possible
+  $('payOk').addEventListener('click', () => { if ($('payOk').disabled) return; commitPayments(); if (onCommit) onCommit(); scheduleDrivePush(); closeModal(); if (after) after(); }); // payOk désactivé si incomplet → pas de validation possible. Paiement = JALON → synchro Drive rapide.
 }
 // Reste « reporté » (liquide, à percevoir à la prochaine visite) rattaché au client.
 function setClientImpaye(t, cid, resteTTC) {
@@ -11805,6 +11834,10 @@ window.addEventListener('DOMContentLoaded', () => {
   const _bootUpdate = checkForUpdate(); // vérifie une nouvelle version au lancement ; si MAJ → purge+reload (la synchro Drive attend ce contrôle, cf. plus bas)
   applyTheme(); // couleur du thème (bandeau & boutons)
   applyBadgeColors(); // couleurs personnalisées des badges
+  // Synchro « à la fermeture » : quand l'app passe en arrière-plan ou se ferme, on envoie tout de suite au Drive ce qui attend.
+  // (La synchro régulière à chaque frappe a été retirée — trop fréquente ; les données sont de toute façon enregistrées en local.)
+  document.addEventListener('visibilitychange', () => { if (document.hidden) driveSyncOnExit(); });
+  window.addEventListener('pagehide', driveSyncOnExit);
   const av = $('appVersion'); if (av) av.textContent = 'v' + APP_VERSION;
   const avTop = $('appVerTop'); if (avTop) avTop.textContent = 'v' + APP_VERSION;
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -11900,7 +11933,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
     currentTour.closed = true;
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
-    saveTournees(); scheduleCalPush(currentTour); openEditor();
+    saveTournees(); scheduleDrivePush(); scheduleCalPush(currentTour); openEditor(); // clôture = JALON → synchro Drive rapide
   });
   $('edBack').addEventListener('click', () => showTab('tournees'));
   $('edAddArret').addEventListener('click', pickClientForArret);
