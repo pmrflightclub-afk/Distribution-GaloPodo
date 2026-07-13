@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.8';
+const APP_VERSION = '1.3.9';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.9', date: '2026-07-13',
+    corrections: [
+      'Sécurité des données renforcée : les suppressions (fiches/tournées effacées) sont désormais mémorisées dans un espace de stockage DÉDIÉ et protégé, séparé des empreintes de synchronisation. Même si la mémoire du navigateur venait à saturer, l\'app ne libère QUE les empreintes (qui se recalculent seules) et ne touche JAMAIS à la mémoire des suppressions — une fiche supprimée ne peut donc pas « réapparaître » après une synchronisation. Vos données professionnelles (clients, compta, statistiques) sont préservées en toutes circonstances.',
+    ],
+  },
   {
     version: '1.3.8', date: '2026-07-13',
     corrections: [
@@ -2019,10 +2025,25 @@ const LS = {
   set(k, v) {
     try { localStorage.setItem(k, JSON.stringify(v)); }
     catch (e) {
-      // Quota localStorage dépassé : « ftr.syncmeta » (empreintes de synchro) est RECONSTRUCTIBLE → on le purge pour libérer
-      // de la place puis on réessaie une fois. Il sera reconstruit paresseusement au prochain enregistrement (empreintes compactes).
+      // Quota localStorage dépassé. On libère de la place en jetant UNIQUEMENT les empreintes de synchro (« ftr.syncmeta » →
+      // m.hash), qui sont RECONSTRUCTIBLES. Les TOMBSTONES (suppressions, « ftr.tomb ») ne sont PAS reconstructibles : on les
+      // met à l'abri AVANT toute purge (y compris ceux d'un ancien format combiné) → aucune fiche supprimée ne peut réapparaître.
       const quota = e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014);
-      if (quota) { try { localStorage.removeItem('ftr.syncmeta'); localStorage.setItem(k, JSON.stringify(v)); return; } catch (e2) { /* toujours plein */ } }
+      if (quota) {
+        try {
+          let old = {}, durable = {};
+          try { old = JSON.parse(localStorage.getItem('ftr.syncmeta') || '{}') || {}; } catch (e0) {}
+          try { durable = JSON.parse(localStorage.getItem('ftr.tomb') || '{}') || {}; } catch (e0) {}
+          const oldTomb = (old && old.tomb) || {};
+          Object.keys(oldTomb).forEach((kind) => { durable[kind] = durable[kind] || {}; const src = oldTomb[kind] || {}; Object.keys(src).forEach((id) => { durable[kind][id] = Math.max(durable[kind][id] || 0, src[id]); }); });
+          // ORDRE : alléger d'abord « ftr.syncmeta » (jette les empreintes = libère la place), PUIS écrire les tombstones (les
+          // salvés sont déjà en mémoire dans `durable`), enfin réécrire la valeur cible. Les tombstones ne sont jamais perdus.
+          localStorage.setItem('ftr.syncmeta', JSON.stringify({ hash: {} })); // on ne jette QUE les empreintes (reconstructibles)
+          localStorage.setItem('ftr.tomb', JSON.stringify(durable));          // petit, durable — JAMAIS purgé
+          localStorage.setItem(k, JSON.stringify(v));
+          return;
+        } catch (e2) { /* toujours plein après purge → on laisse remonter l'erreur (pas d'écrasement silencieux) */ }
+      }
       throw e;
     }
   },
@@ -2643,7 +2664,20 @@ function hashStr(s) {
 // (≈ 12 caractères), pas la copie JSON complète — sinon « ftr.syncmeta » dupliquait TOUTES les données (clients + tournées +
 // collections de réglages) et faisait déborder le quota localStorage. Seule l'ÉGALITÉ compte pour détecter un changement.
 function hashRec(rec) { const c = {}; for (const k in rec) if (k !== 'updatedAt') c[k] = rec[k]; return hashStr(JSON.stringify(c)); }
-function syncMeta() { const m = LS.get('ftr.syncmeta', {}); m.hash = m.hash || {}; m.tomb = m.tomb || {}; return m; }
+// Métadonnées de synchro en DEUX stores distincts :
+//  - « ftr.syncmeta » = empreintes de contenu (m.hash) — reconstructibles, purgeables si le quota déborde.
+//  - « ftr.tomb »     = tombstones (suppressions) — NON reconstructibles, petits, JAMAIS purgés.
+// Séparer les deux garantit qu'une libération d'espace ne peut jamais faire réapparaître une fiche supprimée.
+function syncMeta() {
+  const m = LS.get('ftr.syncmeta', {}); m.hash = m.hash || {};
+  // Tombstones : store dédié en priorité ; sinon migration depuis l'ancien format combiné (m.tomb dans ftr.syncmeta).
+  let tomb = LS.get('ftr.tomb', null);
+  if (tomb == null) { tomb = m.tomb || {}; if (m.tomb) LS.set('ftr.tomb', tomb); } // migre une seule fois vers le store durable
+  m.tomb = tomb || {};
+  return m;
+}
+// Persiste les métadonnées : d'abord les tombstones (petits, durables), ensuite les empreintes seules (sans les tombstones).
+function saveSyncMeta(m) { LS.set('ftr.tomb', (m && m.tomb) || {}); LS.set('ftr.syncmeta', { hash: (m && m.hash) || {} }); }
 // Pose updatedAt sur les enregistrements modifiés et enregistre les suppressions en tombstones (par « kind »).
 function syncStamp(kind, arr) {
   const m = syncMeta(); m.hash[kind] = m.hash[kind] || {}; m.tomb[kind] = m.tomb[kind] || {};
@@ -2655,7 +2689,7 @@ function syncStamp(kind, arr) {
     if (m.tomb[kind][rec.id] && m.tomb[kind][rec.id] <= (rec.updatedAt || 0)) delete m.tomb[kind][rec.id]; // réapparu → tombstone périmé
   });
   Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = now; delete m.hash[kind][id]; } }); // disparu → tombstone
-  LS.set('ftr.syncmeta', m);
+  saveSyncMeta(m);
 }
 function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); scheduleDrivePush(); bgSaveFlash(); }
 function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); scheduleDrivePush(); bgSaveFlash(); }
@@ -2777,7 +2811,7 @@ function applyMerged(merged) {
   // enregistrements venus de l'autre appareil (fin du « churn » d'horodatage qui pouvait fausser les futures fusions).
   const rehash = (kind, arr) => { m.hash[kind] = {}; (arr || []).forEach((r) => { if (r && r.id) m.hash[kind][r.id] = hashRec(r); }); };
   rehash('clients', clients); rehash('tournees', tournees.concat(archive)); SETTINGS_COLLECTIONS.forEach((k) => rehash('set:' + k, S[k]));
-  LS.set('ftr.syncmeta', m);
+  saveSyncMeta(m);
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
   // Une fusion peut avoir changé les couleurs de thème/badges → les ré-appliquer tout de suite (bandeau, boutons, badges) et
   // rafraîchir les pastilles si l'écran Réglages est ouvert, sinon l'affichage garde les anciennes couleurs jusqu'à un reload.
@@ -3019,7 +3053,7 @@ function applyRemoteReplace(remote) {
   const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
   const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
   tournees = tours.filter((t) => !isArch(t)); archive = tours.filter(isArch);
-  const m = syncMeta(); m.tomb = Object.assign({}, remote.tomb || {}); m.hash = {}; LS.set('ftr.syncmeta', m);
+  const m = syncMeta(); m.tomb = Object.assign({}, remote.tomb || {}); m.hash = {}; saveSyncMeta(m);
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
 }
 async function googleSync(interactive, statusEl, reload) {
