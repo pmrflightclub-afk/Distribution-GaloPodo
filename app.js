@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.91';
+const APP_VERSION = '1.2.92';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.92', date: '2026-07-13',
+    ajouts: [
+      'Planche : un seul bouton « 💾📧 Enregistrer le PDF et l\'envoyer par mail ». Il ENREGISTRE d\'abord le PDF sur votre appareil, PUIS ouvre l\'envoi par mail (que vous pouvez fermer sans envoyer — le PDF est déjà enregistré). Le bouton « Générer le PDF » séparé a été retiré. La case « M\'envoyer une copie » est maintenant DÉCOCHÉE par défaut.',
+      'Planche : le formulaire est réorganisé en sections plus claires — Colonnes · Cheval & client · Date & type · Cycle & note · Photos · Aperçu.',
+    ],
+    corrections: [
+      'Ordinateur : il n\'y a plus qu\'UNE barre de défilement dans les fenêtres (l\'ancienne barre de droite qui ne servait à rien a disparu). L\'en-tête (titre + ✕) reste visible pendant le défilement.',
+      'Planche → Photos : le bouton « Importer des photos » (redondant) a été retiré ; le champ « Choisir des fichiers » est désormais visible et suffit à ajouter des photos.',
+    ],
+  },
   {
     version: '1.2.91', date: '2026-07-13',
     corrections: [
@@ -7048,25 +7059,26 @@ async function gmailSend(to, subject, bodyText, blob, filename, cc) {
   return true;
 }
 // Modale d'envoi d'un document : saisie du destinataire + envoi Gmail (PDF joint) OU repli partage/téléchargement.
-function modalSendDoc(blob, filename, defaultTo, subject, bodyText, onSent) {
+function modalSendDoc(blob, filename, defaultTo, subject, bodyText, onSent, onClose) {
   openModal(`<div class="modal-head"><b>📧 Envoyer par email</b><button class="x" id="mX">✕</button></div>
     <label>Destinataire<input type="email" id="sdTo" value="${esc(defaultTo || '')}" placeholder="email@exemple.com"/></label>
     <label>Objet<input type="text" id="sdSubj" value="${esc(subject || '')}"/></label>
     <label class="pl-note-field">Message<textarea id="sdBody" rows="4">${esc(bodyText || '')}</textarea></label>
-    <label class="chk2"><input type="checkbox" id="sdCopy" ${S.mailSelfCopy !== false ? 'checked' : ''}/> 📧 M'envoyer une copie${S.mailSelf ? ' (' + esc(S.mailSelf) + ')' : ' (mon adresse)'}</label>
+    <label class="chk2"><input type="checkbox" id="sdCopy" ${S.mailSelfCopy === true ? 'checked' : ''}/> 📧 M'envoyer une copie${S.mailSelf ? ' (' + esc(S.mailSelf) + ')' : ' (mon adresse)'}</label>
     <div class="actions"><button class="btn primary block" id="sdGmail">📨 Envoyer via Gmail (PDF joint automatiquement)</button></div>
     <p class="hint">Envoi depuis votre compte Gmail connecté (Réglages → Mail). À la 1ʳᵉ fois, Google demandera l'autorisation d'<b>envoyer</b> des mails. La copie n'est possible que par Gmail (pas par le partage natif).</p>
     <div class="actions"><button class="btn block" id="sdShare">📤 Sinon : partager / télécharger le PDF</button></div>
     <p class="status" id="sdStatus"></p>`);
-  $('mX').onclick = closeModal;
+  let _closed = false; const fireClose = () => { if (_closed) return; _closed = true; if (onClose) onClose(); }; // onClose = à la fermeture (envoi OU abandon) — une seule fois
+  $('mX').onclick = () => { closeModal(); fireClose(); };
   $('sdGmail').onclick = async () => {
     const to = $('sdTo').value.trim(); if (!to) { alert('Renseignez le destinataire.'); return; }
     const copy = !!($('sdCopy') && $('sdCopy').checked); S.mailSelfCopy = copy; saveSettings(); // mémorise le choix par défaut
     const st = $('sdStatus'), btn = $('sdGmail'); btn.disabled = true; st.className = 'status'; st.textContent = 'Envoi via Gmail…';
-    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename, copy ? true : ''); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to + (copy && S.mailSelf ? ' (copie à ' + S.mailSelf + ')' : ''); setTimeout(() => { closeModal(); if (onSent) onSent(); }, 1400); } // fermer AVANT onSent (qui peut ouvrir la planche suivante)
+    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename, copy ? true : ''); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to + (copy && S.mailSelf ? ' (copie à ' + S.mailSelf + ')' : ''); setTimeout(() => { closeModal(); if (onSent) onSent(); fireClose(); }, 1400); } // fermer AVANT onSent (qui peut ouvrir la planche suivante)
     catch (e) { st.className = 'status err'; st.textContent = 'Échec : ' + (e && e.message || e) + ' — utilisez « partager / télécharger ».'; btn.disabled = false; }
   };
-  $('sdShare').onclick = async () => { const ok = await shareDoc(blob, filename, subject, bodyText); if (ok) { closeModal(); if (onSent) onSent(); } };
+  $('sdShare').onclick = async () => { const ok = await shareDoc(blob, filename, subject, bodyText); if (ok) { closeModal(); if (onSent) onSent(); fireClose(); } };
 }
 function concatBytes(parts) { let len = 0; parts.forEach((p) => len += p.length); const out = new Uint8Array(len); let o = 0; parts.forEach((p) => { out.set(p, o); o += p.length; }); return out; }
 function dataUrlToBytes(u) { const b64 = (u || '').split(',')[1] || ''; const bin = atob(b64); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
@@ -8762,27 +8774,37 @@ function modalPlancheCreate(type, prefill) {
   const uniq = (a) => Array.from(new Set(a));
   const titre = (type === 'avantapres' ? 'Créer une planche avant / après' : 'Créer une planche de contact') + (plCreate.queueTotal ? ' — cheval ' + plCreate.queueIdx + '/' + plCreate.queueTotal : '') + (plCreate.stade ? ' · ' + plCreate.stade : '');
   openModal(`<div class="modal-head"><b>🖼 ${titre}</b><button class="x" id="mX">✕</button></div>
-    <div style="max-height:80vh;overflow:auto" id="plCbody">
+    <div id="plCbody">
       <section class="card">
         ${plCreate.allowTourPick && !plCreate.queueTotal ? '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px"><button class="btn small" id="plCwaiting">📋 Waiting list</button><button class="btn small" id="plCfromTour">📅 Depuis une tournée</button></div>' : ''}
+        <label style="margin:0 0 4px;font-size:.82rem;color:var(--muted)">Nombre de colonnes (angles)</label>
         <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
+      </section>
+      <section class="card">
+        <div class="card-head"><h3 class="rsub" style="margin:0">Cheval &amp; client</h3></div>
         <div class="row"><label class="grow">Cheval<div style="display:flex;gap:5px"><input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval" style="flex:1;min-width:0"/><button type="button" class="btn small" id="plCchevalPick" title="Choisir dans la liste">🐴 Choisir</button></div></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
         <p id="plCclientWarn" class="pl-owner-warn" style="display:none"></p>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         ${type === 'contact' ? '<label id="plChistWrap">Historique (reprendre une planche du cheval)<select id="plChist" disabled></select></label>' : ''}
+      </section>
+      <section class="card">
+        <div class="card-head"><h3 class="rsub" style="margin:0">Date &amp; type de planche</h3></div>
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>${plCreate.allowTourPick ? '<div id="plCdateSuggest"></div>' : ''}
         ${type === 'contact' ? `<label>Type de planche (stade) — <b>obligatoire</b><select id="plCstade">${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
         ${type === 'contact' && plCreate.hasChevalPage ? `<label class="chk2"><input type="checkbox" id="plCchevalPage" ${plCreate.chevalPageOn ? 'checked' : ''}/> ➕ Ajouter la page « Cheval »</label>` : ''}
+      </section>
+      <section class="card">
+        <div class="card-head"><h3 class="rsub" style="margin:0">Durée de cycle &amp; note</h3></div>
         <label id="plCcycleWrap" style="${plancheStadeCareNeeded(plCreate.stade) ? '' : 'display:none'}">Durée du cycle précédent (semaines) — <b>obligatoire</b><input type="number" id="plCcycle" min="1" step="1" value="${plCreate.dureeCycleSem || ''}" placeholder="ex : 7"/></label>
         <label class="pl-note-field">Note (bas de page)<textarea id="plCnote" rows="2" placeholder="Observation, remarque…">${esc(plCreate.note || '')}</textarea></label>
       </section>
       <section class="card">
-        <div class="card-head"><h3 class="rsub" style="margin:0">Photos</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCdateAll">📅 Tout dater à la planche</button><button class="btn small" id="plCimport">＋ Importer des photos</button></div></div>
+        <div class="card-head"><h3 class="rsub" style="margin:0">Photos</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" id="plCdateAll">📅 Tout dater à la planche</button></div></div>
         <p class="hint">Les photos restent dans la mémoire de l'app le temps de la création (jamais enregistrées). Touchez une vignette pour la <b>sélectionner</b>, puis touchez une case de la grille pour l'y <b>placer</b>. Touchez une case remplie pour la vider.</p>
+        <label class="pl-file-field">Ajouter des photos<input type="file" id="plCfiles" accept="image/*" multiple/></label>
         <div class="seg" id="plCpotView" style="margin:6px 0"><button type="button" class="seg-btn on" data-pv="grid">▦ Grille</button><button type="button" class="seg-btn" data-pv="large">▭ Grande vue</button></div>
         <p class="hint" id="plCpotHint" style="margin:2px 0 6px">Grille : glissez une photo dans la grille, ou touchez la photo puis la case. Grande vue : choisissez membre + angle sous chaque photo.</p>
-        <input type="file" id="plCfiles" accept="image/*" multiple hidden/>
         <div class="pl-pot grid" id="plCpot"></div>
       </section>
       <section class="card">
@@ -8791,7 +8813,7 @@ function modalPlancheCreate(type, prefill) {
         <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (déplacer, zoomer, tourner). À <b>Valider</b>, l'image est <b>vraiment découpée</b> pour remplir exactement sa case — l'aperçu et le PDF sont alors identiques. Les repères (bords + <b>axe rouge central</b>) aident à centrer le sujet (ils n'apparaissent pas sur le PDF). Édition désactivée : toucher une image la retire.</p>
         <div id="plCgrid"></div>
       </section>
-      <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button>${plCreate.queueTotal && plCreate.queue && plCreate.queue.length ? '<button class="btn block primary" id="plCnext">➡ Passer à la planche suivante (sans enregistrer celle-ci)</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
+      <div class="actions"><button class="btn primary block" id="plCmail">💾📧 Enregistrer le PDF et l'envoyer par mail</button>${plCreate.queueTotal && plCreate.queue && plCreate.queue.length ? '<button class="btn block primary" id="plCnext">➡ Passer à la planche suivante (sans enregistrer celle-ci)</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
     </div>`);
   const close = () => { plDraftClear(); plCreate = null; closeModal(); }; // fermer = abandonner → efface le brouillon
   if ($('plCbody')) { const sv = () => plDraftSave(); $('plCbody').addEventListener('input', sv); $('plCbody').addEventListener('change', sv); } // toute saisie du formulaire alimente le brouillon
@@ -8818,7 +8840,6 @@ function modalPlancheCreate(type, prefill) {
   if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; const w = $('plCcycleWrap'); if (w) w.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; }); // le champ « durée du cycle » suit le stade (parage/ferrage/déferrage)
   if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); if (plCreate.cellT) Object.keys(plCreate.cellT).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellT[k]; }); if (plCreate.cellCrop) Object.keys(plCreate.cellCrop).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCrop[k]; }); plRenderPot(); plRenderGrid(); });
-  $('plCimport').onclick = () => $('plCfiles').click();
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
@@ -8846,31 +8867,21 @@ function modalPlancheCreate(type, prefill) {
     plUpdateCropCtrls();
     plRenderGrid();
   });
-  // « Générer le PDF » = PDF propre (moteur canvas, en-tête/grille/pied) téléchargé. N'utilise PLUS window.print (qui imprimait l'interface de l'app).
-  $('plCpdf').onclick = async () => {
-    if (plCreate.type === 'contact' && !plCreate.stade) { alert('Choisissez le type de planche (parage, ferrage, déferrage ou radio) avant de générer.'); return; }
-    if (plancheCycleMissing(plCreate)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines) avant de générer.'); return; }
-    if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo n\'est placée dans la grille. Générer quand même la planche (vide) ?')) return;
-    const btn = $('plCpdf'); const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Génération…';
-    try {
-      const blob = await planchePdfBlob();
-      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = plancheBaseName(plCreate) + '.pdf'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
-      plancheTodoDone(plCreate); addPlancheHistory(plCreate); plDraftClear(); // planche produite → le brouillon n'a plus lieu d'être
-      if (plCreate.queueTotal) { plQueueAdvance(); return; } // file de planches : la génération enchaîne sur la suivante (ou clôt à la dernière)
-    } catch (e) { alert('Impossible de générer la planche.'); }
-    if ($('plCpdf')) { btn.disabled = false; btn.textContent = old; }
-  };
+  // Bouton UNIQUE : enregistre d'abord le PDF sur l'appareil (téléchargement), PUIS ouvre l'envoi par mail.
+  // Fermer l'envoi sans envoyer est OK — le PDF est déjà enregistré. Dans une file, on enchaîne à la fermeture de l'envoi.
   $('plCmail').onclick = async () => {
-    if (plCreate.type === 'contact' && !plCreate.stade) { alert('Choisissez le type de planche (parage, ferrage, déferrage ou radio) avant d\'envoyer.'); return; }
-    if (plancheCycleMissing(plCreate)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines) avant d\'envoyer.'); return; }
-    if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo placée. Envoyer quand même la planche (vide) ?')) return;
-    const btn = $('plCmail'); const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Préparation…';
+    if (plCreate.type === 'contact' && !plCreate.stade) { alert('Choisissez le type de planche (parage, ferrage, déferrage ou radio) avant de continuer.'); return; }
+    if (plancheCycleMissing(plCreate)) { alert('Planche de parage / ferrage : renseignez la « durée du cycle précédent » (en semaines).'); return; }
+    if (!Object.keys(plCreate.cells).length && !confirm('Aucune photo n\'est placée dans la grille. Continuer quand même (planche vide) ?')) return;
+    const btn = $('plCmail'); const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Génération…';
     try {
       const blob = await planchePdfBlob();
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = plancheBaseName(plCreate) + '.pdf'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); // enregistre le PDF sur l'appareil
+      plancheTodoDone(plCreate); addPlancheHistory(plCreate); plDraftClear(); // PDF enregistré → planche faite
       const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
-      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), () => { if (!plCreate) return; plancheTodoDone(plCreate); addPlancheHistory(plCreate); plDraftClear(); if (plCreate.queueTotal) plQueueAdvance(); else plCreate = null; }); // mail envoyé → enchaîne la planche suivante de la file (ou clôt)
-    } catch (e) { alert('Impossible de générer la planche.'); }
-    if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
+      const advance = () => { if (!plCreate) return; if (plCreate.queueTotal) plQueueAdvance(); else { plCreate = null; closeModal(); } }; // à la fermeture de l'envoi : planche suivante (ou clôture)
+      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), null, advance);
+    } catch (e) { alert('Impossible de générer la planche.'); if ($('plCmail')) { btn.disabled = false; btn.textContent = old; } }
   };
   plRenderPot(); plRenderGrid();
 }

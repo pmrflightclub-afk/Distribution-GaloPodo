@@ -508,7 +508,7 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 /* Barre de brouillon (mémoire de saisie restaurée) */
 .draft-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #fde68a22; border: 1px solid var(--warn); color: var(--warn); border-radius: 10px; padding: 8px 12px; font-size: .82rem; font-weight: 700; margin-bottom: 10px; }
 .draft-bar .btn { flex: none; }
-.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0; padding-bottom: 12px; position: sticky; top: 0; background: var(--card); z-index: 4; } /* reste visible pendant le défilement (le ✕ reste accessible) — une seule barre de défilement, celle de la modale */
 .modal-head .x { border: 0; background: transparent; font-size: 1.2rem; color: var(--muted); cursor: pointer; }
 
 /* Impression (fiches Compta → PDF) : on n'affiche QUE #printArea (display, pas visibility → pas de pages blanches) */
@@ -659,6 +659,8 @@ table.pl-egrid th.pl-mem { font-size: .68rem; font-weight: 700; color: var(--str
 .pl-ce-frame img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; transform-origin: center center; user-select: none; -webkit-user-drag: none; display: block; }
 .pl-ce-wrap .pro-logo-zoom { width: 100%; }
 /* Éditeur de recadrage : image entière + cadre déplaçable/redimensionnable + extérieur assombri */
+.pl-file-field { display: block; margin: 6px 0; font-size: .82rem; color: var(--muted); }
+.pl-file-field input[type=file] { display: block; margin-top: 4px; color: var(--ink); font-size: .85rem; max-width: 100%; }
 .pl-ce-work { position: relative; width: min(92vw, 460px); height: min(54vh, 460px); margin: 8px auto; overflow: hidden; background: #2a2a2a; border-radius: 8px; touch-action: none; user-select: none; }
 .pl-ce-img2 { position: absolute; transform-origin: center center; pointer-events: none; -webkit-user-drag: none; user-select: none; display: block; }
 .pl-ce-cropframe { position: absolute; box-sizing: border-box; border: 2px solid #fff; box-shadow: 0 0 0 2000px rgba(0, 0, 0, .55); cursor: move; touch-action: none; }
