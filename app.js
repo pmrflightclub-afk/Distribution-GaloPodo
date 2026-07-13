@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.94';
+const APP_VERSION = '1.2.95';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.95', date: '2026-07-13',
+    corrections: [
+      'Agenda → « Récupérer » (nouveau contact avec formulaire) : l\'adresse de l\'écurie renseignée dans le formulaire est maintenant reprise comme adresse spécifique du cheval (au lieu d\'être ignorée).',
+      'Le « 📄 Formulaire (anamnèse) » s\'affiche désormais PAR-DESSUS la fiche client : le fermer ne fait plus perdre la fiche de création en cours.',
+      'Fiche client pré-remplie depuis un mail : les champs que vous saisissez sont désormais CONSERVÉS si vous fermez puis rouvrez la fiche (brouillon dédié à ce mail) — plus de perte de saisie.',
+    ],
+    modifs: [
+      'Gestion → Adresses chevaux : les boutons « ⛔ Refuser ce lieu » et « 💤 Marquer inactif » sont empilés l\'un au-dessus de l\'autre, alignés à droite de chaque item.',
+    ],
+  },
   {
     version: '1.2.94', date: '2026-07-13',
     corrections: [
@@ -3775,9 +3786,8 @@ function renderClients() {
     list.appendChild(el);
   });
 }
-function editClient(existing, onSaved, prefillNom, prefill) {
-  const key = 'client:' + (existing ? existing.id : 'new');
-  if (!existing && prefill) DRAFTS.clear(key); // fiche pré-remplie (ex. depuis un formulaire mail) : la donnée du formulaire PRIME sur un éventuel brouillon générique resté en mémoire (sinon la fiche s'ouvrait vide)
+function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
+  const key = draftKey || ('client:' + (existing ? existing.id : 'new')); // clé de brouillon dédiée (ex. par mail) → pas d'écrasement par le brouillon générique ET les saisies sont conservées d'une réouverture à l'autre
   const draft = DRAFTS.get(key);
   const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), civilite: '', politesse: true, prenom: '', nom: (prefillNom || ''), email: '', tel: '', societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
   // Pré-remplissage depuis un mail « prise de contact » (nouveau client, sans brouillon en cours).
@@ -3788,7 +3798,12 @@ function editClient(existing, onSaved, prefillNom, prefill) {
     if (prefill.email) w.email = prefill.email; if (prefill.tel) w.tel = prefill.tel;
     if (prefill.rue || prefill.cpVille) { const cpm = (prefill.cpVille || '').match(/\d{4,5}/); const loc = (prefill.cpVille || '').replace(/\d{4,5}/, '').replace(/[,]/g, ' ').replace(/\s+/g, ' ').trim(); w.addr = Object.assign(emptyAddr(), { rue: prefill.rue || '', cp: cpm ? cpm[0] : '', localite: loc }); }
     const chOff = prefill.status === 'inactif' || prefill.status === 'noir'; // client inactif/liste noire → chevaux importés inactifs
-    if (prefill.cheval && (prefill.cheval.nom || prefill.cheval.anamnese)) { (w.chevaux = w.chevaux || []).push({ id: uid(), nom: prefill.cheval.nom || '', dateNaissance: prefill.cheval.dateNaissance || '', race: prefill.cheval.race || '', anamnese: prefill.cheval.anamnese || null, dateDemandeSuivi: prefill.cheval.dateDemandeSuivi || '', actif: !chOff, addrSource: 'client', addr: emptyAddr() }); }
+    if (prefill.cheval && (prefill.cheval.nom || prefill.cheval.anamnese)) {
+      const pc = prefill.cheval;
+      const ch = { id: uid(), nom: pc.nom || '', dateNaissance: pc.dateNaissance || '', race: pc.race || '', anamnese: pc.anamnese || null, dateDemandeSuivi: pc.dateDemandeSuivi || '', actif: !chOff, addrSource: 'client', addr: emptyAddr() };
+      if (pc.ecurieAddr) { ch.addrSource = 'specifique'; ch.addr = Object.assign(emptyAddr(), parseAddrLoose(pc.ecurieAddr)); if (pc.ecurieNom) ch.addrNom = pc.ecurieNom; } // adresse de l'écurie fournie dans le formulaire → adresse spécifique du cheval
+      (w.chevaux = w.chevaux || []).push(ch);
+    }
     if (prefill.status === 'inactif') w.actif = false;
     else if (prefill.status === 'noir') { w.blacklist = true; w.actif = false; }
   }
@@ -3965,8 +3980,9 @@ function anamneseRowsHtml(f) {
 // Formulaire d'anamnèse (issu d'un mail « prise de contact ») rangé sur la fiche cheval — visualisation.
 function modalAnamnese(h) {
   const f = (h && h.anamnese) || {};
-  openModal(`<div class="modal-head"><b>📄 Formulaire — ${esc((h && h.nom) || 'cheval')}</b><button class="x" id="mX">✕</button></div><div class="anam-list" style="max-height:64vh;overflow:auto">${anamneseRowsHtml(f)}</div><div class="actions"><button class="btn block" id="anClose">Fermer</button></div>`);
-  $('mX').addEventListener('click', closeModal); $('anClose').addEventListener('click', closeModal);
+  // Surcouche empilée : s'affiche PAR-DESSUS la fiche client — la fermer ne fait pas perdre la création en cours.
+  const o = openOverlay(`<div class="modal-head"><b>📄 Formulaire — ${esc((h && h.nom) || 'cheval')}</b><button class="x" data-x>✕</button></div><div class="anam-list" style="max-height:64vh;overflow:auto">${anamneseRowsHtml(f)}</div><div class="actions"><button class="btn block" data-close>Fermer</button></div>`);
+  o.q('[data-x]').onclick = o.close; o.q('[data-close]').onclick = o.close;
 }
 // ================= GESTION → ADRESSES CHEVAUX =================
 let adrChevFilter = 'actives'; // actives (défaut) | inactifs | noir
@@ -8304,6 +8320,13 @@ function parseDateLoose(s) {
   m = /(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/.exec(s); if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
   return '';
 }
+// Découpe grossière d'une adresse libre (« Rue X 12, 5000 Namur ») en rue / code postal / localité.
+function parseAddrLoose(s) {
+  s = (s || '').trim(); if (!s) return { rue: '', cp: '', localite: '' };
+  const m = s.match(/(\d{4,5})\s+([^,\d][^,]*)\s*$/); // « … 5000 Namur » en fin de chaîne
+  if (m) return { rue: s.slice(0, m.index).replace(/[,\s]+$/, '').trim(), cp: m[1], localite: m[2].trim() };
+  return { rue: s, cp: '', localite: '' };
+}
 // « Créer le client » depuis un mail : ouvre la fiche client pré-remplie + 1 cheval (anamnèse = formulaire complet).
 // Date du mail (RFC-2822 → 'YYYY-MM-DD' local) = date de la demande de suivi. '' si absente/invalide.
 function mailDateYmd(m) {
@@ -8319,10 +8342,10 @@ function createClientFromMail(m, status, onSaved) {
     societe: mailField(f, "Nom de l'entreprise"), tvaNum: mailField(f, 'Numéro de TVA', 'N° de TVA'),
     email: m.from || '', tel: mailField(f, 'Numéro de téléphone'),
     rue: mailField(f, 'Votre adresse (domicile) N° et rue', 'Adresse de facturation'), cpVille: mailField(f, 'Code postal et localité'),
-    cheval: { nom: mailField(f, 'Nom du cheval'), dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f, dateDemandeSuivi: mailDateYmd(m) },
+    cheval: { nom: mailField(f, 'Nom du cheval'), dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f, dateDemandeSuivi: mailDateYmd(m), ecurieAddr: mailField(f, "Adresse de l'écurie", "Adresse écurie", "Adresse de l'ecurie"), ecurieNom: mailField(f, "Nom de l'écurie", 'Écurie', "Nom de l'ecurie") },
     status: status || 'normal',
   };
-  editClient(null, (saved) => { m.status = 'client'; m.clientId = saved && saved.id; m.chevalNom = prefill.cheval.nom; saveSettings(); if (currentGsub === 'contactmail') renderContactMail(); if (onSaved) onSaved(saved); }, null, prefill);
+  editClient(null, (saved) => { m.status = 'client'; m.clientId = saved && saved.id; m.chevalNom = prefill.cheval.nom; saveSettings(); if (currentGsub === 'contactmail') renderContactMail(); if (onSaved) onSaved(saved); }, null, prefill, 'client:mail:' + (m.id || 'x')); // clé de brouillon dédiée à ce mail (prérempli + saisies conservées)
 }
 // « Mettre à jour un client » depuis un mail : trouve le client existant puis propose des modifications à valider (sans écraser).
 function updateClientFromMail(m) {

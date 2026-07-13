@@ -162,16 +162,16 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .li-act-col .btn { white-space: nowrap; }
 .list-item.stack-act { align-items: flex-start; }
 .list-item.stack-act > .li-main { flex: 1 1 auto; } /* remplit la largeur de l'item → la barre écurie (Refuser ce lieu) s'aligne à droite */
-.td-eta { color: var(--ok, #2e9e5b); font-weight: 700; font-size: .82em; white-space: nowrap; }
+.td-eta { color: var(--badge-eta-future, var(--ok, #2e9e5b)); font-weight: 700; font-size: .82em; white-space: nowrap; }
 .td-eta.td-past { color: var(--badge-eta-past, #8a8f98); } /* tournée passée « il y a n j » : gris (personnalisable dans Réglages → Badges) */
-.td-cloturee { color: color-mix(in srgb, var(--accent) 55%, #fff); font-weight: 700; font-size: .82em; white-space: nowrap; } /* statut clôturé, à droite, orange clair */
+.td-cloturee { color: var(--badge-cloturee, color-mix(in srgb, var(--accent) 55%, #fff)); font-weight: 700; font-size: .82em; white-space: nowrap; } /* statut clôturé, à droite, orange clair */
 .tr-month { margin-top: 10px; }
 .tr-month:first-child { margin-top: 0; }
 .tr-month-h { font-weight: 700; color: var(--muted); font-size: .82rem; text-transform: capitalize; margin: 2px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
 .tour-date { color: var(--accent); }
 .td-badge { font-size: .68rem; font-weight: 700; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
-.td-badge.warn { color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); }
-.td-badge.ok { color: var(--ok, #2e9e5b); background: color-mix(in srgb, var(--ok, #2e9e5b) 13%, transparent); }
+.td-badge.warn { color: var(--badge-warn, var(--danger)); background: color-mix(in srgb, var(--badge-warn, var(--danger)) 13%, transparent); }
+.td-badge.ok { color: var(--badge-ok, var(--ok, #2e9e5b)); background: color-mix(in srgb, var(--badge-ok, var(--ok, #2e9e5b)) 13%, transparent); }
 .td-badge[data-tstatus] { cursor: pointer; text-decoration: underline dotted; }
 /* Modale récap statut de tournée (« à compléter ») */
 .ts-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 2px; border-top: 1px solid var(--line); font-size: .9rem; }
@@ -194,7 +194,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .ac-ecurie { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
 .ac-ecurie .li-sub { flex: 1 1 auto; min-width: 0; }
 .ac-ecurie .btn { flex: none; }
-.ac-stbtns { flex: none; margin-left: auto; display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.ac-stbtns { flex: none; margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; } /* « Refuser ce lieu » / « Marquer inactif » empilés, alignés à droite */
 .ac-hist { opacity: .7; }
 .ac-hist .li-sub { font-style: italic; }
 .btn.pl-red { border-color: var(--danger); color: #fff; background: var(--danger); }
@@ -280,7 +280,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .wk-ev { font-size: .58rem; line-height: 1.2; border-radius: 3px; padding: 1px 3px; margin: 0 0 1px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .item-off { opacity: .55; }
 .fin-detail { display: flex; justify-content: space-between; gap: 8px; font-size: .72rem; color: var(--muted); padding: 1px 0 1px 10px; }
-.badge { font-size: .7rem; padding: 2px 7px; border-radius: 999px; background: #fde68a55; color: var(--warn); font-weight: 700; }
+.badge { font-size: .7rem; padding: 2px 7px; border-radius: 999px; background: color-mix(in srgb, var(--badge-generic, var(--warn)) 22%, transparent); color: var(--badge-generic, var(--warn)); font-weight: 700; }
 
 /* Résultat */
 .hidden { display: none; }
@@ -477,7 +477,7 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .modal-overlay.hidden { display: none; }
 .modal { background: var(--card); width: 100%; max-width: 640px; max-height: 100%; overflow-y: auto; border-radius: 16px; padding: 16px; }
 @media (min-width: 700px) { .modal { max-width: min(960px, 94vw); } } /* PC : modale plus large (couvre mieux, ~largeur de la barre de nav) */
-.rem-tag { font-size: .68rem; font-weight: 700; color: var(--danger); background: #dc262618; padding: 1px 5px; border-radius: 6px; }
+.rem-tag { font-size: .68rem; font-weight: 700; color: var(--badge-info, var(--danger)); background: color-mix(in srgb, var(--badge-info, var(--danger)) 12%, transparent); padding: 1px 5px; border-radius: 6px; }
 .bk-area { width: 100%; height: 210px; margin: 6px 0 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; resize: vertical; }
 .sms-fields { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 /* Sélecteur de client cherchable */
