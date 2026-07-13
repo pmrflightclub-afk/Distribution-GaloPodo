@@ -1,3 +1,8 @@
+/* Indicateur discret d'activité en arrière-plan (non bloquant) : enregistrement, synchro, recalcul… */
+.bg-activity { position: fixed; right: 12px; bottom: calc(var(--tabs-h, 64px) + 14px); z-index: 2500; display: flex; align-items: center; gap: 7px; max-width: 78vw; padding: 7px 13px; border-radius: 999px; background: var(--card); color: var(--ink); border: 1px solid var(--line); box-shadow: 0 2px 12px rgba(0,0,0,.2); font-size: .8rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity .25s, transform .25s; }
+.bg-activity.show { opacity: 1; transform: translateY(0); }
+.bg-activity.done { color: var(--ok, #2e9e5b); }
+.bg-spin { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent, #e8722a) 30%, transparent); border-top-color: var(--accent, #e8722a); animation: boot-spin .7s linear infinite; }
 /* Écran de démarrage bloquant : mise à jour + synchro Drive avant que l'app soit utilisable */
 .boot-sync { position: fixed; inset: 0; z-index: 6000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--bg, #f6f4f1); color: var(--ink, #241f1a); text-align: center; }
 .boot-sync.done { display: none; }

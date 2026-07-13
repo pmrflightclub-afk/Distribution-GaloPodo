@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.99';
+const APP_VERSION = '1.3.0';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.0', date: '2026-07-13',
+    ajouts: [
+      'Indicateur d\'activité en arrière-plan : une petite pastille (en bas à droite) informe désormais de ce que l\'app fait sans bloquer la navigation — « 💾 Enregistré », « ☁️ Synchronisation Google Drive… », « 🧮 Recalcul de la tournée… », « 📅 Agenda Google… », « 📅 Envoi du RDV vers l\'Agenda… » — puis « ✓ À jour ». (L\'écran plein de démarrage reste, lui, pour la mise à jour + 1ʳᵉ synchro.)',
+    ],
+    corrections: [
+      'Tournée « prête » qui repassait en « à compléter » sans raison : la localisation (GPS) déjà calculée des arrêts est maintenant CONSERVÉE quand l\'adresse (texte) n\'a pas changé — une modification de fiche ou une synchro ne « dé-localise » plus une tournée déjà prête.',
+      'Accueil → carte « Nouveautés » : le bouton « ✓ Tout lu » refonctionne (un clic dessus n\'ouvre plus la fenêtre des nouveautés).',
+    ],
+  },
   {
     version: '1.2.99', date: '2026-07-13',
     corrections: [
@@ -2429,13 +2439,30 @@ function matRenouvText(m) {
   const mois = (m.nbChevaux || 1) / cad;
   return `🔁 renouvellement ~ ${durMonthsLabel(Math.round(mois))} (${fmtNum(mois, 1)} mois pour ${fmtNum(m.nbChevaux || 1, 0)} chevaux à ${fmtNum(cad, 1)}/mois)`;
 }
+// ---------- Indicateur d'activité en arrière-plan (non bloquant) ----------
+// Pastille discrète (en bas à droite) qui informe l'utilisateur de ce que l'app fait en fond, sans bloquer la navigation.
+const _bgOps = {}; let _bgDoneTimer = null, _bgSaveTimer = null;
+function bgOp(key, label) { if (label) _bgOps[key] = label; else delete _bgOps[key]; renderBgOps(); } // label = démarre l'op ; null = la termine
+function renderBgOps() {
+  const el = document.getElementById('bgActivity'); if (!el) return;
+  const keys = Object.keys(_bgOps);
+  if (_bgDoneTimer) { clearTimeout(_bgDoneTimer); _bgDoneTimer = null; }
+  if (keys.length) { el.className = 'bg-activity show'; el.innerHTML = '<span class="bg-spin"></span><span>' + esc(_bgOps[keys[keys.length - 1]]) + (keys.length > 1 ? ' +' + (keys.length - 1) : '') + '</span>'; }
+  else { el.className = 'bg-activity show done'; el.innerHTML = '<span>✓</span><span>À jour</span>'; _bgDoneTimer = setTimeout(() => { el.className = 'bg-activity'; }, 1400); }
+}
+function bgSaveFlash() { // enregistrement local (instantané) : brève confirmation « 💾 Enregistré », groupée pour les rafales de frappe
+  const el = document.getElementById('bgActivity'); if (!el || Object.keys(_bgOps).length) return; // une op réseau est déjà affichée → ne pas la masquer
+  el.className = 'bg-activity show done'; el.innerHTML = '<span>💾</span><span>Enregistré</span>';
+  if (_bgSaveTimer) clearTimeout(_bgSaveTimer);
+  _bgSaveTimer = setTimeout(() => { if (!Object.keys(_bgOps).length) el.className = 'bg-activity'; }, 1000);
+}
 // Collections id-clés DANS les réglages : elles doivent fusionner par enregistrement (union + tombstones) comme clients/tournées,
 // sinon un ajout/suppression fait sur un appareil est écrasé en bloc par l'autre appareil (perte de rappels, frais, écritures…).
 const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit'];
 function saveSettings() {
   S.updatedAt = Date.now();
   SETTINGS_COLLECTIONS.forEach((k) => { if (Array.isArray(S[k])) syncStamp('set:' + k, S[k]); }); // horodatage + tombstones par enregistrement (survit à la fusion multi-appareils)
-  LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); scheduleDrivePush();
+  LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); scheduleDrivePush(); bgSaveFlash();
 }
 
 // ---------- Thème (couleur bandeau & boutons) ----------
@@ -2542,9 +2569,9 @@ function syncStamp(kind, arr) {
   Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = now; delete m.hash[kind][id]; } }); // disparu → tombstone
   LS.set('ftr.syncmeta', m);
 }
-function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); scheduleDrivePush(); }
-function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); scheduleDrivePush(); }
-function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); scheduleDrivePush(); }
+function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); scheduleDrivePush(); bgSaveFlash(); }
+function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); scheduleDrivePush(); bgSaveFlash(); }
+function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); scheduleDrivePush(); bgSaveFlash(); }
 
 // ---------- Synchro D1 : fusion idempotente (moteur pur — utilisé par l'import fichier et, plus tard, Drive) ----------
 // Union de deux collections par id : garde le updatedAt le plus élevé ; un tombstone plus récent supprime l'enregistrement.
@@ -2656,15 +2683,17 @@ async function fetchCalendarEvents(interactive) {
 async function agendaAutoSync(allowAcquire) {
   if (!S.googleClientId) return;
   if (!allowAcquire && !gTokenValid(GSCOPE_CAL)) return; // navigation : jamais d'écran d'auth si le jeton n'est pas déjà en cache
+  bgOp('agenda', '📅 Agenda Google…');
   try {
     _agendaEvents = await fetchCalendarEvents(false);
     if ($('tab-agenda') && $('tab-agenda').classList.contains('active')) renderAgendaItems();
     if (typeof renderAgendaCalendrier === 'function') renderAgendaCalendrier();
   } catch { /* jeton non consenti / hors-ligne : rafraîchissement manuel disponible */ }
+  finally { bgOp('agenda', null); }
 }
 // ======= Push RDV app → Google Agenda (écriture) : 1 évènement par client par tournée, heure obligatoire. =======
 const _calTimers = {}; // débounce PAR tournée (id) → programmer plusieurs tournées d'affilée les pousse toutes (pas seulement la dernière)
-function scheduleCalPush(t) { if (!S.calPush || !S.googleClientId || !t) return; const id = t.id; clearTimeout(_calTimers[id]); _calTimers[id] = setTimeout(() => { delete _calTimers[id]; const tt = allTours().find((x) => x.id === id); if (tt) pushTourToCalendar(tt, { interactive: false }); }, 1500); }
+function scheduleCalPush(t) { if (!S.calPush || !S.googleClientId || !t) return; const id = t.id; clearTimeout(_calTimers[id]); _calTimers[id] = setTimeout(() => { delete _calTimers[id]; const tt = allTours().find((x) => x.id === id); if (tt) { bgOp('cal', '📅 Envoi du RDV vers l\'Agenda…'); Promise.resolve(pushTourToCalendar(tt, { interactive: false })).finally(() => bgOp('cal', null)); } }, 1500); }
 // Heure de RDV d'un client sur une tournée = la plus tôt de ses arrêts.
 // Heure de RDV d'un client (pour l'agenda) : heure PROPRE au client dans l'arrêt (cl.heure) si définie, sinon heure de l'arrêt.
 function clientRdvHeure(t, clientId) { let best = ''; (t.arrets || []).forEach((a) => { (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; const h = cl.heure || arretHeure(a); if (h && (!best || h < best)) best = h; }); }); return best; }
@@ -2887,6 +2916,7 @@ async function drivePushNow() {
   if (S.syncMode !== 'drive') return;
   if (!(S.googleAutoSync && S.googleClientId)) return;
   if (!gTokenValid(GSCOPE_DRIVE)) return; // pas de jeton en cache → on n'ouvre JAMAIS d'écran d'auth ici (évite le renvoi vers Google en pleine navigation) ; la synchro au boot rattrapera
+  bgOp('drive', '☁️ Synchronisation Google Drive…');
   try {
     const token = await googleToken(false); // silencieux : jeton déjà en cache (retour immédiat, aucune UI)
     const f = await driveFindFile(token);
@@ -2895,6 +2925,7 @@ async function drivePushNow() {
     if (h === _lastPushHash) return; // E2 : rien de neuf depuis le dernier envoi → on évite un aller-retour inutile
     await driveUpload(token, f ? f.id : null, snap); _lastPushHash = h;
   } catch { /* hors-ligne ou jeton non consenti : la synchro au prochain boot rattrapera */ }
+  finally { bgOp('drive', null); }
 }
 // D3 (mode fichier) : lit un fichier de synchro et le FUSIONNE (sans écraser).
 function importSyncFile(file, statusEl) {
@@ -4506,7 +4537,7 @@ function reconcileTour(tour) {
       });
     });
   });
-  newArrets.forEach((na) => { const old = oldArrets.find((o) => norm(addrStr(o.addr)) === norm(addrStr(na.addr))); if (old) { if (typeof old.realMin === 'number') na.realMin = old.realMin; if (typeof old.validatedAt === 'number') na.validatedAt = old.validatedAt; if (old.heure) na.heure = old.heure; if (old.rdvDone) na.rdvDone = old.rdvDone; } });
+  newArrets.forEach((na) => { const old = oldArrets.find((o) => norm(addrStr(o.addr)) === norm(addrStr(na.addr))); if (old) { if (typeof old.realMin === 'number') na.realMin = old.realMin; if (typeof old.validatedAt === 'number') na.validatedAt = old.validatedAt; if (old.heure) na.heure = old.heure; if (old.rdvDone) na.rdvDone = old.rdvDone; if (na.addr && (na.addr.lat == null || na.addr.lon == null) && old.addr && old.addr.lat != null && old.addr.lon != null) { na.addr.lat = old.addr.lat; na.addr.lon = old.addr.lon; } } }); // conserve la localisation (lat/lon) déjà calculée quand l'adresse (texte) n'a pas changé → une tournée « prête » ne se « dé-localise » plus si la fiche client perd sa géoloc (édition/synchro)
   tour.arrets = newArrets.filter((a) => a.clients.length);
   if (JSON.stringify(tour.arrets) !== beforeArrets) changed = true;
   if (beforeAddr !== addrSig(tour.arrets)) { tour.result = null; invalidateTourRoute(oldArrets.map((a) => norm(addrStr(a.addr))), tour); } // adresses modifiées → recalcul géométrie + segments/heures périmés
@@ -5579,7 +5610,7 @@ function recalcAllTours() {
 
 // Recalcul complet GÉOMÉTRIE + argent (API). silent = ne change pas d'onglet, statut discret.
 let _geoTimer = null;
-function scheduleGeoRecalc() { clearTimeout(_geoTimer); _geoTimer = setTimeout(() => { if (currentTour && currentTour.arrets.length) calcTour(true); }, 700); }
+function scheduleGeoRecalc() { clearTimeout(_geoTimer); _geoTimer = setTimeout(() => { if (currentTour && currentTour.arrets.length) { bgOp('geo', '🧮 Recalcul de la tournée…'); Promise.resolve(calcTour(true)).finally(() => bgOp('geo', null)); } }, 700); }
 
 async function calcTour(silent) {
   if (!currentTour) return; // tournée supprimée entre-temps → ne pas la ré-enregistrer
@@ -11080,8 +11111,8 @@ function renderHomeChangelog() {
   const e = unread[0];
   card.classList.remove('hidden');
   card.innerHTML = `<div class="cl-msg"><div class="li-main"><b>📣 Nouveautés — version ${esc(e.version)}${unread.length > 1 ? ' (+' + (unread.length - 1) + ')' : ''}</b><span class="li-sub">Appuyez pour découvrir les nouveautés et corrections.</span></div><div style="display:flex;gap:8px;align-items:center"><button class="btn small" id="clMarkAll" title="Tout marquer comme lu">✓ Tout lu</button><span class="li-chev">›</span></div></div>`;
-  card.onclick = () => openChangelogEntry(e);
-  const mb = $('clMarkAll'); if (mb) mb.addEventListener('click', (ev) => { ev.stopPropagation(); markAllChangelogRead(); renderHomeChangelog(); });
+  card.onclick = (ev) => { if (ev.target.closest('#clMarkAll')) return; openChangelogEntry(e); }; // un clic sur « Tout lu » n'ouvre pas la carte (robuste même si la propagation fuit)
+  const mb = $('clMarkAll'); if (mb) mb.onclick = (ev) => { ev.stopPropagation(); ev.preventDefault(); markAllChangelogRead(); renderHomeChangelog(); };
 }
 function markAllChangelogRead() { if (!Array.isArray(S.changelogRead)) S.changelogRead = []; CHANGELOG.forEach((e) => { if (!S.changelogRead.includes(e.version)) S.changelogRead.push(e.version); }); saveSettings(); }
 // Réglages → Changelog : toutes les versions ; non lues mises en avant, lues grisées.
