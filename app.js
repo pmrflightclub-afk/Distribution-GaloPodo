@@ -11,10 +11,23 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.3.3';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.3', date: '2026-07-13',
+    corrections: [
+      'Accueil → Nouveautés : le bouton « ✓ Tout lu » fonctionne — la carte se masque immédiatement au clic.',
+    ],
+    modifs: [
+      'L\'indicateur d\'activité en arrière-plan est déplacé EN HAUT, centré, juste sous la barre de navigation.',
+    ],
+    ajouts: [
+      'Synchro entre appareils : les petites listes de réglages (mots-clés mail, stades de planche, ordre des tuiles, répartition analytique) sont désormais aussi conservées des deux côtés.',
+      'Au 1ᵉʳ lancement, après le paramétrage société, l\'app propose de choisir la synchronisation (Google Drive multi-appareils, ou cet appareil seulement).',
+    ],
+  },
   {
     version: '1.3.2', date: '2026-07-13',
     ajouts: [
@@ -2160,6 +2173,8 @@ if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 // « Appareil lié au Drive » = drapeau LOCAL (non synchronisé). Les utilisateurs Drive EXISTANTS sont considérés déjà liés (aucune gêne) ;
 // un appareil neuf reste « non lié » tant qu'il n'a pas fait le choix explicite (fusionner / adopter / envoyer) au 1ᵉʳ lien.
 if (LS.get('ftr.driveLinked', null) === null) LS.set('ftr.driveLinked', !!(S.syncMode === 'drive' && S.googleClientId));
+// Choix de synchro proposé au 1ᵉʳ lancement (après le paramétrage société) : les utilisateurs DÉJÀ configurés sont considérés « déjà choisi ».
+if (LS.get('ftr.syncChoiceDone', null) === null) LS.set('ftr.syncChoiceDone', !!S.setupDone);
 if (typeof S.calPush !== 'boolean') S.calPush = false;                 // pousser automatiquement les RDV de l'app vers Google Agenda (écriture)
 if (!S.calPushed || typeof S.calPushed !== 'object') S.calPushed = {}; // { 'tourId:clientId' : googleEventId } → mise à jour / suppression du bon évènement
 if (typeof S.calDureeMin !== 'number' || S.calDureeMin < 5) S.calDureeMin = 60; // durée par défaut d'un RDV poussé (minutes)
@@ -2635,6 +2650,22 @@ function mergeSettings(localS, remoteS) {
   // Personnalisations d'affichage (maps accumulatives → union par clé, pas de perte croisée entre appareils).
   merged.badgeColors = Object.assign({}, (localS && localS.badgeColors) || {}, (remoteS && remoteS.badgeColors) || {});
   merged.tileLabels = Object.assign({}, (localS && localS.tileLabels) || {}, (remoteS && remoteS.tileLabels) || {});
+  // Petites listes de config sans identifiant : union dédoublonnée (mots-clés mail, ordre des tuiles) → pas de perte croisée.
+  const unionStr = (a, b) => { const seen = new Set(), out = []; [].concat(a || [], b || []).forEach((s) => { const k = norm(s); if (s != null && s !== '' && !seen.has(k)) { seen.add(k); out.push(s); } }); return out; };
+  merged.mailKeywords = unionStr(localS && localS.mailKeywords, remoteS && remoteS.mailKeywords);
+  merged.statOrder = unionStr(localS && localS.statOrder, remoteS && remoteS.statOrder);
+  merged.analyticOrder = unionStr(localS && localS.analyticOrder, remoteS && remoteS.analyticOrder);
+  // Config planche : base-wins pour l'objet, mais les STADES (liste de textes) fusionnent en union.
+  merged.planche = Object.assign({}, base.planche);
+  merged.planche.stades = unionStr(localS && localS.planche && localS.planche.stades, remoteS && remoteS.planche && remoteS.planche.stades);
+  // Répartition analytique : union PAR sous-compte (évite le double-comptage des %) ; les lignes sans sous-compte suivent la base.
+  merged.analyticAlloc = Object.assign({}, base.analyticAlloc);
+  ['mainOeuvre', 'materiel', 'vehicule'].forEach((k) => {
+    const byKey = {}; const add = (rows) => (rows || []).forEach((r) => { if (r && r.sousCompteId) byKey[r.sousCompteId] = r; }); // dernier gagne pour un même sous-compte
+    add(localS && localS.analyticAlloc && localS.analyticAlloc[k]); add(remoteS && remoteS.analyticAlloc && remoteS.analyticAlloc[k]);
+    const nulls = ((base.analyticAlloc && base.analyticAlloc[k]) || []).filter((r) => r && !r.sousCompteId);
+    merged.analyticAlloc[k] = Object.values(byKey).concat(nulls);
+  });
   // Config initiale : une fois validée sur un appareil, elle ne doit JAMAIS régresser (OR sur setupDone/setupLocked). Les champs pilotés (pays/régime/forme) suivent l'appareil qui a validé.
   const lDone = !!(localS && localS.setupDone), rDone = !!(remoteS && remoteS.setupDone);
   merged.setupDone = lDone || rDone;
@@ -10952,9 +10983,26 @@ function modalSetup() {
       _lockModal = false; closeModal();
       if (typeof reconcileActiveTours === 'function') reconcileActiveTours();
       refreshEverywhere(); renderHome();
+      modalSyncChoice(); // propose la synchro juste après le paramétrage société (1ʳᵉ fois seulement)
     });
   };
   render();
+}
+// Proposé UNE fois (après le paramétrage société) : choisir de synchroniser entre appareils (Google Drive) ou de rester local.
+function modalSyncChoice() {
+  if (LS.get('ftr.syncChoiceDone', false)) return; // déjà choisi sur cet appareil
+  if (S.syncMode === 'drive' && S.googleClientId) { LS.set('ftr.syncChoiceDone', true); return; } // déjà configuré
+  const done = () => { LS.set('ftr.syncChoiceDone', true); closeModal(); };
+  openModal(`<div class="modal-head"><b>📲 Sauvegarde & synchronisation</b></div>
+    <p class="hint">Voulez-vous <b>synchroniser GaloPodo entre plusieurs appareils</b> (téléphone + ordinateur) via <b>Google Drive</b> ? Vos données restent privées (votre propre compte Google). Vous pourrez changer à tout moment dans <b>Réglages → Synchro</b>.</p>
+    <div class="actions" style="flex-direction:column;gap:8px;align-items:stretch">
+      <button class="btn primary block" id="scGoogle" style="text-align:left">☁️ <b>Oui — Google Drive</b><br><span class="li-sub">Multi-appareils. On vous guide pour connecter votre compte.</span></button>
+      <button class="btn block" id="scNone" style="text-align:left">📱 <b>Non — cet appareil seulement</b><br><span class="li-sub">Aucune synchro (vous pourrez l'activer plus tard).</span></button>
+    </div>
+    <p class="hint">💡 Conseil multi-appareils : configurez la synchro sur votre 1ᵉʳ appareil, puis sur le 2ᵉ choisissez « Utiliser les données du Drive » — vous éviterez tout doublon.</p>`);
+  const g = $('scGoogle'), n = $('scNone');
+  if (g) g.onclick = () => { done(); applySyncMode('drive'); if ($('setGoogleAuto')) $('setGoogleAuto').checked = true; S.googleAutoSync = true; saveSettings(); showTab('reglages'); if (typeof showReglages === 'function') showReglages('synchro'); alert('Renseignez votre « ID client Google » ci-dessous, puis « Connecter » et « Synchroniser ».'); };
+  if (n) n.onclick = done;
 }
 function renderHome() {
   autoCloseOverdueTours(); // vérifie à chaque affichage de l'Accueil
@@ -11170,9 +11218,12 @@ function renderHomeChangelog() {
   if (!unread.length) { card.classList.add('hidden'); card.innerHTML = ''; card.onclick = null; return; }
   const e = unread[0];
   card.classList.remove('hidden');
-  card.innerHTML = `<div class="cl-msg"><div class="li-main"><b>📣 Nouveautés — version ${esc(e.version)}${unread.length > 1 ? ' (+' + (unread.length - 1) + ')' : ''}</b><span class="li-sub">Appuyez pour découvrir les nouveautés et corrections.</span></div><div style="display:flex;gap:8px;align-items:center"><button class="btn small" id="clMarkAll" title="Tout marquer comme lu">✓ Tout lu</button><span class="li-chev">›</span></div></div>`;
-  card.onclick = (ev) => { if (ev.target.closest('#clMarkAll')) return; openChangelogEntry(e); }; // un clic sur « Tout lu » n'ouvre pas la carte (robuste même si la propagation fuit)
-  const mb = $('clMarkAll'); if (mb) mb.onclick = (ev) => { ev.stopPropagation(); ev.preventDefault(); markAllChangelogRead(); renderHomeChangelog(); };
+  card.innerHTML = `<div class="cl-msg"><div class="li-main"><b>📣 Nouveautés — version ${esc(e.version)}${unread.length > 1 ? ' (+' + (unread.length - 1) + ')' : ''}</b><span class="li-sub">Appuyez pour découvrir les nouveautés et corrections.</span></div><div style="display:flex;gap:8px;align-items:center"><button type="button" class="btn small" data-markall title="Tout marquer comme lu">✓ Tout lu</button><span class="li-chev">›</span></div></div>`;
+  // Un SEUL gestionnaire délégué sur la carte : un clic sur « Tout lu » masque tout de suite la carte PUIS marque comme lu (visuel garanti même si l'enregistrement traîne) ; ailleurs → ouvre les nouveautés.
+  card.onclick = (ev) => {
+    if (ev.target.closest('[data-markall]')) { ev.stopPropagation(); ev.preventDefault(); card.classList.add('hidden'); card.innerHTML = ''; card.onclick = null; try { markAllChangelogRead(); } catch (err) {} return; }
+    openChangelogEntry(e);
+  };
 }
 function markAllChangelogRead() { if (!Array.isArray(S.changelogRead)) S.changelogRead = []; CHANGELOG.forEach((e) => { if (!S.changelogRead.includes(e.version)) S.changelogRead.push(e.version); }); saveSettings(); }
 // Réglages → Changelog : toutes les versions ; non lues mises en avant, lues grisées.
