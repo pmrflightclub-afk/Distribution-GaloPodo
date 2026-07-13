@@ -489,6 +489,11 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 
 /* Chevaux (modal) */
 .cheval { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--bg); margin-bottom: 8px; }
+/* Adresses multiples par cheval (fiche client + modale « changer l'adresse ») */
+.ch-adr-list { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.ch-adr { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--card); }
+.ch-adr .a-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ch-adr .a-top .grow { flex: 1; min-width: 0; }
 
 /* Modal */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-start; justify-content: center; z-index: 3000; padding: 16px; padding-top: calc(var(--topbar-h, 88px) + var(--tabs-h, 64px) + 10px); padding-bottom: max(16px, env(safe-area-inset-bottom)); }

@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.4.2';
+const APP_VERSION = '1.5.0';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.5.0', date: '2026-07-14',
+    ajouts: [
+      'Plusieurs adresses par cheval : dans la fiche d\'un client, chaque cheval peut désormais avoir plusieurs adresses nommées (écuries), avec une adresse « ⭐ par défaut » que vous choisissez. Bouton « ＋ Ajouter une adresse » et « Reprendre une adresse connue » (qui remplit tout, pays compris).',
+      'Gestion → Adresses chevaux : pour chaque cheval, vous voyez toutes ses adresses (actuelle, autres, anciennes) et pouvez définir laquelle est « par défaut » d\'un clic.',
+      'Dans une tournée à venir : chaque cheval a un bouton « 📍 Adresse » pour changer son adresse (en choisir une existante ou en encoder une nouvelle). La tournée se met à jour automatiquement — l\'arrêt suit la nouvelle adresse — et vous propose de replacer le rendez-vous (heure / ordre). Le report ou l\'annulation restent accessibles par les boutons habituels.',
+    ],
+  },
   {
     version: '1.4.2', date: '2026-07-13',
     corrections: [
@@ -3186,7 +3194,23 @@ function importSyncFile(file, statusEl) {
     if (c.societeMemeAdresse === undefined) c.societeMemeAdresse = true;
     if (!Array.isArray(c.impayes)) c.impayes = []; // restes reportés (paiement partiel liquide)
     c.societeAddr = toAddr(c.societeAddr);
-    (c.chevaux || []).forEach((h) => { if (!h.id) h.id = uid(); if (h.adresse !== undefined) { h.addr = toAddr(h.adresse); delete h.adresse; } h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = (h.memeAdresse === false) ? 'specifique' : 'client'; });
+    (c.chevaux || []).forEach((h) => {
+      if (!h.id) h.id = uid();
+      if (h.adresse !== undefined) { h.addr = toAddr(h.adresse); delete h.adresse; }
+      h.addr = toAddr(h.addr);
+      if (!h.addrSource) h.addrSource = (h.memeAdresse === false) ? 'specifique' : 'client';
+      // Adresses multiples par cheval : un cheval avec une adresse PROPRE ('specifique') devient une 1ʳᵉ entrée ACTIVE ;
+      // les anciennes adresses (déménagements, h.addrHistory) deviennent des entrées INACTIVES réactivables. Un cheval qui
+      // suit l'adresse du client garde `adresses=[]` (repli sur c.addr). Idempotent (ne reconstruit que si absent).
+      if (!Array.isArray(h.adresses)) {
+        h.adresses = [];
+        if (h.addrSource === 'specifique' && addrStr(h.addr).trim()) {
+          const curN = addrStr(h.addr).trim().toLowerCase(); // (norm() n'est pas encore défini au moment de cette migration)
+          h.adresses.push({ id: uid(), nom: (h.addrNom || '').trim(), addr: toAddr(h.addr), actif: true });
+          (h.addrHistory || []).forEach((old) => { if (addrStr(old).trim() && addrStr(old).trim().toLowerCase() !== curN) h.adresses.push({ id: uid(), nom: '', addr: toAddr(old), actif: false }); });
+        }
+      }
+    });
   });
   tournees.forEach((t) => {
     if (!Array.isArray(t.articles)) t.articles = [];
@@ -4241,6 +4265,10 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
     if (!w.chevaux.length) box.insertAdjacentHTML('beforeend', '<p class="empty">Aucun cheval.</p>');
     w.chevaux.forEach((h, i) => {
       h.addr = toAddr(h.addr); if (!h.addrSource) h.addrSource = 'specifique';
+      // Adresses multiples : garantir un tableau ; amorcer depuis h.addr si vide (cheval passé en « adresse propre » sans entrée).
+      if (!Array.isArray(h.adresses)) h.adresses = [];
+      if (h.addrSource === 'specifique' && !h.adresses.length && addrStr(h.addr).trim()) h.adresses.push({ id: uid(), nom: h.addrNom || '', addr: toAddr(h.addr), actif: true });
+      chevalSyncActive(h);
       const row = document.createElement('div'); row.className = 'cheval';
       row.innerHTML = `<div class="form-sub">
         <div class="form-sub-h">Identification</div>
@@ -4264,13 +4292,13 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
         <label>Type d'adresse<select data-src>
           <option value="client">Même adresse que le client</option>
           <option value="societe">Adresse de la société</option>
-          <option value="specifique">Adresse spécifique</option>
+          <option value="specifique">Adresse(s) propre(s) du cheval</option>
         </select></label>
         ${h.addrSource === 'specifique'
     ? `<label class="chk2 chk-wrap"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> 🔒 Écurie privée (nom = nom du client)</label>
-        <label>Reprendre une adresse connue<input type="text" data-addrfind list="chevAddrList" placeholder="Nom client / société / adresse déjà connue…"/></label>${h.addrPrivee ? '' : `<label>Nom de l'écurie<input type="text" data-addrnom value="${esc(h.addrNom || '')}" placeholder="Écurie du Nord, pré de…"/></label>`}`
+        <div class="ch-adr-list">${(h.adresses || []).map((a, ai) => `<div class="ch-adr" data-ai="${ai}"><div class="a-top"><label class="chk2" style="margin:0"><input type="radio" name="chdef_${esc(h.id)}" data-def ${a.actif ? 'checked' : ''}/> ⭐ Par défaut</label>${h.addrPrivee ? '' : `<input type="text" class="grow" data-anom value="${esc(a.nom || '')}" placeholder="Nom de l'écurie (Écurie du Nord…)"/>`}<button type="button" class="a-del" data-adel title="Supprimer cette adresse">✕</button></div><label>Reprendre une adresse connue<input type="text" data-afind list="chevAddrList" placeholder="Nom client / société / adresse déjà connue…"/></label><div data-amount></div></div>`).join('') || '<p class="hint">Aucune adresse propre. Ajoutez-en une ci-dessous.</p>'}</div>
+        <button type="button" class="btn small" data-aadd>＋ Ajouter une adresse</button>`
     : `<p class="hint">Nom de l'écurie : <b>${esc(chevalAddrNom(w, h))}</b> (repris ${h.addrSource === 'societe' ? 'de la société' : 'du client'}).</p>`}
-        <div data-addrmount ${h.addrSource === 'specifique' ? '' : 'style="display:none"'}></div>
       </div>`;
       row.querySelector('[data-src]').value = h.addrSource;
       row.querySelector('[data-nom]').addEventListener('input', (e) => { h.nom = e.target.value; saveDraft(); });
@@ -4282,24 +4310,34 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
       row.querySelector('[data-pec]').addEventListener('change', (e) => { h.datePriseEnCharge = e.target.value || ''; saveDraft(); });
       { const dd = row.querySelector('[data-dds]'); if (dd) dd.addEventListener('change', (e) => { h.dateDemandeSuivi = e.target.value || ''; saveDraft(); }); }
       { const dc = row.querySelector('[data-disc]'); if (dc) dc.addEventListener('input', (e) => { h.discipline = e.target.value; saveDraft(); }); }
-      { const af = row.querySelector('[data-addrfind]'); if (af) af.addEventListener('change', (e) => { const txt = (e.target.value || '').trim(); if (!txt) return; const places = collectRoutePlaces(); const p = places.find((x) => norm(x.label) === norm(txt)) || places.find((x) => norm(x.label).includes(norm(txt))); if (p && p.addr) { const s = toAddr(p.addr); h.addr = Object.assign(emptyAddr(), { rue: s.rue || '', numero: s.numero || '', cp: s.cp || '', localite: s.localite || '', lat: s.lat || null, lon: s.lon || null }); saveDraft(); renderCh(); } else { alert('Adresse non trouvée. Choisissez un nom dans la liste proposée.'); } }); }
+      // (adresse propre : reprise/édition/ajout câblées PAR ENTRÉE plus bas)
       row.querySelector('[data-lourd]').addEventListener('change', (e) => { h.lourd = e.target.checked; if (!e.target.checked) delete h.lourdHT; renderCh(); saveDraft(); });
       { const lh = row.querySelector('[data-lourdht]'); if (lh) lh.addEventListener('input', (e) => { const v = parseFloat(e.target.value); h.lourdHT = (e.target.value === '' || isNaN(v)) ? null : Math.max(0, v); saveDraft(); }); }
       row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
       { const pv = row.querySelector('[data-priv]'); if (pv) pv.addEventListener('change', (e) => { h.addrPrivee = e.target.checked; renderCh(); saveDraft(); }); }
-      { const an = row.querySelector('[data-addrnom]'); if (an) an.addEventListener('input', (e) => { h.addrNom = e.target.value; saveDraft(); }); }
       // Badge de statut du LIEU sur la section adresse du cheval (à l'endroit exact où l'adresse refusée est détectée).
       const refreshChBadge = () => {
         const bb = row.querySelector('.ch-addr-badge'); if (!bb) return;
         bb.innerHTML = addrStatusBadgeHtml(chevalAddr(w, h));
         const b = bb.querySelector('[data-addrfix]');
-        if (b) b.addEventListener('click', () => { // amène au champ adresse : le champ propre si spécifique, sinon le sélecteur de type (pour passer en « adresse spécifique »)
-          const tgt = row.querySelector('[data-addrmount] input') || row.querySelector('[data-src]');
+        if (b) b.addEventListener('click', () => { // amène au champ adresse : la 1ʳᵉ adresse propre si spécifique, sinon le sélecteur de type
+          const tgt = row.querySelector('[data-amount] input') || row.querySelector('[data-src]');
           if (tgt) { try { tgt.scrollIntoView({ block: 'center' }); } catch { } tgt.focus(); }
         });
       };
-      if (h.addrSource === 'specifique') mountAddress(row.querySelector('[data-addrmount]'), h.addr, (a) => { h.addr = a; saveDraft(); refreshChBadge(); });
+      // Adresses propres (multiples) : câblage PAR ENTRÉE (par défaut / nom / supprimer / reprendre) + bouton d'ajout.
+      if (h.addrSource === 'specifique') {
+        row.querySelectorAll('.ch-adr').forEach((el) => {
+          const ai = +el.dataset.ai; const a = h.adresses[ai]; if (!a) return;
+          const def = el.querySelector('[data-def]'); if (def) def.addEventListener('change', () => { h.adresses.forEach((x) => { x.actif = false; }); a.actif = true; chevalSyncActive(h); saveDraft(); refreshChBadge(); });
+          const nm = el.querySelector('[data-anom]'); if (nm) nm.addEventListener('input', (e) => { a.nom = e.target.value; if (a.actif) h.addrNom = a.nom; saveDraft(); });
+          const del = el.querySelector('[data-adel]'); if (del) del.addEventListener('click', () => { if (!confirm('Supprimer cette adresse ?')) return; const wasActive = a.actif; h.adresses.splice(ai, 1); if (wasActive && h.adresses.length) h.adresses[0].actif = true; chevalSyncActive(h); renderCh(); saveDraft(); });
+          const find = el.querySelector('[data-afind]'); if (find) find.addEventListener('change', (e) => { const txt = (e.target.value || '').trim(); if (!txt) return; const places = collectRoutePlaces(); const p = places.find((x) => norm(x.label) === norm(txt)) || places.find((x) => norm(x.label).includes(norm(txt))); if (p && p.addr) { const s = toAddr(p.addr); a.addr = Object.assign(emptyAddr(), { rue: s.rue || '', numero: s.numero || '', cp: s.cp || '', localite: s.localite || '', pays: s.pays || '', lat: s.lat || null, lon: s.lon || null }); chevalSyncActive(h); saveDraft(); renderCh(); } else { alert('Adresse non trouvée. Choisissez un nom dans la liste proposée.'); } });
+          mountAddress(el.querySelector('[data-amount]'), a.addr, (na) => { a.addr = na; chevalSyncActive(h); saveDraft(); refreshChBadge(); });
+        });
+        const add = row.querySelector('[data-aadd]'); if (add) add.addEventListener('click', () => { h.adresses.push({ id: uid(), nom: '', addr: emptyAddr(), actif: h.adresses.length === 0 }); chevalSyncActive(h); renderCh(); saveDraft(); });
+      }
       refreshChBadge();
       box.appendChild(row);
     });
@@ -4365,11 +4403,14 @@ function chevalAddressesByClient() {
   clients.forEach((c) => {
     const byKey = {};
     (c.chevaux || []).forEach((h) => {
-      const a = chevalAddr(c, h); const k = addrKey(a);
-      if (k) { if (!byKey[k] || byKey[k].hist) byKey[k] = { addr: a, chevaux: [], hist: false }; byKey[k].chevaux.push(h); }
-      (h.addrHistory || []).forEach((ha) => { const hk = addrKey(ha); if (!hk || hk === k || byKey[hk]) return; byKey[hk] = { addr: ha, chevaux: [h], hist: true }; }); // anciennes adresses (déménagement) = référence inactive
+      const activeK = addrKey(chevalAddr(c, h));
+      // Adresses PROPRES (source spécifique) : chaque entrée de h.adresses (active ou non). Sinon 1 seule = adresse effective.
+      const entries = (chevalAddrSrc(h) === 'specifique' && Array.isArray(h.adresses) && h.adresses.length) ? h.adresses.map((e) => e.addr) : [chevalAddr(c, h)];
+      entries.forEach((a) => { const k = addrKey(a); if (!k) return; if (!byKey[k] || byKey[k].hist) byKey[k] = { addr: a, chevaux: [], hist: false }; byKey[k].chevaux.push({ h, actif: k === activeK }); });
+      (h.addrHistory || []).forEach((ha) => { const hk = addrKey(ha); if (!hk || byKey[hk]) return; byKey[hk] = { addr: ha, chevaux: [{ h, actif: false }], hist: true }; }); // anciennes adresses (déménagement) = référence inactive
     });
-    const addrs = Object.values(byKey).sort((x, y) => (x.hist ? 1 : 0) - (y.hist ? 1 : 0)); // actuelles d'abord, anciennes ensuite
+    // adresse ACTIVE d'abord, puis autres adresses propres, puis anciennes
+    const addrs = Object.values(byKey).sort((x, y) => ((x.hist ? 2 : (x.chevaux.some((z) => z.actif) ? 0 : 1)) - (y.hist ? 2 : (y.chevaux.some((z) => z.actif) ? 0 : 1))));
     if (addrs.length) out.push({ client: c, addrs });
   });
   return out;
@@ -4405,22 +4446,26 @@ function renderChevAddresses() {
   shown.forEach((e) => {
     const c = e.client, st = clientState(c);
     const badge = st === 'noir' ? ' <span class="badge badge-noir">liste noire</span>' : st === 'inactif' ? ' <span class="badge">inactif</span>' : '';
-    const specInputs = [], addrList = []; let body = '';
+    const specInputs = [], addrList = [], groupList = []; let body = '';
     e.addrs.forEach((grp) => {
-      const chNoms = grp.chevaux.map((h) => h.nom || 'cheval').join(', ');
-      const gi = addrList.length; addrList.push(grp.addr); const stA = addrStatusOf(grp.addr);
+      const chNoms = grp.chevaux.map((x) => x.h.nom || 'cheval').join(', ');
+      const gi = addrList.length; addrList.push(grp.addr); groupList.push(grp); const stA = addrStatusOf(grp.addr);
       const bdg = stA === 'noir' ? ' <span class="badge badge-noir">⛔ lieu refusé</span>' : stA === 'inactif' ? ' <span class="badge">💤 lieu inactif</span>' : '';
-      if (grp.hist) { // ancienne adresse (déménagement) — conservée en mémoire, statut modifiable (base liste noire)
-        body += `<div class="ac-ecurie ac-hist"><div class="li-sub">🕘 ${esc(addrStr(grp.addr))} <span class="badge">ancienne adresse</span>${bdg} · 🐴 ${esc(chNoms)}</div>${stBtns(gi, grp.addr)}</div>`;
+      const allActive = grp.chevaux.length && grp.chevaux.every((x) => x.actif);
+      // Adresse par défaut (active) du/des cheval(aux) : badge si déjà par défaut, sinon bouton pour la définir (par cheval).
+      const defBtn = allActive ? '<span class="badge">⭐ par défaut</span>' : `<button class="btn small" data-def="${gi}">⭐ Définir par défaut</button>`;
+      if (grp.hist) { // ancienne adresse (déménagement) — conservée en mémoire, réactivable comme adresse par défaut
+        body += `<div class="ac-ecurie ac-hist"><div class="li-sub">🕘 ${esc(addrStr(grp.addr))} <span class="badge">ancienne adresse</span>${bdg} · 🐴 ${esc(chNoms)}</div><div class="ac-stbtns">${defBtn}</div>${stBtns(gi, grp.addr)}</div>`;
         return;
       }
-      body += `<div class="ac-ecurie"><div class="li-sub">📍 ${esc(addrStr(grp.addr))}${bdg} · 🐴 ${esc(chNoms)}</div>${stBtns(gi, grp.addr)}</div>`;
-      grp.chevaux.filter((h) => srcOf(h) === 'specifique' && !h.addrPrivee).forEach((h) => { const idx = specInputs.length; specInputs.push(h); body += `<label class="ac-nom"><span class="li-sub">🐴 ${esc(h.nom || 'cheval')} — nom de l'adresse</span><input type="text" data-nom="${idx}" value="${esc(h.addrNom || '')}" placeholder="ex. Écurie du Nord"/></label>`; });
+      body += `<div class="ac-ecurie"><div class="li-sub">${allActive ? '⭐' : '📍'} ${esc(addrStr(grp.addr))}${bdg} · 🐴 ${esc(chNoms)}</div><div class="ac-stbtns">${defBtn}</div>${stBtns(gi, grp.addr)}</div>`;
+      grp.chevaux.filter((x) => chevalAddrSrc(x.h) === 'specifique' && !x.h.addrPrivee).forEach((x) => { const idx = specInputs.length; specInputs.push({ h: x.h, addr: grp.addr }); body += `<label class="ac-nom"><span class="li-sub">🐴 ${esc(x.h.nom || 'cheval')} — nom de l'adresse</span><input type="text" data-nom="${idx}" value="${esc(addrNomForAddr(x.h, grp.addr))}" placeholder="ex. Écurie du Nord"/></label>`; });
     });
     const el = document.createElement('div'); el.className = 'list-item stack-act' + (st !== 'actif' ? ' item-off' : '');
     el.innerHTML = `<div class="li-main"><b>👤 ${esc(fullName(c))}${c.societe ? ' — ' + esc(c.societe) : ''}${badge}</b>${body}</div>`;
     wireSt(el, addrList); // statut de LIEU (liste noire / inactif), séparé du statut client — actuelles ET anciennes adresses
-    el.querySelectorAll('[data-nom]').forEach((inp) => { const h = specInputs[+inp.dataset.nom]; inp.addEventListener('input', (ev) => { h.addrNom = ev.target.value; saveClients(); }); inp.addEventListener('change', () => renderChevAddresses()); });
+    el.querySelectorAll('[data-def]').forEach((b) => b.addEventListener('click', () => { const grp = groupList[+b.dataset.def]; if (!grp) return; grp.chevaux.forEach((x) => setChevalDefaultAddr(x.h, grp.addr)); saveClients(); reconcileActiveTours(); renderChevAddresses(); })); // définir par défaut (par cheval) → répercute sur les tournées en cours
+    el.querySelectorAll('[data-nom]').forEach((inp) => { const it = specInputs[+inp.dataset.nom]; inp.addEventListener('input', (ev) => { setAddrNomForAddr(it.h, it.addr, ev.target.value); saveClients(); }); inp.addEventListener('change', () => renderChevAddresses()); });
     box.appendChild(el);
   });
 }
@@ -5185,17 +5230,42 @@ function pickClientForArret(highlightId) {
   if (pickList.length) mountClientPicker($('pickPicker'), { list: pickList, highlightId, onPick: (c) => chooseClientTargets(c) });
 }
 const societeAddrOf = (c) => (c.societeMemeAdresse !== false || !addrStr(c.societeAddr)) ? c.addr : c.societeAddr;
+// Adresses multiples (source 'specifique') : entrée ACTIVE d'un cheval (celle par défaut), sinon la 1ʳᵉ ; null si aucune.
+function chevalActiveAddrEntry(h) { if (!h || !Array.isArray(h.adresses) || !h.adresses.length) return null; return h.adresses.find((x) => x.actif) || h.adresses[0]; }
+// Garantit une seule entrée active et met `h.addr`/`h.addrNom` EN MIROIR de l'adresse active (compat : tout le code qui lit
+// encore h.addr/h.addrNom reste correct). À appeler après toute mutation de h.adresses.
+function chevalSyncActive(h) {
+  if (!h || !Array.isArray(h.adresses) || !h.adresses.length) return;
+  let act = h.adresses.find((x) => x.actif); if (!act) act = h.adresses[0];
+  h.adresses.forEach((x) => { x.actif = (x === act); });
+  h.addr = toAddr(act.addr); h.addrNom = act.nom || '';
+}
+const chevalAddrSrc = (h) => h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
 const chevalAddr = (c, h) => {
-  const src = h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
+  const src = chevalAddrSrc(h);
+  if (src === 'specifique') { const ea = chevalActiveAddrEntry(h); if (ea && addrStr(ea.addr).trim()) return ea.addr; return addrStr(h.addr) ? h.addr : c.addr; }
   if (src === 'societe') return societeAddrOf(c);
-  if (src === 'specifique') return addrStr(h.addr) ? h.addr : c.addr;
   return c.addr;
 };
+// Rend une adresse « par défaut » (active) pour un cheval : active l'entrée correspondante (l'ajoute si absente, ex. ancienne
+// adresse réactivée), désactive les autres, et met h.addr/h.addrNom en miroir. Bascule le cheval en source 'specifique'.
+function setChevalDefaultAddr(h, addr) {
+  if (!Array.isArray(h.adresses)) h.adresses = [];
+  const k = addrKey(addr); let found = false;
+  h.adresses.forEach((e) => { const on = addrKey(e.addr) === k; e.actif = on; if (on) found = true; });
+  if (!found) h.adresses.push({ id: uid(), nom: h.addrNom || '', addr: toAddr(addr), actif: true });
+  h.addrSource = 'specifique';
+  chevalSyncActive(h);
+}
+// Nom d'écurie d'une adresse PRÉCISE d'un cheval (entrée de h.adresses) — pour l'édition depuis « Adresses chevaux ».
+function chevalAddrEntry(h, addr) { const k = addrKey(addr); return (Array.isArray(h.adresses) ? h.adresses.find((e) => addrKey(e.addr) === k) : null) || null; }
+function addrNomForAddr(h, addr) { const e = chevalAddrEntry(h, addr); return e ? (e.nom || '') : (h.addrNom || ''); }
+function setAddrNomForAddr(h, addr, val) { const e = chevalAddrEntry(h, addr); if (e) { e.nom = val; if (e.actif) h.addrNom = val; } else { h.addrNom = val; } }
 // Nom d'affichage de l'adresse d'un cheval, selon la source : client → nom du client ; société → nom de la société ; spécifique → « adresse privée » (= nom du client) ou nom saisi.
 function chevalAddrNom(c, h) {
   const src = h.addrSource || 'client';
+  if (src === 'specifique') { if (h.addrPrivee) return fullName(c); const ea = chevalActiveAddrEntry(h); const nm = ea ? (ea.nom || '').trim() : (h.addrNom || '').trim(); return nm || fullName(c) || 'Adresse'; }
   if (src === 'societe') return c.societe || fullName(c);
-  if (src === 'specifique') { if (h.addrPrivee) return fullName(c); return (h.addrNom || '').trim() || fullName(c) || 'Adresse'; }
   return fullName(c) || 'Adresse';
 }
 // Statut d'une adresse PHYSIQUE (clé = adresse normalisée), partagé par tous les chevaux à cette adresse : 'actif' (défaut) | 'inactif' | 'noir' (liste noire).
@@ -5245,6 +5315,56 @@ function chooseClientTargets(c) {
 }
 // Après un +client : si un arrêt NOUVEAU a été ajouté à une tournée qui avait déjà des arrêts → proposer l'intercalation.
 function maybeIntercaler(res) { if (res && res.preExisting && res.placements && res.placements.length) modalIntercaler(currentTour, res.placements); }
+// Changer l'adresse (par défaut) d'un cheval depuis l'éditeur de tournée : choisir une de ses adresses OU en encoder une nouvelle.
+// L'adresse choisie devient l'adresse par défaut du cheval (répercutée fiche + « Adresses chevaux »), et la tournée en cours est
+// reconciliée (l'arrêt migre vers la nouvelle adresse) puis, si un nouvel arrêt apparaît, on propose de le placer (ordre/horaire).
+function modalChangeChevalAddr(c, h) {
+  if (!Array.isArray(h.adresses)) h.adresses = [];
+  if (chevalAddrSrc(h) === 'specifique' && !h.adresses.length && addrStr(h.addr).trim()) h.adresses.push({ id: uid(), nom: h.addrNom || '', addr: toAddr(h.addr), actif: true });
+  chevalSyncActive(h);
+  const curKey = addrKey(chevalAddr(c, h));
+  const newAddr = emptyAddr(); let mkDefault = true;
+  const o = openOverlay('<div class="modal-head"><b>📍 Adresse — ' + esc(h.nom || 'cheval') + '</b><button class="x" data-x>✕</button></div><div id="chaddrBody"></div>');
+  const body = o.q('#chaddrBody');
+  const list = () => h.adresses.map((e, i) => `<label class="chk" style="margin-bottom:6px"><input type="radio" name="chaddrSel" data-sel="${i}" ${addrKey(e.addr) === curKey ? 'checked' : ''}/> <b>${esc(e.nom || 'Adresse')}</b> — ${esc(addrStr(e.addr)) || '<i>adresse ?</i>'}${addrKey(e.addr) === curKey ? ' <span class="badge">⭐ actuelle</span>' : ''}</label>`).join('') || '<p class="hint">Ce cheval suit l\'adresse du client. Encodez une adresse propre ci-dessous.</p>';
+  body.innerHTML = `
+    <p class="hint">Choisissez l'adresse de ce cheval pour la tournée. Elle devient son adresse <b>par défaut</b> (répercutée sur la fiche et « Adresses chevaux »).</p>
+    <div class="ch-adr-list">${list()}</div>
+    <details class="ch-menu" id="chaddrNew"><summary class="btn small">＋ Encoder une nouvelle adresse</summary>
+      <div data-newmount style="margin-top:6px"></div>
+      <label class="chk2"><input type="checkbox" id="chaddrMkDef" checked/> Définir comme adresse par défaut du cheval (utilisée dans la tournée)</label>
+    </details>
+    <div class="actions"><button class="btn primary block" id="chaddrOk">Utiliser cette adresse</button></div>`;
+  mountAddress(body.querySelector('[data-newmount]'), newAddr, (na) => { Object.assign(newAddr, na); });
+  { const mk = body.querySelector('#chaddrMkDef'); if (mk) mk.addEventListener('change', (e) => { mkDefault = e.target.checked; }); }
+  o.q('[data-x]').onclick = o.close;
+  body.querySelector('#chaddrOk').addEventListener('click', () => {
+    const newOpen = body.querySelector('#chaddrNew').open;
+    let target = null;
+    if (newOpen && addrStr(newAddr).trim()) {
+      if (mkDefault) { setChevalDefaultAddr(h, newAddr); const ea = chevalActiveAddrEntry(h); target = ea ? ea.addr : null; }
+      else { h.adresses.push({ id: uid(), nom: '', addr: toAddr(newAddr), actif: false }); chevalSyncActive(h); saveClients(); o.close(); alert('Adresse ajoutée à la fiche du cheval. Cochez « par défaut » pour l\'utiliser dans la tournée.'); return; }
+    } else {
+      const sel = body.querySelector('[name="chaddrSel"]:checked'); if (!sel) { alert('Choisissez une adresse ou encodez-en une nouvelle.'); return; }
+      const e = h.adresses[+sel.dataset.sel]; if (!e) return; setChevalDefaultAddr(h, e.addr); target = e.addr;
+    }
+    saveClients(); o.close();
+    if (target && addrKey(target) !== curKey) applyChevalAddrChangeToTour();
+    else { reconcileActiveTours(); if (currentTour) { renderEditorArrets(); scheduleGeoRecalc(); } }
+  });
+}
+// Après un changement d'adresse par défaut d'un cheval : reconcilie la tournée en cours (l'arrêt migre) + propose le placement
+// (ordre/horaire via modalIntercaler) si un nouvel arrêt est apparu, sinon recalcule. Report/annulation restent accessibles par arrêt.
+function applyChevalAddrChangeToTour() {
+  if (!currentTour) return;
+  const beforeKeys = new Set((currentTour.arrets || []).map((x) => norm(addrStr(x.addr))));
+  reconcileTour(currentTour);
+  persistCurrentTour();
+  renderEditorArrets();
+  scheduleGeoRecalc();
+  const news = (currentTour.arrets || []).filter((x) => x.clients && x.clients.length && !beforeKeys.has(norm(addrStr(x.addr))));
+  if (news.length) modalIntercaler(currentTour, news.map((ar) => ({ arret: ar, cl: ar.clients[0], isNew: true })));
+}
 function addClientToTour(c, chevaux) {
   const oldAddrs = (currentTour.arrets || []).map((a) => norm(addrStr(a.addr))); // ordre AVANT ajout (invalidation chirurgicale)
   const placements = []; // arrêts où le client est AJOUTÉ (nouvel arrêt OU fusion avec client fraîchement ajouté) → intercalation
@@ -5440,7 +5560,7 @@ function renderEditorArrets(locked) {
           opts += ck('data-supp="difficile"', cv && cv.difficile, 'Cheval difficile', !acte);
           const dp = dernierParageInfo(cl.clientId, ph.nom, currentTour.date); // temps écoulé depuis le dernier parage/visite (tournées clôturées)
           const pInfo = dp ? ` <span class="td-eta" title="Dernier parage/visite : ${esc(fmtDateFr(dp.date))}">⏱ ${dp.days < 7 ? dp.days + ' j' : Math.round(dp.days / 7) + ' sem'}</span>` : '';
-          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act"><button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
+          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act">${cancelled ? '' : `<button type="button" class="btn small" data-chaddr="${pi}" title="Changer l'adresse de ce cheval">📍 Adresse</button>`}<button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
         });
         h += '</div>';
         // Prestation visite choisie (affichée sous le tableau, modifiable) — par cheval dont la case Visite est cochée.
@@ -5484,6 +5604,7 @@ function renderEditorArrets(locked) {
           modalSupplement(ph.nom, cv, key, () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // saisie montant HT + éligibilité remise
         }));
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { persistCurrentTour(); if (!paid) recomputeMoney(); renderEditorArrets(locked); scheduleCalPush(currentTour); refreshEverywhere(); } }); })); // persistCurrentTour (copie) ; payé → facture figée (NC) ; non payé → recalcul ; maj Google + bandeau (km)
+        wrap.querySelectorAll('[data-chaddr]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.chaddr]; const fiche = cObj ? (cObj.chevaux || []).find((x) => (x.id != null && ph.id != null && x.id === ph.id) || norm(x.nom) === norm(ph.nom)) : null; if (!fiche) { alert('Fiche du cheval introuvable.'); return; } modalChangeChevalAddr(cObj, fiche); })); // changer l'adresse (par défaut) d'un cheval → répercute sur la tournée
         el.appendChild(wrap);
       } // fin des actes (édition uniquement si tournée non clôturée)
 
