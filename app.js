@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.96';
+const APP_VERSION = '1.2.97';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.97', date: '2026-07-13',
+    corrections: [
+      'Synchro entre appareils : le suivi comptable (paiements reçus, mois archivés, périodes verrouillées) ainsi que les couleurs de badges et titres de cases personnalisés fusionnent désormais correctement — ils pouvaient être perdus ou réinitialisés lors d\'une synchronisation.',
+      'Planche : une planche générée ou envoyée ne réapparaît plus à tort comme « planche non terminée à reprendre » au lancement suivant.',
+      'Planche — envoi Gmail : fermer la fenêtre d\'envoi à la main juste après l\'envoi ne masque plus la planche suivante d\'une série.',
+      'Planche : cocher / décocher « Ajouter la page Cheval » n\'oublie plus une image déjà découpée (plus d\'image « fantôme »).',
+      'Fiche client depuis un mail : « Effacer le brouillon » repart bien des informations du formulaire reçu (au lieu d\'une fiche vide).',
+      'Planche : le sélecteur « Choisir » ne laisse plus l\'avertissement « plusieurs clients » affiché une fois le bon client choisi.',
+    ],
+  },
   {
     version: '1.2.96', date: '2026-07-13',
     ajouts: [
@@ -2485,8 +2496,8 @@ function renderBadgesSettings() {
     const row = document.createElement('div'); row.className = 'badge-set-row';
     row.innerHTML = `<div class="badge-set-main"><div class="badge-set-sample">${b.sample}</div><span class="badge-set-lbl">${esc(b.label)}</span></div><div class="badge-set-act"><input type="color" value="${esc(custom || b.def)}" data-bcol/><button class="btn small" data-breset ${custom ? '' : 'disabled'}>Défaut</button></div>`;
     const inp = row.querySelector('[data-bcol]'), rst = row.querySelector('[data-breset]');
-    const h = (e) => { bc[b.key] = e.target.value; applyBadgeColors(); saveSettings(); rst.disabled = false; }; // pas de re-render pendant le glissé du sélecteur ; l'aperçu se recolore via la variable CSS
-    inp.addEventListener('input', h); inp.addEventListener('change', h);
+    inp.addEventListener('input', (e) => { bc[b.key] = e.target.value; applyBadgeColors(); rst.disabled = false; }); // aperçu live via la variable CSS, SANS sauvegarde à chaque pixel du glissé
+    inp.addEventListener('change', (e) => { bc[b.key] = e.target.value; applyBadgeColors(); saveSettings(); rst.disabled = false; }); // persiste à la fin du choix
     rst.addEventListener('click', () => { delete bc[b.key]; applyBadgeColors(); saveSettings(); inp.value = b.def; rst.disabled = true; });
     box.appendChild(row);
   });
@@ -2558,6 +2569,13 @@ function mergeSettings(localS, remoteS) {
   merged.plancheHistory = unionById('plancheHistory');
   { const byK = {}, kk = (y) => (y.clientId || '') + '|' + norm(y.chevalNom || '') + '|' + (y.date || '') + '|' + norm(y.type || ''); ((localS && localS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); ((remoteS && remoteS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); merged.plancheDone = Object.values(byK); }
   merged.addrStatus = Object.assign({}, (localS && localS.addrStatus) || {}, (remoteS && remoteS.addrStatus) || {}); // statut de lieu (noir/inactif) : union — un lieu refusé sur un appareil le reste
+  // Suivi comptable : paiements reçus, démarches faites, périodes verrouillées → UNION (sinon un mois clôturé/encodé rouvrirait, un paiement disparaîtrait, après une synchro). Même protection que l'import « Données seules ».
+  merged.comptaRecu = Object.assign({}, (localS && localS.comptaRecu) || {}, (remoteS && remoteS.comptaRecu) || {});
+  merged.comptaDemarche = Object.assign({}, (localS && localS.comptaDemarche) || {}, (remoteS && remoteS.comptaDemarche) || {});
+  merged.comptaStatus = Object.assign({}, (localS && localS.comptaStatus) || {}, (remoteS && remoteS.comptaStatus) || {});
+  // Personnalisations d'affichage (maps accumulatives → union par clé, pas de perte croisée entre appareils).
+  merged.badgeColors = Object.assign({}, (localS && localS.badgeColors) || {}, (remoteS && remoteS.badgeColors) || {});
+  merged.tileLabels = Object.assign({}, (localS && localS.tileLabels) || {}, (remoteS && remoteS.tileLabels) || {});
   // Config initiale : une fois validée sur un appareil, elle ne doit JAMAIS régresser (OR sur setupDone/setupLocked). Les champs pilotés (pays/régime/forme) suivent l'appareil qui a validé.
   const lDone = !!(localS && localS.setupDone), rDone = !!(remoteS && remoteS.setupDone);
   merged.setupDone = lDone || rDone;
@@ -3971,7 +3989,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
   renderCh();
   updateLegalState();
   $('mX').addEventListener('click', closeModal);
-  if (draft && $('cDraftReset')) $('cDraftReset').addEventListener('click', () => { DRAFTS.clear(key); closeModal(); editClient(existing, onSaved); });
+  if (draft && $('cDraftReset')) $('cDraftReset').addEventListener('click', () => { DRAFTS.clear(key); closeModal(); editClient(existing, onSaved, prefillNom, prefill, draftKey); }); // efface le brouillon MAIS repart de l'état pré-rempli (mail) et de la même clé
   $('cPrenom').addEventListener('input', (e) => { w.prenom = e.target.value; saveDraft(); });
   $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
   if ($('cEmail')) $('cEmail').addEventListener('input', (e) => { w.email = e.target.value; saveDraft(); });
@@ -7161,7 +7179,7 @@ function modalSendDoc(blob, filename, defaultTo, subject, bodyText, onSent, onCl
     const to = $('sdTo').value.trim(); if (!to) { alert('Renseignez le destinataire.'); return; }
     const copy = !!($('sdCopy') && $('sdCopy').checked); S.mailSelfCopy = copy; saveSettings(); // mémorise le choix par défaut
     const st = $('sdStatus'), btn = $('sdGmail'); btn.disabled = true; st.className = 'status'; st.textContent = 'Envoi via Gmail…';
-    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename, copy ? true : ''); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to + (copy && S.mailSelf ? ' (copie à ' + S.mailSelf + ')' : ''); setTimeout(() => { closeModal(); if (onSent) onSent(); fireClose(); }, 1400); } // fermer AVANT onSent (qui peut ouvrir la planche suivante)
+    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename, copy ? true : ''); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to + (copy && S.mailSelf ? ' (copie à ' + S.mailSelf + ')' : ''); setTimeout(() => { if (_closed) return; closeModal(); if (onSent) onSent(); fireClose(); }, 1400); } // fermer AVANT onSent (qui peut ouvrir la planche suivante) ; si déjà fermé à la main entre-temps, ne rien faire (sinon on masquerait la planche suivante)
     catch (e) { st.className = 'status err'; st.textContent = 'Échec : ' + (e && e.message || e) + ' — utilisez « partager / télécharger ».'; btn.disabled = false; }
   };
   $('sdShare').onclick = async () => { const ok = await shareDoc(blob, filename, subject, bodyText); if (ok) { closeModal(); if (onSent) onSent(); fireClose(); } };
@@ -8707,6 +8725,7 @@ function startPlancheQueue(items) {
 // Avance dans la file de planches (après PDF / mail / bouton « passer »). Ouvre la suivante ou, si c'était la dernière, ferme la création.
 function plQueueAdvance() {
   if (!plCreate) return;
+  plDraftClear(); // la planche courante est traitée ou explicitement passée → pas de brouillon à conserver (la suivante enregistrera le sien)
   const q = plCreate.queue || [];
   if (q.length) modalPlancheCreate('contact', Object.assign({}, q[0], { queue: q.slice(1), queueTotal: plCreate.queueTotal, queueIdx: plCreate.queueIdx + 1 }));
   else { plCreate = null; closeModal(); }
@@ -8729,8 +8748,9 @@ function plRenderChevalOwner() {
   if (dl) dl.innerHTML = (matches.length ? matches : clients).map((c) => `<option value="${esc(fullName(c))}"></option>`).join(''); // ne proposer que les clients concernés
   if (matches.length === 1) { plCreate.client = fullName(matches[0]); plCreate.clientId = matches[0].id; if (ci) ci.value = plCreate.client; if (warn) warn.style.display = 'none'; }
   else if (matches.length > 1) {
-    if (!matches.some((c) => c.id === plCreate.clientId)) { plCreate.client = ''; plCreate.clientId = null; if (ci) ci.value = ''; } // client courant hors liste → à re-choisir
-    if (warn) { warn.style.display = ''; warn.innerHTML = '⚠ ' + matches.length + ' clients ont un cheval « ' + esc(plCreate.cheval) + ' » — choisissez le bon client.'; }
+    const resolved = matches.some((c) => c.id === plCreate.clientId); // client déjà choisi (ex. via le sélecteur « Choisir ») → pas d'ambiguïté à signaler
+    if (!resolved) { plCreate.client = ''; plCreate.clientId = null; if (ci) ci.value = ''; } // client courant hors liste → à re-choisir
+    if (warn) { warn.style.display = resolved ? 'none' : ''; if (!resolved) warn.innerHTML = '⚠ ' + matches.length + ' clients ont un cheval « ' + esc(plCreate.cheval) + ' » — choisissez le bon client.'; }
   } else if (warn) warn.style.display = 'none';
 }
 // Waiting list : planches PHOTO demandées pendant une tournée (bouton 📷 Photo) et PAS ENCORE FAITES — mises en rappel.
@@ -8824,7 +8844,7 @@ function plDraftDB() {
 }
 async function plDraftPut(obj) { try { const db = await plDraftDB(); await new Promise((res, rej) => { const tx = db.transaction(PL_DRAFT_STORE, 'readwrite'); tx.objectStore(PL_DRAFT_STORE).put(obj, PL_DRAFT_KEY); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch (e) {} }
 async function plDraftGet() { try { const db = await plDraftDB(); return await new Promise((res, rej) => { const tx = db.transaction(PL_DRAFT_STORE, 'readonly'); const rq = tx.objectStore(PL_DRAFT_STORE).get(PL_DRAFT_KEY); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error); }); } catch (e) { return null; } }
-async function plDraftClear() { try { const db = await plDraftDB(); await new Promise((res) => { const tx = db.transaction(PL_DRAFT_STORE, 'readwrite'); tx.objectStore(PL_DRAFT_STORE).delete(PL_DRAFT_KEY); tx.oncomplete = res; tx.onerror = res; }); } catch (e) {} }
+async function plDraftClear() { if (_plDraftTimer) { clearTimeout(_plDraftTimer); _plDraftTimer = null; } try { const db = await plDraftDB(); await new Promise((res) => { const tx = db.transaction(PL_DRAFT_STORE, 'readwrite'); tx.objectStore(PL_DRAFT_STORE).delete(PL_DRAFT_KEY); tx.oncomplete = res; tx.onerror = res; }); } catch (e) {} } // annule toute sauvegarde en attente → une planche générée/fermée ne « ressuscite » pas en brouillon
 let _plDraftTimer = null;
 function plDraftSave() {
   if (!plCreate) return;
@@ -8934,7 +8954,7 @@ function modalPlancheCreate(type, prefill) {
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
   if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; const w = $('plCcycleWrap'); if (w) w.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; }); // le champ « durée du cycle » suit le stade (parage/ferrage/déferrage)
-  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); if (plCreate.cellT) Object.keys(plCreate.cellT).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellT[k]; }); if (plCreate.cellCrop) Object.keys(plCreate.cellCrop).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCrop[k]; }); plRenderPot(); plRenderGrid(); });
+  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); if (plCreate.cellT) Object.keys(plCreate.cellT).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellT[k]; }); if (plCreate.cellCrop) Object.keys(plCreate.cellCrop).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCrop[k]; }); if (plCreate.cellImg) Object.keys(plCreate.cellImg).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellImg[k]; }); if (plCreate.cellCropDef) Object.keys(plCreate.cellCropDef).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCropDef[k]; }); plRenderPot(); plRenderGrid(); });
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
