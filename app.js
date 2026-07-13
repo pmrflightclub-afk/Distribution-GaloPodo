@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.3';
+const APP_VERSION = '1.3.4';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.4', date: '2026-07-13',
+    corrections: [
+      'Recherche d\'adresse (fiche client / cheval) qui affichait « Aucun résultat » sur une adresse pourtant existante : l\'app relance désormais la recherche SANS le code postal / la localité déjà saisis (qui pouvaient trop restreindre). Message plus clair sinon, avec le conseil d\'activer une clé Geoapify (Réglages → GPS) pour un service d\'adresse plus fiable que l\'OpenStreetMap gratuit.',
+    ],
+  },
   {
     version: '1.3.3', date: '2026-07-13',
     corrections: [
@@ -3256,10 +3262,12 @@ function attachAuto(input, kind, addr, onPick, onEdit) {
     const text = parts.filter(Boolean).join(' ');
     close(); box = document.createElement('div'); box.className = 'aw-sugg'; input.parentElement.appendChild(box); box.innerHTML = '<div class="aw-item">Recherche…</div>';
     try {
-      const res = await suggestAddress(text); if (!box) return; box.innerHTML = '';
-      if (!res.length) { box.innerHTML = '<div class="aw-item">Aucun résultat</div>'; return; }
+      let res = await suggestAddress(text);
+      if ((!res || !res.length) && text !== searchBase) res = await suggestAddress(searchBase); // repli : rechercher SANS le contexte CP/localité déjà saisi (qui peut trop restreindre → « aucun résultat » sur une adresse pourtant existante)
+      if (!box) return; box.innerHTML = '';
+      if (!res || !res.length) { box.innerHTML = '<div class="aw-item">Aucun résultat. Vérifiez l\'orthographe — ou activez une clé Geoapify (Réglages → GPS) pour une recherche plus fiable.</div>'; return; }
       res.forEach((s) => { const d = document.createElement('div'); d.className = 'aw-item'; d.textContent = s.label; d.addEventListener('mousedown', (e) => { e.preventDefault(); onPick(Object.assign({}, s, (extractedNum && !s.numero) ? { numero: extractedNum } : {})); close(); }); box.appendChild(d); });
-    } catch (e) { if (box) box.innerHTML = '<div class="aw-item">Erreur : ' + e.message + '</div>'; }
+    } catch (e) { if (box) box.innerHTML = '<div class="aw-item">Service d\'adresse momentanément indisponible (' + esc(e && e.message || e) + '). Réessayez, ou activez Geoapify (Réglages → GPS).</div>'; }
   };
   input.addEventListener('input', () => { addr.lat = null; addr.lon = null; onEdit && onEdit(); clearTimeout(deb); deb = setTimeout(run, S.provider === 'geoapify' ? 350 : 1100); });
   input.addEventListener('blur', () => setTimeout(close, 150));
