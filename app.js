@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.98';
+const APP_VERSION = '1.2.99';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.99', date: '2026-07-13',
+    corrections: [
+      'Synchro : après une fusion entre appareils, les empreintes internes sont recalculées — les enregistrements reçus de l\'autre appareil ne sont plus re-marqués « modifiés » au prochain enregistrement (horodatages plus fiables, meilleures fusions futures).',
+    ],
+  },
   {
     version: '1.2.98', date: '2026-07-13',
     ajouts: [
@@ -2625,7 +2631,12 @@ function applyMerged(merged) {
   const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
   tournees = merged.tours.filter((t) => !isArch(t));
   archive = merged.tours.filter((t) => isArch(t));
-  const m = syncMeta(); m.tomb = Object.assign({}, m.tomb, merged.tomb); LS.set('ftr.syncmeta', m); // conserve TOUS les tombstones fusionnés (clients, tournées, collections réglages)
+  const m = syncMeta(); m.tomb = Object.assign({}, m.tomb, merged.tomb); // conserve TOUS les tombstones fusionnés (clients, tournées, collections réglages)
+  // Recale les empreintes sur le contenu FUSIONNÉ → le prochain enregistrement ne re-marque pas comme « modifiés » les
+  // enregistrements venus de l'autre appareil (fin du « churn » d'horodatage qui pouvait fausser les futures fusions).
+  const rehash = (kind, arr) => { m.hash[kind] = {}; (arr || []).forEach((r) => { if (r && r.id) m.hash[kind][r.id] = hashRec(r); }); };
+  rehash('clients', clients); rehash('tournees', tournees.concat(archive)); SETTINGS_COLLECTIONS.forEach((k) => rehash('set:' + k, S[k]));
+  LS.set('ftr.syncmeta', m);
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
 }
 function importSnapshotMerge(remote) { applyMerged(mergeSnapshots(exportSnapshot(), remote)); }
