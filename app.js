@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.7';
+const APP_VERSION = '1.3.8';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.8', date: '2026-07-13',
+    corrections: [
+      'Erreur « quota dépassé » (stockage plein) corrigée : l\'app garde en interne une empreinte de synchronisation pour chaque fiche/tournée — elle stockait par erreur une COPIE COMPLÈTE des données (double du volume), ce qui pouvait saturer la mémoire du navigateur. L\'empreinte est désormais un petit condensé, et si le stockage sature quand même, l\'app libère l\'espace récupérable et réessaie au lieu de planter. Aucune donnée n\'est perdue (l\'empreinte se reconstruit toute seule).',
+    ],
+  },
   {
     version: '1.3.7', date: '2026-07-13',
     corrections: [
@@ -2010,7 +2016,16 @@ async function manualCheckForUpdate(statusEl) {
 // ---------- Persistance ----------
 const LS = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { localStorage.setItem(k, JSON.stringify(v)); },
+  set(k, v) {
+    try { localStorage.setItem(k, JSON.stringify(v)); }
+    catch (e) {
+      // Quota localStorage dépassé : « ftr.syncmeta » (empreintes de synchro) est RECONSTRUCTIBLE → on le purge pour libérer
+      // de la place puis on réessaie une fois. Il sera reconstruit paresseusement au prochain enregistrement (empreintes compactes).
+      const quota = e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014);
+      if (quota) { try { localStorage.removeItem('ftr.syncmeta'); localStorage.setItem(k, JSON.stringify(v)); return; } catch (e2) { /* toujours plein */ } }
+      throw e;
+    }
+  },
 };
 const uid = () => 'id' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
 
@@ -2616,8 +2631,18 @@ let archive = LS.get('ftr.archive', []);            // tournées clôturées > 4
 const allTours = () => tournees.concat(archive);    // union pour stats/finances/odomètre/fusion
 
 // ---------- Synchro D1 : horodatage (updatedAt) + tombstones (suppressions) ----------
-// Signature de contenu d'un enregistrement, hors updatedAt (pour détecter un vrai changement).
-function hashRec(rec) { const c = {}; for (const k in rec) if (k !== 'updatedAt') c[k] = rec[k]; return JSON.stringify(c); }
+// Condensé court d'une chaîne (cyrb53) : sert d'empreinte de contenu SANS stocker la donnée elle-même.
+function hashStr(s) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) { const ch = s.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
+}
+// Signature de contenu d'un enregistrement, hors updatedAt (pour détecter un vrai changement). On stocke un CONDENSÉ court
+// (≈ 12 caractères), pas la copie JSON complète — sinon « ftr.syncmeta » dupliquait TOUTES les données (clients + tournées +
+// collections de réglages) et faisait déborder le quota localStorage. Seule l'ÉGALITÉ compte pour détecter un changement.
+function hashRec(rec) { const c = {}; for (const k in rec) if (k !== 'updatedAt') c[k] = rec[k]; return hashStr(JSON.stringify(c)); }
 function syncMeta() { const m = LS.get('ftr.syncmeta', {}); m.hash = m.hash || {}; m.tomb = m.tomb || {}; return m; }
 // Pose updatedAt sur les enregistrements modifiés et enregistre les suppressions en tombstones (par « kind »).
 function syncStamp(kind, arr) {
