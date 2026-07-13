@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.92';
+const APP_VERSION = '1.2.93';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.93', date: '2026-07-13',
+    ajouts: [
+      'Planche : nouveau champ « Orientation » (Portrait par défaut) séparé du champ « Format d\'image ». Le format donne la FORME (Plein page · Carré · 4:3 · 3:2 · 16:9, défaut 4:3), l\'orientation le SENS : en portrait les cases sont automatiquement basculées (plus hautes que larges). Les deux se choisissent en haut de la création (et par défaut dans Réglages → Planche).',
+    ],
+    modifs: [
+      'Planche : le bouton « 🐴 Choisir » (cheval) est passé sur sa propre ligne, juste sous le titre « Cheval & client ».',
+    ],
+  },
   {
     version: '1.2.92', date: '2026-07-13',
     ajouts: [
@@ -1985,7 +1994,12 @@ else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', '
 if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 };
 { const gg = S.planche.gridGuide; if (!(gg.marginLR2 > 0)) gg.marginLR2 = 1.0; if (!(gg.marginTB2 > 0)) gg.marginTB2 = 1.0; } // 2ᵉ repère (cible d'alignement du sujet), défaut 1 cm
 { const gg = S.planche.gridGuide; if (!gg.color1) gg.color1 = '#333333'; if (!gg.color2) gg.color2 = '#2b7bd6'; } // couleurs des repères 1 (coupe) et 2 (cible), réglables dans Gestion → Planche
-if (!S.planche.format) S.planche.format = 'fill'; // format des cases : 'fill' (plein page) | 'square' | 'ph43' | 'ph34' | 'reflex32' | 'reflex23'
+{ // Format des cases : schéma orienté ('fill' | 'square' | 'r43' | 'r32' | 'r169') — le SENS (paysage/portrait) est porté par l'orientation de la planche, pas par le format.
+  const fmtMap = { ph43: 'r43', ph34: 'r43', reflex32: 'r32', reflex23: 'r32' };
+  if (S.planche.format && fmtMap[S.planche.format]) S.planche.format = fmtMap[S.planche.format];
+  if (!S.planche.format) S.planche.format = 'r43'; // défaut : 4:3
+}
+if (!S.planche.orientMigrated) { if (S.planche.contact) S.planche.contact.orientation = 'portrait'; if (S.planche.avantapres) S.planche.avantapres.orientation = 'portrait'; S.planche.orientMigrated = true; } // planches en PORTRAIT par défaut (bascule unique)
 // Ajustement des images dans les cases : 'cover' = remplir (rogne l'excédent, pas de bande blanche) · 'contain' = image entière (bandes blanches si proportions ≠).
 if (S.planche.fitMode !== 'contain' && S.planche.fitMode !== 'cover') S.planche.fitMode = 'cover';
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
@@ -8371,10 +8385,10 @@ function renderPlancheConfig() {
     <div class="row"><label class="grow">Repère 2 · gauche/droite (cm)<input type="number" id="plGuideLR2" min="0" step="0.1" value="${gg.marginLR2}"/></label><label class="grow">Repère 2 · haut/bas (cm)<input type="number" id="plGuideTB2" min="0" step="0.1" value="${gg.marginTB2}"/></label></div>
     <div class="row"><label class="grow">Couleur du repère 1<input type="color" id="plGuideC1" value="${esc(gg.color1 || '#333333')}"/></label><label class="grow">Couleur du repère 2<input type="color" id="plGuideC2" value="${esc(gg.color2 || '#2b7bd6')}"/></label></div>
     <h3 class="rsub" style="margin-top:10px">Format des images</h3>
-    <p class="hint">Forme des cases (et de la zone de recadrage). <b>Plein page</b> = les cases remplissent la page (ratio dicté par les colonnes/lignes). Les autres formats donnent des cases à ratio fixe, <b>agrandies au maximum et centrées</b> — idéal pour homogénéiser des photos téléphone / reflex. Modifiable aussi à la volée pendant la création.</p>
+    <p class="hint">Le <b>format</b> donne la FORME des cases (4:3, 3:2…) et l'<b>orientation</b> (ci-dessus) le SENS : en <b>portrait</b> le ratio est basculé (cases plus hautes que larges). <b>Plein page</b> = les cases remplissent la page. Les autres formats donnent des cases à ratio fixe, <b>agrandies au maximum et centrées</b>. Réglables aussi à la volée pendant la création.</p>
     <label>Format par défaut<select id="plFormatSel">${plFormatOptions(S.planche.format)}</select></label>`;
   body.appendChild(head);
-  $('plOri').value = P.orientation || 'paysage';
+  $('plOri').value = P.orientation || 'portrait';
   $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; saveSettings(); });
   $('plGuideLR').addEventListener('change', (e) => { S.planche.gridGuide.marginLR = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
   $('plGuideTB').addEventListener('change', (e) => { S.planche.gridGuide.marginTB = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
@@ -8382,7 +8396,7 @@ function renderPlancheConfig() {
   $('plGuideTB2').addEventListener('change', (e) => { S.planche.gridGuide.marginTB2 = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
   $('plGuideC1').addEventListener('change', (e) => { S.planche.gridGuide.color1 = e.target.value || '#333333'; saveSettings(); });
   $('plGuideC2').addEventListener('change', (e) => { S.planche.gridGuide.color2 = e.target.value || '#2b7bd6'; saveSettings(); });
-  if ($('plFormatSel')) $('plFormatSel').addEventListener('change', (e) => { S.planche.format = e.target.value || 'fill'; saveSettings(); });
+  if ($('plFormatSel')) $('plFormatSel').addEventListener('change', (e) => { S.planche.format = e.target.value || 'r43'; saveSettings(); });
   // Colonnes = angles de vue, par modèle 3/4/5
   const sc = document.createElement('section'); sc.className = 'card';
   sc.innerHTML = `<h3 class="rsub">Colonnes — angles de vue (par modèle)</h3>
@@ -8749,7 +8763,7 @@ function plDraftRestore(d) {
   if (!plCreate) return;
   // restaure l'état lourd que le pré-remplissage ne porte pas (photos, placements, recadrages, options d'affichage)
   plCreate.photos = d.photos || []; plCreate.cells = d.cells || {}; plCreate.cellT = d.cellT || {}; plCreate.cellCrop = d.cellCrop || {}; plCreate.cellImg = d.cellImg || {}; plCreate.cellCropDef = d.cellCropDef || {};
-  if (d.fitMode) plCreate.fitMode = d.fitMode; if (d.potView) plCreate.potView = d.potView; if (d.pages) plCreate.pages = d.pages; if (d.compar) plCreate.compar = d.compar; if (d.chevalPageOn != null) plCreate.chevalPageOn = d.chevalPageOn;
+  if (d.fitMode) plCreate.fitMode = d.fitMode; if (d.potView) plCreate.potView = d.potView; if (d.pages) plCreate.pages = d.pages; if (d.compar) plCreate.compar = d.compar; if (d.chevalPageOn != null) plCreate.chevalPageOn = d.chevalPageOn; if (d.orientation) plCreate.orientation = d.orientation; if (d.format) plCreate.format = d.format;
   const cp = $('plCchevalPage'); if (cp) cp.checked = !!plCreate.chevalPageOn; // reflète l'état restauré de la case « page Cheval »
   plRenderPot(); plRenderGrid();
 }
@@ -8765,7 +8779,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || P.orientation || 'portrait', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -8779,10 +8793,12 @@ function modalPlancheCreate(type, prefill) {
         ${plCreate.allowTourPick && !plCreate.queueTotal ? '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px"><button class="btn small" id="plCwaiting">📋 Waiting list</button><button class="btn small" id="plCfromTour">📅 Depuis une tournée</button></div>' : ''}
         <label style="margin:0 0 4px;font-size:.82rem;color:var(--muted)">Nombre de colonnes (angles)</label>
         <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
+        <div class="row" style="margin-top:8px"><label class="grow">Orientation<select id="plCorient"><option value="portrait"${plCreate.orientation === 'portrait' ? ' selected' : ''}>Portrait</option><option value="paysage"${plCreate.orientation !== 'portrait' ? ' selected' : ''}>Paysage</option></select></label><label class="grow">Format d'image<select id="plCformat">${plFormatOptions(plCreate.format)}</select></label></div>
       </section>
       <section class="card">
         <div class="card-head"><h3 class="rsub" style="margin:0">Cheval &amp; client</h3></div>
-        <div class="row"><label class="grow">Cheval<div style="display:flex;gap:5px"><input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval" style="flex:1;min-width:0"/><button type="button" class="btn small" id="plCchevalPick" title="Choisir dans la liste">🐴 Choisir</button></div></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
+        <button type="button" class="btn small block" id="plCchevalPick" style="margin-bottom:8px">🐴 Choisir un cheval dans la liste</button>
+        <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
         <p id="plCclientWarn" class="pl-owner-warn" style="display:none"></p>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
@@ -8808,7 +8824,7 @@ function modalPlancheCreate(type, prefill) {
         <div class="pl-pot grid" id="plCpot"></div>
       </section>
       <section class="card">
-        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><label style="display:flex;align-items:center;gap:4px;margin:0;font-size:.85rem">Format<select id="plCformat">${plFormatOptions(plCreate.format)}</select></label><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
+        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
         <div id="plCgridEditCtrls" class="pl-edit-ctrls" style="display:none"></div>
         <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (déplacer, zoomer, tourner). À <b>Valider</b>, l'image est <b>vraiment découpée</b> pour remplir exactement sa case — l'aperçu et le PDF sont alors identiques. Les repères (bords + <b>axe rouge central</b>) aident à centrer le sujet (ils n'apparaissent pas sur le PDF). Édition désactivée : toucher une image la retire.</p>
         <div id="plCgrid"></div>
@@ -8845,6 +8861,11 @@ function modalPlancheCreate(type, prefill) {
   $('plCfiles').addEventListener('change', plHandleFiles);
   if ($('plCformat')) $('plCformat').addEventListener('change', (e) => { // Format d'image : le ratio des cases change → les recadrages (calés sur l'ancien ratio) ne sont plus valides
     plCreate.format = e.target.value; S.planche.format = e.target.value; saveSettings();
+    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
+    plRenderGrid();
+  });
+  if ($('plCorient')) $('plCorient').addEventListener('change', (e) => { // Orientation : change la page ET le sens du ratio des cases → recadrages invalidés
+    plCreate.orientation = e.target.value === 'paysage' ? 'paysage' : 'portrait'; P.orientation = plCreate.orientation; saveSettings();
     plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
     plRenderGrid();
   });
@@ -9194,22 +9215,26 @@ function plClientLines(st) {
 function plProFooter() { const p = S.proIdent || {}; const bits = []; if (p.societe) bits.push(p.societe); const c = []; if (p.email) c.push(p.email); if (p.tel) c.push(p.tel); if (c.length) bits.push('Contact : ' + c.join(' · ')); if (p.tvaNum) bits.push('TVA : ' + p.tvaNum); return bits.join('   ·   '); } // société · contact · TVA
 // Géométrie de planche en MILLIMÈTRES (A4), partagée par le moteur canvas et le moteur impression (marges 0,5 mm, cellules fixes).
 const PL_PXMM = 4.7; // résolution du rendu canvas (px par mm)
-// Ratio (largeur/hauteur) d'une case selon le « Format d'image » choisi. 0 = « Plein page » (les cases remplissent la grille, ratio dicté par la page/colonnes/lignes).
+// Ratio (largeur/hauteur) d'une case selon le format ET l'orientation. Le format donne la « forme » (4:3, 3:2…),
+// l'orientation la couche : en PORTRAIT le ratio est inversé (case plus haute que large). 0 = « Plein page ».
 function plFormatAspect(st) {
-  const f = (st && st.format) || (S.planche && S.planche.format) || 'fill';
+  const f = (st && st.format) || (S.planche && S.planche.format) || 'r43';
+  const portrait = (st && st.orientation) === 'portrait';
+  let base;
   switch (f) {
-    case 'square': return 1;         // 1:1
-    case 'ph43': return 4 / 3;       // photo 4:3 paysage (téléphone / G11)
-    case 'ph34': return 3 / 4;       // portrait 3:4
-    case 'reflex32': return 3 / 2;   // reflex 3:2 paysage
-    case 'reflex23': return 2 / 3;   // reflex 2:3 portrait
-    default: return 0;               // 'fill' → plein page (comportement historique)
+    case 'square': return 1;                              // 1:1 (identique dans les deux sens)
+    case 'r43': case 'ph43': case 'ph34': base = 4 / 3; break;   // 4:3
+    case 'r32': case 'reflex32': case 'reflex23': base = 3 / 2; break; // 3:2
+    case 'r169': base = 16 / 9; break;                    // 16:9
+    default: return 0;                                    // 'fill' → plein page
   }
+  return portrait ? 1 / base : base;
 }
-// Libellés des formats (pour les <select> de la création et des réglages).
+// Libellés des formats (forme, sans le sens — le sens est donné par l'orientation). Mappe aussi les anciennes valeurs.
 function plFormatOptions(sel) {
-  const opts = [['fill', 'Plein page'], ['square', 'Carré 1:1'], ['ph43', 'Photo 4:3'], ['ph34', 'Portrait 3:4'], ['reflex32', 'Reflex 3:2'], ['reflex23', 'Reflex 2:3']];
-  return opts.map((o) => `<option value="${o[0]}"${(sel || 'fill') === o[0] ? ' selected' : ''}>${o[1]}</option>`).join('');
+  const opts = [['fill', 'Plein page'], ['square', 'Carré 1:1'], ['r43', '4:3'], ['r32', '3:2'], ['r169', '16:9']];
+  const m = { ph43: 'r43', ph34: 'r43', reflex32: 'r32', reflex23: 'r32' }; sel = m[sel] || sel || 'r43';
+  return opts.map((o) => `<option value="${o[0]}"${sel === o[0] ? ' selected' : ''}>${o[1]}</option>`).join('');
 }
 function plGeom(land, nCols, refRows, aspect) {
   const pageW = land ? 297 : 210, pageH = land ? 210 : 297;
