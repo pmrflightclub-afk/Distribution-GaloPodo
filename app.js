@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.86';
+const APP_VERSION = '1.2.87';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.87', date: '2026-07-13',
+    corrections: [
+      'Éditeur de recadrage : correction du redimensionnement du cadre par les poignées (sur ordinateur, le cadre sautait à sa taille maxi) ; les deux axes pilotent maintenant la taille. « Cadre plein » réinitialise correctement une image déjà recadrée. Réaffecter une photo (menus membre/angle) n\'oublie plus son ancien découpage (plus d\'image fantôme). Découpe protégée : si l\'image ne peut pas être découpée, le cadrage précédent est conservé et un message s\'affiche.',
+    ],
+  },
   {
     version: '1.2.86', date: '2026-07-12',
     ajouts: [
@@ -8727,7 +8733,7 @@ function plRenderPot() {
     t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta') || ev.target.closest('.pl-th-assign')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
     if (showAssign) { const mb = t.querySelector('.pl-th-mb'), ang = t.querySelector('.pl-th-ang'); if (mb && ang) {
       // FIX : on NE re-dessine PAS le pot au changement (sinon la sélection partielle se réinitialisait) — on mémorise ph._mb/_ang, on place quand les deux sont choisis, et on met à jour la grille + le badge « placé » de cette vignette.
-      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; if (!plCreate.cellT) plCreate.cellT = {}; if (!plCreate.cellCrop) plCreate.cellCrop = {}; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; delete plCreate.cellT[k]; delete plCreate.cellCrop[k]; } }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); const tk = pr[0] + '_' + pr[1] + '_' + ang.value; delete plCreate.cellT[tk]; delete plCreate.cellCrop[tk]; plCreate.cells[tk] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); };
+      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; if (!plCreate.cellT) plCreate.cellT = {}; if (!plCreate.cellCrop) plCreate.cellCrop = {}; if (!plCreate.cellImg) plCreate.cellImg = {}; if (!plCreate.cellCropDef) plCreate.cellCropDef = {}; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; delete plCreate.cellT[k]; delete plCreate.cellCrop[k]; delete plCreate.cellImg[k]; delete plCreate.cellCropDef[k]; } }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); const tk = pr[0] + '_' + pr[1] + '_' + ang.value; delete plCreate.cellT[tk]; delete plCreate.cellCrop[tk]; delete plCreate.cellImg[tk]; delete plCreate.cellCropDef[tk]; plCreate.cells[tk] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); }; // nettoie AUSSI l'image cuite (cellImg/cellCropDef) → plus d'image fantôme à la réaffectation (B2)
       mb.addEventListener('change', applyAssign); ang.addEventListener('change', applyAssign);
     } }
     t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; if (plCreate.cellT) delete plCreate.cellT[k]; if (plCreate.cellCrop) delete plCreate.cellCrop[k]; if (plCreate.cellImg) delete plCreate.cellImg[k]; if (plCreate.cellCropDef) delete plCreate.cellCropDef[k]; } }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
@@ -8819,23 +8825,6 @@ function plRenderGrid() {
 // Facteur d'agrandissement pour qu'une image TOURNÉE de `rotDeg` couvre encore TOUTE la case (colW×rowH) → zéro coin blanc.
 // = |cos| + max(colW/rowH, rowH/colW)·|sin| (exact pour une image qui couvre pile la case ; sinon rogne un peu plus, jamais de vide). 1 si rot=0.
 const plRotCover = (rotDeg, cw, ch) => { const r = (rotDeg || 0) * Math.PI / 180; const ar = (cw > 0 && ch > 0) ? Math.max(cw / ch, ch / cw) : 1; return Math.abs(Math.cos(r)) + ar * Math.abs(Math.sin(r)); };
-// « Vrai crop » : cuit une NOUVELLE image au ratio EXACT de la case (cellAR = colW/rowH) à partir de imgEl + transfo T {zoom,x,y,rot}.
-// Reproduit à l'identique la math du rendu PDF (base cover + zoom-de-couverture rotation + translate/scale/rotate) → l'image découpée EST le rendu final.
-function plBakeCrop(imgEl, cellAR, T, cover) {
-  const iw = imgEl.naturalWidth || imgEl.width, ih = imgEl.naturalHeight || imgEl.height;
-  if (!iw || !ih) return '';
-  const outH = 900, outW = Math.max(1, Math.round(outH * cellAR)); // sortie au ratio de la case, bonne résolution
-  const cv = document.createElement('canvas'); cv.width = outW; cv.height = outH;
-  const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, outW, outH); // fond blanc (visible seulement en mode « Image entière »)
-  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, outW, outH); ctx.clip();
-  const s = cover ? Math.max(outW / iw, outH / ih) : Math.min(outW / iw, outH / ih);
-  const rc = cover ? plRotCover(T.rot, outW, outH) : 1, dw = iw * s * rc, dh = ih * s * rc;
-  ctx.translate(outW / 2 + (T.x || 0) * outW, outH / 2 + (T.y || 0) * outH);
-  ctx.scale(T.zoom || 1, T.zoom || 1); ctx.rotate((T.rot || 0) * Math.PI / 180);
-  ctx.drawImage(imgEl, -dw / 2, -dh / 2, dw, dh);
-  ctx.restore();
-  try { return cv.toDataURL('image/jpeg', 0.9); } catch (e) { return ''; }
-}
 function plGuideSvg() {
   const st = plCreate; const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
   const gg = (S.planche && S.planche.gridGuide) || { marginLR: 0.5, marginTB: 0.5 };
@@ -8877,8 +8866,9 @@ function modalCellEdit(key) {
   const cellAR = g.colW / g.rowH;
   const src = new Image(); src.onload = () => build(); src.onerror = () => {}; src.src = ph.url;
   function build() {
+    if (plCreate !== st) return; // création de planche fermée/changée pendant le chargement async → on abandonne (F1)
     const iw = src.naturalWidth, ih = src.naturalHeight; if (!iw || !ih) return;
-    const def = (st.cellCropDef[key] && st.cellCropDef[key].relW != null) ? st.cellCropDef[key] : null;
+    let def = (st.cellCropDef[key] && st.cellCropDef[key].relW != null) ? st.cellCropDef[key] : null;
     let rot = def ? (def.rot || 0) : 0;
     let fr = null; // cadre en px du plan de travail {fx,fy,fw,fh} ; null = défaut (max centré)
     const ov = document.createElement('div'); ov.className = 'modal-overlay pl-ce-overlay';
@@ -8911,23 +8901,23 @@ function modalCellEdit(key) {
     q('rot').addEventListener('input', (e) => { rot = parseInt(e.target.value, 10) || 0; layout(); });
     q('rotL').onclick = () => { rot = ((rot - 90 + 540) % 360) - 180; q('rot').value = rot; layout(); };
     q('rotR').onclick = () => { rot = ((rot + 90 + 540) % 360) - 180; q('rot').value = rot; layout(); };
-    q('reset').onclick = () => { fr = null; layout(); };
+    q('reset').onclick = () => { def = null; fr = null; layout(); }; // « Cadre plein » : ignore le recadrage sauvegardé et repart du cadre maximal (B3)
     // Déplacer le cadre
     frEl.addEventListener('pointerdown', (e) => {
       if (e.target.classList.contains('pl-ce-h')) return;
       const s0 = { x: e.clientX, y: e.clientY, fx: fr.fx, fy: fr.fy }; try { frEl.setPointerCapture(e.pointerId); } catch (err) {}
       const mv = (ev) => { fr.fx = s0.fx + (ev.clientX - s0.x); fr.fy = s0.fy + (ev.clientY - s0.y); clampFrame(); paintFrame(); };
-      const up = () => { frEl.removeEventListener('pointermove', mv); frEl.removeEventListener('pointerup', up); };
-      frEl.addEventListener('pointermove', mv); frEl.addEventListener('pointerup', up); e.preventDefault(); e.stopPropagation();
+      const up = () => { frEl.removeEventListener('pointermove', mv); frEl.removeEventListener('pointerup', up); frEl.removeEventListener('pointercancel', up); };
+      frEl.addEventListener('pointermove', mv); frEl.addEventListener('pointerup', up); frEl.addEventListener('pointercancel', up); e.preventDefault(); e.stopPropagation();
     });
     // Redimensionner par les poignées (ratio verrouillé, ancré au coin opposé)
     ov.querySelectorAll('.pl-ce-h').forEach((h) => h.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); const cn = h.dataset.h;
       const ax = (cn === 'nw' || cn === 'sw') ? fr.fx + fr.fw : fr.fx, ay = (cn === 'nw' || cn === 'ne') ? fr.fy + fr.fh : fr.fy;
       try { h.setPointerCapture(e.pointerId); } catch (err) {}
-      const mv = (ev) => { let nw = Math.max(30, Math.abs(ev.clientX - ax)); let nh = nw / cellAR; if (nw > dW) { nw = dW; nh = nw / cellAR; } if (nh > dH) { nh = dH; nw = nh * cellAR; } fr.fw = nw; fr.fh = nh; fr.fx = (cn === 'nw' || cn === 'sw') ? ax - nw : ax; fr.fy = (cn === 'nw' || cn === 'ne') ? ay - nh : ay; clampFrame(); paintFrame(); };
-      const up = () => { h.removeEventListener('pointermove', mv); h.removeEventListener('pointerup', up); };
-      h.addEventListener('pointermove', mv); h.addEventListener('pointerup', up); e.preventDefault();
+      const mv = (ev) => { const rc = work.getBoundingClientRect(); const lx = ev.clientX - rc.left, ly = ev.clientY - rc.top; let nw = Math.max(30, Math.abs(lx - ax), Math.abs(ly - ay) * cellAR); let nh = nw / cellAR; if (nw > dW) { nw = dW; nh = nw / cellAR; } if (nh > dH) { nh = dH; nw = nh * cellAR; } fr.fw = nw; fr.fh = nh; fr.fx = (cn === 'nw' || cn === 'sw') ? ax - nw : ax; fr.fy = (cn === 'nw' || cn === 'ne') ? ay - nh : ay; clampFrame(); paintFrame(); }; // coords LOCALES au plan de travail (B1) + les 2 axes pilotent la taille (F5)
+      const up = () => { h.removeEventListener('pointermove', mv); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up); };
+      h.addEventListener('pointermove', mv); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up); e.preventDefault();
     }));
     q('ok').onclick = () => { // DÉCOUPE réelle : image tournée → région du cadre → nouvelle image au ratio de la case
       const bb = bbox(rot), tw = Math.max(1, Math.round(bb.W)), th = Math.max(1, Math.round(bb.H));
@@ -8939,8 +8929,9 @@ function modalCellEdit(key) {
       const octx = oc.getContext('2d'); octx.fillStyle = '#fff'; octx.fillRect(0, 0, outW, outH);
       octx.drawImage(tc, relX * tw, relY * th, relW * tw, relH * th, 0, 0, outW, outH);
       let data = ''; try { data = oc.toDataURL('image/jpeg', 0.9); } catch (err) {}
-      if (data) st.cellImg[key] = data;
-      st.cellCropDef[key] = { rot, relX, relY, relW, relH };
+      if (plCreate !== st) { close(); return; } // création changée entre-temps → ne touche pas la nouvelle (F1)
+      if (!data) { alert('Découpe impossible (image protégée). Réimportez la photo.'); return; } // pas de mutation si rien n'a été produit (F2)
+      st.cellImg[key] = data; st.cellCropDef[key] = { rot, relX, relY, relW, relH };
       if (st.cellT) delete st.cellT[key]; if (st.cellCrop) delete st.cellCrop[key];
       close(); plRenderGrid();
     };
