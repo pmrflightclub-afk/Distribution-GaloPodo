@@ -15,6 +15,7 @@
 <body>
   <div id="bootSync" class="boot-sync">
     <div class="boot-sync-box">
+      <img class="boot-logo" src="icons/logo-mark.png" alt="GaloPodo" />
       <div class="boot-spinner" aria-hidden="true"></div>
       <div class="boot-sync-title">GaloPodo</div>
       <div class="boot-sync-status" id="bootSyncStatus">Démarrage…</div>
@@ -148,6 +149,7 @@
   <!-- ============ TOURNÉE (page unique) ============ -->
   <main id="tab-editeur" class="tab-panel">
     <div class="editor-head"><button class="btn small" id="edBack">← Retour</button><span id="edTitle">Tournée</span><span class="badge" id="edStatusBadge"></span></div>
+    <p class="status" id="edStatus" style="margin:0 0 8px"></p>
     <p class="banner hidden" id="edLockBanner">🔒 Tournée clôturée — non modifiable.</p>
     <div class="actions" id="edActesWrap" style="display:none;margin-bottom:10px"><button class="btn block" id="edActes">✏️ Corriger les prestations (recalcule la facture automatiquement)</button></div>
     <div class="actions" id="edCancelBillWrap" style="display:none;margin-bottom:10px"><button class="btn danger block" id="edCancelBill">🚫 Annuler une facturation (cheval / arrêt / client / tournée)</button></div>
@@ -199,7 +201,6 @@
 
     <div class="actions"><button class="btn primary block" id="edCalc" style="display:none">Calculer</button>
       <p class="hint" style="text-align:center">🔄 Les frais se recalculent et s'enregistrent automatiquement à chaque changement.</p></div>
-    <p class="status" id="edStatus"></p>
     <div class="actions" id="edRecoverWrap" style="display:none"><button class="btn primary block" id="edRecover">📊 Compléter les stats (tournée récupérée)</button></div>
     <div class="actions"><button class="btn danger block" id="edDelete">Supprimer cette tournée</button></div>
   </main>

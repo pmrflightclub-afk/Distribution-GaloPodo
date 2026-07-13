@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.4';
+const APP_VERSION = '1.3.5';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.5', date: '2026-07-13',
+    corrections: [
+      'Recherche d\'adresse : les propositions respectent enfin le PAYS — fini les résultats français pour un code postal BELGE. La recherche est désormais structurée (rue + code postal + localité) et un champ « Pays » (Belgique / France / Luxembourg) a été ajouté aux adresses (client & cheval), par défaut celui de votre activité. Le pays est aussi déduit du code postal (4 chiffres = Belgique/Luxembourg, 5 = France).',
+      'Tournée : le message d\'erreur (ex. « adresse introuvable ») s\'affiche maintenant EN HAUT de la page et reste visible (collant sous la navigation) — vous ne le manquez plus.',
+    ],
+    modifs: [
+      'Écran de démarrage : le logo GaloPodo est affiché en haut, au centre.',
+    ],
+  },
   {
     version: '1.3.4', date: '2026-07-13',
     corrections: [
@@ -2004,7 +2014,7 @@ const DRAFTS = {
 };
 
 // ---------- Adresses structurées ----------
-const emptyAddr = () => ({ rue: '', numero: '', cp: '', localite: '', lat: null, lon: null });
+const emptyAddr = () => ({ rue: '', numero: '', cp: '', localite: '', pays: '', lat: null, lon: null });
 function toAddr(x) { if (!x) return emptyAddr(); if (typeof x === 'string') return Object.assign(emptyAddr(), { rue: x }); return Object.assign(emptyAddr(), x); }
 function addrStr(a) { a = toAddr(a); const l1 = [a.rue, a.numero].filter(Boolean).join(' '); const l2 = [a.cp, a.localite].filter(Boolean).join(' '); return [l1, l2].filter(Boolean).join(', '); }
 
@@ -3195,20 +3205,40 @@ function splitHouseNumber(text) {
 }
 // Suggestions d'adresse (autocomplete). Aucun filtre `type` : chaque proposition renvoie l'adresse COMPLÈTE (rue + CP + localité),
 // pour qu'un choix depuis n'importe quel champ remplisse les 4 champs (le filtre par type masquait la rue).
-async function suggestAddress(text) {
+// Codes pays pour restreindre la recherche : pays explicite prioritaire, sinon déduit du code postal (5 chiffres = France ; 4 chiffres = Belgique/Luxembourg).
+function addrCountryCodes(ctx) {
+  const p = (ctx && ctx.pays) || '';
+  if (p === 'fr' || p === 'be' || p === 'lu') return p;
+  const cp = String((ctx && ctx.cp) || '').trim();
+  if (/^\d{5}$/.test(cp)) return 'fr';
+  if (/^\d{4}$/.test(cp)) return 'be,lu';
+  return 'be,fr,lu';
+}
+async function suggestAddress(text, ctx) {
+  ctx = ctx || {}; const cc = addrCountryCodes(ctx);
   if (S.provider === 'geoapify') {
     if (!S.geoapifyKey) throw new Error('Clé Geoapify manquante');
-    const r = await fetch(`https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(text)}&limit=6&lang=fr&filter=countrycode:be,fr,lu&apiKey=${S.geoapifyKey}`);
+    const r = await fetch(`https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(text)}&limit=6&lang=fr&filter=countrycode:${cc}&apiKey=${S.geoapifyKey}`);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     return (j.features || []).map((f) => { const p = f.properties; return { rue: p.street || p.name || '', numero: p.housenumber || '', cp: p.postcode || '', localite: p.city || p.town || p.village || '', lat: p.lat, lon: p.lon, label: p.formatted }; });
   }
-  const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=be,fr,lu&q=${encodeURIComponent(text)}`, { headers: { 'Accept-Language': 'fr' } });
+  // Nominatim : requête STRUCTURÉE (street/postalcode/city) quand on a le contexte → le code postal belge n'est plus « noyé » par la recherche texte libre (fini les résultats français parasites).
+  let url;
+  if (ctx.cp || ctx.city) {
+    const q = new URLSearchParams({ format: 'jsonv2', addressdetails: '1', limit: '6', countrycodes: cc });
+    const street = (ctx.street != null) ? ctx.street : text; if (street) q.set('street', street);
+    if (ctx.cp) q.set('postalcode', ctx.cp); if (ctx.city) q.set('city', ctx.city);
+    url = 'https://nominatim.openstreetmap.org/search?' + q.toString();
+  } else {
+    url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=' + cc + '&q=' + encodeURIComponent(text);
+  }
+  const r = await fetch(url, { headers: { 'Accept-Language': 'fr' } });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   return j.map((x) => { const a = x.address || {}; return { rue: a.road || a.pedestrian || a.hamlet || '', numero: a.house_number || '', cp: a.postcode || '', localite: a.city || a.town || a.village || a.municipality || '', lat: parseFloat(x.lat), lon: parseFloat(x.lon), label: x.display_name }; });
 }
-async function geocode(addr) { const text = addrStr(addr); if (!text.trim()) throw new Error('Adresse vide'); const res = await suggestAddress(text); if (!res.length) throw new Error('Adresse introuvable : ' + text); return { lat: res[0].lat, lon: res[0].lon }; }
+async function geocode(addr) { const text = addrStr(addr); if (!text.trim()) throw new Error('Adresse vide'); const res = await suggestAddress(text, { pays: addr.pays, cp: addr.cp, city: addr.localite, street: [addr.rue, addr.numero].filter(Boolean).join(' ') }); if (!res.length) throw new Error('Adresse introuvable : ' + text); return { lat: res[0].lat, lon: res[0].lon }; }
 
 // Distances domicile → chaque arrêt EN UN SEUL APPEL (matrix). Renvoie un tableau de km (null si indisponible).
 async function directMatrix(home, stops) {
@@ -3255,15 +3285,15 @@ function attachAuto(input, kind, addr, onPick, onEdit) {
     // Dans le champ Rue, on extrait le N° tapé (« Rue X 16 » → cherche « Rue X », N°=16) pour le réappliquer au choix.
     let searchBase = raw, extractedNum = '';
     if (kind === 'street') { const sp = splitHouseNumber(raw); searchBase = sp.street; extractedNum = sp.numero; }
-    // Contexte pour affiner (CP/localité connus), sans filtrer par type → la proposition reste une adresse complète.
-    const parts = [searchBase];
-    if (kind !== 'postcode' && addr.cp) parts.push(addr.cp);
-    if (kind !== 'city' && addr.localite) parts.push(addr.localite);
-    const text = parts.filter(Boolean).join(' ');
+    // Recherche STRUCTURÉE selon le champ édité + contexte (CP/localité/pays) → propositions du BON pays.
+    const ctx = { pays: addr.pays };
+    if (kind === 'street') { ctx.street = searchBase; if (addr.cp) ctx.cp = addr.cp; if (addr.localite) ctx.city = addr.localite; }
+    else if (kind === 'city') { ctx.city = searchBase; if (addr.cp) ctx.cp = addr.cp; }
+    else { ctx.cp = searchBase; if (addr.localite) ctx.city = addr.localite; } // postcode
     close(); box = document.createElement('div'); box.className = 'aw-sugg'; input.parentElement.appendChild(box); box.innerHTML = '<div class="aw-item">Recherche…</div>';
     try {
-      let res = await suggestAddress(text);
-      if ((!res || !res.length) && text !== searchBase) res = await suggestAddress(searchBase); // repli : rechercher SANS le contexte CP/localité déjà saisi (qui peut trop restreindre → « aucun résultat » sur une adresse pourtant existante)
+      let res = await suggestAddress(searchBase, ctx);
+      if ((!res || !res.length) && (ctx.cp || ctx.city)) { const c2 = { pays: addr.pays }; if (kind === 'street') c2.street = searchBase; else if (kind === 'city') c2.city = searchBase; else c2.cp = searchBase; res = await suggestAddress(searchBase, c2); } // repli SANS CP/localité mais en GARDANT le pays (pas de résultats étrangers parasites)
       if (!box) return; box.innerHTML = '';
       if (!res || !res.length) { box.innerHTML = '<div class="aw-item">Aucun résultat. Vérifiez l\'orthographe — ou activez une clé Geoapify (Réglages → GPS) pour une recherche plus fiable.</div>'; return; }
       res.forEach((s) => { const d = document.createElement('div'); d.className = 'aw-item'; d.textContent = s.label; d.addEventListener('mousedown', (e) => { e.preventDefault(); onPick(Object.assign({}, s, (extractedNum && !s.numero) ? { numero: extractedNum } : {})); close(); }); box.appendChild(d); });
@@ -3275,11 +3305,15 @@ function attachAuto(input, kind, addr, onPick, onEdit) {
 }
 function mountAddress(container, addr, onChange) {
   addr = toAddr(addr); container.classList.add('addr-widget');
+  if (!addr.pays) addr.pays = (S.pays === 'fr' ? 'fr' : 'be'); // pays par défaut = celui de l'activité
+  const opt = (v, l) => `<option value="${v}"${addr.pays === v ? ' selected' : ''}>${l}</option>`;
   container.innerHTML = `
     <div class="row"><label class="grow af" style="flex:3">Rue<input class="aw-rue" value="${esc(addr.rue)}" autocomplete="off"/></label><label style="flex:1">N°<input class="aw-num" value="${esc(addr.numero)}" autocomplete="off"/></label></div>
-    <div class="row"><label class="af" style="flex:1">Code postal<input class="aw-cp" value="${esc(addr.cp)}" autocomplete="off"/></label><label class="grow af" style="flex:2">Localité<input class="aw-loc" value="${esc(addr.localite)}" autocomplete="off"/></label></div>`;
-  const el = { rue: container.querySelector('.aw-rue'), numero: container.querySelector('.aw-num'), cp: container.querySelector('.aw-cp'), localite: container.querySelector('.aw-loc') };
-  const emit = () => { addr.rue = el.rue.value; addr.numero = el.numero.value; addr.cp = el.cp.value; addr.localite = el.localite.value; onChange && onChange(addr); };
+    <div class="row"><label class="af" style="flex:1">Code postal<input class="aw-cp" value="${esc(addr.cp)}" autocomplete="off"/></label><label class="grow af" style="flex:2">Localité<input class="aw-loc" value="${esc(addr.localite)}" autocomplete="off"/></label></div>
+    <label>Pays<select class="aw-pays">${opt('be', 'Belgique')}${opt('fr', 'France')}${opt('lu', 'Luxembourg')}</select></label>`;
+  const el = { rue: container.querySelector('.aw-rue'), numero: container.querySelector('.aw-num'), cp: container.querySelector('.aw-cp'), localite: container.querySelector('.aw-loc'), pays: container.querySelector('.aw-pays') };
+  const emit = () => { addr.rue = el.rue.value; addr.numero = el.numero.value; addr.cp = el.cp.value; addr.localite = el.localite.value; addr.pays = el.pays.value; onChange && onChange(addr); };
+  if (el.pays) el.pays.addEventListener('change', () => { addr.pays = el.pays.value; addr.lat = null; addr.lon = null; emit(); }); // changer le pays → nouvelle recherche possible
   // Choix d'une proposition (depuis n'importe quel champ) : remplit rue + N° + CP + localité (garde l'ancien si la proposition ne fournit pas le champ).
   const fill = (s) => {
     addr.rue = s.rue || addr.rue;
