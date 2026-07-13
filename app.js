@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.4.2';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.4.2', date: '2026-07-13',
+    corrections: [
+      'Statut « ✓ prête » : le TEMPS DE ROUTE réel (bouton « Route » de chaque arrêt, + le temps de retour) est maintenant un prérequis, comme l\'heure de RDV. Tant qu\'un arrêt n\'a pas son temps de route renseigné, la tournée reste « ⚠ à compléter » (la fenêtre de détail indique combien d\'arrêts il reste). Avant, une tournée pouvait afficher « prête » alors que des temps de route manquaient.',
+    ],
+  },
   {
     version: '1.4.1', date: '2026-07-13',
     corrections: [
@@ -5014,7 +5020,9 @@ function modalTourStatus(t) {
   };
   render();
 }
-// « Prête » = paramétrage complet (PAS d'acte ni de paiement) : adresses localisées + itinéraire calculé + ≥1 cheval présent/client + heure de RDV/client. Renvoie la liste des manques (vide = prête). L'itinéraire périmé est signalé à part (tourRouteStale).
+// « Prête » = paramétrage complet (PAS d'acte ni de paiement) : adresses localisées + itinéraire calculé + ≥1 cheval présent/client
+// + heure de RDV/client + TEMPS DE ROUTE RÉEL (bouton « Route ») renseigné pour chaque arrêt et pour le retour. Renvoie la liste
+// des manques (vide = prête). Un temps de route PÉRIMÉ (à recalculer) est aussi signalé à part par tourRouteStale (badge prioritaire).
 function tourReadyIssues(t) {
   const out = [];
   if (!t || !(t.arrets || []).length) return ['aucun arrêt'];
@@ -5025,6 +5033,11 @@ function tourReadyIssues(t) {
   const byClient = {};
   (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { const e = byClient[cl.clientId] = byClient[cl.clientId] || { has: false, present: false }; (cl.chevaux || []).forEach((cv) => { e.has = true; if (!chevalCancelled(cv)) e.present = true; }); }));
   Object.keys(byClient).forEach((cid) => { const e = byClient[cid]; if (e.has && !e.present) out.push(clientName(cid) + ' : aucun cheval présent'); else if (e.present && !clientRdvHeure(t, cid)) out.push(clientName(cid) + ' : heure de RDV manquante'); });
+  // Temps de route RÉEL (bouton « Route ») : requis pour CHAQUE arrêt (realMin > 0) + le retour (returnRealMin > 0).
+  // null = jamais renseigné, 0 = périmé (à recalculer) → les deux empêchent « prête ».
+  const nRoute = (t.arrets || []).filter((a) => !(a.realMin > 0)).length;
+  if (nRoute) out.push('temps de route à renseigner (' + nRoute + ' arrêt' + (nRoute > 1 ? 's' : '') + ')');
+  if (!(t.returnRealMin > 0)) out.push('temps de retour (route) à renseigner');
   return out;
 }
 
