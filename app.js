@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.88';
+const APP_VERSION = '1.2.89';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.89', date: '2026-07-13',
+    corrections: [
+      'Création de planche : nouveau bouton « 🐴 Choisir » à côté du champ Cheval — un sélecteur plein écran (chevaux groupés par client, recherche) qui fonctionne de façon fiable sur téléphone, là où la liste déroulante native était capricieuse. Choisir un cheval remplit aussi automatiquement le bon client.',
+      'Accueil → « Agenda privé du jour » : « Retirer » est désormais définitif — l\'événement ne réapparaît plus (même après une resynchronisation entre appareils).',
+      '« Depuis une tournée » s\'ouvre maintenant en surcouche au-dessus de la planche en cours : la fermer ne fait plus perdre la planche (comme « Waiting list »).',
+      '« Waiting list » liste de nouveau les planches DEMANDÉES via 📷 Photo pendant une tournée et pas encore faites (rappels) — distinct de « Depuis une tournée » (tous les chevaux d\'une tournée) et de « Historique » (planches déjà enregistrées). On peut en cocher plusieurs pour les enchaîner.',
+    ],
+  },
   {
     version: '1.2.88', date: '2026-07-13',
     ajouts: [
@@ -2039,6 +2048,7 @@ if (typeof S.reducLiquide !== 'number' || S.reducLiquide < 0) S.reducLiquide = 2
 if (!S.agendaImported || typeof S.agendaImported !== 'object') S.agendaImported = {}; // { eventId: {clientId, title, start, location} }
 if (!S.agendaInactive || typeof S.agendaInactive !== 'object') S.agendaInactive = {}; // { eventId: true } — items masqués (section Inactifs)
 if (!S.agendaPrive || typeof S.agendaPrive !== 'object') S.agendaPrive = {}; // { eventId: {title, day, start, location} } — agenda privé (perso, non facturé)
+if (!S.agendaPriveVus || typeof S.agendaPriveVus !== 'object') S.agendaPriveVus = {}; // { eventId: true } — événements privés « vus / traités » (retirés du Trajet du jour), tombstone qui survit à la resync
 if (!['tout', 'prive', 'tour'].includes(S.agendaFilter)) S.agendaFilter = 'tout'; // filtre agenda : 'tout' / 'prive' (privé seul) / 'tour' (tournée seule)
 if (S.agendaView !== 'semaine' && S.agendaView !== 'mois') S.agendaView = 'mois'; // vue agenda : 'mois' (condensée) ou 'semaine' (planning horaire)
 if (!S.accentColor) S.accentColor = '#e8722a';
@@ -2420,6 +2430,7 @@ function mergeSettings(localS, remoteS) {
   merged.agendaImported = Object.assign({}, (localS && localS.agendaImported) || {}, (remoteS && remoteS.agendaImported) || {});
   merged.agendaInactive = Object.assign({}, (localS && localS.agendaInactive) || {}, (remoteS && remoteS.agendaInactive) || {});
   merged.agendaPrive = Object.assign({}, (localS && localS.agendaPrive) || {}, (remoteS && remoteS.agendaPrive) || {});
+  merged.agendaPriveVus = Object.assign({}, (localS && localS.agendaPriveVus) || {}, (remoteS && remoteS.agendaPriveVus) || {}); // « vu/traité » = union → un retrait fait sur un appareil ne réapparaît pas
   merged.calPushed = Object.assign({}, (localS && localS.calPushed) || {}, (remoteS && remoteS.calPushed) || {}); // évènements Google poussés : union des mappings (pas de doublon entre appareils)
   // Adresse de départ (domicile) : ne jamais la perdre si l'appareil « gagnant » l'avait vide → reprendre celle qui est renseignée.
   const hasAddr = (a) => { try { return !!addrStr(a).trim(); } catch { return false; } };
@@ -3463,7 +3474,7 @@ function showGestion(sub) {
 function eventHeure(ev) { const s = (ev && ev.start) || ''; return s.length > 10 ? s.slice(11, 16) : ''; }
 // Événements de l'agenda privé pour un jour donné (triés par heure).
 function privateEventsForDay(day) {
-  return Object.keys(S.agendaPrive || {}).map((id) => Object.assign({ id }, S.agendaPrive[id])).filter((x) => x.day === day).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+  return Object.keys(S.agendaPrive || {}).map((id) => Object.assign({ id }, S.agendaPrive[id])).filter((x) => x.day === day && !(S.agendaPriveVus && S.agendaPriveVus[x.id])).sort((a, b) => (a.start || '').localeCompare(b.start || ''));
 }
 // Tous les rendez-vous d'un jour (agenda privé + chevaux/clients des tournées), triés par heure (sans heure en dernier).
 // Agenda FORWARD-ONLY : aujourd'hui + à venir uniquement (le passé n'est pas un historique — voir Tournées/Stats).
@@ -8485,21 +8496,32 @@ function plPageRows(pi) {
 }
 const plCellKey = (pi, r, ci) => plCreate.type === 'avantapres' ? (pi + '_' + r.ri + '_' + r.pj + '_' + ci) : (pi + '_' + r.ri + '_' + ci);
 
+// Surcouche empilée (au-dessus de la modale de création de planche) : la fermer NE détruit PAS la modale sous-jacente.
+function openOverlay(innerHtml, cls) {
+  const ov = document.createElement('div'); ov.className = 'modal-overlay ' + (cls || 'pl-stack-overlay');
+  ov.innerHTML = '<div class="modal">' + innerHtml + '</div>';
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+  return { ov, close, q: (s) => ov.querySelector(s), qa: (s) => Array.from(ov.querySelectorAll(s)) };
+}
 // Déclarer → Planche : choisir une tournée effectuée (toutes) pour préremplir. On sélectionne des clients/chevaux, puis on enchaîne UNE planche (UN PDF) par cheval.
 function modalPlancheFromTour() {
   const tours = allTours().slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   if (!tours.length) { alert('Aucune tournée enregistrée.'); return; }
-  openModal(`<div class="modal-head"><b>📅 Planche depuis une tournée</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Choisissez une tournée. Vous cocherez ensuite les clients et chevaux ; l'app enchaîne une planche (un PDF) par cheval.</p>
-    <div id="ptList" style="max-height:66vh;overflow:auto"></div>
-    <div class="actions"><button class="btn block" id="ptClose">Fermer</button></div>`);
-  $('mX').onclick = closeModal; $('ptClose').onclick = closeModal;
-  const box = $('ptList');
+  const o = openOverlay(`<div class="modal-head"><b>📅 Planche depuis une tournée</b><button class="x" data-x>✕</button></div>
+    <div style="max-height:78vh;overflow:auto">
+      <p class="hint">Choisissez une tournée. Vous cocherez ensuite les clients et chevaux ; l'app enchaîne une planche (un PDF) par cheval.</p>
+      <div id="ptList"></div>
+    </div>
+    <div class="actions"><button class="btn block" data-close>Fermer</button></div>`);
+  o.q('[data-x]').onclick = o.close; o.q('[data-close]').onclick = o.close;
+  const box = o.q('#ptList');
   tours.forEach((t) => {
     const noms = (t.arrets || []).flatMap((a) => (a.clients || []).map((cl) => clientName(cl.clientId)));
     const el = document.createElement('div'); el.className = 'list-item clickable';
     el.innerHTML = `<div class="li-main"><b>${esc(fmtDateFr(t.date))}${t.nom && t.nom.trim() ? ' · ' + esc(t.nom.trim()) : ''}</b><span class="li-sub">${esc([...new Set(noms)].join(' · ') || 'aucun client')}</span></div><div class="li-act"><span class="li-chev">›</span></div>`;
-    el.addEventListener('click', () => modalPlancheTourSelect(t));
+    el.addEventListener('click', () => { o.close(); modalPlancheTourSelect(t); });
     box.appendChild(el);
   });
 }
@@ -8510,29 +8532,30 @@ function modalPlancheTourSelect(t) {
   const stades = (S.planche.stades || []).slice();
   const sel = {}; rows.forEach((_, i) => { sel[i] = new Set(stades.length ? [stades[0]] : ['']); }); // défaut : 1er stade coché (ou « sans stade »)
   const count = () => rows.reduce((n, _, i) => n + sel[i].size, 0);
-  openModal(`<div class="modal-head"><b>📅 ${esc(fmtDateFr(t.date))} — chevaux</b><button class="x" id="mX">✕</button></div>
+  const o = openOverlay(`<div class="modal-head"><b>📅 ${esc(fmtDateFr(t.date))} — chevaux</b><button class="x" data-x>✕</button></div>
     <p class="hint">Pour chaque cheval, choisissez le ou les <b>stades</b> de planche à produire (${stades.length ? esc(stades.join(' · ')) : 'aucun stade configuré → 1 planche par cheval'}). Une planche = un PDF par (cheval × stade), à la suite. Gérez les stades dans Gestion → Planche.</p>
     <div id="ptcList" style="max-height:58vh;overflow:auto"></div>
-    <div class="actions"><button class="btn primary block" id="ptcOk">Créer les planches (<span id="ptcN">${count()}</span>)</button><button class="btn block" id="ptcClose">Fermer</button></div>`);
-  $('mX').onclick = closeModal; $('ptcClose').onclick = closeModal;
-  const box = $('ptcList'); let cur = null;
+    <div class="actions"><button class="btn primary block" data-ok>Créer les planches (<span id="ptcN">${count()}</span>)</button><button class="btn block" data-close>Fermer</button></div>`);
+  o.q('[data-x]').onclick = o.close; o.q('[data-close]').onclick = o.close;
+  const box = o.q('#ptcList'); let cur = null; const ptcN = () => o.q('#ptcN');
   rows.forEach((r, i) => {
     if (r.clientNom !== cur) { cur = r.clientNom; const h = document.createElement('div'); h.className = 'pt-client'; h.textContent = '👤 ' + r.clientNom; box.appendChild(h); }
     const row = document.createElement('div'); row.style.margin = '6px 0 8px 6px';
     if (stades.length) {
       row.innerHTML = `<div><b>🐴 ${esc(r.cheval)}</b></div><div class="pt-stades" style="display:flex;gap:5px;flex-wrap:wrap;margin-top:3px"></div>`;
       const sb = row.querySelector('.pt-stades');
-      stades.forEach((s) => { const chip = document.createElement('button'); chip.type = 'button'; chip.className = 'seg-btn' + (sel[i].has(s) ? ' on' : ''); chip.style.fontSize = '.82rem'; chip.textContent = s; chip.addEventListener('click', () => { if (sel[i].has(s)) sel[i].delete(s); else sel[i].add(s); chip.classList.toggle('on'); if ($('ptcN')) $('ptcN').textContent = count(); }); sb.appendChild(chip); });
+      stades.forEach((s) => { const chip = document.createElement('button'); chip.type = 'button'; chip.className = 'seg-btn' + (sel[i].has(s) ? ' on' : ''); chip.style.fontSize = '.82rem'; chip.textContent = s; chip.addEventListener('click', () => { if (sel[i].has(s)) sel[i].delete(s); else sel[i].add(s); chip.classList.toggle('on'); const n = ptcN(); if (n) n.textContent = count(); }); sb.appendChild(chip); });
     } else {
       row.innerHTML = `<label class="chk" style="display:flex"><input type="checkbox" checked/> 🐴 ${esc(r.cheval)}</label>`;
-      row.querySelector('input').addEventListener('change', (e) => { sel[i].clear(); if (e.target.checked) sel[i].add(''); if ($('ptcN')) $('ptcN').textContent = count(); });
+      row.querySelector('input').addEventListener('change', (e) => { sel[i].clear(); if (e.target.checked) sel[i].add(''); const n = ptcN(); if (n) n.textContent = count(); });
     }
     box.appendChild(row);
   });
-  $('ptcOk').onclick = () => {
+  o.q('[data-ok]').onclick = () => {
     const items = [];
     rows.forEach((r, i) => { const chosen = stades.length ? stades.filter((s) => sel[i].has(s)) : (sel[i].has('') ? [''] : []); chosen.forEach((s) => items.push({ cheval: r.cheval, client: r.clientNom, date: t.date, stade: s })); });
     if (!items.length) { alert('Choisissez au moins un stade / cheval.'); return; }
+    o.close();
     startPlancheQueue(items);
   };
 }
@@ -8570,46 +8593,83 @@ function plRenderChevalOwner() {
     if (warn) { warn.style.display = ''; warn.innerHTML = '⚠ ' + matches.length + ' clients ont un cheval « ' + esc(plCreate.cheval) + ' » — choisissez le bon client.'; }
   } else if (warn) warn.style.display = 'none';
 }
-// Waiting list : planches de contact DÉJÀ CRÉÉES (S.plancheHistory) qu'on peut reprendre et refaire — seule
-// la métadonnée est conservée (jamais les images). Multi-sélection → file de reprise (une planche après l'autre).
-// Surcouche empilée (overlay) au-dessus de la création : la fermer sans choisir laisse la planche en cours intacte.
-// La clé d'historique inclut le clientId → deux chevaux de même nom chez deux clients restent DEUX entrées distinctes.
+// Waiting list : planches PHOTO demandées pendant une tournée (bouton 📷 Photo) et PAS ENCORE FAITES — mises en rappel.
+// C'est DIFFÉRENT de « Depuis une tournée » (tous les chevaux d'une tournée) et de « Historique » (planches déjà enregistrées).
+// Multi-sélection → file (une planche après l'autre). Surcouche empilée : la fermer laisse la planche en cours intacte.
+// La clé inclut le clientId → deux chevaux de même nom chez deux clients restent DEUX items distincts.
 function modalPlancheWaiting() {
   let ft = ''; // filtre par type (stade)
   const sel = new Set(); // ids sélectionnés
-  const source = () => (S.plancheHistory || []).slice()
-    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || ((b.createdAt || 0) - (a.createdAt || 0))); // récent en haut
-  const ov = document.createElement('div'); ov.className = 'modal-overlay pl-wl-overlay';
-  document.body.appendChild(ov);
-  const close = () => ov.remove();
-  ov.addEventListener('click', (e) => { if (e.target === ov) close(); }); // clic sur le fond → ferme (une seule fois attaché)
+  const source = () => (S.plancheTodo || [])
+    .filter((x) => x.type ? !hasPlancheDone(x.clientId, x.chevalNom, x.date, x.type) : !hasAnyPlancheDone(x.clientId, x.chevalNom, x.date))
+    .slice()
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || norm(clientName(a.clientId)).localeCompare(norm(clientName(b.clientId)))); // récent en haut
+  const o = openOverlay('', 'pl-wl-overlay'); // render() remplace tout le contenu de l'overlay à chaque rendu
   const render = () => {
     const list = source();
-    const types = Array.from(new Set(list.map((x) => x.stade).filter(Boolean)));
+    const types = Array.from(new Set(list.map((x) => x.type).filter(Boolean)));
     if (ft && !types.includes(ft)) ft = '';
-    const shown = ft ? list.filter((x) => x.stade === ft) : list;
+    const shown = ft ? list.filter((x) => x.type === ft) : list;
     const seg = `<div class="seg seg-sm" id="plwFilter" style="margin:6px 0;flex-wrap:wrap"><button type="button" class="seg-btn${ft ? '' : ' on'}" data-t="">Tout</button>${types.map((tp) => `<button type="button" class="seg-btn${ft === tp ? ' on' : ''}" data-t="${esc(tp)}">${esc(tp)}</button>`).join('')}</div>`;
-    const rows = shown.length ? shown.map((x) => `<div class="list-item clickable${sel.has(x.id) ? ' picked' : ''}" data-id="${x.id}"><div class="li-main"><b>${sel.has(x.id) ? '☑' : '☐'} ${esc(x.stade || 'Planche')}</b><span class="li-sub">🐴 ${esc(x.cheval || '')} · 👤 ${esc(x.client || clientName(x.clientId))}${x.date ? ' · ' + esc(fmtDateFr(x.date)) : ''}${x.modele ? ' · ' + esc(x.modele) + ' col.' : ''}</span></div></div>`).join('') : '<p class="empty">Aucune planche déjà créée.</p>';
-    ov.innerHTML = `<div class="modal"><div class="modal-head"><b>📋 Waiting list — planches déjà créées</b><button class="x" data-x>✕</button></div>
+    const rows = shown.length ? shown.map((x) => `<div class="list-item clickable${sel.has(x.id) ? ' picked' : ''}" data-id="${x.id}"><div class="li-main"><b>${sel.has(x.id) ? '☑' : '☐'} ${esc(x.type || 'Planche')}</b> <span class="badge">${(x.angle || 3)} angles</span><span class="li-sub">🐴 ${esc(x.chevalNom || '')} · 👤 ${esc(clientName(x.clientId))}${x.date ? ' · ' + esc(fmtDateFr(x.date)) : ''}</span></div></div>`).join('') : '<p class="empty">Aucune planche en attente.</p>';
+    o.ov.innerHTML = `<div class="modal"><div class="modal-head"><b>📋 Waiting list — planches à faire</b><button class="x" data-x>✕</button></div>
       <div style="max-height:78vh;overflow:auto">
-        <p class="hint">Planches de contact <b>déjà créées</b>. Cochez-en une ou plusieurs pour les <b>reprendre et refaire</b> (les images sont à ré-importer). Elles s'enchaînent l'une après l'autre.</p>
+        <p class="hint">Planches <b>demandées</b> pendant une tournée (bouton 📷 Photo) et <b>pas encore faites</b>. Cochez-en une ou plusieurs pour les enchaîner (cheval, client, date, type, angles pré-remplis). Les images sont à importer.</p>
         ${types.length ? seg : ''}
         <div class="list">${rows}</div>
       </div>
-      <div class="actions"><button class="btn primary block" data-go${sel.size ? '' : ' disabled'}>Reprendre la sélection (<span data-n>${sel.size}</span>)</button><button class="btn block" data-close>Fermer</button></div></div>`;
-    ov.querySelector('[data-x]').onclick = close;
-    ov.querySelector('[data-close]').onclick = close;
-    ov.querySelectorAll('#plwFilter .seg-btn').forEach((b) => b.addEventListener('click', () => { ft = b.dataset.t; render(); }));
-    ov.querySelectorAll('[data-id]').forEach((el) => el.addEventListener('click', () => { const id = el.dataset.id; if (sel.has(id)) sel.delete(id); else sel.add(id); render(); }));
-    ov.querySelector('[data-go]').onclick = () => {
+      <div class="actions"><button class="btn primary block" data-go${sel.size ? '' : ' disabled'}>Faire la sélection (<span data-n>${sel.size}</span>)</button><button class="btn block" data-close>Fermer</button></div></div>`;
+    o.ov.querySelector('[data-x]').onclick = o.close;
+    o.ov.querySelector('[data-close]').onclick = o.close;
+    o.ov.querySelectorAll('#plwFilter .seg-btn').forEach((b) => b.addEventListener('click', () => { ft = b.dataset.t; render(); }));
+    o.ov.querySelectorAll('[data-id]').forEach((el) => el.addEventListener('click', () => { const id = el.dataset.id; if (sel.has(id)) sel.delete(id); else sel.add(id); render(); }));
+    o.ov.querySelector('[data-go]').onclick = () => {
       if (!sel.size) return;
-      const items = source().filter((x) => sel.has(x.id)).map((h) => ({ cheval: h.cheval || '', client: h.client || clientName(h.clientId), clientId: h.clientId || null, date: h.date || todayStr(), stade: h.stade || '', note: h.note || '', dureeCycleSem: h.dureeCycleSem || 0, modele: h.modele || '' }));
+      const items = source().filter((x) => sel.has(x.id)).map((x) => ({ cheval: x.chevalNom || '', client: clientName(x.clientId), clientId: x.clientId || null, date: x.date || todayStr(), stade: x.type || '', modele: String(x.angle || 4), todoId: x.id }));
       if (!items.length) return;
-      close();
+      o.close();
       startPlancheQueue(items);
     };
   };
   render();
+}
+// Sélecteur de cheval fiable sur mobile (remplace le datalist capricieux) : liste tous les chevaux groupés par client,
+// recherche par frappe. Choisir un cheval résout DIRECTEMENT son client (clientId) — plus fiable que la saisie.
+function plPickCheval() {
+  if (!plCreate) return;
+  const rows = [];
+  clients.forEach((c) => activeChevaux(c).forEach((h) => { if (h.nom) rows.push({ clientId: c.id, client: fullName(c), cheval: h.nom }); }));
+  rows.sort((a, b) => norm(a.client).localeCompare(norm(b.client)) || norm(a.cheval).localeCompare(norm(b.cheval)));
+  let q = '';
+  const o = openOverlay(`<div class="modal-head"><b>🐴 Choisir un cheval</b><button class="x" data-x>✕</button></div>
+    <div style="max-height:78vh;overflow:auto">
+      <input type="search" id="plPkQ" placeholder="Rechercher un cheval ou un client…" style="width:100%;box-sizing:border-box;margin:6px 0"/>
+      <div id="plPkList" class="list"></div>
+    </div>
+    <div class="actions"><button class="btn block" data-close>Fermer</button></div>`);
+  o.q('[data-x]').onclick = o.close; o.q('[data-close]').onclick = o.close;
+  const listBox = o.q('#plPkList');
+  const draw = () => {
+    const nq = norm(q);
+    const shown = rows.filter((r) => !nq || norm(r.cheval).includes(nq) || norm(r.client).includes(nq));
+    listBox.innerHTML = ''; let cur = null;
+    if (!shown.length) { listBox.innerHTML = '<p class="empty">Aucun cheval.</p>'; return; }
+    shown.forEach((r) => {
+      if (r.client !== cur) { cur = r.client; const h = document.createElement('div'); h.className = 'pt-client'; h.textContent = '👤 ' + r.client; listBox.appendChild(h); }
+      const el = document.createElement('div'); el.className = 'list-item clickable';
+      el.innerHTML = `<div class="li-main"><b>🐴 ${esc(r.cheval)}</b></div><span class="li-chev">›</span>`;
+      el.addEventListener('click', () => {
+        if (!plCreate) { o.close(); return; }
+        plCreate.cheval = r.cheval; plCreate.client = r.client; plCreate.clientId = r.clientId;
+        const ci = $('plCcheval'); if (ci) ci.value = r.cheval; const cl = $('plCclient'); if (cl) cl.value = r.client;
+        o.close();
+        plRenderChevalOwner(); plRenderHistory(); if (plCreate.allowTourPick) plRenderDateSuggest();
+      });
+      listBox.appendChild(el);
+    });
+  };
+  o.q('#plPkQ').addEventListener('input', (e) => { q = e.target.value; draw(); });
+  draw();
 }
 function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
@@ -8628,7 +8688,7 @@ function modalPlancheCreate(type, prefill) {
       <section class="card">
         ${plCreate.allowTourPick && !plCreate.queueTotal ? '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px"><button class="btn small" id="plCwaiting">📋 Waiting list</button><button class="btn small" id="plCfromTour">📅 Depuis une tournée</button></div>' : ''}
         <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
-        <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
+        <div class="row"><label class="grow">Cheval<div style="display:flex;gap:5px"><input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval" style="flex:1;min-width:0"/><button type="button" class="btn small" id="plCchevalPick" title="Choisir dans la liste">🐴 Choisir</button></div></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
         <p id="plCclientWarn" class="pl-owner-warn" style="display:none"></p>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
@@ -8670,6 +8730,7 @@ function modalPlancheCreate(type, prefill) {
   // Historique : reprendre une planche précédente du cheval → ré-ouvre la création pré-remplie (métadonnées ; les photos sont à ré-importer).
   { const hs = $('plChist'); if (hs) hs.addEventListener('change', (e) => { const h = (S.plancheHistory || []).find((x) => x.id === e.target.value); if (h) modalPlancheCreate('contact', { cheval: h.cheval, client: h.client, clientId: h.clientId, date: h.date, stade: h.stade, note: h.note, dureeCycleSem: h.dureeCycleSem, modele: h.modele, allowTourPick: plCreate.allowTourPick }); }); }
   if ($('plCwaiting')) $('plCwaiting').onclick = () => modalPlancheWaiting();
+  if ($('plCchevalPick')) $('plCchevalPick').onclick = () => plPickCheval(); // sélecteur fiable sur mobile (les datalist sont capricieux)
   plRenderChevalOwner(); plRenderHistory();
   $('plCclient').addEventListener('input', (e) => { plCreate.client = e.target.value; });
   $('plCdate').addEventListener('change', (e) => { plCreate.date = e.target.value; });
@@ -9674,7 +9735,7 @@ function renderHomeTrajet() {
       const heure = eventHeure(p);
       const row = document.createElement('div'); row.className = 'list-item';
       row.innerHTML = `<div class="li-main"><b>${heure ? '🕘 ' + heure + ' · ' : ''}${esc(p.title)}</b>${p.location ? '<span class="li-sub">📍 ' + esc(p.location) + '</span>' : ''}</div><div class="li-act"><button class="btn small" data-rm>Retirer</button></div>`;
-      row.querySelector('[data-rm]').addEventListener('click', () => { delete S.agendaPrive[p.id]; saveSettings(); renderHomeTrajet(); });
+      row.querySelector('[data-rm]').addEventListener('click', () => { S.agendaPriveVus[p.id] = true; saveSettings(); renderHomeTrajet(); }); // « vu/traité » persistant (ne réapparaît plus, même après resync)
       list.appendChild(row);
     });
     sec.appendChild(list); box.appendChild(sec);
