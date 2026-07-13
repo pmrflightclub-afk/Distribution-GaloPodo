@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.1', date: '2026-07-13',
+    corrections: [
+      'Agenda → « Récupérer » (nouveau contact avec formulaire) : après avoir créé la fiche client pré-remplie et l\'avoir enregistrée, l\'app ouvre maintenant la fenêtre « → tournée » pour confirmer l\'ajout du RDV (tournée du jour existante, ou créée si besoin). Une fois validé, l\'événement quitte bien la liste des items d\'agenda.',
+    ],
+  },
   {
     version: '1.3.0', date: '2026-07-13',
     ajouts: [
@@ -3794,21 +3800,22 @@ function attachEventToTour(ev, client) {
 }
 // Bouton « Récupérer » : propose de lier un client connu (croisement nom/prénom/société/cheval) ou d'en créer un nouveau,
 // puis rattache l'événement à la tournée du jour.
-function recuperateEvent(ev) {
-  const matches = matchClientsForEvent(ev);
+function recuperateEvent(ev, preClient) {
+  let matches = matchClientsForEvent(ev);
+  if (preClient && !matches.some((c) => c.id === preClient.id)) matches = [preClient].concat(matches); // client tout juste créé → proposé en 1er
   const attach = (client) => { const r = attachEventToTour(ev, client); closeModal(); const st = $('agendaStatus'); if (st) { const conflits = (activeChevaux(client) || []).filter((h) => chevalRdvConflicts(client.id, h.id, ev.day).length).map((h) => h.nom); st.className = conflits.length ? 'status warn' : 'status ok'; st.textContent = (r.created ? 'Tournée créée' : 'Ajouté à la tournée') + ' du ' + (ev.day ? fmtDateFr(ev.day) : '') + ' → ' + fullName(client) + '.' + (conflits.length ? ' ⚠ RDV déjà prévu (moins de 5 sem) pour : ' + conflits.join(', ') + '.' : ''); } };
-  // Nouveau contact avec formulaire reçu (et aucun client connu) : on crée d'ABORD la fiche client pré-remplie depuis le
-  // formulaire, PUIS on rattache le nouveau client à la tournée du jour (existante ou créée). « Récupérer » fait tout.
+  // Nouveau contact avec formulaire reçu (et aucun client connu) : on crée d'ABORD la fiche pré-remplie, PUIS on REVIENT ici
+  // (le mail est désormais « traité » → plus de boucle) avec le nouveau client proposé, pour CHOISIR/confirmer la tournée.
   const mailMatches = matchContactMailForEvent(ev);
-  if (mailMatches.length && !matches.length) { createClientFromMail(mailMatches[0], 'normal', (saved) => { if (saved) attach(saved); }); return; }
-  let h = `<div class="modal-head"><b>Récupérer l'événement</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">« ${esc(ev.title)} »${ev.day ? ' · ' + esc(fmtDateFr(ev.day)) : ''}${ev.location ? ' · 📍 ' + esc(ev.location) : ''}</p>`;
-  h += matches.length ? '<h2 style="font-size:.9rem">Client connu proposé</h2><div id="recMatches"></div>' : '<p class="hint">Aucun client connu ne correspond à cet événement.</p>';
+  if (!preClient && mailMatches.length && !matches.length) { createClientFromMail(mailMatches[0], 'normal', (saved) => { if (saved) recuperateEvent(ev, saved); }); return; }
+  let h = `<div class="modal-head"><b>Récupérer l'événement → tournée</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">« ${esc(ev.title)} »${ev.day ? ' · ' + esc(fmtDateFr(ev.day)) : ''}${ev.location ? ' · 📍 ' + esc(ev.location) : ''}<br>Le client sera ajouté à la tournée du ${esc(ev.day ? fmtDateFr(ev.day) : 'jour')} (créée si elle n'existe pas encore).</p>`;
+  h += matches.length ? '<h2 style="font-size:.9rem">Client proposé</h2><div id="recMatches"></div>' : '<p class="hint">Aucun client connu ne correspond à cet événement.</p>';
   h += '<div class="actions"><button class="btn primary block" id="recNew">+ Créer un nouveau client (nom pré-rempli)</button></div>';
   openModal(h);
   if ($('mX')) $('mX').addEventListener('click', closeModal);
-  if (matches.length && $('recMatches')) matches.forEach((c) => { const b = document.createElement('button'); b.className = 'btn block'; b.style.marginBottom = '6px'; b.textContent = 'Lier à ' + fullName(c) + (c.societe ? ' — ' + c.societe : ''); b.addEventListener('click', () => attach(c)); $('recMatches').appendChild(b); });
-  if ($('recNew')) $('recNew').addEventListener('click', () => editClient(null, (nc) => attach(nc), ev.title)); // nom pré-rempli avec le titre de l'item
+  if (matches.length && $('recMatches')) matches.forEach((c) => { const b = document.createElement('button'); b.className = 'btn block'; b.style.marginBottom = '6px'; b.textContent = '📅 Créer le RDV → ' + fullName(c) + (c.societe ? ' — ' + c.societe : ''); b.addEventListener('click', () => attach(c)); $('recMatches').appendChild(b); });
+  if ($('recNew')) $('recNew').addEventListener('click', () => editClient(null, (nc) => recuperateEvent(ev, nc), ev.title)); // création manuelle → revient aussi choisir la tournée
 }
 function agendaItemRow(ev) {
   const match = matchClientForEvent(ev.title);
