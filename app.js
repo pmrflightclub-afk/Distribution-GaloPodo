@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.93';
+const APP_VERSION = '1.2.94';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.94', date: '2026-07-13',
+    corrections: [
+      'Sauvegarde / synchro entre appareils : correction d\'une PERTE DE DONNÉES. Les listes des Réglages (rappels, frais véhicule, matériel, articles, comptes & sous-comptes, provisions, écritures du journal, charges, notes de crédit, mails de contact) n\'étaient PAS fusionnées enregistrement par enregistrement : un ajout/suppression fait sur un appareil pouvait être écrasé en bloc par l\'autre appareil lors de la synchronisation. Elles fusionnent désormais comme les clients et les tournées (chaque élément est horodaté, les ajouts des deux appareils sont conservés, les suppressions respectées).',
+    ],
+  },
   {
     version: '1.2.93', date: '2026-07-13',
     ajouts: [
@@ -2377,7 +2383,14 @@ function matRenouvText(m) {
   const mois = (m.nbChevaux || 1) / cad;
   return `🔁 renouvellement ~ ${durMonthsLabel(Math.round(mois))} (${fmtNum(mois, 1)} mois pour ${fmtNum(m.nbChevaux || 1, 0)} chevaux à ${fmtNum(cad, 1)}/mois)`;
 }
-function saveSettings() { S.updatedAt = Date.now(); LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); scheduleDrivePush(); }
+// Collections id-clés DANS les réglages : elles doivent fusionner par enregistrement (union + tombstones) comme clients/tournées,
+// sinon un ajout/suppression fait sur un appareil est écrasé en bloc par l'autre appareil (perte de rappels, frais, écritures…).
+const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit'];
+function saveSettings() {
+  S.updatedAt = Date.now();
+  SETTINGS_COLLECTIONS.forEach((k) => { if (Array.isArray(S[k])) syncStamp('set:' + k, S[k]); }); // horodatage + tombstones par enregistrement (survit à la fusion multi-appareils)
+  LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); scheduleDrivePush();
+}
 
 // ---------- Thème (couleur bandeau & boutons) ----------
 const THEME_PRESETS = ['#e8722a', '#1f6f54', '#2563eb', '#dc2626', '#7c3aed', '#0891b2'];
@@ -2508,19 +2521,26 @@ function mergeSettings(localS, remoteS) {
 }
 // Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
 function mergeSnapshots(local, remote) {
-  const tombC = mergeTomb(local.tomb && local.tomb.clients, remote.tomb && remote.tomb.clients);
-  const tombT = mergeTomb(local.tomb && local.tomb.tournees, remote.tomb && remote.tomb.tournees);
+  const lt = local.tomb || {}, rt = remote.tomb || {};
+  const kindSet = new Set(['clients', 'tournees'].concat(Object.keys(lt), Object.keys(rt), SETTINGS_COLLECTIONS.map((k) => 'set:' + k)));
+  const tomb = {}; kindSet.forEach((k) => { tomb[k] = mergeTomb(lt[k], rt[k]); });
+  const settings = mergeSettings(local.settings, remote.settings);
+  // Collections des réglages : fusion par enregistrement (union + tombstones) → aucune perte d'ajout, suppressions respectées.
+  SETTINGS_COLLECTIONS.forEach((k) => {
+    const lv = (local.settings && local.settings[k]), rv = (remote.settings && remote.settings[k]);
+    if (Array.isArray(lv) || Array.isArray(rv)) settings[k] = mergeCollection(lv || [], rv || [], tomb['set:' + k]);
+  });
   return {
-    settings: mergeSettings(local.settings, remote.settings),
-    clients: mergeCollection(local.clients, remote.clients, tombC),
-    tours: mergeCollection(local.tours, remote.tours, tombT),
-    tomb: { clients: tombC, tournees: tombT },
+    settings,
+    clients: mergeCollection(local.clients, remote.clients, tomb.clients),
+    tours: mergeCollection(local.tours, remote.tours, tomb.tournees),
+    tomb,
   };
 }
 // Instantané local complet (pour export / fusion).
 function exportSnapshot() {
   const m = syncMeta();
-  return { app: 'GaloPodo', version: APP_VERSION, at: Date.now(), settings: S, clients, tours: allTours(), tomb: { clients: (m.tomb && m.tomb.clients) || {}, tournees: (m.tomb && m.tomb.tournees) || {} } };
+  return { app: 'GaloPodo', version: APP_VERSION, at: Date.now(), settings: S, clients, tours: allTours(), tomb: Object.assign({}, m.tomb || {}) };
 }
 // Applique le résultat de fusion : réécrit les stores + re-partitionne les tournées (actives / archive > 4 semaines).
 function applyMerged(merged) {
@@ -2530,7 +2550,7 @@ function applyMerged(merged) {
   const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
   tournees = merged.tours.filter((t) => !isArch(t));
   archive = merged.tours.filter((t) => isArch(t));
-  const m = syncMeta(); m.tomb.clients = merged.tomb.clients; m.tomb.tournees = merged.tomb.tournees; LS.set('ftr.syncmeta', m);
+  const m = syncMeta(); m.tomb = Object.assign({}, m.tomb, merged.tomb); LS.set('ftr.syncmeta', m); // conserve TOUS les tombstones fusionnés (clients, tournées, collections réglages)
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
 }
 function importSnapshotMerge(remote) { applyMerged(mergeSnapshots(exportSnapshot(), remote)); }
