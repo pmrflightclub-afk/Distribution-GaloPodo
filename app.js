@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.89';
+const APP_VERSION = '1.2.90';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.90', date: '2026-07-13',
+    ajouts: [
+      'Planche — « Format d\'image » : choisissez la forme des cases (et de la zone de recadrage) — Plein page, Carré 1:1, Photo 4:3, Portrait 3:4, Reflex 3:2 ou 2:3. Les cases du PDF sont mises au même ratio, agrandies au maximum et centrées, pour 3, 4 ou 5 colonnes. Réglable par défaut dans Réglages → Planche, et à la volée pendant la création. (Changer de format en cours de route réinitialise les recadrages, qui étaient calés sur l\'ancien ratio.)',
+      'Éditeur de recadrage : le zoom est de retour — un curseur « Zoom » agrandit l\'image et vous la déplacez au doigt (glisser) sous le cadre, pour viser précisément un petit sujet. Le cadre garde toujours le ratio de la case.',
+      'Planche non terminée conservée : si vous minimisez l\'app ou que la page se recharge, la planche en cours (photos comprises) n\'est plus perdue — à la réouverture, l\'app propose de la reprendre. Elle est effacée une fois la planche générée, envoyée ou fermée (rien n\'est enregistré de façon permanente).',
+    ],
+  },
   {
     version: '1.2.89', date: '2026-07-13',
     corrections: [
@@ -1955,6 +1963,7 @@ else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', '
 if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 };
 { const gg = S.planche.gridGuide; if (!(gg.marginLR2 > 0)) gg.marginLR2 = 1.0; if (!(gg.marginTB2 > 0)) gg.marginTB2 = 1.0; } // 2ᵉ repère (cible d'alignement du sujet), défaut 1 cm
 { const gg = S.planche.gridGuide; if (!gg.color1) gg.color1 = '#333333'; if (!gg.color2) gg.color2 = '#2b7bd6'; } // couleurs des repères 1 (coupe) et 2 (cible), réglables dans Gestion → Planche
+if (!S.planche.format) S.planche.format = 'fill'; // format des cases : 'fill' (plein page) | 'square' | 'ph43' | 'ph34' | 'reflex32' | 'reflex23'
 // Ajustement des images dans les cases : 'cover' = remplir (rogne l'excédent, pas de bande blanche) · 'contain' = image entière (bandes blanches si proportions ≠).
 if (S.planche.fitMode !== 'contain' && S.planche.fitMode !== 'cover') S.planche.fitMode = 'cover';
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
@@ -7070,7 +7079,7 @@ function plTrunc(ctx, s, maxW) { s = String(s || ''); if (ctx.measureText(s).wid
 // Rend une page de planche sur un canvas (en-tête 3 zones + grille cellules fixes + pied) → export PDF image / email. Géométrie mm partagée.
 async function planchePageCanvas(pi) {
   const st = plCreate, land = st.orientation !== 'portrait';
-  const g = plGeom(land, (st.angles || []).length, plRefRows(st));
+  const g = plGeom(land, (st.angles || []).length, plRefRows(st), plFormatAspect(st));
   const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.textBaseline = 'top';
@@ -7095,10 +7104,10 @@ async function planchePageCanvas(pi) {
   if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(10), lw = Math.min(zpW, lg.width * (lh / lg.height)); const lx = rightEdge - lw; ctx.drawImage(lg, lx, py, lw, lh); logoCx = lx + lw / 2; py += lh + fs(1.5); } } // logo aligné au BORD DROIT de la grille (drawImage met à l'échelle → jamais rogné ; lw ≤ zpW → ne déborde pas)
   { const p = S.proIdent || {}; const proName = [p.prenom, p.nom].filter(Boolean).join(' '); if (proName) { ctx.font = 'bold ' + fs(3.1) + 'px sans-serif'; const tw = Math.min(ctx.measureText(proName).width, zpW); let cxT = logoCx; if (cxT + tw / 2 > rightEdge) cxT = rightEdge - tw / 2; ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.fillText(plTrunc(ctx, proName, zpW), cxT, py); } } // nom centré SOUS le logo (recalé vers la gauche s'il déborderait à droite)
   ctx.textAlign = 'left';
-  // Grille (cellules fixes)
-  const gx = px(g.gridLeft), gtop = px(g.gridTop), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH);
+  // Grille (cellules fixes). offX/offY : décalage de centrage quand un « Format d'image » est choisi (les cases ne remplissent plus toute la page).
+  const gx = px(g.gridLeft + g.offX), gtop = px(g.gridTop + g.offY), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH), blockW = px(g.blockW);
   const cropZoom = plCropZoom(); // zoom uniforme « Rogner » (1 si désactivé)
-  ctx.fillStyle = '#eee'; ctx.fillRect(gx, gtop, px(g.gridW), angH);
+  ctx.fillStyle = '#eee'; ctx.fillRect(gx, gtop, blockW, angH);
   ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(2.8) + 'px sans-serif'; ctx.textAlign = 'center';
   angles.forEach((a, ci) => ctx.fillText(plTrunc(ctx, a, colW - 6), gx + labelW + ci * colW + colW / 2, gtop + angH / 2 - fs(1.4)));
   const imgs = {};
@@ -7134,7 +7143,7 @@ async function planchePageCanvas(pi) {
   for (let ci = 0; ci <= angles.length; ci++) { const xx = gx + labelW + ci * colW; ctx.moveTo(xx, gtop); ctx.lineTo(xx, gridBottom); }
   ctx.moveTo(gx, gtop); ctx.lineTo(gx, gridBottom);
   for (let ri = 0; ri <= rows.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
-  ctx.moveTo(gx, gtop); ctx.lineTo(gx + px(g.gridW), gtop); ctx.stroke();
+  ctx.moveTo(gx, gtop); ctx.lineTo(gx + blockW, gtop); ctx.stroke();
   // Pied de page : logo GaloPodo AGRANDI, COLLÉ au texte (société · contact · TVA), l'ensemble logo+texte centré sous la grille.
   const fy = px(g.pageH - g.margin - g.footerH);
   const flg = await plLoadImg(GALOPODO_LOGO_FILE), fh = px(6.5), lTop = fy + px(0.3); // logo 5 → 6,5 mm
@@ -8326,7 +8335,10 @@ function renderPlancheConfig() {
     <p class="hint">Repères affichés en <b>mode « Éditer les images »</b> (aperçu seulement, jamais sur le PDF). <b>Repère 1</b> (gris) = ligne de coupe si « Rogner » est actif. <b>Repère 2</b> (bleu pointillé) = cible d'alignement du sujet (le pied). Axe central rouge = centre.</p>
     <div class="row"><label class="grow">Repère 1 · gauche/droite (cm)<input type="number" id="plGuideLR" min="0" step="0.1" value="${gg.marginLR}"/></label><label class="grow">Repère 1 · haut/bas (cm)<input type="number" id="plGuideTB" min="0" step="0.1" value="${gg.marginTB}"/></label></div>
     <div class="row"><label class="grow">Repère 2 · gauche/droite (cm)<input type="number" id="plGuideLR2" min="0" step="0.1" value="${gg.marginLR2}"/></label><label class="grow">Repère 2 · haut/bas (cm)<input type="number" id="plGuideTB2" min="0" step="0.1" value="${gg.marginTB2}"/></label></div>
-    <div class="row"><label class="grow">Couleur du repère 1<input type="color" id="plGuideC1" value="${esc(gg.color1 || '#333333')}"/></label><label class="grow">Couleur du repère 2<input type="color" id="plGuideC2" value="${esc(gg.color2 || '#2b7bd6')}"/></label></div>`;
+    <div class="row"><label class="grow">Couleur du repère 1<input type="color" id="plGuideC1" value="${esc(gg.color1 || '#333333')}"/></label><label class="grow">Couleur du repère 2<input type="color" id="plGuideC2" value="${esc(gg.color2 || '#2b7bd6')}"/></label></div>
+    <h3 class="rsub" style="margin-top:10px">Format des images</h3>
+    <p class="hint">Forme des cases (et de la zone de recadrage). <b>Plein page</b> = les cases remplissent la page (ratio dicté par les colonnes/lignes). Les autres formats donnent des cases à ratio fixe, <b>agrandies au maximum et centrées</b> — idéal pour homogénéiser des photos téléphone / reflex. Modifiable aussi à la volée pendant la création.</p>
+    <label>Format par défaut<select id="plFormatSel">${plFormatOptions(S.planche.format)}</select></label>`;
   body.appendChild(head);
   $('plOri').value = P.orientation || 'paysage';
   $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; saveSettings(); });
@@ -8336,6 +8348,7 @@ function renderPlancheConfig() {
   $('plGuideTB2').addEventListener('change', (e) => { S.planche.gridGuide.marginTB2 = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
   $('plGuideC1').addEventListener('change', (e) => { S.planche.gridGuide.color1 = e.target.value || '#333333'; saveSettings(); });
   $('plGuideC2').addEventListener('change', (e) => { S.planche.gridGuide.color2 = e.target.value || '#2b7bd6'; saveSettings(); });
+  if ($('plFormatSel')) $('plFormatSel').addEventListener('change', (e) => { S.planche.format = e.target.value || 'fill'; saveSettings(); });
   // Colonnes = angles de vue, par modèle 3/4/5
   const sc = document.createElement('section'); sc.className = 'card';
   sc.innerHTML = `<h3 class="rsub">Colonnes — angles de vue (par modèle)</h3>
@@ -8671,11 +8684,54 @@ function plPickCheval() {
   o.q('#plPkQ').addEventListener('input', (e) => { q = e.target.value; draw(); });
   draw();
 }
+// ===== Brouillon de planche (IndexedDB) — survit à la mise en arrière-plan / au rechargement de la page =====
+// La planche en cours (plCreate, PHOTOS comprises = dataURL) est sauvée en continu ; restaurée à la réouverture ;
+// EFFACÉE dès qu'elle est générée/envoyée ou fermée. Rien de permanent : jamais dans le PDF ni dans l'historique.
+const PL_DRAFT_DB = 'galopodo-draft', PL_DRAFT_STORE = 'draft', PL_DRAFT_KEY = 'plancheEnCours';
+function plDraftDB() {
+  return new Promise((res, rej) => {
+    let rq; try { rq = indexedDB.open(PL_DRAFT_DB, 1); } catch (e) { return rej(e); }
+    rq.onupgradeneeded = () => { const db = rq.result; if (!db.objectStoreNames.contains(PL_DRAFT_STORE)) db.createObjectStore(PL_DRAFT_STORE); };
+    rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+  });
+}
+async function plDraftPut(obj) { try { const db = await plDraftDB(); await new Promise((res, rej) => { const tx = db.transaction(PL_DRAFT_STORE, 'readwrite'); tx.objectStore(PL_DRAFT_STORE).put(obj, PL_DRAFT_KEY); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch (e) {} }
+async function plDraftGet() { try { const db = await plDraftDB(); return await new Promise((res, rej) => { const tx = db.transaction(PL_DRAFT_STORE, 'readonly'); const rq = tx.objectStore(PL_DRAFT_STORE).get(PL_DRAFT_KEY); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error); }); } catch (e) { return null; } }
+async function plDraftClear() { try { const db = await plDraftDB(); await new Promise((res) => { const tx = db.transaction(PL_DRAFT_STORE, 'readwrite'); tx.objectStore(PL_DRAFT_STORE).delete(PL_DRAFT_KEY); tx.oncomplete = res; tx.onerror = res; }); } catch (e) {} }
+let _plDraftTimer = null;
+function plDraftSave() {
+  if (!plCreate) return;
+  const has = (plCreate.photos && plCreate.photos.length) || Object.keys(plCreate.cells || {}).length;
+  if (!has) return; // rien de lourd à perdre → pas de brouillon
+  if (_plDraftTimer) clearTimeout(_plDraftTimer);
+  _plDraftTimer = setTimeout(() => {
+    if (!plCreate) return;
+    const snap = {}; Object.keys(plCreate).forEach((k) => { if (k === 'sel' || k === 'cropSel' || k === 'cropMode' || k === 'gridEdit') return; snap[k] = plCreate[k]; }); // hors état d'édition transitoire
+    snap.savedAt = Date.now(); plDraftPut(snap);
+  }, 600);
+}
+function plDraftRestore(d) {
+  modalPlancheCreate(d.type === 'avantapres' ? 'avantapres' : 'contact', { cheval: d.cheval, client: d.client, clientId: d.clientId, date: d.date, stade: d.stade, note: d.note, dureeCycleSem: d.dureeCycleSem, modele: d.modele, format: d.format, allowTourPick: d.allowTourPick, queue: d.queue, queueTotal: d.queueTotal, queueIdx: d.queueIdx, todoId: d.todoId });
+  if (!plCreate) return;
+  // restaure l'état lourd que le pré-remplissage ne porte pas (photos, placements, recadrages, options d'affichage)
+  plCreate.photos = d.photos || []; plCreate.cells = d.cells || {}; plCreate.cellT = d.cellT || {}; plCreate.cellCrop = d.cellCrop || {}; plCreate.cellImg = d.cellImg || {}; plCreate.cellCropDef = d.cellCropDef || {};
+  if (d.fitMode) plCreate.fitMode = d.fitMode; if (d.potView) plCreate.potView = d.potView; if (d.pages) plCreate.pages = d.pages; if (d.compar) plCreate.compar = d.compar; if (d.chevalPageOn != null) plCreate.chevalPageOn = d.chevalPageOn;
+  const cp = $('plCchevalPage'); if (cp) cp.checked = !!plCreate.chevalPageOn; // reflète l'état restauré de la case « page Cheval »
+  plRenderPot(); plRenderGrid();
+}
+async function plDraftMaybeRestore() {
+  if (plCreate) return; // une planche est déjà ouverte
+  const d = await plDraftGet(); if (!d) return;
+  const has = (d.photos && d.photos.length) || Object.keys(d.cells || {}).length;
+  if (!has) { plDraftClear(); return; }
+  const label = (d.cheval || 'planche') + (d.stade ? ' · ' + d.stade : '');
+  if (confirm('Une planche non terminée a été retrouvée (' + label + ').\n\nLa reprendre ?')) plDraftRestore(d); else plDraftClear();
+}
 function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: P.orientation || 'paysage', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -8708,14 +8764,15 @@ function modalPlancheCreate(type, prefill) {
         <div class="pl-pot grid" id="plCpot"></div>
       </section>
       <section class="card">
-        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
+        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><label style="display:flex;align-items:center;gap:4px;margin:0;font-size:.85rem">Format<select id="plCformat">${plFormatOptions(plCreate.format)}</select></label><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
         <div id="plCgridEditCtrls" class="pl-edit-ctrls" style="display:none"></div>
         <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (déplacer, zoomer, tourner). À <b>Valider</b>, l'image est <b>vraiment découpée</b> pour remplir exactement sa case — l'aperçu et le PDF sont alors identiques. Les repères (bords + <b>axe rouge central</b>) aident à centrer le sujet (ils n'apparaissent pas sur le PDF). Édition désactivée : toucher une image la retire.</p>
         <div id="plCgrid"></div>
       </section>
       <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button>${plCreate.queueTotal && plCreate.queue && plCreate.queue.length ? '<button class="btn block primary" id="plCnext">➡ Passer à la planche suivante (sans enregistrer celle-ci)</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
     </div>`);
-  const close = () => { plCreate = null; closeModal(); };
+  const close = () => { plDraftClear(); plCreate = null; closeModal(); }; // fermer = abandonner → efface le brouillon
+  if ($('plCbody')) { const sv = () => plDraftSave(); $('plCbody').addEventListener('input', sv); $('plCbody').addEventListener('change', sv); } // toute saisie du formulaire alimente le brouillon
   $('mX').onclick = close; $('plCclose').onclick = close;
   if ($('plCfromTour')) $('plCfromTour').onclick = () => modalPlancheFromTour();
   if ($('plCnext')) $('plCnext').onclick = () => plQueueAdvance();
@@ -8743,6 +8800,11 @@ function modalPlancheCreate(type, prefill) {
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
+  if ($('plCformat')) $('plCformat').addEventListener('change', (e) => { // Format d'image : le ratio des cases change → les recadrages (calés sur l'ancien ratio) ne sont plus valides
+    plCreate.format = e.target.value; S.planche.format = e.target.value; saveSettings();
+    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
+    plRenderGrid();
+  });
   if ($('plCgridFit')) { // « Remplir les cases » = curseur (Remplir / Entière), Remplir actif par défaut
     const updFit = () => { $('plCgridFit').innerHTML = `<button type="button" class="seg-btn${plCreate.fitMode !== 'contain' ? ' on' : ''}" data-fit="cover">⛶ Remplir</button><button type="button" class="seg-btn${plCreate.fitMode === 'contain' ? ' on' : ''}" data-fit="contain">🖼 Entière</button>`; $('plCgridFit').querySelectorAll('[data-fit]').forEach((b) => b.addEventListener('click', () => { if (plCreate.fitMode !== b.dataset.fit) { plCreate.fitMode = b.dataset.fit; S.planche.fitMode = b.dataset.fit; saveSettings(); updFit(); plRenderGrid(); } })); };
     updFit();
@@ -8771,7 +8833,7 @@ function modalPlancheCreate(type, prefill) {
     try {
       const blob = await planchePdfBlob();
       const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = plancheBaseName(plCreate) + '.pdf'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
-      plancheTodoDone(plCreate); addPlancheHistory(plCreate);
+      plancheTodoDone(plCreate); addPlancheHistory(plCreate); plDraftClear(); // planche produite → le brouillon n'a plus lieu d'être
       if (plCreate.queueTotal) { plQueueAdvance(); return; } // file de planches : la génération enchaîne sur la suivante (ou clôt à la dernière)
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCpdf')) { btn.disabled = false; btn.textContent = old; }
@@ -8784,7 +8846,7 @@ function modalPlancheCreate(type, prefill) {
     try {
       const blob = await planchePdfBlob();
       const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
-      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), () => { if (!plCreate) return; plancheTodoDone(plCreate); addPlancheHistory(plCreate); if (plCreate.queueTotal) plQueueAdvance(); else plCreate = null; }); // mail envoyé → enchaîne la planche suivante de la file (ou clôt)
+      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), () => { if (!plCreate) return; plancheTodoDone(plCreate); addPlancheHistory(plCreate); plDraftClear(); if (plCreate.queueTotal) plQueueAdvance(); else plCreate = null; }); // mail envoyé → enchaîne la planche suivante de la file (ou clôt)
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
   };
@@ -8836,6 +8898,7 @@ function plRenderPot() {
     t.querySelector('.pl-th-setdate').addEventListener('click', () => { ph.date = plCreate.date; const di = t.querySelector('.pl-th-date'); if (di) di.value = ph.date; });
     box.appendChild(t);
   });
+  plDraftSave(); // sauvegarde le brouillon (photos importées, dates)
 }
 
 function plPlace(key) {
@@ -8851,7 +8914,7 @@ function plRenderGrid() {
   const box = $('plCgrid'); if (!box || !plCreate) return;
   box.innerHTML = '';
   const st = plCreate, pages = st.pages || [], angles = st.angles || [];
-  const g = plGeom(st.orientation !== 'portrait', angles.length, plRefRows(st)); // géométrie PDF → ratio de case (colW:rowH) pour l'aperçu fidèle
+  const g = plGeom(st.orientation !== 'portrait', angles.length, plRefRows(st), plFormatAspect(st)); // géométrie PDF → ratio de case (colW:rowH) pour l'aperçu fidèle
   const cropZoom = plCropZoom(); // facteur de rognage (appliqué par case selon cellCrop, hors mode édition)
   if (!pages.length) { box.innerHTML = '<p class="hint">Aucune page configurée. Configurez la planche dans Gestion → Planche.</p>'; return; }
   pages.forEach((pg, pi) => {
@@ -8913,6 +8976,7 @@ function plRenderGrid() {
     });
     wrap.appendChild(tbl); box.appendChild(wrap);
   });
+  plDraftSave(); // sauvegarde le brouillon (placements/recadrages)
 }
 
 // Cadrillage d'aide (mode édition) : 4 lignes de marge (gauche/droite/haut/bas, cm → % de la case) + axe central rouge.
@@ -8921,7 +8985,7 @@ function plRenderGrid() {
 // = |cos| + max(colW/rowH, rowH/colW)·|sin| (exact pour une image qui couvre pile la case ; sinon rogne un peu plus, jamais de vide). 1 si rot=0.
 const plRotCover = (rotDeg, cw, ch) => { const r = (rotDeg || 0) * Math.PI / 180; const ar = (cw > 0 && ch > 0) ? Math.max(cw / ch, ch / cw) : 1; return Math.abs(Math.cos(r)) + ar * Math.abs(Math.sin(r)); };
 function plGuideSvg() {
-  const st = plCreate; const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
+  const st = plCreate; const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st));
   const gg = (S.planche && S.planche.gridGuide) || { marginLR: 0.5, marginTB: 0.5 };
   const pc = (cm, dim) => Math.max(0, Math.min(49, (10 * (+cm || 0)) / dim * 100));
   const L1 = pc(gg.marginLR, g.colW), T1 = pc(gg.marginTB, g.rowH); // repère 1 = ligne de COUPE (crop)
@@ -8935,7 +8999,7 @@ function plGuideSvg() {
 // Facteur de zoom « Rogner » : agrandit uniformément pour que le 1ᵉʳ repère (marges) remplisse la case (le côté le plus contraint touche le bord → l'autre rogne un peu plus). 1 = pas de crop.
 function plCropZoom() {
   const st = plCreate; if (!st) return 1;
-  const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
+  const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st));
   const gg = (S.planche && S.planche.gridGuide) || { marginLR: 0.5, marginTB: 0.5 };
   const mLR = 10 * (+gg.marginLR || 0), mTB = 10 * (+gg.marginTB || 0);
   const sx = g.colW > 2 * mLR ? g.colW / (g.colW - 2 * mLR) : 1, sy = g.rowH > 2 * mTB ? g.rowH / (g.rowH - 2 * mTB) : 1;
@@ -8958,7 +9022,7 @@ function modalCellEdit(key) {
   const st = plCreate; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
   if (!ph || !ph.url) return;
   if (!st.cellImg) st.cellImg = {}; if (!st.cellCropDef) st.cellCropDef = {};
-  const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st));
+  const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st));
   const cellAR = g.colW / g.rowH;
   const src = new Image(); src.onload = () => build(); src.onerror = () => {}; src.src = ph.url;
   function build() {
@@ -8970,23 +9034,25 @@ function modalCellEdit(key) {
     const ov = document.createElement('div'); ov.className = 'modal-overlay pl-ce-overlay';
     ov.innerHTML = `<div class="modal"><div class="modal-head"><b>✏️ Cadrer l'image</b><button class="x" data-ce="x">✕</button></div>
       <div class="pl-ce-work" data-ce="work"><img class="pl-ce-img2" data-ce="img" src="${ph.url}" alt="" draggable="false"/><div class="pl-ce-cropframe" data-ce="fr">${plGuideSvg()}<span class="pl-ce-h" data-h="nw"></span><span class="pl-ce-h" data-h="ne"></span><span class="pl-ce-h" data-h="sw"></span><span class="pl-ce-h" data-h="se"></span></div></div>
+      <label class="pro-logo-zoom">Zoom<input type="range" data-ce="zoom" min="1" max="4" step="0.05" value="1"/></label>
       <label class="pro-logo-zoom">Rotation<input type="range" data-ce="rot" min="-180" max="180" step="1" value="${rot}"/></label>
       <div class="pro-logo-btns"><button class="btn small" data-ce="rotL">⟲ −90°</button><button class="btn small" data-ce="rotR">⟳ +90°</button><button class="btn small" data-ce="reset">Cadre plein</button></div>
-      <p class="hint">Déplacez / redimensionnez le <b>cadre</b> (poignées) sur l'image ; tournez l'image si besoin. Ce qui est <b>hors du cadre (assombri) sera coupé</b>. Les repères + <b>axe rouge central</b> aident à centrer le sujet.</p>
+      <p class="hint"><b>Zoom</b> pour agrandir l'image, puis <b>glissez l'image</b> pour la déplacer sous le cadre. Déplacez / redimensionnez le <b>cadre</b> (poignées) ; tournez si besoin. Ce qui est <b>hors du cadre (assombri) sera coupé</b>. Repères + <b>axe rouge central</b> pour centrer le sujet.</p>
       <div class="actions"><button class="btn primary block" data-ce="ok">Valider (découper)</button><button class="btn block" data-ce="cancel">Annuler</button></div></div>`;
     document.body.appendChild(ov);
     const q = (n) => ov.querySelector(`[data-ce="${n}"]`);
     const work = q('work'), imgEl = q('img'), frEl = q('fr');
     let ox = 0, oy = 0, dW = 0, dH = 0; // bbox affichée de l'image tournée
+    let zoom = 1, panX = 0, panY = 0; // zoom + déplacement de l'image de travail (aides d'édition, non persistées : le crop est cuit dans l'image)
     const bbox = (deg) => { const r = deg * Math.PI / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r)); return { W: iw * c + ih * s, H: iw * s + ih * c }; };
     const clampFrame = () => { fr.fw = Math.min(fr.fw, dW); fr.fh = fr.fw / cellAR; if (fr.fh > dH) { fr.fh = dH; fr.fw = fr.fh * cellAR; } fr.fx = Math.max(ox, Math.min(fr.fx, ox + dW - fr.fw)); fr.fy = Math.max(oy, Math.min(fr.fy, oy + dH - fr.fh)); };
     const paintFrame = () => { frEl.style.left = fr.fx + 'px'; frEl.style.top = fr.fy + 'px'; frEl.style.width = fr.fw + 'px'; frEl.style.height = fr.fh + 'px'; };
     const layout = () => {
       const workW = work.clientWidth, workH = work.clientHeight; if (!workW || !workH) { requestAnimationFrame(layout); return; }
-      const bb = bbox(rot), ds = Math.min(workW / bb.W, workH / bb.H);
-      dW = bb.W * ds; dH = bb.H * ds; ox = (workW - dW) / 2; oy = (workH - dH) / 2;
+      const bb = bbox(rot), ds = Math.min(workW / bb.W, workH / bb.H) * zoom; // le zoom multiplie l'échelle d'ajustement
+      dW = bb.W * ds; dH = bb.H * ds; ox = (workW - dW) / 2 + panX; oy = (workH - dH) / 2 + panY;
       imgEl.style.width = (iw * ds) + 'px'; imgEl.style.height = (ih * ds) + 'px';
-      imgEl.style.left = ((workW - iw * ds) / 2) + 'px'; imgEl.style.top = ((workH - ih * ds) / 2) + 'px';
+      imgEl.style.left = ((workW - iw * ds) / 2 + panX) + 'px'; imgEl.style.top = ((workH - ih * ds) / 2 + panY) + 'px';
       imgEl.style.transform = `rotate(${rot}deg)`;
       if (!fr) { if (def) { fr = { fx: ox + def.relX * dW, fy: oy + def.relY * dH, fw: def.relW * dW, fh: def.relH * dH }; } else { let fw, fh; if (dW / dH >= cellAR) { fh = dH; fw = cellAR * dH; } else { fw = dW; fh = dW / cellAR; } fr = { fx: ox + (dW - fw) / 2, fy: oy + (dH - fh) / 2, fw, fh }; } }
       clampFrame(); paintFrame();
@@ -8995,9 +9061,18 @@ function modalCellEdit(key) {
     q('x').onclick = q('cancel').onclick = close;
     ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
     q('rot').addEventListener('input', (e) => { rot = parseInt(e.target.value, 10) || 0; layout(); });
+    q('zoom').addEventListener('input', (e) => { zoom = Math.max(1, parseFloat(e.target.value) || 1); layout(); });
     q('rotL').onclick = () => { rot = ((rot - 90 + 540) % 360) - 180; q('rot').value = rot; layout(); };
     q('rotR').onclick = () => { rot = ((rot + 90 + 540) % 360) - 180; q('rot').value = rot; layout(); };
-    q('reset').onclick = () => { def = null; fr = null; layout(); }; // « Cadre plein » : ignore le recadrage sauvegardé et repart du cadre maximal (B3)
+    q('reset').onclick = () => { def = null; fr = null; zoom = 1; panX = 0; panY = 0; q('zoom').value = 1; layout(); }; // « Cadre plein » : repart du cadre maximal + remet zoom/déplacement à zéro (B3)
+    // Déplacer l'IMAGE (glisser le fond du plan de travail, hors cadre/poignées) → panoramique
+    work.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.pl-ce-cropframe') || e.target.classList.contains('pl-ce-h')) return; // le cadre et ses poignées sont gérés à part
+      const s0 = { x: e.clientX, y: e.clientY, px: panX, py: panY }; try { work.setPointerCapture(e.pointerId); } catch (err) {}
+      const mv = (ev) => { panX = s0.px + (ev.clientX - s0.x); panY = s0.py + (ev.clientY - s0.y); layout(); };
+      const up = () => { work.removeEventListener('pointermove', mv); work.removeEventListener('pointerup', up); work.removeEventListener('pointercancel', up); };
+      work.addEventListener('pointermove', mv); work.addEventListener('pointerup', up); work.addEventListener('pointercancel', up); e.preventDefault();
+    });
     // Déplacer le cadre
     frEl.addEventListener('pointerdown', (e) => {
       if (e.target.classList.contains('pl-ce-h')) return;
@@ -9086,14 +9161,38 @@ function plClientLines(st) {
 function plProFooter() { const p = S.proIdent || {}; const bits = []; if (p.societe) bits.push(p.societe); const c = []; if (p.email) c.push(p.email); if (p.tel) c.push(p.tel); if (c.length) bits.push('Contact : ' + c.join(' · ')); if (p.tvaNum) bits.push('TVA : ' + p.tvaNum); return bits.join('   ·   '); } // société · contact · TVA
 // Géométrie de planche en MILLIMÈTRES (A4), partagée par le moteur canvas et le moteur impression (marges 0,5 mm, cellules fixes).
 const PL_PXMM = 4.7; // résolution du rendu canvas (px par mm)
-function plGeom(land, nCols, refRows) {
+// Ratio (largeur/hauteur) d'une case selon le « Format d'image » choisi. 0 = « Plein page » (les cases remplissent la grille, ratio dicté par la page/colonnes/lignes).
+function plFormatAspect(st) {
+  const f = (st && st.format) || (S.planche && S.planche.format) || 'fill';
+  switch (f) {
+    case 'square': return 1;         // 1:1
+    case 'ph43': return 4 / 3;       // photo 4:3 paysage (téléphone / G11)
+    case 'ph34': return 3 / 4;       // portrait 3:4
+    case 'reflex32': return 3 / 2;   // reflex 3:2 paysage
+    case 'reflex23': return 2 / 3;   // reflex 2:3 portrait
+    default: return 0;               // 'fill' → plein page (comportement historique)
+  }
+}
+// Libellés des formats (pour les <select> de la création et des réglages).
+function plFormatOptions(sel) {
+  const opts = [['fill', 'Plein page'], ['square', 'Carré 1:1'], ['ph43', 'Photo 4:3'], ['ph34', 'Portrait 3:4'], ['reflex32', 'Reflex 3:2'], ['reflex23', 'Reflex 2:3']];
+  return opts.map((o) => `<option value="${o[0]}"${(sel || 'fill') === o[0] ? ' selected' : ''}>${o[1]}</option>`).join('');
+}
+function plGeom(land, nCols, refRows, aspect) {
   const pageW = land ? 297 : 210, pageH = land ? 210 : 297;
   const margin = 0.5, headerH = 17, footerH = 7, labelW = 9, angleHeaderH = 5; // headerH 15→17 : évite le débordement de l'en-tête (client/cheval avec beaucoup d'infos + note) sur la grille
   const gridLeft = margin, gridTop = margin + headerH;
   const gridW = pageW - 2 * margin, gridH = pageH - 2 * margin - headerH - footerH;
-  const colW = (gridW - labelW) / Math.max(1, nCols);
-  const rowH = (gridH - angleHeaderH) / Math.max(1, refRows);
-  return { pageW, pageH, margin, headerH, footerH, labelW, angleHeaderH, gridLeft, gridTop, gridW, gridH, colW, rowH, nCols, refRows };
+  const availW = gridW - labelW, availH = gridH - angleHeaderH;
+  let colW = availW / Math.max(1, nCols), rowH = availH / Math.max(1, refRows), offX = 0, offY = 0;
+  if (aspect && aspect > 0) { // cases contraintes au ratio choisi, AGRANDIES au max qui rentre, bloc (étiquettes + cases) CENTRÉ dans la grille
+    const cw = Math.min(availW / Math.max(1, nCols), aspect * (availH / Math.max(1, refRows)));
+    colW = cw; rowH = cw / aspect;
+    offX = (gridW - (labelW + colW * Math.max(1, nCols))) / 2;
+    offY = (gridH - (angleHeaderH + rowH * Math.max(1, refRows))) / 2;
+  }
+  const blockW = labelW + colW * Math.max(1, nCols), blockH = angleHeaderH + rowH * Math.max(1, refRows);
+  return { pageW, pageH, margin, headerH, footerH, labelW, angleHeaderH, gridLeft, gridTop, gridW, gridH, colW, rowH, nCols, refRows, offX, offY, blockW, blockH };
 }
 // Nombre de lignes de référence (le plus grand parmi les pages) → cellules de taille FIXE d'une page/planche à l'autre.
 function plRefRows(st) { let m = 1; (st.pages || []).forEach((pg, pi) => { m = Math.max(m, plPageRows(pi).length); }); return m; }
@@ -11274,6 +11373,7 @@ window.addEventListener('DOMContentLoaded', () => {
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
   migrateCreditedCancellations(); // 1.1.57 : marque « credited » les chevaux annulés portant une note de crédit (évite la double réduction du CA)
   bindSettings(); refreshEverywhere(); renderHome();
+  setTimeout(() => { plDraftMaybeRestore(); }, 900); // propose de reprendre une planche non terminée (après mise en arrière-plan / rechargement)
   if ($('homeSetupBtn')) $('homeSetupBtn').addEventListener('click', modalSetup);
   // L'écran de config initiale s'ouvre APRÈS la synchro Drive de démarrage (cf. _bootUpdate.then plus bas) — pour ne pas redemander si un autre appareil l'a déjà validé.
 
