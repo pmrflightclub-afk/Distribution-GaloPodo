@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.4.1', date: '2026-07-13',
+    corrections: [
+      'Statut de tournée fiabilisé : quand vous ajoutez (ou retirez) un arrêt dans une tournée déjà « ✓ prête », elle repasse aussitôt en « ⚠ à compléter » tant que l\'itinéraire n\'a pas été recalculé pour inclure ce nouvel arrêt. Avant, l\'ancien itinéraire (qui ne couvrait pas le nouvel arrêt) laissait la tournée affichée « prête » à tort.',
+    ],
+  },
   {
     version: '1.4.0', date: '2026-07-13',
     corrections: [
@@ -4980,7 +4986,8 @@ function modalTourStatus(t) {
   const render = () => {
     const st = statusOf(t), jourJ = st === 'active';
     const geoMissing = (t.arrets || []).some((a) => !(a.addr && a.addr.lat != null && a.addr.lon != null));
-    const noItin = !t.result || geoMissing;
+    const noItin = !t.result || !t.result.rows || t.result.rows.length !== (t.arrets || []).length || geoMissing; // itinéraire absent OU périmé (n'englobe plus tous les arrêts) OU adresse non localisée
+
     let prep = '';
     if (noItin || tourRouteStale(t)) prep += `<div class="ts-line ts-warn"><span>🗺 Itinéraire ${noItin ? 'non calculé' : 'à recalculer'}${geoMissing ? ' · adresse à localiser' : ''}</span><button class="btn small primary" id="tsCalc">🔄 Calculer maintenant</button></div>`;
     if (tourHeureStale(t)) prep += `<div class="ts-line ts-warn"><span>🕘 Des heures de RDV sont « à revoir » (l'ordre a changé)</span><button class="btn small" data-tsopen>Ouvrir</button></div>`;
@@ -5012,7 +5019,9 @@ function tourReadyIssues(t) {
   const out = [];
   if (!t || !(t.arrets || []).length) return ['aucun arrêt'];
   if ((t.arrets || []).some((a) => !(a.addr && a.addr.lat != null && a.addr.lon != null))) out.push('adresse non localisée');
-  if (!t.result) out.push('itinéraire non calculé');
+  // Itinéraire « à jour » = un résultat calculé QUI COUVRE tous les arrêts actuels. Après un ajout/retrait d'arrêt, l'ancien
+  // t.result (moins/plus de lignes que d'arrêts) est PÉRIMÉ → la tournée doit repasser « à compléter » (même critère que l'éditeur).
+  if (!t.result || !t.result.rows || t.result.rows.length !== (t.arrets || []).length) out.push('itinéraire non calculé');
   const byClient = {};
   (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { const e = byClient[cl.clientId] = byClient[cl.clientId] || { has: false, present: false }; (cl.chevaux || []).forEach((cv) => { e.has = true; if (!chevalCancelled(cv)) e.present = true; }); }));
   Object.keys(byClient).forEach((cid) => { const e = byClient[cid]; if (e.has && !e.present) out.push(clientName(cid) + ' : aucun cheval présent'); else if (e.present && !clientRdvHeure(t, cid)) out.push(clientName(cid) + ' : heure de RDV manquante'); });
