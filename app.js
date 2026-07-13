@@ -11,10 +11,22 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.5';
+const APP_VERSION = '1.3.7';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.7', date: '2026-07-13',
+    corrections: [
+      'Couleurs (thème & badges) : elles ne « sautent » plus. Un changement de couleur s\'applique tout de suite, même si un enregistrement en fond échoue, ET il n\'est plus écrasé par la synchronisation Google Drive — l\'appareil sur lequel vous venez de changer la couleur fait foi. Après une synchro, le bandeau, les boutons et les badges reprennent aussitôt la bonne couleur (avant : il fallait recharger).',
+    ],
+  },
+  {
+    version: '1.3.6', date: '2026-07-13',
+    corrections: [
+      'Recherche d\'adresse : le CODE POSTAL déjà saisi est désormais prioritaire. Quand vous tapez une rue (ou une localité) et qu\'un code postal est encodé (ex. 4210), les propositions d\'un AUTRE code postal sont écartées — fini les résultats à côté. En dernier recours (aucune adresse trouvée avec le code postal), l\'app élargit la recherche mais remet quand même les correspondances de votre code postal en tête de liste.',
+    ],
+  },
   {
     version: '1.3.5', date: '2026-07-13',
     corrections: [
@@ -2510,6 +2522,10 @@ function saveSettings() {
   SETTINGS_COLLECTIONS.forEach((k) => { if (Array.isArray(S[k])) syncStamp('set:' + k, S[k]); }); // horodatage + tombstones par enregistrement (survit à la fusion multi-appareils)
   LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); scheduleDrivePush(); bgSaveFlash();
 }
+// Sauvegarde d'une personnalisation de couleur (thème / badges) : horodatage DÉDIÉ pour que la fusion Drive garde la
+// couleur la PLUS récente au lieu de suivre l'objet réglages « gagnant » global (sinon une couleur changée sur un
+// appareil était ré-écrasée dès que l'autre appareil enregistrait autre chose de plus récent). cf. mergeSettings.
+function saveThemeSettings() { S.themeUpdatedAt = Date.now(); saveSettings(); }
 
 // ---------- Thème (couleur bandeau & boutons) ----------
 const THEME_PRESETS = ['#e8722a', '#1f6f54', '#2563eb', '#dc2626', '#7c3aed', '#0891b2'];
@@ -2558,11 +2574,12 @@ function renderSwatchSet(boxId, presets, current, onPick) {
 }
 function refreshSwatches() {
   const cardCol = () => (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff');
-  renderSwatchSet('swatches', THEME_PRESETS, S.accentColor, (c) => { S.accentColor = c; if ($('setAccent')) $('setAccent').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
-  renderSwatchSet('topbarSwatches', THEME_PRESETS, S.topbarColor || S.accentColor, (c) => { S.topbarColor = c; if ($('setTopbar')) $('setTopbar').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
-  renderSwatchSet('navbarSwatches', BG_PRESETS, S.navBarColor || cardCol(), (c) => { S.navBarColor = c; if ($('setNavbar')) $('setNavbar').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
-  renderSwatchSet('bgSwatches', BG_PRESETS, S.appBg, (c) => { S.appBg = c; if ($('setAppBg')) $('setAppBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
-  renderSwatchSet('logoBgSwatches', LOGO_BG_PRESETS, currentLogoBg(), (c) => { S[logoBgKey()] = c; if (c !== 'transparent' && $('setLogoBg')) $('setLogoBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
+  // Ordre : on APPLIQUE la couleur (applyTheme + rafraîchissement des pastilles) AVANT d'enregistrer, pour que le changement soit visible même si une étape de sauvegarde échoue. saveThemeSettings horodate la perso (survie à la fusion Drive).
+  renderSwatchSet('swatches', THEME_PRESETS, S.accentColor, (c) => { S.accentColor = c; if ($('setAccent')) $('setAccent').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
+  renderSwatchSet('topbarSwatches', THEME_PRESETS, S.topbarColor || S.accentColor, (c) => { S.topbarColor = c; if ($('setTopbar')) $('setTopbar').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
+  renderSwatchSet('navbarSwatches', BG_PRESETS, S.navBarColor || cardCol(), (c) => { S.navBarColor = c; if ($('setNavbar')) $('setNavbar').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
+  renderSwatchSet('bgSwatches', BG_PRESETS, S.appBg, (c) => { S.appBg = c; if ($('setAppBg')) $('setAppBg').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
+  renderSwatchSet('logoBgSwatches', LOGO_BG_PRESETS, currentLogoBg(), (c) => { S[logoBgKey()] = c; if (c !== 'transparent' && $('setLogoBg')) $('setLogoBg').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
 }
 // ===== Couleurs des badges (Réglages → Badges) : chaque badge = une variable CSS, personnalisable, sinon couleur par défaut =====
 const BADGE_DEFS = [
@@ -2587,8 +2604,8 @@ function renderBadgesSettings() {
     row.innerHTML = `<div class="badge-set-main"><div class="badge-set-sample">${b.sample}</div><span class="badge-set-lbl">${esc(b.label)}</span></div><div class="badge-set-act"><input type="color" value="${esc(custom || b.def)}" data-bcol/><button class="btn small" data-breset ${custom ? '' : 'disabled'}>Défaut</button></div>`;
     const inp = row.querySelector('[data-bcol]'), rst = row.querySelector('[data-breset]');
     inp.addEventListener('input', (e) => { bc[b.key] = e.target.value; applyBadgeColors(); rst.disabled = false; }); // aperçu live via la variable CSS, SANS sauvegarde à chaque pixel du glissé
-    inp.addEventListener('change', (e) => { bc[b.key] = e.target.value; applyBadgeColors(); saveSettings(); rst.disabled = false; }); // persiste à la fin du choix
-    rst.addEventListener('click', () => { delete bc[b.key]; applyBadgeColors(); saveSettings(); inp.value = b.def; rst.disabled = true; });
+    inp.addEventListener('change', (e) => { bc[b.key] = e.target.value; applyBadgeColors(); saveThemeSettings(); rst.disabled = false; }); // persiste à la fin du choix (horodatage thème → survit à la fusion Drive)
+    rst.addEventListener('click', () => { delete bc[b.key]; applyBadgeColors(); saveThemeSettings(); inp.value = b.def; rst.disabled = true; });
     box.appendChild(row);
   });
 }
@@ -2664,8 +2681,18 @@ function mergeSettings(localS, remoteS) {
   merged.comptaDemarche = Object.assign({}, (localS && localS.comptaDemarche) || {}, (remoteS && remoteS.comptaDemarche) || {});
   merged.comptaStatus = Object.assign({}, (localS && localS.comptaStatus) || {}, (remoteS && remoteS.comptaStatus) || {});
   // Personnalisations d'affichage (maps accumulatives → union par clé, pas de perte croisée entre appareils).
-  merged.badgeColors = Object.assign({}, (localS && localS.badgeColors) || {}, (remoteS && remoteS.badgeColors) || {});
   merged.tileLabels = Object.assign({}, (localS && localS.tileLabels) || {}, (remoteS && remoteS.tileLabels) || {});
+  // Couleurs de thème (scalaires) & badges : suivent l'appareil dont la personnalisation est la PLUS récente (themeUpdatedAt),
+  // INDÉPENDAMMENT du « gagnant » global — sinon une couleur changée sur un appareil est écrasée dès que l'autre enregistre
+  // autre chose de plus récent. Les badges gardent l'UNION (jamais de perte d'une clé posée sur un seul appareil), mais en
+  // cas de conflit sur une même clé, c'est la source la plus récente qui gagne.
+  {
+    const lT = (localS && localS.themeUpdatedAt) || 0, rT = (remoteS && remoteS.themeUpdatedAt) || 0;
+    const themeSrc = rT > lT ? remoteS : (lT > rT ? localS : base);
+    const otherSrc = themeSrc === remoteS ? localS : remoteS;
+    ['accentColor', 'topbarColor', 'appBg', 'navBarColor', 'themeUpdatedAt'].forEach((k) => { if (themeSrc && themeSrc[k] !== undefined) merged[k] = themeSrc[k]; });
+    merged.badgeColors = Object.assign({}, (otherSrc && otherSrc.badgeColors) || {}, (themeSrc && themeSrc.badgeColors) || {});
+  }
   // Petites listes de config sans identifiant : union dédoublonnée (mots-clés mail, ordre des tuiles) → pas de perte croisée.
   const unionStr = (a, b) => { const seen = new Set(), out = []; [].concat(a || [], b || []).forEach((s) => { const k = norm(s); if (s != null && s !== '' && !seen.has(k)) { seen.add(k); out.push(s); } }); return out; };
   merged.mailKeywords = unionStr(localS && localS.mailKeywords, remoteS && remoteS.mailKeywords);
@@ -2727,6 +2754,9 @@ function applyMerged(merged) {
   rehash('clients', clients); rehash('tournees', tournees.concat(archive)); SETTINGS_COLLECTIONS.forEach((k) => rehash('set:' + k, S[k]));
   LS.set('ftr.syncmeta', m);
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
+  // Une fusion peut avoir changé les couleurs de thème/badges → les ré-appliquer tout de suite (bandeau, boutons, badges) et
+  // rafraîchir les pastilles si l'écran Réglages est ouvert, sinon l'affichage garde les anciennes couleurs jusqu'à un reload.
+  applyTheme(); applyBadgeColors(); refreshSwatches();
 }
 function importSnapshotMerge(remote) { applyMerged(mergeSnapshots(exportSnapshot(), remote)); }
 // ---------- Agenda Google (Calendar, lecture seule) ----------
@@ -3293,7 +3323,16 @@ function attachAuto(input, kind, addr, onPick, onEdit) {
     close(); box = document.createElement('div'); box.className = 'aw-sugg'; input.parentElement.appendChild(box); box.innerHTML = '<div class="aw-item">Recherche…</div>';
     try {
       let res = await suggestAddress(searchBase, ctx);
-      if ((!res || !res.length) && (ctx.cp || ctx.city)) { const c2 = { pays: addr.pays }; if (kind === 'street') c2.street = searchBase; else if (kind === 'city') c2.city = searchBase; else c2.cp = searchBase; res = await suggestAddress(searchBase, c2); } // repli SANS CP/localité mais en GARDANT le pays (pas de résultats étrangers parasites)
+      let usedFallback = false;
+      if ((!res || !res.length) && (ctx.cp || ctx.city)) { const c2 = { pays: addr.pays }; if (kind === 'street') c2.street = searchBase; else if (kind === 'city') c2.city = searchBase; else c2.cp = searchBase; res = await suggestAddress(searchBase, c2); usedFallback = true; } // repli SANS CP/localité mais en GARDANT le pays (pas de résultats étrangers parasites)
+      // Priorité au code postal saisi : quand on édite la Rue/Localité et qu'un CP est déjà encodé, les propositions du BON code postal remontent en tête ; si la recherche principale (structurée avec le CP) a renvoyé des résultats, on écarte carrément les autres codes postaux (fini les propositions ailleurs qu'à 4210). Sur le repli sans CP, on ne filtre pas (sinon plus rien) mais on trie quand même les correspondances en tête.
+      const wantCp = String(addr.cp || '').replace(/\s+/g, '');
+      if (res && res.length && wantCp && kind !== 'postcode') {
+        const norm = (c) => String(c || '').replace(/\s+/g, '');
+        const matchCp = (s) => norm(s.cp) === wantCp;
+        if (!usedFallback && res.some(matchCp)) res = res.filter((s) => !s.cp || matchCp(s));
+        res = res.slice().sort((a, b) => (matchCp(b) ? 1 : 0) - (matchCp(a) ? 1 : 0));
+      }
       if (!box) return; box.innerHTML = '';
       if (!res || !res.length) { box.innerHTML = '<div class="aw-item">Aucun résultat. Vérifiez l\'orthographe — ou activez une clé Geoapify (Réglages → GPS) pour une recherche plus fiable.</div>'; return; }
       res.forEach((s) => { const d = document.createElement('div'); d.className = 'aw-item'; d.textContent = s.label; d.addEventListener('mousedown', (e) => { e.preventDefault(); onPick(Object.assign({}, s, (extractedNum && !s.numero) ? { numero: extractedNum } : {})); close(); }); box.appendChild(d); });
@@ -11472,7 +11511,7 @@ function bindSettings() {
   if ($('setDureeMode')) $('setDureeMode').value = S.dureeAuto ? 'auto' : 'vitesse';
   toggleKeyRow(); refreshTarifTable();
   // iOS : le sélecteur natif de couleur émet « change » (à la fermeture) et pas toujours « input » → on écoute les deux.
-  const bindColor = (id, set) => { const el = $(id); if (!el) return; const h = (e) => { set(e.target.value); saveSettings(); applyTheme(); refreshSwatches(); }; el.addEventListener('input', h); el.addEventListener('change', h); };
+  const bindColor = (id, set) => { const el = $(id); if (!el) return; const h = (e) => { set(e.target.value); applyTheme(); refreshSwatches(); saveThemeSettings(); }; el.addEventListener('input', h); el.addEventListener('change', h); };
   if ($('setAccent')) { $('setAccent').value = S.accentColor; bindColor('setAccent', (v) => { S.accentColor = v; }); }
   if ($('setTopbar')) { $('setTopbar').value = S.topbarColor || S.accentColor; bindColor('setTopbar', (v) => { S.topbarColor = v; }); }
   if ($('setNavbar')) { $('setNavbar').value = S.navBarColor || (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff'); bindColor('setNavbar', (v) => { S.navBarColor = v; }); }
