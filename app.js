@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.95';
+const APP_VERSION = '1.2.96';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.96', date: '2026-07-13',
+    ajouts: [
+      'Nouvelle page Réglages → Badges (après Thème) : personnalisez la couleur de chaque badge de l\'app — tournée à venir, tournée passée, « Clôturée », « à compléter / à revoir », « prête », étiquette générique, et info/nouveau — avec un aperçu en direct. Le bouton « Défaut » remet la couleur d\'origine (qui suit le thème).',
+    ],
+  },
   {
     version: '1.2.95', date: '2026-07-13',
     corrections: [
@@ -2017,6 +2023,7 @@ if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.g
   if (!S.planche.format) S.planche.format = 'r43'; // défaut : 4:3
 }
 if (!S.planche.orientMigrated) { if (S.planche.contact) S.planche.contact.orientation = 'portrait'; if (S.planche.avantapres) S.planche.avantapres.orientation = 'portrait'; S.planche.orientMigrated = true; } // planches en PORTRAIT par défaut (bascule unique)
+if (!S.badgeColors || typeof S.badgeColors !== 'object') S.badgeColors = {}; // couleurs personnalisées des badges (Réglages → Badges) ; vide = couleurs par défaut
 // Ajustement des images dans les cases : 'cover' = remplir (rogne l'excédent, pas de bande blanche) · 'contain' = image entière (bandes blanches si proportions ≠).
 if (S.planche.fitMode !== 'contain' && S.planche.fitMode !== 'cover') S.planche.fitMode = 'cover';
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
@@ -2455,6 +2462,34 @@ function refreshSwatches() {
   renderSwatchSet('navbarSwatches', BG_PRESETS, S.navBarColor || cardCol(), (c) => { S.navBarColor = c; if ($('setNavbar')) $('setNavbar').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
   renderSwatchSet('bgSwatches', BG_PRESETS, S.appBg, (c) => { S.appBg = c; if ($('setAppBg')) $('setAppBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
   renderSwatchSet('logoBgSwatches', LOGO_BG_PRESETS, currentLogoBg(), (c) => { S[logoBgKey()] = c; if (c !== 'transparent' && $('setLogoBg')) $('setLogoBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
+}
+// ===== Couleurs des badges (Réglages → Badges) : chaque badge = une variable CSS, personnalisable, sinon couleur par défaut =====
+const BADGE_DEFS = [
+  { key: 'etaFuture', cssVar: '--badge-eta-future', label: 'Tournée à venir (J-n)', def: '#2e9e5b', sample: '<span class="td-eta">J-5</span>' },
+  { key: 'etaPast', cssVar: '--badge-eta-past', label: 'Tournée passée (il y a n j)', def: '#8a8f98', sample: '<span class="td-eta td-past">il y a 3 j</span>' },
+  { key: 'cloturee', cssVar: '--badge-cloturee', label: 'Statut « Clôturée »', def: '#e79a5c', sample: '<span class="td-cloturee">Clôturée</span>' },
+  { key: 'warn', cssVar: '--badge-warn', label: 'À compléter / à revoir / recalculer', def: '#dc2626', sample: '<span class="td-badge warn">⚠ à compléter</span>' },
+  { key: 'ok', cssVar: '--badge-ok', label: 'Tournée prête', def: '#2e9e5b', sample: '<span class="td-badge ok">✓ prête</span>' },
+  { key: 'generic', cssVar: '--badge-generic', label: 'Étiquette générique', def: '#b45309', sample: '<span class="badge">à classer</span>' },
+  { key: 'info', cssVar: '--badge-info', label: 'Info / nouveau', def: '#dc2626', sample: '<span class="rem-tag">nouveau</span>' },
+];
+function applyBadgeColors() {
+  const root = document.documentElement.style; const bc = S.badgeColors || {};
+  BADGE_DEFS.forEach((b) => { if (bc[b.key]) root.setProperty(b.cssVar, bc[b.key]); else root.removeProperty(b.cssVar); }); // pas de perso → variable retirée → la couleur par défaut (thème) reprend
+}
+function renderBadgesSettings() {
+  const box = $('badgesList'); if (!box) return; box.innerHTML = '';
+  const bc = S.badgeColors || (S.badgeColors = {});
+  BADGE_DEFS.forEach((b) => {
+    const custom = bc[b.key];
+    const row = document.createElement('div'); row.className = 'badge-set-row';
+    row.innerHTML = `<div class="badge-set-main"><div class="badge-set-sample">${b.sample}</div><span class="badge-set-lbl">${esc(b.label)}</span></div><div class="badge-set-act"><input type="color" value="${esc(custom || b.def)}" data-bcol/><button class="btn small" data-breset ${custom ? '' : 'disabled'}>Défaut</button></div>`;
+    const inp = row.querySelector('[data-bcol]'), rst = row.querySelector('[data-breset]');
+    const h = (e) => { bc[b.key] = e.target.value; applyBadgeColors(); saveSettings(); rst.disabled = false; }; // pas de re-render pendant le glissé du sélecteur ; l'aperçu se recolore via la variable CSS
+    inp.addEventListener('input', h); inp.addEventListener('change', h);
+    rst.addEventListener('click', () => { delete bc[b.key]; applyBadgeColors(); saveSettings(); inp.value = b.def; rst.disabled = true; });
+    box.appendChild(row);
+  });
 }
 
 let clients = LS.get('ftr.clients', []);
@@ -3525,6 +3560,7 @@ function showReglages(sub) {
   if (currentRsub === 'calcul') renderCalcul();
   if (currentRsub === 'analyse') renderAnalyse();
   if (currentRsub === 'changelog') renderChangelog();
+  if (currentRsub === 'badges') renderBadgesSettings();
   if (currentRsub === 'calendrier') renderAgendaCalendrier();
   window.scrollTo(0, 0);
 }
@@ -11442,6 +11478,7 @@ function refreshEverywhere() {
 window.addEventListener('DOMContentLoaded', () => {
   const _bootUpdate = checkForUpdate(); // vérifie une nouvelle version au lancement ; si MAJ → purge+reload (la synchro Drive attend ce contrôle, cf. plus bas)
   applyTheme(); // couleur du thème (bandeau & boutons)
+  applyBadgeColors(); // couleurs personnalisées des badges
   const av = $('appVersion'); if (av) av.textContent = 'v' + APP_VERSION;
   const avTop = $('appVerTop'); if (avTop) avTop.textContent = 'v' + APP_VERSION;
   document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
