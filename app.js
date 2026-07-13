@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.2';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.3.2', date: '2026-07-13',
+    ajouts: [
+      'Synchro Google Drive — 1ᵉʳ lien d\'un appareil : si le compte contient DÉJÀ des données (d\'un autre appareil), une fenêtre de mise en garde vous laisse CHOISIR — « ⬇️ Utiliser les données du Drive » (recommandé pour un 2ᵉ appareil, évite les doublons), « 🔗 Fusionner les deux », ou « ⬆️ Envoyer mes données (écraser le Drive) ». En arrière-plan, un appareil pas encore lié ne fusionne plus en douce : il attend votre choix (Réglages → Synchro). Les appareils déjà synchronisés ne sont pas concernés (aucun changement pour eux).',
+    ],
+  },
   {
     version: '1.3.1', date: '2026-07-13',
     corrections: [
@@ -2151,6 +2157,9 @@ if (typeof S.setupLocked !== 'boolean') S.setupLocked = false;
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (typeof S.googleClientId !== 'string') S.googleClientId = '';
 if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
+// « Appareil lié au Drive » = drapeau LOCAL (non synchronisé). Les utilisateurs Drive EXISTANTS sont considérés déjà liés (aucune gêne) ;
+// un appareil neuf reste « non lié » tant qu'il n'a pas fait le choix explicite (fusionner / adopter / envoyer) au 1ᵉʳ lien.
+if (LS.get('ftr.driveLinked', null) === null) LS.set('ftr.driveLinked', !!(S.syncMode === 'drive' && S.googleClientId));
 if (typeof S.calPush !== 'boolean') S.calPush = false;                 // pousser automatiquement les RDV de l'app vers Google Agenda (écriture)
 if (!S.calPushed || typeof S.calPushed !== 'object') S.calPushed = {}; // { 'tourId:clientId' : googleEventId } → mise à jour / suppression du bon évènement
 if (typeof S.calDureeMin !== 'number' || S.calDureeMin < 5) S.calDureeMin = 60; // durée par défaut d'un RDV poussé (minutes)
@@ -2881,12 +2890,56 @@ function snapshotHash(snap) {
 }
 let _lastPushHash = null; // hash du dernier coffre effectivement envoyé (E2 : saute l'upload auto si inchangé)
 // Synchro Drive : télécharge le distant, FUSIONNE, renvoie le tout (le coffre porte l'état fusionné). interactive = autorise l'écran de connexion.
+// Au 1ᵉʳ lien d'un appareil à un compte qui contient DÉJÀ des données : choix pour éviter doublons / perte. Résout 'adopt' | 'merge' | 'push' | null.
+function modalDriveLinkChoice() {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v) => { if (done) return; done = true; closeModal(); resolve(v); };
+    openModal(`<div class="modal-head"><b>⚠ Ce compte contient déjà une sauvegarde</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Le compte Google connecté contient <b>déjà des données GaloPodo</b> (probablement d'un <b>autre appareil</b>). Choisissez comment lier CET appareil — <b>pour éviter les doublons ou une perte de données</b> :</p>
+      <div class="actions" style="flex-direction:column;gap:8px;align-items:stretch">
+        <button class="btn block" id="dlcAdopt" style="text-align:left">⬇️ <b>Utiliser les données du Drive</b><br><span class="li-sub">Cet appareil est neuf / vide → il adopte tout ce qui est sur le Drive. <b>Recommandé pour un 2ᵉ appareil.</b></span></button>
+        <button class="btn block" id="dlcMerge" style="text-align:left">🔗 <b>Fusionner les deux</b><br><span class="li-sub">Vous avez saisi des choses des DEUX côtés séparément → on garde tout (peut créer des doublons de listes de base, à nettoyer).</span></button>
+        <button class="btn block" id="dlcPush" style="text-align:left">⬆️ <b>Envoyer MES données (écraser le Drive)</b><br><span class="li-sub">Cet appareil fait référence → il remplace la sauvegarde du Drive.</span></button>
+      </div>
+      <p class="hint">💡 Pour ne plus jamais avoir ce souci : travaillez toujours sur l'appareil déjà synchronisé, et laissez la synchro se faire au démarrage <b>avant</b> de saisir.</p>`);
+    $('mX').onclick = () => fin(null);
+    $('dlcAdopt').onclick = () => fin('adopt');
+    $('dlcMerge').onclick = () => fin('merge');
+    $('dlcPush').onclick = () => fin('push');
+  });
+}
+// Adopte l'instantané distant en REMPLAÇANT le local (sans fusion) — mais conserve les réglages PROPRES à cet appareil (ID Google, mode synchro, fond de logo).
+function applyRemoteReplace(remote) {
+  const keep = ['googleClientId', 'syncMode', 'googleAutoSync', 'logoBg', 'logoBgMobile'], saved = {}; keep.forEach((k) => { saved[k] = S[k]; });
+  S = Object.assign({}, DEFAULTS, remote.settings || {}, saved);
+  clients = Array.isArray(remote.clients) ? remote.clients : [];
+  const tours = Array.isArray(remote.tours) ? remote.tours : [];
+  const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
+  const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
+  tournees = tours.filter((t) => !isArch(t)); archive = tours.filter(isArch);
+  const m = syncMeta(); m.tomb = Object.assign({}, remote.tomb || {}); m.hash = {}; LS.set('ftr.syncmeta', m);
+  LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
+}
 async function googleSync(interactive, statusEl, reload) {
   const setS = (cls, txt) => { if (statusEl) { statusEl.className = 'status ' + cls; statusEl.textContent = txt; } };
   try {
     setS('', 'Connexion à Google…'); const token = await googleToken(interactive);
     setS('', 'Synchronisation Drive…'); const f = await driveFindFile(token);
-    if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); }
+    let remote = null; if (f) remote = await driveDownload(token, f.id);
+    const remoteHasData = !!(remote && Array.isArray(remote.tours) && ((remote.tours || []).length || (remote.clients || []).length || (remote.settings && remote.settings.setupDone)));
+    const linked = LS.get('ftr.driveLinked', false);
+    if (remoteHasData && !linked) {
+      if (!interactive) { setS('', 'Sauvegarde trouvée sur le Drive — ouvrez Réglages → Synchro pour la lier.'); return; } // en fond, on NE fusionne PAS en douce (doublons) → on attend le choix explicite
+      const choice = await modalDriveLinkChoice();
+      if (!choice) { setS('', 'Liaison annulée.'); return; }
+      LS.set('ftr.driveLinked', true);
+      if (choice === 'adopt') applyRemoteReplace(remote);
+      else if (choice === 'merge') importSnapshotMerge(remote);
+      // 'push' → on n'importe rien : l'envoi ci-dessous écrase la sauvegarde du Drive
+    } else {
+      if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); // appareil déjà lié, ou Drive sans données → fusion normale
+      if (interactive && !linked) LS.set('ftr.driveLinked', true); // 1ʳᵉ synchro interactive (Drive vide) → cet appareil est la référence
+    }
     const snap = exportSnapshot(); const sz = await snapshotUploadSize(snap);
     setS('', 'Envoi… ' + humanSize(sz.gz || sz.json) + (sz.gz ? ' (compressé)' : ''));
     await driveUpload(token, f ? f.id : null, snap); _lastPushHash = snapshotHash(snap);
