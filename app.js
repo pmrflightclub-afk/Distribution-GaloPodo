@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.97';
+const APP_VERSION = '1.2.98';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.98', date: '2026-07-13',
+    ajouts: [
+      'Au démarrage, un écran « Mise à jour & synchronisation » s\'affiche PAR-DESSUS l\'app (avec l\'avancement) tant que la vérification de mise à jour et la synchronisation Google Drive ne sont pas terminées. Cela évite de travailler sur des données pas encore synchronisées. L\'app devient utilisable dès que tout est prêt. Garde-fou : l\'écran se retire automatiquement au bout de 20 s si le réseau est bloqué.',
+    ],
+  },
   {
     version: '1.2.97', date: '2026-07-13',
     corrections: [
@@ -1899,12 +1905,17 @@ async function fetchLatestRelease() {
   return String(j.tag_name || '').replace(/^v/i, '') || null;
 }
 // Au lancement : vérifie la dernière release GitHub. Si plus récente → purge + recharge (MAJ). Sinon → ouverture normale.
+// ---------- Écran de démarrage bloquant : mise à jour + synchro Drive avant utilisation ----------
+let _bootSyncFinished = false;
+function bootSyncSet(txt) { const el = document.getElementById('bootSyncStatus'); if (el) el.textContent = txt; }
+function bootSyncFinish() { if (_bootSyncFinished) return; _bootSyncFinished = true; const el = document.getElementById('bootSync'); if (el) el.classList.add('done'); } // rend la main à l'utilisateur (app pleinement opérationnelle)
 async function checkForUpdate() {
   if (!UPDATE_REPO) return;
   try {
     const latest = await fetchLatestRelease();
     if (latest && isNewerVersion(latest, APP_VERSION) && sessionStorage.getItem('ftr.updated') !== latest) {
       sessionStorage.setItem('ftr.updated', latest); // anti-boucle
+      bootSyncSet('Nouvelle version v' + latest + ' — mise à jour…'); // l'écran de démarrage reste affiché jusqu'au rechargement
       await purgeAndReload();
     }
   } catch { /* hors-ligne / API indisponible → ouverture normale */ }
@@ -11496,6 +11507,8 @@ function refreshEverywhere() {
 
 // ================= BOOT =================
 window.addEventListener('DOMContentLoaded', () => {
+  bootSyncSet('Recherche de mise à jour…');
+  setTimeout(bootSyncFinish, 20000); // garde-fou : ne jamais bloquer l'app plus de 20 s même si le réseau est bloqué
   const _bootUpdate = checkForUpdate(); // vérifie une nouvelle version au lancement ; si MAJ → purge+reload (la synchro Drive attend ce contrôle, cf. plus bas)
   applyTheme(); // couleur du thème (bandeau & boutons)
   applyBadgeColors(); // couleurs personnalisées des badges
@@ -11570,10 +11583,11 @@ window.addEventListener('DOMContentLoaded', () => {
   // Si une MAJ est disponible, checkForUpdate recharge l'app (le .then n'est jamais atteint) → la synchro se fera avec le NOUVEAU code.
   const _bootSetupGate = () => { if (!S.setupDone) modalSetup(); }; // config initiale : ouverte seulement si non déjà validée (localement OU via Drive après fusion)
   _bootUpdate.then(async () => {
-    if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { try { await googleSync(false, $('googleStatus'), false); renderHome(); } catch { /* ignore */ } }
-    if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } }
+    if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { bootSyncSet('Synchronisation des données (Google Drive)…'); try { await googleSync(false, $('googleStatus'), false); renderHome(); } catch { /* ignore */ } }
+    bootSyncFinish(); // données synchronisées (ou rien à synchroniser) → l'app est pleinement opérationnelle
+    if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } } // agenda : rafraîchissement en fond, non bloquant
     _bootSetupGate(); // APRÈS la synchro Drive : si le Drive contenait déjà la config validée, la fusion a mis setupDone=true → pas de re-demande
-  }).catch(() => { _bootSetupGate(); });
+  }).catch(() => { bootSyncFinish(); _bootSetupGate(); });
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
