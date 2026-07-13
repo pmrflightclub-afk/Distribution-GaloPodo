@@ -652,6 +652,8 @@ table.pl-egrid th.pl-mem { font-size: .68rem; font-weight: 700; color: var(--str
 .pl-guide line.c { stroke: #e11; stroke-width: 1.2; }
 /* Éditeur de cadrage d'une case (zoom / déplacement / rotation) */
 .pl-ce-overlay { z-index: 3100; } /* au-dessus de la modale de création de planche (3000) */
+.pl-wl-overlay { z-index: 3100; } /* Waiting list empilée au-dessus de la création de planche */
+.pl-wl-overlay .list-item.picked { border-color: var(--accent); background: var(--card); }
 .pl-ce-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .pl-ce-frame { position: relative; overflow: hidden; background: #efece7; border: 1px solid var(--line); border-radius: 8px; margin: 0 auto; touch-action: none; }
 .pl-ce-frame img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; transform-origin: center center; user-select: none; -webkit-user-drag: none; display: block; }

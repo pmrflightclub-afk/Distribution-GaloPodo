@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.87';
+const APP_VERSION = '1.2.88';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.88', date: '2026-07-13',
+    ajouts: [
+      'Planches en série (via « Déclarer ») : générer le PDF ou envoyer par mail enchaîne désormais AUTOMATIQUEMENT sur la planche suivante de la série (au lieu de revenir à l\'accueil). Le bouton « Terminer » a été retiré : chaque planche est enregistrée (PDF ou mail) avant de passer à la suivante. Un bouton « Passer à la planche suivante » reste disponible pour sauter une planche.',
+      '« Waiting list » : ne liste plus les rendez-vous, mais les planches DÉJÀ CRÉÉES, pour les reprendre et les refaire facilement. On peut en cocher plusieurs pour les enchaîner. La liste s\'ouvre par-dessus la création : la fermer ne fait plus perdre la planche en cours.',
+      'Réglages → Planche : choix de la COULEUR du repère 1 et du repère 2 du cadrillage d\'aide.',
+      'Création de planche : « Waiting list » (à gauche) et « Depuis une tournée » (à droite) sont désormais deux boutons compacts en haut, au lieu de champs pleine largeur.',
+    ],
+  },
   {
     version: '1.2.87', date: '2026-07-13',
     corrections: [
@@ -1936,6 +1945,7 @@ else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', '
 // Cadrillage d'aide au cadrage des images (mode édition) : marges en cm (gauche/droite liées + haut/bas). Aperçu seulement — jamais dans le PDF.
 if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 };
 { const gg = S.planche.gridGuide; if (!(gg.marginLR2 > 0)) gg.marginLR2 = 1.0; if (!(gg.marginTB2 > 0)) gg.marginTB2 = 1.0; } // 2ᵉ repère (cible d'alignement du sujet), défaut 1 cm
+{ const gg = S.planche.gridGuide; if (!gg.color1) gg.color1 = '#333333'; if (!gg.color2) gg.color2 = '#2b7bd6'; } // couleurs des repères 1 (coupe) et 2 (cible), réglables dans Gestion → Planche
 // Ajustement des images dans les cases : 'cover' = remplir (rogne l'excédent, pas de bande blanche) · 'contain' = image entière (bandes blanches si proportions ≠).
 if (S.planche.fitMode !== 'contain' && S.planche.fitMode !== 'cover') S.planche.fitMode = 'cover';
 // Logo / identité du pro pour les documents (planches). SEUL le logo (petit, redimensionné) est persisté — pas les photos de planche.
@@ -7011,10 +7021,10 @@ function modalSendDoc(blob, filename, defaultTo, subject, bodyText, onSent) {
     const to = $('sdTo').value.trim(); if (!to) { alert('Renseignez le destinataire.'); return; }
     const copy = !!($('sdCopy') && $('sdCopy').checked); S.mailSelfCopy = copy; saveSettings(); // mémorise le choix par défaut
     const st = $('sdStatus'), btn = $('sdGmail'); btn.disabled = true; st.className = 'status'; st.textContent = 'Envoi via Gmail…';
-    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename, copy ? true : ''); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to + (copy && S.mailSelf ? ' (copie à ' + S.mailSelf + ')' : ''); if (onSent) onSent(); setTimeout(closeModal, 1400); }
+    try { await gmailSend(to, $('sdSubj').value, $('sdBody').value, blob, filename, copy ? true : ''); st.className = 'status ok'; st.textContent = '✔ Email envoyé à ' + to + (copy && S.mailSelf ? ' (copie à ' + S.mailSelf + ')' : ''); setTimeout(() => { closeModal(); if (onSent) onSent(); }, 1400); } // fermer AVANT onSent (qui peut ouvrir la planche suivante)
     catch (e) { st.className = 'status err'; st.textContent = 'Échec : ' + (e && e.message || e) + ' — utilisez « partager / télécharger ».'; btn.disabled = false; }
   };
-  $('sdShare').onclick = async () => { const ok = await shareDoc(blob, filename, subject, bodyText); if (ok && onSent) onSent(); };
+  $('sdShare').onclick = async () => { const ok = await shareDoc(blob, filename, subject, bodyText); if (ok) { closeModal(); if (onSent) onSent(); } };
 }
 function concatBytes(parts) { let len = 0; parts.forEach((p) => len += p.length); const out = new Uint8Array(len); let o = 0; parts.forEach((p) => { out.set(p, o); o += p.length; }); return out; }
 function dataUrlToBytes(u) { const b64 = (u || '').split(',')[1] || ''; const bin = atob(b64); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
@@ -8304,7 +8314,8 @@ function renderPlancheConfig() {
     <h3 class="rsub" style="margin-top:10px">Cadrillage d'aide au cadrage</h3>
     <p class="hint">Repères affichés en <b>mode « Éditer les images »</b> (aperçu seulement, jamais sur le PDF). <b>Repère 1</b> (gris) = ligne de coupe si « Rogner » est actif. <b>Repère 2</b> (bleu pointillé) = cible d'alignement du sujet (le pied). Axe central rouge = centre.</p>
     <div class="row"><label class="grow">Repère 1 · gauche/droite (cm)<input type="number" id="plGuideLR" min="0" step="0.1" value="${gg.marginLR}"/></label><label class="grow">Repère 1 · haut/bas (cm)<input type="number" id="plGuideTB" min="0" step="0.1" value="${gg.marginTB}"/></label></div>
-    <div class="row"><label class="grow">Repère 2 · gauche/droite (cm)<input type="number" id="plGuideLR2" min="0" step="0.1" value="${gg.marginLR2}"/></label><label class="grow">Repère 2 · haut/bas (cm)<input type="number" id="plGuideTB2" min="0" step="0.1" value="${gg.marginTB2}"/></label></div>`;
+    <div class="row"><label class="grow">Repère 2 · gauche/droite (cm)<input type="number" id="plGuideLR2" min="0" step="0.1" value="${gg.marginLR2}"/></label><label class="grow">Repère 2 · haut/bas (cm)<input type="number" id="plGuideTB2" min="0" step="0.1" value="${gg.marginTB2}"/></label></div>
+    <div class="row"><label class="grow">Couleur du repère 1<input type="color" id="plGuideC1" value="${esc(gg.color1 || '#333333')}"/></label><label class="grow">Couleur du repère 2<input type="color" id="plGuideC2" value="${esc(gg.color2 || '#2b7bd6')}"/></label></div>`;
   body.appendChild(head);
   $('plOri').value = P.orientation || 'paysage';
   $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; saveSettings(); });
@@ -8312,6 +8323,8 @@ function renderPlancheConfig() {
   $('plGuideTB').addEventListener('change', (e) => { S.planche.gridGuide.marginTB = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
   $('plGuideLR2').addEventListener('change', (e) => { S.planche.gridGuide.marginLR2 = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
   $('plGuideTB2').addEventListener('change', (e) => { S.planche.gridGuide.marginTB2 = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
+  $('plGuideC1').addEventListener('change', (e) => { S.planche.gridGuide.color1 = e.target.value || '#333333'; saveSettings(); });
+  $('plGuideC2').addEventListener('change', (e) => { S.planche.gridGuide.color2 = e.target.value || '#2b7bd6'; saveSettings(); });
   // Colonnes = angles de vue, par modèle 3/4/5
   const sc = document.createElement('section'); sc.className = 'card';
   sc.innerHTML = `<h3 class="rsub">Colonnes — angles de vue (par modèle)</h3>
@@ -8524,7 +8537,16 @@ function modalPlancheTourSelect(t) {
   };
 }
 function startPlancheQueue(items) {
-  modalPlancheCreate('contact', { cheval: items[0].cheval, client: items[0].client, date: items[0].date, stade: items[0].stade || '', queue: items.slice(1), queueTotal: items.length, queueIdx: 1 });
+  if (!items || !items.length) return;
+  // Chaque item = un pré-remplissage complet (cheval, client, clientId, date, stade, et pour l'historique note/modele/cycle).
+  modalPlancheCreate('contact', Object.assign({}, items[0], { queue: items.slice(1), queueTotal: items.length, queueIdx: 1 }));
+}
+// Avance dans la file de planches (après PDF / mail / bouton « passer »). Ouvre la suivante ou, si c'était la dernière, ferme la création.
+function plQueueAdvance() {
+  if (!plCreate) return;
+  const q = plCreate.queue || [];
+  if (q.length) modalPlancheCreate('contact', Object.assign({}, q[0], { queue: q.slice(1), queueTotal: plCreate.queueTotal, queueIdx: plCreate.queueIdx + 1 }));
+  else { plCreate = null; closeModal(); }
 }
 // Suggestions de dates (flux Déclarer) : dates de tournée du cheval choisi dont la planche n'est PAS encore faite.
 function plRenderDateSuggest() {
@@ -8548,32 +8570,44 @@ function plRenderChevalOwner() {
     if (warn) { warn.style.display = ''; warn.innerHTML = '⚠ ' + matches.length + ' clients ont un cheval « ' + esc(plCreate.cheval) + ' » — choisissez le bon client.'; }
   } else if (warn) warn.style.display = 'none';
 }
-// Waiting list : planches PHOTO demandées pendant une tournée (bouton 📷 Photo) et pas encore générées.
-// Un item = date · type (stade) · cheval · client · nb angles ; la clé inclut le clientId → deux chevaux de même nom
-// chez deux clients différents restent DEUX items distincts. Clic → pré-remplit ENTIÈREMENT la planche de contact.
+// Waiting list : planches de contact DÉJÀ CRÉÉES (S.plancheHistory) qu'on peut reprendre et refaire — seule
+// la métadonnée est conservée (jamais les images). Multi-sélection → file de reprise (une planche après l'autre).
+// Surcouche empilée (overlay) au-dessus de la création : la fermer sans choisir laisse la planche en cours intacte.
+// La clé d'historique inclut le clientId → deux chevaux de même nom chez deux clients restent DEUX entrées distinctes.
 function modalPlancheWaiting() {
-  let ft = ''; // filtre par type
-  const all = () => (S.plancheTodo || [])
-    .filter((x) => x.type ? !hasPlancheDone(x.clientId, x.chevalNom, x.date, x.type) : !hasAnyPlancheDone(x.clientId, x.chevalNom, x.date))
-    .slice()
-    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || norm(clientName(a.clientId)).localeCompare(norm(clientName(b.clientId)))); // chronologique, récent en haut
+  let ft = ''; // filtre par type (stade)
+  const sel = new Set(); // ids sélectionnés
+  const source = () => (S.plancheHistory || []).slice()
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || ((b.createdAt || 0) - (a.createdAt || 0))); // récent en haut
+  const ov = document.createElement('div'); ov.className = 'modal-overlay pl-wl-overlay';
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); }); // clic sur le fond → ferme (une seule fois attaché)
   const render = () => {
-    const list = all();
-    const types = Array.from(new Set(list.map((x) => x.type).filter(Boolean)));
-    const shown = ft ? list.filter((x) => x.type === ft) : list;
+    const list = source();
+    const types = Array.from(new Set(list.map((x) => x.stade).filter(Boolean)));
+    if (ft && !types.includes(ft)) ft = '';
+    const shown = ft ? list.filter((x) => x.stade === ft) : list;
     const seg = `<div class="seg seg-sm" id="plwFilter" style="margin:6px 0;flex-wrap:wrap"><button type="button" class="seg-btn${ft ? '' : ' on'}" data-t="">Tout</button>${types.map((tp) => `<button type="button" class="seg-btn${ft === tp ? ' on' : ''}" data-t="${esc(tp)}">${esc(tp)}</button>`).join('')}</div>`;
-    const rows = shown.length ? shown.map((x) => `<div class="list-item clickable" data-id="${x.id}"><div class="li-main"><b>${esc(x.type || 'Planche')}</b> <span class="badge">${(x.angle || 3)} angles</span><span class="li-sub">🐴 ${esc(x.chevalNom || '')} · 👤 ${esc(clientName(x.clientId))}${x.date ? ' · ' + esc(fmtDateFr(x.date)) : ''}</span></div><span class="li-chev">›</span></div>`).join('') : '<p class="empty">Aucune planche en attente.</p>';
-    openModal(`<div class="modal-head"><b>📋 Planches en attente</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">Planches demandées pendant une tournée (bouton 📷 Photo) et <b>pas encore faites</b>. Touchez-en une pour <b>pré-remplir</b> la planche de contact (cheval, client, date, type, angles).</p>
-      ${types.length ? seg : ''}
-      <div class="list">${rows}</div>`);
-    $('mX').onclick = closeModal;
-    document.querySelectorAll('#plwFilter .seg-btn').forEach((b) => b.addEventListener('click', () => { ft = b.dataset.t; render(); }));
-    document.querySelectorAll('#modal [data-id]').forEach((el) => el.addEventListener('click', () => {
-      const x = (S.plancheTodo || []).find((y) => y.id === el.dataset.id); if (!x) return;
-      closeModal();
-      modalPlancheCreate('contact', { cheval: x.chevalNom || '', client: clientName(x.clientId), clientId: x.clientId, date: x.date || todayStr(), stade: x.type || '', modele: String(x.angle || 4), todoId: x.id, allowTourPick: true });
-    }));
+    const rows = shown.length ? shown.map((x) => `<div class="list-item clickable${sel.has(x.id) ? ' picked' : ''}" data-id="${x.id}"><div class="li-main"><b>${sel.has(x.id) ? '☑' : '☐'} ${esc(x.stade || 'Planche')}</b><span class="li-sub">🐴 ${esc(x.cheval || '')} · 👤 ${esc(x.client || clientName(x.clientId))}${x.date ? ' · ' + esc(fmtDateFr(x.date)) : ''}${x.modele ? ' · ' + esc(x.modele) + ' col.' : ''}</span></div></div>`).join('') : '<p class="empty">Aucune planche déjà créée.</p>';
+    ov.innerHTML = `<div class="modal"><div class="modal-head"><b>📋 Waiting list — planches déjà créées</b><button class="x" data-x>✕</button></div>
+      <div style="max-height:78vh;overflow:auto">
+        <p class="hint">Planches de contact <b>déjà créées</b>. Cochez-en une ou plusieurs pour les <b>reprendre et refaire</b> (les images sont à ré-importer). Elles s'enchaînent l'une après l'autre.</p>
+        ${types.length ? seg : ''}
+        <div class="list">${rows}</div>
+      </div>
+      <div class="actions"><button class="btn primary block" data-go${sel.size ? '' : ' disabled'}>Reprendre la sélection (<span data-n>${sel.size}</span>)</button><button class="btn block" data-close>Fermer</button></div></div>`;
+    ov.querySelector('[data-x]').onclick = close;
+    ov.querySelector('[data-close]').onclick = close;
+    ov.querySelectorAll('#plwFilter .seg-btn').forEach((b) => b.addEventListener('click', () => { ft = b.dataset.t; render(); }));
+    ov.querySelectorAll('[data-id]').forEach((el) => el.addEventListener('click', () => { const id = el.dataset.id; if (sel.has(id)) sel.delete(id); else sel.add(id); render(); }));
+    ov.querySelector('[data-go]').onclick = () => {
+      if (!sel.size) return;
+      const items = source().filter((x) => sel.has(x.id)).map((h) => ({ cheval: h.cheval || '', client: h.client || clientName(h.clientId), clientId: h.clientId || null, date: h.date || todayStr(), stade: h.stade || '', note: h.note || '', dureeCycleSem: h.dureeCycleSem || 0, modele: h.modele || '' }));
+      if (!items.length) return;
+      close();
+      startPlancheQueue(items);
+    };
   };
   render();
 }
@@ -8592,13 +8626,12 @@ function modalPlancheCreate(type, prefill) {
   openModal(`<div class="modal-head"><b>🖼 ${titre}</b><button class="x" id="mX">✕</button></div>
     <div style="max-height:80vh;overflow:auto" id="plCbody">
       <section class="card">
-        ${plCreate.allowTourPick && !plCreate.queueTotal ? '<button class="btn small block" id="plCfromTour" style="margin-bottom:8px">📅 Créer depuis une tournée (récupérer cheval / client / date)</button>' : ''}
+        ${plCreate.allowTourPick && !plCreate.queueTotal ? '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px"><button class="btn small" id="plCwaiting">📋 Waiting list</button><button class="btn small" id="plCfromTour">📅 Depuis une tournée</button></div>' : ''}
         <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
         <div class="row"><label class="grow">Cheval<input type="text" id="plCcheval" list="plClChev" value="${esc(plCreate.cheval)}" placeholder="Nom du cheval"/></label><label class="grow">Client<input type="text" id="plCclient" list="plClCli" value="${esc(plCreate.client)}" placeholder="Nom du client"/></label></div>
         <p id="plCclientWarn" class="pl-owner-warn" style="display:none"></p>
         <datalist id="plClChev">${uniq(chNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         <datalist id="plClCli">${uniq(clNames).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
-        ${type === 'contact' && plCreate.allowTourPick ? '<button class="btn small block" id="plCwaiting" style="margin:6px 0">📋 Planches en attente (à faire) — remplir depuis une tournée</button>' : ''}
         ${type === 'contact' ? '<label id="plChistWrap">Historique (reprendre une planche du cheval)<select id="plChist" disabled></select></label>' : ''}
         <label>Date<input type="date" id="plCdate" value="${esc(plCreate.date)}"/></label>${plCreate.allowTourPick ? '<div id="plCdateSuggest"></div>' : ''}
         ${type === 'contact' ? `<label>Type de planche (stade) — <b>obligatoire</b><select id="plCstade">${(S.planche.stades || []).map((s) => `<option value="${esc(s)}"${s === plCreate.stade ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></label>` : ''}
@@ -8620,12 +8653,12 @@ function modalPlancheCreate(type, prefill) {
         <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (déplacer, zoomer, tourner). À <b>Valider</b>, l'image est <b>vraiment découpée</b> pour remplir exactement sa case — l'aperçu et le PDF sont alors identiques. Les repères (bords + <b>axe rouge central</b>) aident à centrer le sujet (ils n'apparaissent pas sur le PDF). Édition désactivée : toucher une image la retire.</p>
         <div id="plCgrid"></div>
       </section>
-      <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button>${plCreate.queueTotal ? '<button class="btn block primary" id="plCnext">' + (plCreate.queue && plCreate.queue.length ? '➡ Planche suivante' : '✅ Terminer') + '</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
+      <div class="actions"><button class="btn primary block" id="plCpdf">🖨 Générer le PDF</button><button class="btn block" id="plCmail">📧 Envoyer par email</button>${plCreate.queueTotal && plCreate.queue && plCreate.queue.length ? '<button class="btn block primary" id="plCnext">➡ Passer à la planche suivante (sans enregistrer celle-ci)</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
     </div>`);
   const close = () => { plCreate = null; closeModal(); };
   $('mX').onclick = close; $('plCclose').onclick = close;
   if ($('plCfromTour')) $('plCfromTour').onclick = () => modalPlancheFromTour();
-  if ($('plCnext')) $('plCnext').onclick = () => { const q = plCreate.queue || []; if (q.length) modalPlancheCreate('contact', { cheval: q[0].cheval, client: q[0].client, date: q[0].date, stade: q[0].stade || '', queue: q.slice(1), queueTotal: plCreate.queueTotal, queueIdx: plCreate.queueIdx + 1 }); else close(); };
+  if ($('plCnext')) $('plCnext').onclick = () => plQueueAdvance();
   $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((b) => b.addEventListener('click', () => {
     plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.cellT = {}; plCreate.cellCrop = {}; plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.sel = null;
     $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.plcm === plCreate.modele));
@@ -8678,6 +8711,7 @@ function modalPlancheCreate(type, prefill) {
       const blob = await planchePdfBlob();
       const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = plancheBaseName(plCreate) + '.pdf'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
       plancheTodoDone(plCreate); addPlancheHistory(plCreate);
+      if (plCreate.queueTotal) { plQueueAdvance(); return; } // file de planches : la génération enchaîne sur la suivante (ou clôt à la dernière)
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCpdf')) { btn.disabled = false; btn.textContent = old; }
   };
@@ -8689,7 +8723,7 @@ function modalPlancheCreate(type, prefill) {
     try {
       const blob = await planchePdfBlob();
       const cli = clients.find((c) => plCreate.client && norm(fullName(c)) === norm(plCreate.client));
-      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), () => { plancheTodoDone(plCreate); addPlancheHistory(plCreate); });
+      modalSendDoc(blob, plancheBaseName(plCreate) + '.pdf', (cli && cli.email) || '', plancheBaseName(plCreate), mailBodyFor(cli, 'la planche de ' + (plCreate.cheval || 'votre cheval') + (plCreate.stade ? ' (' + plCreate.stade + ')' : '')), () => { if (!plCreate) return; plancheTodoDone(plCreate); addPlancheHistory(plCreate); if (plCreate.queueTotal) plQueueAdvance(); else plCreate = null; }); // mail envoyé → enchaîne la planche suivante de la file (ou clôt)
     } catch (e) { alert('Impossible de générer la planche.'); }
     if ($('plCmail')) { btn.disabled = false; btn.textContent = old; }
   };
@@ -8831,9 +8865,10 @@ function plGuideSvg() {
   const pc = (cm, dim) => Math.max(0, Math.min(49, (10 * (+cm || 0)) / dim * 100));
   const L1 = pc(gg.marginLR, g.colW), T1 = pc(gg.marginTB, g.rowH); // repère 1 = ligne de COUPE (crop)
   const L2 = pc(gg.marginLR2, g.colW), T2 = pc(gg.marginTB2, g.rowH); // repère 2 = cible d'alignement du sujet
-  const rect = (L, T, cls) => `<line class="${cls}" x1="${L}" y1="0" x2="${L}" y2="100"/><line class="${cls}" x1="${100 - L}" y1="0" x2="${100 - L}" y2="100"/><line class="${cls}" x1="0" y1="${T}" x2="100" y2="${T}"/><line class="${cls}" x1="0" y1="${100 - T}" x2="100" y2="${100 - T}"/>`;
+  const c1 = gg.color1 || '#333333', c2 = gg.color2 || '#2b7bd6';
+  const rect = (L, T, cls, col) => { const s = ` style="stroke:${col}"`; return `<line class="${cls}"${s} x1="${L}" y1="0" x2="${L}" y2="100"/><line class="${cls}"${s} x1="${100 - L}" y1="0" x2="${100 - L}" y2="100"/><line class="${cls}"${s} x1="0" y1="${T}" x2="100" y2="${T}"/><line class="${cls}"${s} x1="0" y1="${100 - T}" x2="100" y2="${100 - T}"/>`; };
   return `<svg class="pl-guide" viewBox="0 0 100 100" preserveAspectRatio="none">`
-    + rect(L1, T1, 'g1') + rect(L2, T2, 'g2')
+    + rect(L1, T1, 'g1', c1) + rect(L2, T2, 'g2', c2)
     + `<line class="c" x1="50" y1="0" x2="50" y2="100"/></svg>`;
 }
 // Facteur de zoom « Rogner » : agrandit uniformément pour que le 1ᵉʳ repère (marges) remplisse la case (le côté le plus contraint touche le bord → l'autre rogne un peu plus). 1 = pas de crop.
