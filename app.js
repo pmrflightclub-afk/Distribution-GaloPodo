@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.2.90';
+const APP_VERSION = '1.2.91';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.2.91', date: '2026-07-13',
+    corrections: [
+      'Agenda → Items : le bouton qui pré-remplit une fiche client depuis un formulaire reçu ouvrait parfois une fiche VIDE (un brouillon générique resté en mémoire prenait le dessus). Désormais le formulaire reçu prime toujours : la fiche s\'ouvre bien pré-remplie.',
+      'Tournées clôturées : le badge « il y a n jours » passe en GRIS (au lieu de rouge).',
+    ],
+    ajouts: [
+      'Agenda → Items : « Récupérer » fait tout en un seul clic pour un nouveau contact ayant renvoyé son formulaire — il crée d\'abord la fiche client pré-remplie, puis rattache le client à la tournée du jour (existante, ou créée si aucune). Le bouton séparé « Créer (fiche mail) » a été retiré (fusionné dans « Récupérer »).',
+      'Le fond du logo (en haut à gauche du bandeau) est maintenant mémorisé SÉPARÉMENT pour le téléphone et pour l\'ordinateur : réglez-le sur chaque appareil sans changer l\'autre.',
+    ],
+  },
   {
     version: '1.2.90', date: '2026-07-13',
     ajouts: [
@@ -2353,6 +2364,11 @@ function idealInk(hex) {
 const BG_PRESETS = ['#0d0d0d', '#000000', '#15120f', '#101418', '#141a2b', '#0f1a14', '#f6f4f1', '#ffffff', '#fdf6ec', '#eef4ff'];
 const LOGO_BG_PRESETS = ['transparent', '#ffffff', '#000000', '#e8722a'];
 function lum(hex) { const c = String(hex).replace('#', ''); if (c.length < 6) return 1; const r = parseInt(c.slice(0, 2), 16), g = parseInt(c.slice(2, 4), 16), b = parseInt(c.slice(4, 6), 16); return (0.299 * r + 0.587 * g + 0.114 * b) / 255; }
+// Fond du logo (bandeau) INDÉPENDANT par type d'appareil : téléphone/tablette (tactile) vs ordinateur.
+// La couleur choisie sur un téléphone est enregistrée séparément de celle de l'ordinateur.
+function isTouchDevice() { try { return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); } catch (e) { return false; } }
+function logoBgKey() { return isTouchDevice() ? 'logoBgMobile' : 'logoBg'; }
+function currentLogoBg() { const k = logoBgKey(); const v = (S[k] != null) ? S[k] : S.logoBg; return v || 'transparent'; } // mobile non réglé → reprend la valeur ordinateur
 function applyTheme() {
   const root = document.documentElement.style;
   const acc = S.accentColor || '#e8722a';
@@ -2372,7 +2388,7 @@ function applyTheme() {
   const top = S.topbarColor || acc; root.setProperty('--topbar', top); root.setProperty('--topbar-ink', idealInk(top));
   // Barre d'onglets : couleur propre, sinon couleur de la carte
   const nav = S.navBarColor || card; root.setProperty('--navbar', nav); root.setProperty('--navbar-ink', idealInk(nav));
-  root.setProperty('--logo-bg', S.logoBg || 'transparent');
+  root.setProperty('--logo-bg', currentLogoBg());
   const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', top);
 }
 function renderSwatchSet(boxId, presets, current, onPick) {
@@ -2389,7 +2405,7 @@ function refreshSwatches() {
   renderSwatchSet('topbarSwatches', THEME_PRESETS, S.topbarColor || S.accentColor, (c) => { S.topbarColor = c; if ($('setTopbar')) $('setTopbar').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
   renderSwatchSet('navbarSwatches', BG_PRESETS, S.navBarColor || cardCol(), (c) => { S.navBarColor = c; if ($('setNavbar')) $('setNavbar').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
   renderSwatchSet('bgSwatches', BG_PRESETS, S.appBg, (c) => { S.appBg = c; if ($('setAppBg')) $('setAppBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
-  renderSwatchSet('logoBgSwatches', LOGO_BG_PRESETS, S.logoBg, (c) => { S.logoBg = c; if (c !== 'transparent' && $('setLogoBg')) $('setLogoBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
+  renderSwatchSet('logoBgSwatches', LOGO_BG_PRESETS, currentLogoBg(), (c) => { S[logoBgKey()] = c; if (c !== 'transparent' && $('setLogoBg')) $('setLogoBg').value = c; saveSettings(); applyTheme(); refreshSwatches(); });
 }
 
 let clients = LS.get('ftr.clients', []);
@@ -2441,6 +2457,9 @@ function mergeSettings(localS, remoteS) {
   merged.agendaPrive = Object.assign({}, (localS && localS.agendaPrive) || {}, (remoteS && remoteS.agendaPrive) || {});
   merged.agendaPriveVus = Object.assign({}, (localS && localS.agendaPriveVus) || {}, (remoteS && remoteS.agendaPriveVus) || {}); // « vu/traité » = union → un retrait fait sur un appareil ne réapparaît pas
   merged.calPushed = Object.assign({}, (localS && localS.calPushed) || {}, (remoteS && remoteS.calPushed) || {}); // évènements Google poussés : union des mappings (pas de doublon entre appareils)
+  // Fond du logo par appareil : ne jamais perdre la valeur de l'autre appareil si celui qui « gagne » ne l'a pas.
+  if (merged.logoBg == null) merged.logoBg = ((localS && localS.logoBg != null) ? localS.logoBg : (remoteS && remoteS.logoBg));
+  if (merged.logoBgMobile == null) merged.logoBgMobile = ((localS && localS.logoBgMobile != null) ? localS.logoBgMobile : (remoteS && remoteS.logoBgMobile));
   // Adresse de départ (domicile) : ne jamais la perdre si l'appareil « gagnant » l'avait vide → reprendre celle qui est renseignée.
   const hasAddr = (a) => { try { return !!addrStr(a).trim(); } catch { return false; } };
   if (!hasAddr(merged.home)) { if (localS && hasAddr(localS.home)) merged.home = localS.home; else if (remoteS && hasAddr(remoteS.home)) merged.home = remoteS.home; }
@@ -3615,6 +3634,10 @@ function attachEventToTour(ev, client) {
 function recuperateEvent(ev) {
   const matches = matchClientsForEvent(ev);
   const attach = (client) => { const r = attachEventToTour(ev, client); closeModal(); const st = $('agendaStatus'); if (st) { const conflits = (activeChevaux(client) || []).filter((h) => chevalRdvConflicts(client.id, h.id, ev.day).length).map((h) => h.nom); st.className = conflits.length ? 'status warn' : 'status ok'; st.textContent = (r.created ? 'Tournée créée' : 'Ajouté à la tournée') + ' du ' + (ev.day ? fmtDateFr(ev.day) : '') + ' → ' + fullName(client) + '.' + (conflits.length ? ' ⚠ RDV déjà prévu (moins de 5 sem) pour : ' + conflits.join(', ') + '.' : ''); } };
+  // Nouveau contact avec formulaire reçu (et aucun client connu) : on crée d'ABORD la fiche client pré-remplie depuis le
+  // formulaire, PUIS on rattache le nouveau client à la tournée du jour (existante ou créée). « Récupérer » fait tout.
+  const mailMatches = matchContactMailForEvent(ev);
+  if (mailMatches.length && !matches.length) { createClientFromMail(mailMatches[0], 'normal', (saved) => { if (saved) attach(saved); }); return; }
   let h = `<div class="modal-head"><b>Récupérer l'événement</b><button class="x" id="mX">✕</button></div>
     <p class="hint">« ${esc(ev.title)} »${ev.day ? ' · ' + esc(fmtDateFr(ev.day)) : ''}${ev.location ? ' · 📍 ' + esc(ev.location) : ''}</p>`;
   h += matches.length ? '<h2 style="font-size:.9rem">Client connu proposé</h2><div id="recMatches"></div>' : '<p class="hint">Aucun client connu ne correspond à cet événement.</p>';
@@ -3630,14 +3653,12 @@ function agendaItemRow(ev) {
   const el = document.createElement('div'); el.className = 'list-item stack-act';
   const linkTxt = match ? '≈ ' + esc(fullName(match)) + ' (proposé)' : '⚠ client inconnu → création';
   const mailTxt = mailMatches.length ? ' · <span class="td-eta">✉ formulaire reçu</span>' : '';
-  const mailBtn = mailMatches.length ? ' <button class="btn small" data-cmail>👤 Créer (fiche mail)</button>' : '';
   // Cet évènement correspond-il déjà à un RDV de l'agenda app (tournée à venir, ce client à cette date) ? → évite un ré-import en double.
   const alreadyPlanned = !!(match && ev.day && allTours().some((t) => t.date === ev.day && statusOf(t) !== 'cloturee' && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === match.id))));
   const planTxt = alreadyPlanned ? ' · <span class="td-eta">✓ déjà dans l\'agenda app</span>' : '';
   el.innerHTML = `<div class="li-main"><b>${esc(ev.title)}</b><span class="li-sub">${esc(ev.day ? fmtDateFr(ev.day) : '')}${ev.location ? ' · 📍 ' + esc(ev.location) : ''} · ${linkTxt}${mailTxt}${planTxt}</span></div>
-    <div class="li-act li-act-col"><button class="btn small primary" data-rec>Récupérer</button>${mailBtn} <button class="btn small" data-prive>Agenda privé</button> <button class="btn small" data-inact>Inactif</button></div>`;
-  if (mailMatches.length) { const b = el.querySelector('[data-cmail]'); if (b) b.addEventListener('click', () => { b.disabled = true; createClientFromMail(mailMatches[0], 'normal'); }); } // fiche pré-remplie depuis le formulaire reçu
-  el.querySelector('[data-rec]').addEventListener('click', () => recuperateEvent(ev));
+    <div class="li-act li-act-col"><button class="btn small primary" data-rec>Récupérer</button> <button class="btn small" data-prive>Agenda privé</button> <button class="btn small" data-inact>Inactif</button></div>`;
+  el.querySelector('[data-rec]').addEventListener('click', () => recuperateEvent(ev)); // « Récupérer » gère aussi le cas « formulaire reçu » : crée la fiche pré-remplie puis rattache à la tournée
   el.querySelector('[data-prive]').addEventListener('click', () => { S.agendaPrive[ev.id] = { title: ev.title, day: ev.day, start: ev.start, location: ev.location }; saveSettings(); renderAgendaItems(); if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHomeTrajet(); }); // → agenda privé (perso), quitte la liste
   el.querySelector('[data-inact]').addEventListener('click', () => { S.agendaInactive[ev.id] = true; saveSettings(); renderAgendaItems(); }); // → section Inactifs
   return el;
@@ -3711,6 +3732,7 @@ function renderClients() {
 }
 function editClient(existing, onSaved, prefillNom, prefill) {
   const key = 'client:' + (existing ? existing.id : 'new');
+  if (!existing && prefill) DRAFTS.clear(key); // fiche pré-remplie (ex. depuis un formulaire mail) : la donnée du formulaire PRIME sur un éventuel brouillon générique resté en mémoire (sinon la fiche s'ouvrait vide)
   const draft = DRAFTS.get(key);
   const w = draft ? draft : (existing ? JSON.parse(JSON.stringify(existing)) : { id: uid(), civilite: '', politesse: true, prenom: '', nom: (prefillNom || ''), email: '', tel: '', societe: '', assujettiTva: false, tvaNum: '', entrepriseNum: '', societeMemeAdresse: true, addr: emptyAddr(), societeAddr: emptyAddr(), chevaux: [] });
   // Pré-remplissage depuis un mail « prise de contact » (nouveau client, sans brouillon en cours).
@@ -8244,7 +8266,7 @@ function mailDateYmd(m) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 // status : 'normal' (défaut) · 'inactif' (client + chevaux inactifs) · 'noir' (client en liste noire, chevaux inactifs). Les infos sont toujours importées.
-function createClientFromMail(m, status) {
+function createClientFromMail(m, status, onSaved) {
   const f = mailFieldsOf(m); // re-parse le corps (répare les anciens mails à clés « *label* »)
   const prefill = {
     prenom: mailField(f, 'Prénom'), nom: mailField(f, 'Nom'),
@@ -8254,7 +8276,7 @@ function createClientFromMail(m, status) {
     cheval: { nom: mailField(f, 'Nom du cheval'), dateNaissance: parseDateLoose(mailField(f, 'Date de naissance')), race: mailField(f, 'Race'), anamnese: f, dateDemandeSuivi: mailDateYmd(m) },
     status: status || 'normal',
   };
-  editClient(null, (saved) => { m.status = 'client'; m.clientId = saved && saved.id; m.chevalNom = prefill.cheval.nom; saveSettings(); if (currentGsub === 'contactmail') renderContactMail(); }, null, prefill);
+  editClient(null, (saved) => { m.status = 'client'; m.clientId = saved && saved.id; m.chevalNom = prefill.cheval.nom; saveSettings(); if (currentGsub === 'contactmail') renderContactMail(); if (onSaved) onSaved(saved); }, null, prefill);
 }
 // « Mettre à jour un client » depuis un mail : trouve le client existant puis propose des modifications à valider (sans écraser).
 function updateClientFromMail(m) {
@@ -11114,7 +11136,7 @@ function bindSettings() {
   if ($('setTopbar')) { $('setTopbar').value = S.topbarColor || S.accentColor; bindColor('setTopbar', (v) => { S.topbarColor = v; }); }
   if ($('setNavbar')) { $('setNavbar').value = S.navBarColor || (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff'); bindColor('setNavbar', (v) => { S.navBarColor = v; }); }
   if ($('setAppBg')) { $('setAppBg').value = S.appBg; bindColor('setAppBg', (v) => { S.appBg = v; }); }
-  if ($('setLogoBg')) { if (S.logoBg && S.logoBg !== 'transparent') $('setLogoBg').value = S.logoBg; bindColor('setLogoBg', (v) => { S.logoBg = v; }); }
+  if ($('setLogoBg')) { const cur = currentLogoBg(); if (cur && cur !== 'transparent') $('setLogoBg').value = cur; bindColor('setLogoBg', (v) => { S[logoBgKey()] = v; }); } // écrit sur la clé du type d'appareil courant (ordinateur / téléphone)
   refreshSwatches();
   // Champs numériques : séparateur de milliers + unité DANS le champ, mise à jour en direct.
   const paints = {};

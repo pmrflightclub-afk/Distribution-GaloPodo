@@ -163,7 +163,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .list-item.stack-act { align-items: flex-start; }
 .list-item.stack-act > .li-main { flex: 1 1 auto; } /* remplit la largeur de l'item → la barre écurie (Refuser ce lieu) s'aligne à droite */
 .td-eta { color: var(--ok, #2e9e5b); font-weight: 700; font-size: .82em; white-space: nowrap; }
-.td-eta.td-past { color: var(--danger); }
+.td-eta.td-past { color: var(--badge-eta-past, #8a8f98); } /* tournée passée « il y a n j » : gris (personnalisable dans Réglages → Badges) */
 .td-cloturee { color: color-mix(in srgb, var(--accent) 55%, #fff); font-weight: 700; font-size: .82em; white-space: nowrap; } /* statut clôturé, à droite, orange clair */
 .tr-month { margin-top: 10px; }
 .tr-month:first-child { margin-top: 0; }
