@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.2';
+const APP_VERSION = '1.7.3';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.3', date: '2026-07-14',
+    corrections: [
+      'Synchronisation multi-appareils fiabilisée : les fiches clients sont maintenant fusionnées EN PROFONDEUR. Un cheval — ou une adresse — ajouté sur un appareil n\'est plus jamais perdu quand un autre appareil enregistre une version plus récente du même client (fusion par élément, l\'ajout de chacun est conservé).',
+    ],
+  },
   {
     version: '1.7.2', date: '2026-07-14',
     ajouts: [
@@ -2845,6 +2851,37 @@ function mergeCollection(localArr, remoteArr, tomb) {
   return Object.values(byId).filter((rec) => ((tomb && tomb[rec.id]) || 0) <= (rec.updatedAt || 0));
 }
 function mergeTomb(a, b) { const t = Object.assign({}, a || {}); Object.keys(b || {}).forEach((id) => { t[id] = Math.max(t[id] || 0, b[id]); }); return t; }
+// Fusion EN PROFONDEUR d'un client (a = version la plus récente, b = plus ancienne) : chevaux fusionnés par id (UNION →
+// aucun cheval ajouté sur un appareil n'est perdu), et pour chaque cheval, ses adresses fusionnées par id (UNION →
+// aucune adresse ajoutée n'est perdue). En cas de conflit sur le MÊME id, la version récente (a) gagne.
+function mergeOneCheval(a, b) {
+  const h = Object.assign({}, a);
+  if (Array.isArray(a.adresses) || Array.isArray(b.adresses)) {
+    const byId = {}; (b.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); (a.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); // récent gagne
+    const list = Object.values(byId).map((e) => Object.assign({}, e));
+    const aAct = (a.adresses || []).find((e) => e.actif); const aid = aAct ? aAct.id : null; // l'adresse active du récent fait foi
+    let has = false; list.forEach((e) => { e.actif = aid ? (e.id === aid) : false; if (e.actif) has = true; });
+    if (!has && list.length) list[0].actif = true; // garantir une seule active
+    h.adresses = list;
+  }
+  return h;
+}
+function mergeOneClient(a, b) {
+  const base = Object.assign({}, a); const chById = {};
+  (b.chevaux || []).forEach((h) => { if (h && h.id) chById[h.id] = h; }); // anciens d'abord (gardés s'ils n'existent plus chez le récent)
+  (a.chevaux || []).forEach((h) => { if (!h || !h.id) return; chById[h.id] = chById[h.id] ? mergeOneCheval(h, chById[h.id]) : h; });
+  base.chevaux = Object.values(chById);
+  return base;
+}
+function mergeClients(localArr, remoteArr, tomb) {
+  const lById = {}, rById = {}; (localArr || []).forEach((c) => { if (c && c.id) lById[c.id] = c; }); (remoteArr || []).forEach((c) => { if (c && c.id) rById[c.id] = c; });
+  const out = []; new Set([...Object.keys(lById), ...Object.keys(rById)]).forEach((id) => {
+    const lc = lById[id], rc = rById[id];
+    const merged = (lc && rc) ? (() => { const newer = (rc.updatedAt || 0) >= (lc.updatedAt || 0) ? rc : lc; return mergeOneClient(newer, newer === rc ? lc : rc); })() : (lc || rc);
+    if (((tomb && tomb[id]) || 0) <= (merged.updatedAt || 0)) out.push(merged); // tombstone client respecté
+  });
+  return out;
+}
 // Réglages : l'objet le plus récent gagne (entier), MAIS les états accumulatifs sont unifiés (union) pour
 // ne jamais écraser ce qui a été fait sur l'autre appareil : changelog lu, items d'agenda inactivés/récupérés.
 function mergeSettings(localS, remoteS) {
@@ -2929,7 +2966,7 @@ function mergeSnapshots(local, remote) {
   });
   return {
     settings,
-    clients: mergeCollection(local.clients, remote.clients, tomb.clients),
+    clients: mergeClients(local.clients, remote.clients, tomb.clients),
     tours: mergeCollection(local.tours, remote.tours, tomb.tournees),
     tomb,
   };
