@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.5.1', date: '2026-07-14',
+    ajouts: [
+      'Changer l\'adresse d\'un cheval dans une tournée : vous choisissez maintenant si l\'adresse est « 📌 ponctuelle » (juste pour cette tournée — elle est ajoutée aux adresses du cheval mais son adresse par défaut ne change PAS) ou « ⭐ par défaut » (permanente). Vous pouvez piocher une adresse déjà connue du cheval ou en encoder une nouvelle, et revenir à l\'adresse par défaut d\'un clic. Le cheval concerné affiche un repère « 📌 ponctuelle » dans la tournée.',
+    ],
+  },
   {
     version: '1.5.0', date: '2026-07-14',
     ajouts: [
@@ -4841,9 +4847,10 @@ function reconcileTour(tour) {
       cl.chevaux.forEach((cv) => {
         const h = (c.chevaux || []).find((x) => (cv.id && x.id === cv.id) || norm(x.nom) === norm(cv.nom));
         if (!h) return; // cheval supprimé → retiré
-        const arr = findOrCreate(chevalAddr(c, h), a.type); // adresse ACTUELLE du cheval → suit le changement d'adresse
+        const ovr = (cv.addrOverride && addrStr(cv.addrOverride).trim()) ? toAddr(cv.addrOverride) : null; // adresse PONCTUELLE (cette tournée) prioritaire sur le défaut du cheval
+        const arr = findOrCreate(ovr || chevalAddr(c, h), a.type); // sinon adresse ACTUELLE du cheval → suit le changement d'adresse
         let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); }
-        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null, parageOffert: !!cv.parageOffert, visiteOffert: !!cv.visiteOffert, fourbureOffert: !!cv.fourbureOffert, npasOffert: !!cv.npasOffert, infectionOffert: !!cv.infectionOffert, photo: cv.photo || null, difficile: !!cv.difficile, difficileHT: cv.difficileHT, difficileOffert: !!cv.difficileOffert, consultMin: cv.consultMin });
+        if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null, parageOffert: !!cv.parageOffert, visiteOffert: !!cv.visiteOffert, fourbureOffert: !!cv.fourbureOffert, npasOffert: !!cv.npasOffert, infectionOffert: !!cv.infectionOffert, photo: cv.photo || null, difficile: !!cv.difficile, difficileHT: cv.difficileHT, difficileOffert: !!cv.difficileOffert, consultMin: cv.consultMin, ...(cv.addrOverride ? { addrOverride: cv.addrOverride } : {}) });
       });
     });
   });
@@ -5318,39 +5325,44 @@ function maybeIntercaler(res) { if (res && res.preExisting && res.placements && 
 // Changer l'adresse (par défaut) d'un cheval depuis l'éditeur de tournée : choisir une de ses adresses OU en encoder une nouvelle.
 // L'adresse choisie devient l'adresse par défaut du cheval (répercutée fiche + « Adresses chevaux »), et la tournée en cours est
 // reconciliée (l'arrêt migre vers la nouvelle adresse) puis, si un nouvel arrêt apparaît, on propose de le placer (ordre/horaire).
-function modalChangeChevalAddr(c, h) {
+function modalChangeChevalAddr(c, h, cv) {
   if (!Array.isArray(h.adresses)) h.adresses = [];
   if (chevalAddrSrc(h) === 'specifique' && !h.adresses.length && addrStr(h.addr).trim()) h.adresses.push({ id: uid(), nom: h.addrNom || '', addr: toAddr(h.addr), actif: true });
   chevalSyncActive(h);
-  const curKey = addrKey(chevalAddr(c, h));
-  const newAddr = emptyAddr(); let mkDefault = true;
+  const defKey = addrKey(chevalAddr(c, h)); // adresse PAR DÉFAUT du cheval
+  const ovrKey = (cv && cv.addrOverride && addrStr(cv.addrOverride).trim()) ? addrKey(cv.addrOverride) : null; // adresse PONCTUELLE en cours (cette tournée)
+  const curKey = ovrKey || defKey; // adresse réellement utilisée dans la tournée
+  const newAddr = emptyAddr();
   const o = openOverlay('<div class="modal-head"><b>📍 Adresse — ' + esc(h.nom || 'cheval') + '</b><button class="x" data-x>✕</button></div><div id="chaddrBody"></div>');
   const body = o.q('#chaddrBody');
-  const list = () => h.adresses.map((e, i) => `<label class="chk" style="margin-bottom:6px"><input type="radio" name="chaddrSel" data-sel="${i}" ${addrKey(e.addr) === curKey ? 'checked' : ''}/> <b>${esc(e.nom || 'Adresse')}</b> — ${esc(addrStr(e.addr)) || '<i>adresse ?</i>'}${addrKey(e.addr) === curKey ? ' <span class="badge">⭐ actuelle</span>' : ''}</label>`).join('') || '<p class="hint">Ce cheval suit l\'adresse du client. Encodez une adresse propre ci-dessous.</p>';
+  const list = () => h.adresses.map((e, i) => { const k = addrKey(e.addr); const tags = (k === defKey ? ' <span class="badge">⭐ défaut</span>' : '') + (k === ovrKey ? ' <span class="badge">📌 ponctuelle</span>' : ''); return `<label class="chk" style="margin-bottom:6px"><input type="radio" name="chaddrSel" data-sel="${i}" ${k === curKey ? 'checked' : ''}/> <b>${esc(e.nom || 'Adresse')}</b> — ${esc(addrStr(e.addr)) || '<i>adresse ?</i>'}${tags}</label>`; }).join('') || '<p class="hint">Ce cheval suit l\'adresse du client. Encodez une adresse propre ci-dessous.</p>';
   body.innerHTML = `
-    <p class="hint">Choisissez l'adresse de ce cheval pour la tournée. Elle devient son adresse <b>par défaut</b> (répercutée sur la fiche et « Adresses chevaux »).</p>
+    <p class="hint">Choisissez une adresse de ce cheval (ou encodez-en une), puis dites si elle est <b>ponctuelle</b> (cette tournée seulement) ou <b>par défaut</b> (permanente, répercutée sur la fiche et « Adresses chevaux »).</p>
     <div class="ch-adr-list">${list()}</div>
-    <details class="ch-menu" id="chaddrNew"><summary class="btn small">＋ Encoder une nouvelle adresse</summary>
-      <div data-newmount style="margin-top:6px"></div>
-      <label class="chk2"><input type="checkbox" id="chaddrMkDef" checked/> Définir comme adresse par défaut du cheval (utilisée dans la tournée)</label>
-    </details>
-    <div class="actions"><button class="btn primary block" id="chaddrOk">Utiliser cette adresse</button></div>`;
+    <details class="ch-menu" id="chaddrNew"><summary class="btn small">＋ Encoder une nouvelle adresse</summary><div data-newmount style="margin-top:6px"></div></details>
+    ${ovrKey ? '<p class="hint">📌 Une adresse <b>ponctuelle</b> est active pour cette tournée. <button type="button" class="btn small" id="chaddrRevert">↩ Revenir au défaut</button></p>' : ''}
+    <div class="actions two"><button class="btn" id="chaddrPonct">📌 Ponctuelle (cette tournée)</button><button class="btn primary" id="chaddrDef">⭐ Par défaut</button></div>`;
   mountAddress(body.querySelector('[data-newmount]'), newAddr, (na) => { Object.assign(newAddr, na); });
-  { const mk = body.querySelector('#chaddrMkDef'); if (mk) mk.addEventListener('change', (e) => { mkDefault = e.target.checked; }); }
   o.q('[data-x]').onclick = o.close;
-  body.querySelector('#chaddrOk').addEventListener('click', () => {
-    const newOpen = body.querySelector('#chaddrNew').open;
-    let target = null;
-    if (newOpen && addrStr(newAddr).trim()) {
-      if (mkDefault) { setChevalDefaultAddr(h, newAddr); const ea = chevalActiveAddrEntry(h); target = ea ? ea.addr : null; }
-      else { h.adresses.push({ id: uid(), nom: '', addr: toAddr(newAddr), actif: false }); chevalSyncActive(h); saveClients(); o.close(); alert('Adresse ajoutée à la fiche du cheval. Cochez « par défaut » pour l\'utiliser dans la tournée.'); return; }
-    } else {
-      const sel = body.querySelector('[name="chaddrSel"]:checked'); if (!sel) { alert('Choisissez une adresse ou encodez-en une nouvelle.'); return; }
-      const e = h.adresses[+sel.dataset.sel]; if (!e) return; setChevalDefaultAddr(h, e.addr); target = e.addr;
-    }
-    saveClients(); o.close();
-    if (target && addrKey(target) !== curKey) applyChevalAddrChangeToTour();
-    else { reconcileActiveTours(); if (currentTour) { renderEditorArrets(); scheduleGeoRecalc(); } }
+  // Adresse cible : nouvelle si le volet est ouvert et rempli, sinon la radio sélectionnée.
+  const targetAddr = () => {
+    if (body.querySelector('#chaddrNew').open && addrStr(newAddr).trim()) return { addr: toAddr(newAddr), isNew: true };
+    const sel = body.querySelector('[name="chaddrSel"]:checked'); if (!sel) return null;
+    const e = h.adresses[+sel.dataset.sel]; return e ? { addr: toAddr(e.addr), isNew: false } : null;
+  };
+  const finish = () => { saveClients(); o.close(); applyChevalAddrChangeToTour(); };
+  { const rv = body.querySelector('#chaddrRevert'); if (rv) rv.addEventListener('click', () => { if (cv) delete cv.addrOverride; finish(); }); } // retour à l'adresse par défaut
+  body.querySelector('#chaddrDef').addEventListener('click', () => {
+    const t = targetAddr(); if (!t) { alert('Choisissez une adresse ou encodez-en une.'); return; }
+    setChevalDefaultAddr(h, t.addr); if (cv) delete cv.addrOverride; // devient le défaut permanent → plus d'adresse ponctuelle
+    finish();
+  });
+  body.querySelector('#chaddrPonct').addEventListener('click', () => {
+    const t = targetAddr(); if (!t) { alert('Choisissez une adresse ou encodez-en une.'); return; }
+    if (t.isNew && !h.adresses.some((e) => addrKey(e.addr) === addrKey(t.addr))) h.adresses.push({ id: uid(), nom: '', addr: toAddr(t.addr), actif: false }); // ajoutée à la fiche (inactive), le défaut ne change pas
+    chevalSyncActive(h);
+    if (cv) { if (addrKey(t.addr) === defKey) delete cv.addrOverride; else cv.addrOverride = toAddr(t.addr); } // ponctuelle = défaut → pas d'override
+    finish();
   });
 }
 // Après un changement d'adresse par défaut d'un cheval : reconcilie la tournée en cours (l'arrêt migre) + propose le placement
@@ -5541,6 +5553,7 @@ function renderEditorArrets(locked) {
           const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(ph.nom)) : null;
           const isLourd = !!(fiche && fiche.lourd);
           const tag = cancelled ? ` <span class="badge badge-cancel">${cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé'}</span>` : '';
+          const ovrTag = (cv && cv.addrOverride && addrStr(cv.addrOverride).trim()) ? ' <span class="badge" title="Adresse ponctuelle pour cette tournée">📌 ponctuelle</span>' : '';
           const photoOn = !!(cv && cv.photo && (cv.photo.stades || []).length);
           const chips = [];
           if (cv && !cancelled) {
@@ -5560,7 +5573,7 @@ function renderEditorArrets(locked) {
           opts += ck('data-supp="difficile"', cv && cv.difficile, 'Cheval difficile', !acte);
           const dp = dernierParageInfo(cl.clientId, ph.nom, currentTour.date); // temps écoulé depuis le dernier parage/visite (tournées clôturées)
           const pInfo = dp ? ` <span class="td-eta" title="Dernier parage/visite : ${esc(fmtDateFr(dp.date))}">⏱ ${dp.days < 7 ? dp.days + ' j' : Math.round(dp.days / 7) + ' sem'}</span>` : '';
-          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${pInfo}<span class="ch-top-act">${cancelled ? '' : `<button type="button" class="btn small" data-chaddr="${pi}" title="Changer l'adresse de ce cheval">📍 Adresse</button>`}<button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
+          h += `<div class="ch-row${cancelled ? ' ch-cancel' : ''}"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${tag}${ovrTag}${pInfo}<span class="ch-top-act">${cancelled ? '' : `<button type="button" class="btn small" data-chaddr="${pi}" title="Changer l'adresse de ce cheval">📍 Adresse</button>`}<button type="button" class="btn-cancel${cancelled ? ' on' : ''}" data-cancel="${pi}" title="${cancelled ? 'RDV annulé/reporté — gérer' : 'Annuler / reporter'}">${cancelled ? '✎ Gérer' : '⊘ Annuler'}</button>${cancelled ? '' : `<details class="ch-menu"><summary class="btn small">＋ Actes ▾</summary><div class="ch-opts">${opts}</div></details>`}</span></div>${cancelled ? '' : `<div class="ch-chips">${chipsHtml}</div>`}</div>`;
         });
         h += '</div>';
         // Prestation visite choisie (affichée sous le tableau, modifiable) — par cheval dont la case Visite est cochée.
@@ -5604,7 +5617,7 @@ function renderEditorArrets(locked) {
           modalSupplement(ph.nom, cv, key, () => { saveTournees(); recomputeMoney(); renderEditorArrets(locked); }); // saisie montant HT + éligibilité remise
         }));
         wrap.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.cancel], cv = ensureCv(ph); const paid = clientPaiementDone(currentTour, cl.clientId); modalCancelRdv(ph.nom, { cv, clientId: cl.clientId, tour: currentTour, arret: a, paid, locked: comptaLocked(currentTour, cl.clientId), onDone: () => { persistCurrentTour(); if (!paid) recomputeMoney(); renderEditorArrets(locked); scheduleCalPush(currentTour); refreshEverywhere(); } }); })); // persistCurrentTour (copie) ; payé → facture figée (NC) ; non payé → recalcul ; maj Google + bandeau (km)
-        wrap.querySelectorAll('[data-chaddr]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.chaddr]; const fiche = cObj ? (cObj.chevaux || []).find((x) => (x.id != null && ph.id != null && x.id === ph.id) || norm(x.nom) === norm(ph.nom)) : null; if (!fiche) { alert('Fiche du cheval introuvable.'); return; } modalChangeChevalAddr(cObj, fiche); })); // changer l'adresse (par défaut) d'un cheval → répercute sur la tournée
+        wrap.querySelectorAll('[data-chaddr]').forEach((b) => b.addEventListener('click', () => { const ph = pool[+b.dataset.chaddr]; const fiche = cObj ? (cObj.chevaux || []).find((x) => (x.id != null && ph.id != null && x.id === ph.id) || norm(x.nom) === norm(ph.nom)) : null; if (!fiche) { alert('Fiche du cheval introuvable.'); return; } modalChangeChevalAddr(cObj, fiche, cvOf(ph) || ensureCv(ph)); })); // changer l'adresse d'un cheval (ponctuelle ou par défaut) → répercute sur la tournée
         el.appendChild(wrap);
       } // fin des actes (édition uniquement si tournée non clôturée)
 
