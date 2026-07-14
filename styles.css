@@ -710,9 +710,7 @@ table.pl-egrid th.pl-mem { font-size: .68rem; font-weight: 700; color: var(--str
 .pl-mk-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid rgba(128,128,128,.5); }
 .pl-me-wrap { position: relative; width: min(92vw, 460px); max-width: 100%; margin: 8px auto; background: #222; border-radius: 8px; overflow: hidden; touch-action: none; user-select: none; }
 .pl-me-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; -webkit-user-drag: none; pointer-events: none; }
-.pl-me-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.pl-me-svg line { pointer-events: none; }
-.pl-me-h { pointer-events: auto; cursor: grab; }
+.pl-me-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .pl-me-angle { text-align: center; font-size: 1.05rem; margin: 6px 0 2px; }
 .pl-me-legend { display: flex; flex-wrap: wrap; gap: 4px 0; justify-content: center; margin-bottom: 6px; }
 .pl-ce-img2 { position: absolute; transform-origin: center center; pointer-events: none; -webkit-user-drag: none; user-select: none; display: block; }

@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.1', date: '2026-07-14',
+    corrections: [
+      'Marqueurs — ANGLES JUSTES : les valeurs d\'angle (et les repères fixes 25° / 3° / 6° / 90°) sont désormais calculées en tenant compte de la forme réelle de la case (elles étaient faussées hors format carré, donc en 4:3). Un repère à 25° mesure bien 25°.',
+      'Marqueurs : le déplacement des points est fiabilisé (plus de poignée qui décroche au bord ou qui « colle »). Les traits ne débordent plus de la case dans le PDF. La transparence choisie s\'applique aussi dans l\'éditeur. Ajout d\'une case « Ajouter les pages Marqueurs au PDF », d\'une légende dans le comparatif, et suppression des pages vides.',
+      'Adresses : l\'assistant de vérification complète bien l\'adresse ACTIVE du cheval (au lieu d\'une copie ignorée) ; on peut supprimer la dernière adresse d\'un cheval ; « Reprendre une adresse connue » reprend aussi le nom d\'écurie.',
+    ],
+  },
   {
     version: '1.7.0', date: '2026-07-14',
     ajouts: [
@@ -2212,51 +2220,54 @@ function markDefaults(typeKey) {
   if (typeKey === 'rotation') return { pts: { A: { x: 28, y: 66 }, J: { x: 50, y: 50 }, B: { x: 72, y: 34 } } };
   return { pts: {} };
 }
-const _deg = (x1, y1, x2, y2) => Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+// IMPORTANT : les points sont en % (0-100) de la case, mais la case n'est PAS carrée. Pour des ANGLES et des repères fixes
+// (25°/3°/6°/90°) JUSTES, on calcule en espace PHYSIQUE : x' = x·asp, y' = y (asp = largeur/hauteur de la case image).
 const _acute = (a, b) => { let d = Math.abs(a - b) % 180; if (d > 90) d = 180 - d; return d; }; // angle aigu entre 2 droites (0-90)
 const _between = (a, b) => { let d = Math.abs(a - b) % 360; if (d > 180) d = 360 - d; return d; }; // angle entre 2 vecteurs (0-180)
-// Extrémité d'une ligne partant de (qx,qy) le long de `dirDeg`, inclinée de `tiltDeg`, en choisissant le sens qui MONTE (y le plus petit).
-function _tiltUp(qx, qy, dirDeg, tiltDeg, len) {
-  const a1 = (dirDeg - tiltDeg) * Math.PI / 180, a2 = (dirDeg + tiltDeg) * Math.PI / 180;
-  const e1 = { x: qx + len * Math.cos(a1), y: qy + len * Math.sin(a1) };
-  const e2 = { x: qx + len * Math.cos(a2), y: qy + len * Math.sin(a2) };
+const _degA = (x1, y1, x2, y2, asp) => Math.atan2(y2 - y1, (x2 - x1) * asp) * 180 / Math.PI; // angle PHYSIQUE d'une droite
+const _lenA = (x1, y1, x2, y2, asp) => Math.hypot((x2 - x1) * asp, y2 - y1); // longueur physique
+// Extrémité (en %) d'une ligne partant de (qx,qy) le long de la direction (dx1,dy1)→(dx2,dy2), inclinée de tiltDeg en espace
+// PHYSIQUE, longueur physique lenP, en choisissant le sens qui MONTE (y le plus petit).
+function _tiltUp(qx, qy, dx1, dy1, dx2, dy2, tiltDeg, lenP, asp) {
+  const baseAng = Math.atan2(dy2 - dy1, (dx2 - dx1) * asp), qxp = qx * asp;
+  const cand = (sign) => { const a = baseAng + sign * tiltDeg * Math.PI / 180; return { x: (qxp + lenP * Math.cos(a)) / asp, y: qy + lenP * Math.sin(a) }; };
+  const e1 = cand(-1), e2 = cand(1);
   return e1.y <= e2.y ? e1 : e2;
 }
-// Géométrie d'un marqueur : renvoie { lines:[{k,x1,y1,x2,y2}], handles:[{k,x,y}], angle:Number, measureName, measureColor }.
-// Lignes de RÉFÉRENCE (fixes) calculées depuis les poignées ; ligne de MESURE = celle qui donne l'angle affiché.
-function markGeom(typeKey, m) {
+// Géométrie d'un marqueur (aspect = largeur/hauteur de la case image). Renvoie { lines, handles, angle, measureName, measureColor }.
+function markGeom(typeKey, m, aspect) {
+  const asp = (aspect != null && aspect > 0) ? aspect : ((typeof plCellAspect === 'function') ? plCellAspect() : 1);
   const p = (m && m.pts) || {}; const t = markType(typeKey); const out = { lines: [], handles: [], angle: null, measureName: '', measureColor: markColor(typeKey, t ? t.measure : '') };
   const push = (k, x1, y1, x2, y2) => out.lines.push({ k, x1, y1, x2, y2 });
   if (typeKey === 'coronal') {
     const { L, R, P } = p; if (!L || !R || !P) return out;
-    const len = Math.hypot(R.x - L.x, R.y - L.y) || 30;
+    const len = _lenA(L.x, L.y, R.x, R.y, asp) || 30;
     push('sol', L.x, L.y, R.x, R.y);
-    const e = _tiltUp(L.x, L.y, _deg(L.x, L.y, R.x, R.y), 25, len); push('ref25', L.x, L.y, e.x, e.y);
+    const e = _tiltUp(L.x, L.y, L.x, L.y, R.x, R.y, 25, len, asp); push('ref25', L.x, L.y, e.x, e.y); // 25° FIXE depuis L, monte à droite
     push('axe', L.x, L.y, P.x, P.y);
-    out.angle = _acute(_deg(L.x, L.y, R.x, R.y), _deg(L.x, L.y, P.x, P.y));
+    out.angle = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(L.x, L.y, P.x, P.y, asp));
     out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
   } else if (typeKey === 'solaire') {
     const { L, R, P } = p; if (!L || !R || !P) return out;
-    const len = Math.hypot(R.x - L.x, R.y - L.y) || 30;
+    const len = _lenA(L.x, L.y, R.x, R.y, asp) || 30;
     push('base', L.x, L.y, R.x, R.y);
-    const d = _deg(R.x, R.y, L.x, L.y); // direction R→L (les obliques partent de R, montent à gauche)
-    const e3 = _tiltUp(R.x, R.y, d, 3, len); push('ref3', R.x, R.y, e3.x, e3.y);
-    const e6 = _tiltUp(R.x, R.y, d, 6, len); push('ref6', R.x, R.y, e6.x, e6.y);
+    const e3 = _tiltUp(R.x, R.y, R.x, R.y, L.x, L.y, 3, len, asp); push('ref3', R.x, R.y, e3.x, e3.y); // 3°/6° FIXES depuis R, montent à gauche
+    const e6 = _tiltUp(R.x, R.y, R.x, R.y, L.x, L.y, 6, len, asp); push('ref6', R.x, R.y, e6.x, e6.y);
     push('axe', R.x, R.y, P.x, P.y); // mesure depuis R
-    out.angle = _acute(_deg(L.x, L.y, R.x, R.y), _deg(R.x, R.y, P.x, P.y));
+    out.angle = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(R.x, R.y, P.x, P.y, asp));
     out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
   } else if (typeKey === 'paroi') {
     const { T, B, M } = p; if (!T || !B || !M) return out;
     push('aplomb', T.x, T.y, B.x, B.y);
-    const ap = _deg(T.x, T.y, B.x, B.y); const perp = (ap + 90) * Math.PI / 180; const half = (Math.hypot(B.x - T.x, B.y - T.y) || 40) * 0.55;
-    push('base90', B.x - half * Math.cos(perp), B.y - half * Math.sin(perp), B.x + half * Math.cos(perp), B.y + half * Math.sin(perp)); // ⊥ prolongée des 2 côtés
+    const ap = _degA(T.x, T.y, B.x, B.y, asp) * Math.PI / 180, perp = ap + Math.PI / 2, half = (_lenA(T.x, T.y, B.x, B.y, asp) || 40) * 0.55, bxp = B.x * asp; // ⊥ 90° physique, prolongée des 2 côtés
+    push('base90', (bxp - half * Math.cos(perp)) / asp, B.y - half * Math.sin(perp), (bxp + half * Math.cos(perp)) / asp, B.y + half * Math.sin(perp));
     push('paroi', T.x, T.y, M.x, M.y); // mesure depuis le haut T
-    out.angle = _acute(_deg(T.x, T.y, B.x, B.y), _deg(T.x, T.y, M.x, M.y));
+    out.angle = _acute(_degA(T.x, T.y, B.x, B.y, asp), _degA(T.x, T.y, M.x, M.y, asp));
     out.handles = [{ k: 'T', x: T.x, y: T.y }, { k: 'B', x: B.x, y: B.y }, { k: 'M', x: M.x, y: M.y }];
   } else if (typeKey === 'rotation') {
     const { A, J, B } = p; if (!A || !J || !B) return out;
     push('seg1', A.x, A.y, J.x, J.y); push('seg2', J.x, J.y, B.x, B.y);
-    out.angle = 180 - _between(_deg(J.x, J.y, A.x, A.y), _deg(J.x, J.y, B.x, B.y)); // écart à l'alignement (180°)
+    out.angle = 180 - _between(_degA(J.x, J.y, A.x, A.y, asp), _degA(J.x, J.y, B.x, B.y, asp)); // écart à l'alignement (180°)
     out.handles = [{ k: 'A', x: A.x, y: A.y }, { k: 'J', x: J.x, y: J.y }, { k: 'B', x: B.x, y: B.y }];
   }
   out.measureName = (t && (t.lines.find((l) => l.k === t.measure) || {}).name) || '';
@@ -4423,8 +4434,8 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
           const ai = +el.dataset.ai; const a = h.adresses[ai]; if (!a) return;
           const def = el.querySelector('[data-def]'); if (def) def.addEventListener('change', () => { h.adresses.forEach((x) => { x.actif = false; }); a.actif = true; chevalSyncActive(h); saveDraft(); refreshChBadge(); });
           const nm = el.querySelector('[data-anom]'); if (nm) nm.addEventListener('input', (e) => { a.nom = e.target.value; if (a.actif) h.addrNom = a.nom; saveDraft(); });
-          const del = el.querySelector('[data-adel]'); if (del) del.addEventListener('click', () => { if (!confirm('Supprimer cette adresse ?')) return; const wasActive = a.actif; h.adresses.splice(ai, 1); if (wasActive && h.adresses.length) h.adresses[0].actif = true; chevalSyncActive(h); renderCh(); saveDraft(); });
-          const find = el.querySelector('[data-afind]'); if (find) find.addEventListener('change', (e) => { const txt = (e.target.value || '').trim(); if (!txt) return; const places = collectRoutePlaces(); const p = places.find((x) => norm(x.label) === norm(txt)) || places.find((x) => norm(x.label).includes(norm(txt))); if (p && p.addr) { const s = toAddr(p.addr); a.addr = Object.assign(emptyAddr(), { rue: s.rue || '', numero: s.numero || '', cp: s.cp || '', localite: s.localite || '', pays: s.pays || '', lat: s.lat || null, lon: s.lon || null }); chevalSyncActive(h); saveDraft(); renderCh(); } else { alert('Adresse non trouvée. Choisissez un nom dans la liste proposée.'); } });
+          const del = el.querySelector('[data-adel]'); if (del) del.addEventListener('click', () => { if (!confirm('Supprimer cette adresse ?')) return; const wasActive = a.actif; h.adresses.splice(ai, 1); if (wasActive && h.adresses.length) h.adresses[0].actif = true; if (!h.adresses.length) h.addr = emptyAddr(); chevalSyncActive(h); renderCh(); saveDraft(); }); // dernière adresse supprimée → vider h.addr pour qu'elle ne soit pas ré-amorcée
+          const find = el.querySelector('[data-afind]'); if (find) find.addEventListener('change', (e) => { const txt = (e.target.value || '').trim(); if (!txt) return; const places = collectRoutePlaces(); const p = places.find((x) => norm(x.label) === norm(txt)) || places.find((x) => norm(x.label).includes(norm(txt))); if (p && p.addr) { const s = toAddr(p.addr); a.addr = Object.assign(emptyAddr(), { rue: s.rue || '', numero: s.numero || '', cp: s.cp || '', localite: s.localite || '', pays: s.pays || '', lat: s.lat || null, lon: s.lon || null }); if (!a.nom && p.label && String(p.label).includes(' · ')) a.nom = String(p.label).split(' · ').slice(1).join(' · ').trim(); chevalSyncActive(h); saveDraft(); renderCh(); } else { alert('Adresse non trouvée. Choisissez un nom dans la liste proposée.'); } }); // reprend aussi le nom d'écurie (après « · »)
           mountAddress(el.querySelector('[data-amount]'), a.addr, (na) => { a.addr = na; chevalSyncActive(h); saveDraft(); refreshChBadge(); });
         });
         const add = row.querySelector('[data-aadd]'); if (add) add.addEventListener('click', () => { h.adresses.push({ id: uid(), nom: '', addr: emptyAddr(), actif: h.adresses.length === 0 }); chevalSyncActive(h); renderCh(); saveDraft(); });
@@ -5330,7 +5341,14 @@ function chevalSyncActive(h) {
   if (!h || !Array.isArray(h.adresses) || !h.adresses.length) return;
   let act = h.adresses.find((x) => x.actif); if (!act) act = h.adresses[0];
   h.adresses.forEach((x) => { x.actif = (x === act); });
-  h.addr = toAddr(act.addr); h.addrNom = act.nom || '';
+  act.addr = toAddr(act.addr); h.addr = act.addr; h.addrNom = act.nom || ''; // MÊME référence : toute édition de h.addr (assistant, géocodage) modifie aussi l'entrée active
+}
+// Adresse à ÉDITER/GÉOCODER pour un cheval = celle de l'entrée ACTIVE (créée si absente). Garde h.addr en miroir (référence partagée).
+function chevalEditAddr(h) {
+  if (!Array.isArray(h.adresses)) h.adresses = [];
+  let e = chevalActiveAddrEntry(h);
+  if (!e) { e = { id: uid(), nom: h.addrNom || '', addr: toAddr(h.addr), actif: true }; h.adresses.push(e); }
+  e.addr = toAddr(e.addr); h.addr = e.addr; return e.addr;
 }
 const chevalAddrSrc = (h) => h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
 const chevalAddr = (c, h) => {
@@ -5355,7 +5373,7 @@ function addrNomForAddr(h, addr) { const e = chevalAddrEntry(h, addr); return e 
 function setAddrNomForAddr(h, addr, val) { const e = chevalAddrEntry(h, addr); if (e) { e.nom = val; if (e.actif) h.addrNom = val; } else { h.addrNom = val; } }
 // Nom d'affichage de l'adresse d'un cheval, selon la source : client → nom du client ; société → nom de la société ; spécifique → « adresse privée » (= nom du client) ou nom saisi.
 function chevalAddrNom(c, h) {
-  const src = h.addrSource || 'client';
+  const src = chevalAddrSrc(h);
   if (src === 'specifique') { if (h.addrPrivee) return fullName(c); const ea = chevalActiveAddrEntry(h); const nm = ea ? (ea.nom || '').trim() : (h.addrNom || '').trim(); return nm || fullName(c) || 'Adresse'; }
   if (src === 'societe') return c.societe || fullName(c);
   return fullName(c) || 'Adresse';
@@ -7946,17 +7964,23 @@ async function plancheComparatifCanvas() {
   for (let ci = 0; ci <= cols.length; ci++) { const xx = gx + labelW + ci * colW; ctx.moveTo(xx, gtop); ctx.lineTo(xx, gridBottom); }
   for (let ri = 0; ri <= membres.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
   ctx.stroke();
+  // Légende : nom + couleur de la MESURE de chaque type (une fois par page).
+  { const ly = px(g.pageH - g.margin - g.footerH - 5.5); let lx = px(g.margin); ctx.textBaseline = 'middle'; ctx.font = fs(2.7) + 'px sans-serif';
+    cols.forEach((t) => { const col = markColor(t.key, t.measure), nm = (t.lines.find((l) => l.k === t.measure) || {}).name || t.label; ctx.fillStyle = col; ctx.fillRect(lx, ly - px(1.2), px(2.4), px(2.4)); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.fillText(t.label + ' (' + nm + ')', lx + px(3), ly); lx += px(3) + ctx.measureText(t.label + ' (' + nm + ')').width + px(5); }); ctx.textBaseline = 'top'; }
   return cv;
 }
 async function planchePdfBlob() {
   const land = plCreate.orientation !== 'portrait', pages = [];
   const addPage = (cv) => pages.push({ bytes: dataUrlToBytes(cv.toDataURL('image/jpeg', 0.85)), w: cv.width, h: cv.height });
   for (let pi = 0; pi < (plCreate.pages || []).length; pi++) addPage(await planchePageCanvas(pi));
-  // Pages MARQUEURS — toujours en DERNIER (après la page Cheval). Une page par type ayant au moins une image marquée, puis le comparatif.
-  const marks = plCreate.cellMarks || {}; const usedTypes = {}; let anyMark = false;
-  Object.keys(marks).forEach((k) => Object.keys(marks[k] || {}).forEach((ty) => { usedTypes[ty] = true; anyMark = true; }));
-  for (const t of MARK_TYPES) { if (usedTypes[t.key]) addPage(await plancheMarkerPageCanvas(t.key)); }
-  if (anyMark && Object.keys(usedTypes).length >= 2) addPage(await plancheComparatifCanvas()); // comparatif utile s'il y a ≥2 types
+  // Pages MARQUEURS — toujours en DERNIER (après la page Cheval), si la case « Ajouter les pages Marqueurs » est cochée.
+  // Un type n'a une page QUE s'il a au moins une image RÉELLEMENT placée marquée (évite une page vide, cf. B3).
+  if (plCreate.markPagesOn !== false) {
+    const marked = plPlacedCells().filter((c) => plCreate.cellMarks[c.key] && Object.keys(plCreate.cellMarks[c.key]).length);
+    const usedTypes = {}; marked.forEach((c) => Object.keys(plCreate.cellMarks[c.key]).forEach((ty) => { usedTypes[ty] = true; }));
+    for (const t of MARK_TYPES) { if (usedTypes[t.key]) addPage(await plancheMarkerPageCanvas(t.key)); }
+    if (Object.keys(usedTypes).length >= 2) addPage(await plancheComparatifCanvas()); // comparatif utile s'il y a ≥2 types
+  }
   return pdfFromJpegPages(pages, land);
 }
 function printHtml(title, bodyHtml) {
@@ -9546,7 +9570,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || (P.orientationUserSet && P.orientation ? P.orientation : 'paysage'), logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cellMarks: {}, markMode: false, markPick: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || (P.orientationUserSet && P.orientation ? P.orientation : 'paysage'), logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cellMarks: {}, markMode: false, markPick: {}, markPagesOn: true, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -9599,7 +9623,8 @@ function modalPlancheCreate(type, prefill) {
       ${type === 'contact' ? `<section class="card" id="plCmarkCard">
         <div class="card-head"><h3 class="rsub" style="margin:0">Marqueurs (compas d'angles)</h3><button class="btn small" id="plCmarkToggle">📐 Créer des marqueurs</button></div>
         <div id="plCmarkBody" style="display:none">
-          <p class="hint">① Cochez ci-dessus, dans l'aperçu, les images à marquer. ② Pour chaque image, cochez le(s) type(s) de marqueur. ③ Dans chaque type, touchez une image pour placer et régler le marqueur (déplacer les points, tourner, symétrie). L'angle mesuré s'affiche.</p>
+          <p class="hint">① Pour chaque image, cochez le(s) type(s) de marqueur. ② Dans chaque type, touchez une image pour placer et régler le marqueur (déplacer les points, tourner, symétrie). L'angle mesuré s'affiche.</p>
+          <label class="chk2"><input type="checkbox" id="plCmarkPageInc" checked/> 📄 Ajouter les pages Marqueurs au PDF (toujours en dernier : une par type + comparatif)</label>
           <div id="plCmarkGrid"></div>
           <div id="plCmarkTypes"></div>
         </div>
@@ -9670,6 +9695,7 @@ function modalPlancheCreate(type, prefill) {
     if ($('plCmarkBody')) $('plCmarkBody').style.display = plCreate.markMode ? '' : 'none';
     plRenderMarkers();
   });
+  if ($('plCmarkPageInc')) { $('plCmarkPageInc').checked = plCreate.markPagesOn !== false; $('plCmarkPageInc').addEventListener('change', (e) => { plCreate.markPagesOn = e.target.checked; plDraftSave(); }); }
   // Bouton UNIQUE : enregistre d'abord le PDF sur l'appareil (téléchargement), PUIS ouvre l'envoi par mail.
   // Fermer l'envoi sans envoyer est OK — le PDF est déjà enregistré. Dans une file, on enchaîne à la fermeture de l'envoi.
   $('plCmail').onclick = async () => {
@@ -9726,10 +9752,10 @@ function plRenderPot() {
     t.addEventListener('click', (ev) => { if (ev.target.closest('.pl-th-x') || ev.target.closest('.pl-th-meta') || ev.target.closest('.pl-th-assign')) return; plCreate.sel = plCreate.sel === ph.id ? null : ph.id; plRenderPot(); plRenderGrid(); });
     if (showAssign) { const mb = t.querySelector('.pl-th-mb'), ang = t.querySelector('.pl-th-ang'); if (mb && ang) {
       // FIX : on NE re-dessine PAS le pot au changement (sinon la sélection partielle se réinitialisait) — on mémorise ph._mb/_ang, on place quand les deux sont choisis, et on met à jour la grille + le badge « placé » de cette vignette.
-      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; if (!plCreate.cellT) plCreate.cellT = {}; if (!plCreate.cellCrop) plCreate.cellCrop = {}; if (!plCreate.cellImg) plCreate.cellImg = {}; if (!plCreate.cellCropDef) plCreate.cellCropDef = {}; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; delete plCreate.cellT[k]; delete plCreate.cellCrop[k]; delete plCreate.cellImg[k]; delete plCreate.cellCropDef[k]; } }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); const tk = pr[0] + '_' + pr[1] + '_' + ang.value; delete plCreate.cellT[tk]; delete plCreate.cellCrop[tk]; delete plCreate.cellImg[tk]; delete plCreate.cellCropDef[tk]; plCreate.cells[tk] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); }; // nettoie AUSSI l'image cuite (cellImg/cellCropDef) → plus d'image fantôme à la réaffectation (B2)
+      const applyAssign = () => { ph._mb = mb.value; ph._ang = ang.value; if (!plCreate.cellT) plCreate.cellT = {}; if (!plCreate.cellCrop) plCreate.cellCrop = {}; if (!plCreate.cellImg) plCreate.cellImg = {}; if (!plCreate.cellCropDef) plCreate.cellCropDef = {}; if (!plCreate.cellMarks) plCreate.cellMarks = {}; if (!plCreate.markPick) plCreate.markPick = {}; Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; delete plCreate.cellT[k]; delete plCreate.cellCrop[k]; delete plCreate.cellImg[k]; delete plCreate.cellCropDef[k]; delete plCreate.cellMarks[k]; delete plCreate.markPick[k]; } }); const ok = !!(mb.value && ang.value !== ''); if (ok) { const pr = mb.value.split(':'); const tk = pr[0] + '_' + pr[1] + '_' + ang.value; delete plCreate.cellT[tk]; delete plCreate.cellCrop[tk]; delete plCreate.cellImg[tk]; delete plCreate.cellCropDef[tk]; plCreate.cells[tk] = ph.id; } t.classList.toggle('placed', ok); plRenderGrid(); }; // nettoie AUSSI l'image cuite (cellImg/cellCropDef) → plus d'image fantôme à la réaffectation (B2)
       mb.addEventListener('change', applyAssign); ang.addEventListener('change', applyAssign);
     } }
-    t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; if (plCreate.cellT) delete plCreate.cellT[k]; if (plCreate.cellCrop) delete plCreate.cellCrop[k]; if (plCreate.cellImg) delete plCreate.cellImg[k]; if (plCreate.cellCropDef) delete plCreate.cellCropDef[k]; } }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
+    t.querySelector('.pl-th-x').addEventListener('click', () => { plCreate.photos = plCreate.photos.filter((p) => p.id !== ph.id); Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === ph.id) { delete plCreate.cells[k]; if (plCreate.cellT) delete plCreate.cellT[k]; if (plCreate.cellCrop) delete plCreate.cellCrop[k]; if (plCreate.cellImg) delete plCreate.cellImg[k]; if (plCreate.cellCropDef) delete plCreate.cellCropDef[k]; if (plCreate.cellMarks) delete plCreate.cellMarks[k]; if (plCreate.markPick) delete plCreate.markPick[k]; } }); if (plCreate.sel === ph.id) plCreate.sel = null; plRenderPot(); plRenderGrid(); });
     t.querySelector('.pl-th-date').addEventListener('change', (ev) => { ph.date = ev.target.value; }); // pas de re-render (garde le focus)
     t.querySelector('.pl-th-setdate').addEventListener('click', () => { ph.date = plCreate.date; const di = t.querySelector('.pl-th-date'); if (di) di.value = ph.date; });
     box.appendChild(t);
@@ -9862,8 +9888,9 @@ const PL_MARK_BAND = 0.16; // fraction de la hauteur de case réservée à la BA
 function plCellAspect() { const st = plCreate; if (!st) return 4 / 3; const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st)); const rowImg = (g.rowH || 3) * (1 - PL_MARK_BAND); return (g.colW && rowImg) ? g.colW / rowImg : 4 / 3; }
 // Dessine les lignes d'un marqueur (coords % 0-100) dans le rectangle image (x,y,w,h) d'un canvas.
 function drawMarkerLines(ctx, typeKey, m, x, y, w, h, opacity) {
-  const g = markGeom(typeKey, m); if (!g.lines.length) return g;
-  ctx.save(); ctx.globalAlpha = (opacity != null) ? opacity : 0.9; ctx.lineWidth = Math.max(1.4, w * 0.012); ctx.lineCap = 'round';
+  const g = markGeom(typeKey, m, w / h); if (!g.lines.length) return g; // aspect = largeur/hauteur de la case image
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip(); // ne jamais déborder de la case (B5)
+  ctx.globalAlpha = (opacity != null) ? opacity : 0.9; ctx.lineWidth = Math.max(1.4, w * 0.012); ctx.lineCap = 'round';
   g.lines.forEach((l) => { ctx.strokeStyle = markColor(typeKey, l.k); ctx.beginPath(); ctx.moveTo(x + l.x1 / 100 * w, y + l.y1 / 100 * h); ctx.lineTo(x + l.x2 / 100 * w, y + l.y2 / 100 * h); ctx.stroke(); });
   ctx.restore(); return g;
 }
@@ -9880,18 +9907,24 @@ function modalMarkEdit(key, typeKey) {
     <div class="actions two"><button class="btn small" data-mirror>↔ Symétrie G/D</button><button class="btn small" data-reset>↺ Réinitialiser</button></div>
     <div class="actions"><button class="btn primary block" data-ok>✓ Valider</button></div>`, 'pl-ce-overlay');
   const svg = o.q('.pl-me-svg'), wrap = o.q('.pl-me-wrap');
+  const opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
   let dragH = null;
   const ptTo = (ev) => { const r = wrap.getBoundingClientRect(); return { x: Math.max(0, Math.min(100, (ev.clientX - r.left) / r.width * 100)), y: Math.max(0, Math.min(100, (ev.clientY - r.top) / r.height * 100)) }; };
   const draw = () => {
-    const g = markGeom(typeKey, m); let s = '';
-    g.lines.forEach((l) => { s += `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.8" vector-effect="non-scaling-stroke" stroke-linecap="round" opacity="0.95"/>`; });
-    g.handles.forEach((h) => { s += `<circle class="pl-me-h" data-h="${h.k}" cx="${h.x}" cy="${h.y}" r="3.4" fill="#fff" stroke="#222" stroke-width="0.7" vector-effect="non-scaling-stroke"/>`; });
+    const g = markGeom(typeKey, m, ar); let s = '';
+    g.lines.forEach((l) => { s += `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.8" vector-effect="non-scaling-stroke" stroke-linecap="round" opacity="${opacity}"/>`; });
+    g.handles.forEach((h) => { s += `<circle cx="${h.x}" cy="${h.y}" r="3.4" fill="#fff" stroke="#222" stroke-width="0.7" vector-effect="non-scaling-stroke"/>`; });
     svg.innerHTML = s;
     const ang = g.angle != null ? Math.round(g.angle) + '°' : '—';
     o.q('#plMeAngle').innerHTML = `<b style="color:${esc(g.measureColor)}">${esc(g.measureName)} : ${ang}</b>`;
     o.q('#plMeLegend').innerHTML = t.lines.map((l) => `<span class="pl-mk-leg"><span class="pl-mk-swatch" style="background:${esc(markColor(typeKey, l.k))}"></span>${esc(l.name)}</span>`).join('');
-    svg.querySelectorAll('[data-h]').forEach((c) => c.addEventListener('pointerdown', (ev) => { ev.preventDefault(); dragH = ev.target.dataset.h; try { ev.target.setPointerCapture(ev.pointerId); } catch (e) {} }));
   };
+  // Interaction : capture sur le WRAP (élément STABLE, non recréé) + sélection de la poignée la plus proche → drag fiable (tactile inclus, plus de poignée « collée »).
+  wrap.addEventListener('pointerdown', (ev) => {
+    const pt = ptTo(ev), g = markGeom(typeKey, m, ar); let best = null, bd = 9;
+    g.handles.forEach((h) => { const d = Math.hypot(h.x - pt.x, h.y - pt.y); if (d < bd) { bd = d; best = h.k; } });
+    if (best && m.pts[best]) { dragH = best; try { wrap.setPointerCapture(ev.pointerId); } catch (e) {} ev.preventDefault(); }
+  });
   wrap.addEventListener('pointermove', (ev) => { if (!dragH || !m.pts[dragH]) return; const p = ptTo(ev); m.pts[dragH].x = p.x; m.pts[dragH].y = p.y; draw(); });
   const up = () => { if (dragH) { dragH = null; plDraftSave(); } };
   wrap.addEventListener('pointerup', up); wrap.addEventListener('pointercancel', up);
@@ -10413,11 +10446,11 @@ function scanClient(c) {
     if (!h.datePriseEnCharge) hf.push({ label: 'Date de prise en charge', type: 'date', get: () => '', set: (v) => h.datePriseEnCharge = v });
     if (!h.discipline) hf.push({ label: 'Discipline / usage', get: () => '', set: (v) => h.discipline = v });
     // Adresse PROPRE au cheval : seulement quand elle est spécifique (≠ client/société) → alors elle doit être complète.
-    if ((h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client')) === 'specifique') {
-      const had = toAddr(h.addr);
-      if (!had.rue) hf.push({ label: 'Adresse propre — rue + n°', get: () => '', set: (v) => { h.addr = toAddr(h.addr); h.addr.rue = v; h.addr.lat = null; h.addr.lon = null; } });
-      if (!had.cp) hf.push({ label: 'Adresse propre — code postal', get: () => '', set: (v) => { h.addr = toAddr(h.addr); h.addr.cp = v; h.addr.lat = null; h.addr.lon = null; } });
-      if (!had.localite) hf.push({ label: 'Adresse propre — localité', get: () => '', set: (v) => { h.addr = toAddr(h.addr); h.addr.localite = v; h.addr.lat = null; h.addr.lon = null; } });
+    if (chevalAddrSrc(h) === 'specifique') {
+      const ea = chevalActiveAddrEntry(h); const had = toAddr(ea ? ea.addr : h.addr); // adresse ACTIVE = source de vérité (l'assistant écrit dans l'entrée active, pas dans h.addr seul)
+      if (!had.rue) hf.push({ label: 'Adresse propre — rue + n°', get: () => '', set: (v) => { const a = chevalEditAddr(h); a.rue = v; a.lat = null; a.lon = null; chevalSyncActive(h); } });
+      if (!had.cp) hf.push({ label: 'Adresse propre — code postal', get: () => '', set: (v) => { const a = chevalEditAddr(h); a.cp = v; a.lat = null; a.lon = null; chevalSyncActive(h); } });
+      if (!had.localite) hf.push({ label: 'Adresse propre — localité', get: () => '', set: (v) => { const a = chevalEditAddr(h); a.localite = v; a.lat = null; a.lon = null; chevalSyncActive(h); } });
     }
     if (hf.length) chevaux.push({ cheval: h, fields: hf });
   });
