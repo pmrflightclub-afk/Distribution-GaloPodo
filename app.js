@@ -11,10 +11,21 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.3';
+const APP_VERSION = '1.7.4';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.4', date: '2026-07-14',
+    ajouts: [
+      'Marqueurs — sélection en 2 temps : cochez d\'abord, dans la grille d\'aperçu, les images à marquer ; elles alimentent la grille des marqueurs (avec les 4 types).',
+      'Nouveau bouton « Éditer les marqueurs (à la suite) » : enchaîne tous les marqueurs image par image (à la validation, on passe au suivant). Idem « Gérer les images » dans « Aperçu / mise en page » pour cadrer toutes les photos à la suite.',
+    ],
+    corrections: [
+      'Grille d\'aperçu : colonnes et lignes désormais parfaitement alignées (largeurs/hauteurs identiques au pixel).',
+      'Marqueurs en format « Plein page » : l\'éditeur et le PDF utilisent le même repère (4:3) → les marqueurs sont alignés dans tous les cas.',
+    ],
+  },
   {
     version: '1.7.3', date: '2026-07-14',
     corrections: [
@@ -7962,8 +7973,9 @@ async function plancheMarkerPageCanvas(typeKey) {
     for (let ci = 0; ci < angles.length; ci++) {
       const key = byMA[membres[ri] + '||' + angles[ci]]; if (!key) continue;
       const cx = gx + labelW + ci * colW, src = plMarkCellSrc(key), im = src && await plLoadImg(src); if (!im) continue;
-      ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, imgH); ctx.clip(); const s = Math.max(colW / im.width, imgH / im.height); ctx.drawImage(im, cx + (colW - im.width * s) / 2, ry + (imgH - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
-      const m = st.cellMarks[key][typeKey], gg = drawMarkerLines(ctx, typeKey, m, cx, ry, colW, imgH, opacity);
+      const b = plMarkFitBox(cx, ry, colW, imgH);
+      ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
+      const m = st.cellMarks[key][typeKey], gg = drawMarkerLines(ctx, typeKey, m, b.x, b.y, b.w, b.h, opacity);
       ctx.fillStyle = '#fff'; ctx.fillRect(cx, ry + imgH, colW, bandH); // bande d'angle SOUS l'image
       const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.7) + 'px sans-serif'; ctx.fillStyle = gg ? gg.measureColor : '#333';
@@ -7998,8 +8010,9 @@ async function plancheComparatifCanvas() {
     for (let ci = 0; ci < cols.length; ci++) {
       const ty = cols[ci].key; const c = placed.find((c) => c.membre === membres[ri] && st.cellMarks[c.key][ty]); if (!c) continue;
       const cx = gx + labelW + ci * colW, src = plMarkCellSrc(c.key), im = src && await plLoadImg(src); if (!im) continue;
-      ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, imgH); ctx.clip(); const s = Math.max(colW / im.width, imgH / im.height); ctx.drawImage(im, cx + (colW - im.width * s) / 2, ry + (imgH - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
-      const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], cx, ry, colW, imgH, opacity);
+      const b = plMarkFitBox(cx, ry, colW, imgH);
+      ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
+      const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], b.x, b.y, b.w, b.h, opacity);
       ctx.fillStyle = '#fff'; ctx.fillRect(cx, ry + imgH, colW, bandH);
       const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillStyle = gg ? gg.measureColor : '#333';
@@ -9661,7 +9674,7 @@ function modalPlancheCreate(type, prefill) {
         <div class="pl-pot grid" id="plCpot"></div>
       </section>
       <section class="card">
-        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
+        <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridManage">🖼️ Gérer les images</button><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
         <div class="row" style="margin-bottom:8px"><label class="grow">Orientation<select id="plCorient"><option value="portrait"${plCreate.orientation === 'portrait' ? ' selected' : ''}>Portrait</option><option value="paysage"${plCreate.orientation !== 'portrait' ? ' selected' : ''}>Paysage</option></select></label><label class="grow">Format d'image<select id="plCformat">${plFormatOptions(plCreate.format)}</select></label></div>
         <div id="plCgridEditCtrls" class="pl-edit-ctrls" style="display:none"></div>
         <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (déplacer, zoomer, tourner). À <b>Valider</b>, l'image est <b>vraiment découpée</b> pour remplir exactement sa case — l'aperçu et le PDF sont alors identiques. Les repères (bords + <b>axe rouge central</b>) aident à centrer le sujet (ils n'apparaissent pas sur le PDF). Édition désactivée : toucher une image la retire.</p>
@@ -9670,9 +9683,10 @@ function modalPlancheCreate(type, prefill) {
       ${type === 'contact' ? `<section class="card" id="plCmarkCard">
         <div class="card-head"><h3 class="rsub" style="margin:0">Marqueurs (compas d'angles)</h3><button class="btn small" id="plCmarkToggle">📐 Créer des marqueurs</button></div>
         <div id="plCmarkBody" style="display:none">
-          <p class="hint">① Pour chaque image, cochez le(s) type(s) de marqueur. ② Dans chaque type, touchez une image pour placer et régler le marqueur (déplacer les points, tourner, symétrie). L'angle mesuré s'affiche.</p>
+          <p class="hint">① Cochez, dans la grille d'aperçu ci-dessus, les images à marquer. ② Pour chaque image, cochez le(s) type(s) de marqueur. ③ Dans chaque type, touchez une image pour placer et régler le marqueur (déplacer les points, tourner, taille, symétrie). Ou utilisez « Éditer les marqueurs » pour les enchaîner. L'angle mesuré s'affiche.</p>
           <label class="chk2"><input type="checkbox" id="plCmarkPageInc" checked/> 📄 Ajouter les pages Marqueurs au PDF (toujours en dernier : une par type + comparatif)</label>
           <div id="plCmarkGrid"></div>
+          <div class="actions" style="margin:6px 0"><button class="btn small" id="plCmarkEditAll">▶️ Éditer les marqueurs (à la suite)</button></div>
           <div id="plCmarkTypes"></div>
         </div>
       </section>` : ''}
@@ -9740,9 +9754,11 @@ function modalPlancheCreate(type, prefill) {
     $('plCmarkToggle').classList.toggle('primary', plCreate.markMode);
     $('plCmarkToggle').textContent = plCreate.markMode ? '✅ Terminer les marqueurs' : '📐 Créer des marqueurs';
     if ($('plCmarkBody')) $('plCmarkBody').style.display = plCreate.markMode ? '' : 'none';
-    plRenderMarkers();
+    plRenderGrid(); plRenderMarkers(); // grille : afficher/masquer les cases à cocher des images
   });
   if ($('plCmarkPageInc')) { $('plCmarkPageInc').checked = plCreate.markPagesOn !== false; $('plCmarkPageInc').addEventListener('change', (e) => { plCreate.markPagesOn = e.target.checked; plDraftSave(); }); }
+  if ($('plCmarkEditAll')) $('plCmarkEditAll').addEventListener('click', plMarkEditAll);
+  if ($('plCgridManage')) $('plCgridManage').addEventListener('click', plCropQueueAll); // cadrer toutes les images à la suite
   // Bouton UNIQUE : enregistre d'abord le PDF sur l'appareil (téléchargement), PUIS ouvre l'envoi par mail.
   // Fermer l'envoi sans envoyer est OK — le PDF est déjà enregistré. Dans une file, on enchaîne à la fermeture de l'envoi.
   $('plCmail').onclick = async () => {
@@ -9867,13 +9883,16 @@ function plRenderGrid() {
         const baked = st.fitMode !== 'contain' && st.cellImg && st.cellImg[key]; // image DÉJÀ découpée (vrai crop) → remplit la case telle quelle
         const imgTag = baked ? `<img src="${baked}" alt="" style="object-fit:cover"/>` : (ph && ph.url ? `<img src="${ph.url}" alt="" style="${imgStyle}"/>` : '<span class="pl-cell-ph">+</span>');
         const cropSel = st.gridEdit && st.cropMode && st.cropSel && st.cropSel.has(key); // sélectionnée pour le rognage → cadre rouge
-        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}${st.gridEdit ? ' pl-cell-edit' : ''}${cropSel ? ' crop-sel' : ''}" data-key="${key}"><div class="pl-cellbox" style="aspect-ratio:${g.colW} / ${g.rowH}">${imgTag}${st.gridEdit ? plGuideSvg() : ''}</div></td>`;
+        const hasImg = !!(baked || (ph && ph.url));
+        const pick = st.markMode && hasImg ? `<label class="pl-pick-o"><input type="checkbox" class="pl-pick" ${st.markPick && st.markPick[key] ? 'checked' : ''}/></label>` : ''; // marqueurs : cocher l'image à marquer
+        return `<td class="pl-cell${st.sel && !ph ? ' sel-target' : ''}${st.gridEdit ? ' pl-cell-edit' : ''}${cropSel ? ' crop-sel' : ''}" data-key="${key}"><div class="pl-cellbox" style="aspect-ratio:${g.colW} / ${g.rowH}">${imgTag}${st.gridEdit ? plGuideSvg() : ''}${pick}</div></td>`;
       }).join('') + '</tr>';
     });
     html += '</tbody>';
     tbl.innerHTML = html;
     tbl.querySelectorAll('.pl-cell').forEach((td) => {
       const key = td.dataset.key;
+      { const pk = td.querySelector('.pl-pick'); if (pk) { pk.addEventListener('click', (e) => e.stopPropagation()); pk.addEventListener('change', (e) => { e.stopPropagation(); if (!st.markPick) st.markPick = {}; if (e.target.checked) st.markPick[key] = true; else delete st.markPick[key]; plRenderMarkers(); plDraftSave(); }); } } // cocher/décocher une image à marquer
       td.addEventListener('click', () => {
         if (st.gridEdit) {
           if (st.cropMode) { if (st.cells[key]) { if (!st.cropSel) st.cropSel = new Set(); if (st.cropSel.has(key)) st.cropSel.delete(key); else st.cropSel.add(key); plRenderGrid(); plUpdateCropCtrls(); } return; } // sélection pour le rognage (cadre rouge)
@@ -9908,8 +9927,9 @@ function plRenderMarkers() {
   const st = plCreate; if (!st) return;
   const gridBox = $('plCmarkGrid'), typesBox = $('plCmarkTypes'); if (!gridBox || !typesBox) return;
   if (!st.markMode) { gridBox.innerHTML = ''; typesBox.innerHTML = ''; return; }
-  const placed = plPlacedCells();
-  if (!placed.length) { gridBox.innerHTML = '<p class="hint">Placez d\'abord des photos dans la grille ci-dessus.</p>'; typesBox.innerHTML = ''; return; }
+  if (!plPlacedCells().length) { gridBox.innerHTML = '<p class="hint">Placez d\'abord des photos dans la grille ci-dessus.</p>'; typesBox.innerHTML = ''; return; }
+  const placed = plPlacedCells().filter((c) => st.markPick && st.markPick[c.key]); // ÉTAPE 1 : images cochées dans l'aperçu
+  if (!placed.length) { gridBox.innerHTML = '<p class="hint">☑️ Cochez, dans la grille d\'aperçu ci-dessus, les images que vous voulez marquer — elles apparaîtront ici.</p>'; typesBox.innerHTML = ''; return; }
   // 2ᵉ grille : chaque image placée + 4 cases (une par type)
   gridBox.innerHTML = '<div class="pl-mark-grid">' + placed.map((c) => {
     const marks = st.cellMarks[c.key] || {};
@@ -9931,9 +9951,14 @@ function plRenderMarkers() {
   }).join('') || '<p class="hint">Cochez au moins un type de marqueur sur une image ci-dessus.</p>';
   typesBox.querySelectorAll('[data-editkey]').forEach((el) => el.addEventListener('click', () => modalMarkEdit(el.dataset.editkey, el.dataset.edittype)));
 }
-const PL_MARK_BAND = 0.16; // fraction de la hauteur de case réservée à la BANDE d'angle (sous l'image). L'éditeur utilise le même ratio d'image → marqueurs alignés avec le PDF.
-function plCellAspect() { const st = plCreate; if (!st) return 4 / 3; const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st)); const rowImg = (g.rowH || 3) * (1 - PL_MARK_BAND); return (g.colW && rowImg) ? g.colW / rowImg : 4 / 3; }
+const PL_MARK_BAND = 0.16; // fraction de la hauteur de case réservée à la BANDE d'angle (sous l'image).
+// Ratio de référence des marqueurs (image seule), INDÉPENDANT de la grille : format contraint → son ratio ; « Plein page » → 4:3
+// (ou 3:4 en portrait). Éditeur ET PDF utilisent ce même ratio → marqueurs toujours alignés (fini le décalage en Plein page).
+function plMarkRefAspect() { const st = plCreate; if (!st) return 4 / 3; const a = plFormatAspect(st); return a > 0 ? a : (st.orientation === 'portrait' ? 3 / 4 : 4 / 3); }
+function plCellAspect() { return plMarkRefAspect(); }
 // Dessine les lignes d'un marqueur (coords % 0-100) dans le rectangle image (x,y,w,h) d'un canvas.
+// Sous-boîte (au ratio de référence des marqueurs) centrée dans une case (x,y,w,h) : image + marqueurs y sont dessinés → alignés avec l'éditeur.
+function plMarkFitBox(x, y, w, h) { const r = plMarkRefAspect(); let sw = w, sh = w / r; if (sh > h) { sh = h; sw = h * r; } return { x: x + (w - sw) / 2, y: y + (h - sh) / 2, w: sw, h: sh }; }
 function drawMarkerLines(ctx, typeKey, m, x, y, w, h, opacity) {
   const g = markGeom(typeKey, m, w / h); if (!g.lines.length) return g; // aspect = largeur/hauteur de la case image
   ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip(); // ne jamais déborder de la case (B5)
@@ -9942,18 +9967,18 @@ function drawMarkerLines(ctx, typeKey, m, x, y, w, h, opacity) {
   ctx.restore(); return g;
 }
 // Éditeur d'un marqueur sur une image : poignées déplaçables (%), lignes de référence + mesure, angle en direct, symétrie, reset.
-function modalMarkEdit(key, typeKey) {
+function modalMarkEdit(key, typeKey, onValidate, progress) {
   const st = plCreate; if (!st) return;
   if (!st.cellMarks[key]) st.cellMarks[key] = {};
   if (!st.cellMarks[key][typeKey]) st.cellMarks[key][typeKey] = markDefaults(typeKey);
   const m = st.cellMarks[key][typeKey], t = markType(typeKey), src = plMarkCellSrc(key), ar = plCellAspect();
-  const o = openOverlay(`<div class="modal-head"><b>📐 ${esc(t.label)}</b><button class="x" data-x>✕</button></div>
+  const o = openOverlay(`<div class="modal-head"><b>📐 ${esc(t.label)}${progress ? ' <span class="li-sub">' + esc(progress) + '</span>' : ''}</b><button class="x" data-x>✕</button></div>
     <div class="pl-me-wrap" style="aspect-ratio:${ar}"><img class="pl-me-img" src="${src || ''}" alt=""/><svg class="pl-me-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
     <p class="pl-me-angle" id="plMeAngle"></p><div class="pl-me-legend" id="plMeLegend"></div>
     <p class="hint">Glissez les points pour placer/tourner le marqueur. Les repères fixes (angles connus) suivent automatiquement.</p>
     <label class="pl-me-size">Taille du marqueur<input type="range" id="plMeSize" min="0.4" max="2.4" step="0.05" value="1"/></label>
     <div class="actions two"><button class="btn small" data-mirror>↔ Symétrie G/D</button><button class="btn small" data-reset>↺ Réinitialiser</button></div>
-    <div class="actions"><button class="btn primary block" data-ok>✓ Valider</button></div>`, 'pl-ce-overlay');
+    <div class="actions"><button class="btn primary block" data-ok>${onValidate ? '✓ Valider et suivant →' : '✓ Valider'}</button></div>`, 'pl-ce-overlay');
   const svg = o.q('.pl-me-svg'), wrap = o.q('.pl-me-wrap');
   const opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
   let dragH = null;
@@ -9976,12 +10001,24 @@ function modalMarkEdit(key, typeKey) {
   wrap.addEventListener('pointermove', (ev) => { if (!dragH || !m.pts[dragH]) return; const p = ptTo(ev); m.pts[dragH].x = p.x; m.pts[dragH].y = p.y; draw(); });
   const up = () => { if (dragH) { dragH = null; plDraftSave(); } };
   wrap.addEventListener('pointerup', up); wrap.addEventListener('pointercancel', up);
-  o.q('[data-x]').onclick = () => { o.close(); plRenderMarkers(); };
+  o.q('[data-x]').onclick = () => { o.close(); plRenderMarkers(); }; // ✕ = arrêter la file
   { let sz = 1; const si = o.q('#plMeSize'); if (si) si.addEventListener('input', (e) => { const v = +e.target.value || 1; markScale(m, v / sz); sz = v; draw(); plDraftSave(); }); } // curseur taille (échelle relative → pas de cumul)
   o.q('[data-mirror]').addEventListener('click', () => { markMirror(m); draw(); plDraftSave(); });
   o.q('[data-reset]').addEventListener('click', () => { m.pts = markDefaults(typeKey).pts; draw(); plDraftSave(); });
-  o.q('[data-ok]').addEventListener('click', () => { o.close(); plRenderMarkers(); });
+  o.q('[data-ok]').addEventListener('click', () => { plDraftSave(); o.close(); if (onValidate) onValidate(); else plRenderMarkers(); });
   draw();
+}
+// File indienne : édite tous les marqueurs (image × type) l'un après l'autre ; « Valider » passe au suivant.
+function plMarkEditQueue(items, i) {
+  if (!plCreate || !items || i >= items.length) { plRenderMarkers(); return; }
+  const it = items[i];
+  modalMarkEdit(it.key, it.type, () => plMarkEditQueue(items, i + 1), (i + 1) + '/' + items.length);
+}
+function plMarkEditAll() {
+  const st = plCreate; if (!st) return;
+  const items = []; plPlacedCells().filter((c) => st.markPick && st.markPick[c.key]).forEach((c) => { const marks = st.cellMarks[c.key] || {}; MARK_TYPES.forEach((t) => { if (marks[t.key]) items.push({ key: c.key, type: t.key }); }); });
+  if (!items.length) { alert('Cochez d\'abord une ou plusieurs images (aperçu) puis au moins un type de marqueur.'); return; }
+  plMarkEditQueue(items, 0);
 }
 
 // Cadrillage d'aide (mode édition) : 4 lignes de marge (gauche/droite/haut/bas, cm → % de la case) + axe central rouge.
@@ -10023,9 +10060,9 @@ function plUpdateCropCtrls() {
 // Éditeur de recadrage : IMAGE ENTIÈRE visible + un CADRE (ratio exact de la case) qu'on déplace/redimensionne (poignées) ;
 // l'extérieur est assombri ; repères + axe rouge central pour centrer le sujet ; rotation de l'image. À Valider on DÉCOUPE
 // réellement (canvas) la zone du cadre → nouvelle image au ratio de la case (aperçu = PDF par construction).
-function modalCellEdit(key) {
+function modalCellEdit(key, onValidate, progress) {
   const st = plCreate; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
-  if (!ph || !ph.url) return;
+  if (!ph || !ph.url) { if (onValidate) onValidate(); return; }
   if (!st.cellImg) st.cellImg = {}; if (!st.cellCropDef) st.cellCropDef = {};
   if (!st.cellMarks) st.cellMarks = {}; if (!st.markPick) st.markPick = {};
   const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st));
@@ -10038,7 +10075,7 @@ function modalCellEdit(key) {
     let rot = def ? (def.rot || 0) : 0;
     let fr = null; // cadre en px du plan de travail {fx,fy,fw,fh} ; null = défaut (max centré)
     const ov = document.createElement('div'); ov.className = 'modal-overlay pl-ce-overlay';
-    ov.innerHTML = `<div class="modal"><div class="modal-head"><b>✏️ Cadrer l'image</b><button class="x" data-ce="x">✕</button></div>
+    ov.innerHTML = `<div class="modal"><div class="modal-head"><b>✏️ Cadrer l'image${progress ? ' <span class="li-sub">' + esc(progress) + '</span>' : ''}</b><button class="x" data-ce="x">✕</button></div>
       <div class="pl-ce-work" data-ce="work"><img class="pl-ce-img2" data-ce="img" src="${ph.url}" alt="" draggable="false"/><div class="pl-ce-cropframe" data-ce="fr">${plGuideSvg()}<span class="pl-ce-h" data-h="nw"></span><span class="pl-ce-h" data-h="ne"></span><span class="pl-ce-h" data-h="sw"></span><span class="pl-ce-h" data-h="se"></span></div></div>
       <label class="pro-logo-zoom">Zoom<input type="range" data-ce="zoom" min="1" max="4" step="0.05" value="1"/></label>
       <label class="pro-logo-zoom">Rotation<input type="range" data-ce="rot" min="-180" max="180" step="1" value="${rot}"/></label>
@@ -10110,10 +10147,23 @@ function modalCellEdit(key) {
       if (!data) { alert('Découpe impossible (image protégée). Réimportez la photo.'); return; } // pas de mutation si rien n'a été produit (F2)
       st.cellImg[key] = data; st.cellCropDef[key] = { rot, relX, relY, relW, relH };
       if (st.cellT) delete st.cellT[key]; if (st.cellCrop) delete st.cellCrop[key];
-      close(); plRenderGrid();
+      close(); if (onValidate) onValidate(); else plRenderGrid(); // file indienne : image suivante à la validation
     };
     requestAnimationFrame(layout);
   }
+}
+// File indienne du CROP : cadre toutes les images placées l'une après l'autre ; « Valider (découper) » passe à la suivante.
+function plCropQueueRun(keys, i) {
+  if (!plCreate || !keys || i >= keys.length) { plRenderGrid(); return; }
+  const key = keys[i];
+  if (!plCreate.cells[key]) { plCropQueueRun(keys, i + 1); return; } // case vidée entre-temps → suivante
+  modalCellEdit(key, () => plCropQueueRun(keys, i + 1), (i + 1) + '/' + keys.length);
+}
+function plCropQueueAll() {
+  if (!plCreate) return;
+  const keys = plPlacedCells().map((c) => c.key);
+  if (!keys.length) { alert('Placez d\'abord des photos dans la grille.'); return; }
+  plCropQueueRun(keys, 0);
 }
 
 // Nom de fichier d'une planche : planche-<cheval>-<date>[-<stade>].
