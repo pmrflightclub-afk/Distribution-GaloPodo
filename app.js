@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.5';
+const APP_VERSION = '1.7.6';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.6', date: '2026-07-14',
+    ajouts: [
+      'Marqueurs : la référence saine (25° / ±3–6° / 0° / pas de déviation) s\'affiche désormais SOUS chaque image dans le PDF, sur une 2ᵉ ligne par défaut. Une nouvelle case « Référence collée à la valeur mesurée » permet de la mettre au contraire à la suite de la valeur, sur la même ligne.',
+    ],
+  },
   {
     version: '1.7.5', date: '2026-07-14',
     ajouts: [
@@ -7987,10 +7993,8 @@ async function plancheMarkerPageCanvas(typeKey) {
       const b = plMarkFitBox(cx, ry, colW, imgH);
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
       const m = st.cellMarks[key][typeKey], gg = drawMarkerLines(ctx, typeKey, m, b.x, b.y, b.w, b.h, opacity);
-      ctx.fillStyle = '#fff'; ctx.fillRect(cx, ry + imgH, colW, bandH); // bande d'angle SOUS l'image
       const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.7) + 'px sans-serif'; ctx.fillStyle = gg ? gg.measureColor : '#333';
-      ctx.fillText(plTrunc(ctx, (gg && gg.measureName ? gg.measureName + ' : ' : '') + ang, colW - 4), cx + colW / 2, ry + imgH + bandH / 2); ctx.textBaseline = 'top';
+      plMarkBand(ctx, cx, ry + imgH, colW, bandH, (gg && gg.measureName ? gg.measureName + ' : ' : '') + ang, t.ref ? 'réf. ' + t.ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
     }
   }
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
@@ -8025,10 +8029,8 @@ async function plancheComparatifCanvas() {
       const cx = gx + labelW + ci * colW, b = plMarkFitBox(cx, ry, colW, imgH);
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
       const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], b.x, b.y, b.w, b.h, opacity);
-      ctx.fillStyle = '#fff'; ctx.fillRect(cx, ry + imgH, colW, bandH);
       const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillStyle = gg ? gg.measureColor : '#333';
-      ctx.fillText(plTrunc(ctx, ang, colW - 4), cx + colW / 2, ry + imgH + bandH / 2); ctx.textBaseline = 'top';
+      plMarkBand(ctx, cx, ry + imgH, colW, bandH, ang, cols[ci].ref ? 'réf. ' + cols[ci].ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
     }
   }
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
@@ -9642,7 +9644,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || (P.orientationUserSet && P.orientation ? P.orientation : 'paysage'), logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cellMarks: {}, markMode: false, markPick: {}, markPagesOn: true, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || (P.orientationUserSet && P.orientation ? P.orientation : 'paysage'), logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cellMarks: {}, markMode: false, markPick: {}, markPagesOn: true, markRefInline: false, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -9697,6 +9699,7 @@ function modalPlancheCreate(type, prefill) {
         <div id="plCmarkBody" style="display:none">
           <p class="hint">① Cochez, dans la grille d'aperçu ci-dessus, les images à marquer. ② Pour chaque image, cochez le(s) type(s) de marqueur. ③ Dans chaque type, touchez une image pour placer et régler le marqueur (déplacer les points, tourner, taille, symétrie). Ou utilisez « Éditer les marqueurs » pour les enchaîner. L'angle mesuré s'affiche.</p>
           <label class="chk2"><input type="checkbox" id="plCmarkPageInc" checked/> 📄 Ajouter les pages Marqueurs au PDF (toujours en dernier : une par type + comparatif)</label>
+          <label class="chk2"><input type="checkbox" id="plCmarkRefInline"/> 📏 Référence saine collée à la valeur mesurée (sinon sur une 2ᵉ ligne sous l'image)</label>
           <div id="plCmarkGrid"></div>
           <div class="actions" style="margin:6px 0"><button class="btn small" id="plCmarkEditAll">▶️ Éditer les marqueurs (à la suite)</button></div>
           <div id="plCmarkTypes"></div>
@@ -9769,6 +9772,7 @@ function modalPlancheCreate(type, prefill) {
     plRenderGrid(); plRenderMarkers(); // grille : afficher/masquer les cases à cocher des images
   });
   if ($('plCmarkPageInc')) { $('plCmarkPageInc').checked = plCreate.markPagesOn !== false; $('plCmarkPageInc').addEventListener('change', (e) => { plCreate.markPagesOn = e.target.checked; plDraftSave(); }); }
+  if ($('plCmarkRefInline')) { $('plCmarkRefInline').checked = !!plCreate.markRefInline; $('plCmarkRefInline').addEventListener('change', (e) => { plCreate.markRefInline = e.target.checked; plDraftSave(); }); }
   if ($('plCmarkEditAll')) $('plCmarkEditAll').addEventListener('click', plMarkEditAll);
   if ($('plCgridManage')) $('plCgridManage').addEventListener('click', plCropQueueAll); // cadrer toutes les images à la suite
   // Bouton UNIQUE : enregistre d'abord le PDF sur l'appareil (téléchargement), PUIS ouvre l'envoi par mail.
@@ -9963,7 +9967,7 @@ function plRenderMarkers() {
   }).join('') || '<p class="hint">Cochez au moins un type de marqueur sur une image ci-dessus.</p>';
   typesBox.querySelectorAll('[data-editkey]').forEach((el) => el.addEventListener('click', () => modalMarkEdit(el.dataset.editkey, el.dataset.edittype)));
 }
-const PL_MARK_BAND = 0.16; // fraction de la hauteur de case réservée à la BANDE d'angle (sous l'image).
+const PL_MARK_BAND = 0.18; // fraction de la hauteur de case réservée à la BANDE d'angle (sous l'image) — assez pour 2 lignes (valeur + réf).
 // Ratio de référence des marqueurs (image seule), INDÉPENDANT de la grille : format contraint → son ratio ; « Plein page » → 4:3
 // (ou 3:4 en portrait). Éditeur ET PDF utilisent ce même ratio → marqueurs toujours alignés (fini le décalage en Plein page).
 function plMarkRefAspect() { const st = plCreate; if (!st) return 4 / 3; const a = plFormatAspect(st); return a > 0 ? a : (st.orientation === 'portrait' ? 3 / 4 : 4 / 3); }
@@ -9971,6 +9975,13 @@ function plCellAspect() { return plMarkRefAspect(); }
 // Dessine les lignes d'un marqueur (coords % 0-100) dans le rectangle image (x,y,w,h) d'un canvas.
 // Sous-boîte (au ratio de référence des marqueurs) centrée dans une case (x,y,w,h) : image + marqueurs y sont dessinés → alignés avec l'éditeur.
 function plMarkFitBox(x, y, w, h) { const r = plMarkRefAspect(); let sw = w, sh = w / r; if (sh > h) { sh = h; sw = h * r; } return { x: x + (w - sw) / 2, y: y + (h - sh) / 2, w: sw, h: sh }; }
+// Bande sous une image (case) : « label » (nom+valeur, ou juste valeur) + référence saine — collée si refInline, sinon 2ᵉ ligne.
+function plMarkBand(ctx, cx, y, colW, bandH, label, refTxt, color, refInline, fs) {
+  ctx.fillStyle = '#fff'; ctx.fillRect(cx, y, colW, bandH); ctx.textAlign = 'center'; ctx.fillStyle = color || '#333';
+  if (!refTxt || refInline) { ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, label + (refTxt ? ' · ' + refTxt : ''), colW - 4), cx + colW / 2, y + bandH / 2); }
+  else { ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.4) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, label, colW - 4), cx + colW / 2, y + bandH * 0.31); ctx.font = fs(2.1) + 'px sans-serif'; ctx.fillStyle = '#666'; ctx.fillText(plTrunc(ctx, refTxt, colW - 4), cx + colW / 2, y + bandH * 0.72); }
+  ctx.textBaseline = 'top';
+}
 function drawMarkerLines(ctx, typeKey, m, x, y, w, h, opacity) {
   const g = markGeom(typeKey, m, w / h); if (!g.lines.length) return g; // aspect = largeur/hauteur de la case image
   ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip(); // ne jamais déborder de la case (B5)
