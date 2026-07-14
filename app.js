@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.6';
+const APP_VERSION = '1.7.7';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.7', date: '2026-07-14',
+    corrections: [
+      'Synchronisation : une fiche cheval ou une adresse SUPPRIMÉE ne « réapparaît » plus après une synchro entre appareils (les suppressions sont désormais mémorisées comme les ajouts). Et après une fusion, l\'adresse active d\'un cheval reste bien reliée à ses coordonnées GPS (fini les pertes de localisation).',
+      'Marqueurs : l\'angle mesuré n\'est plus jamais coupé dans la bande sous l\'image (seul le nom peut être abrégé si la case est étroite). Les images décochées dans l\'aperçu n\'apparaissent plus par erreur dans le PDF. À la reprise d\'un brouillon, les réglages marqueurs (pages incluses, référence collée) sont restaurés. Légende qui ne déborde plus.',
+    ],
+  },
   {
     version: '1.7.6', date: '2026-07-14',
     ajouts: [
@@ -2880,9 +2887,11 @@ function mergeTomb(a, b) { const t = Object.assign({}, a || {}); Object.keys(b |
 // aucune adresse ajoutée n'est perdue). En cas de conflit sur le MÊME id, la version récente (a) gagne.
 function mergeOneCheval(a, b) {
   const h = Object.assign({}, a);
+  h.adrDel = mergeTomb(b.adrDel, a.adrDel); // tombstones d'ADRESSES (suppressions) : survivent à la fusion → pas de résurrection
   if (Array.isArray(a.adresses) || Array.isArray(b.adresses)) {
     const byId = {}; (b.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); (a.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); // récent gagne
-    const list = Object.values(byId).map((e) => Object.assign({}, e));
+    const aIds = new Set((a.adresses || []).map((e) => e.id)); // présente chez le récent = vivante
+    const list = Object.values(byId).filter((e) => aIds.has(e.id) || !((a.adrDel || {})[e.id])).map((e) => Object.assign({}, e)); // présente seulement chez l'ancien → gardée SAUF si le récent l'a supprimée
     const aAct = (a.adresses || []).find((e) => e.actif); const aid = aAct ? aAct.id : null; // l'adresse active du récent fait foi
     let has = false; list.forEach((e) => { e.actif = aid ? (e.id === aid) : false; if (e.actif) has = true; });
     if (!has && list.length) list[0].actif = true; // garantir une seule active
@@ -2892,9 +2901,11 @@ function mergeOneCheval(a, b) {
 }
 function mergeOneClient(a, b) {
   const base = Object.assign({}, a); const chById = {};
-  (b.chevaux || []).forEach((h) => { if (h && h.id) chById[h.id] = h; }); // anciens d'abord (gardés s'ils n'existent plus chez le récent)
+  base.chDel = mergeTomb(b.chDel, a.chDel); // tombstones de CHEVAUX (suppressions)
+  (b.chevaux || []).forEach((h) => { if (h && h.id) chById[h.id] = h; }); // anciens d'abord
   (a.chevaux || []).forEach((h) => { if (!h || !h.id) return; chById[h.id] = chById[h.id] ? mergeOneCheval(h, chById[h.id]) : h; });
-  base.chevaux = Object.values(chById);
+  const aIds = new Set((a.chevaux || []).map((h) => h.id)); // présent chez le récent = vivant
+  base.chevaux = Object.values(chById).filter((h) => aIds.has(h.id) || !((a.chDel || {})[h.id])); // présent seulement chez l'ancien → gardé SAUF si le récent l'a supprimé
   return base;
 }
 function mergeClients(localArr, remoteArr, tomb) {
@@ -3004,6 +3015,9 @@ function exportSnapshot() {
 function applyMerged(merged) {
   S = Object.assign(S, merged.settings);
   clients = merged.clients;
+  // Après fusion, `h.adresses` a été reconstruit (nouveaux objets) → re-partager le miroir h.addr ↔ adresse active pour que
+  // tout le code legacy (géocodage, assistant) qui lit/écrit `h.addr` reste solidaire de l'entrée active (évite les mesures perdues).
+  (clients || []).forEach((c) => (c.chevaux || []).forEach((h) => { try { chevalSyncActive(h); } catch (e) {} }));
   const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
   const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
   tournees = merged.tours.filter((t) => !isArch(t));
@@ -4486,7 +4500,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
       // (adresse propre : reprise/édition/ajout câblées PAR ENTRÉE plus bas)
       row.querySelector('[data-lourd]').addEventListener('change', (e) => { h.lourd = e.target.checked; if (!e.target.checked) delete h.lourdHT; renderCh(); saveDraft(); });
       { const lh = row.querySelector('[data-lourdht]'); if (lh) lh.addEventListener('input', (e) => { const v = parseFloat(e.target.value); h.lourdHT = (e.target.value === '' || isNaN(v)) ? null : Math.max(0, v); saveDraft(); }); }
-      row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; w.chevaux.splice(i, 1); renderCh(); saveDraft(); });
+      row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; if (h.id) { w.chDel = w.chDel || {}; w.chDel[h.id] = Date.now(); } w.chevaux.splice(i, 1); renderCh(); saveDraft(); }); // tombstone → pas de résurrection à la synchro
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
       { const pv = row.querySelector('[data-priv]'); if (pv) pv.addEventListener('change', (e) => { h.addrPrivee = e.target.checked; renderCh(); saveDraft(); }); }
       // Badge de statut du LIEU sur la section adresse du cheval (à l'endroit exact où l'adresse refusée est détectée).
@@ -4505,7 +4519,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
           const ai = +el.dataset.ai; const a = h.adresses[ai]; if (!a) return;
           const def = el.querySelector('[data-def]'); if (def) def.addEventListener('change', () => { h.adresses.forEach((x) => { x.actif = false; }); a.actif = true; chevalSyncActive(h); saveDraft(); refreshChBadge(); });
           const nm = el.querySelector('[data-anom]'); if (nm) nm.addEventListener('input', (e) => { a.nom = e.target.value; if (a.actif) h.addrNom = a.nom; saveDraft(); });
-          const del = el.querySelector('[data-adel]'); if (del) del.addEventListener('click', () => { if (!confirm('Supprimer cette adresse ?')) return; const wasActive = a.actif; h.adresses.splice(ai, 1); if (wasActive && h.adresses.length) h.adresses[0].actif = true; if (!h.adresses.length) h.addr = emptyAddr(); chevalSyncActive(h); renderCh(); saveDraft(); }); // dernière adresse supprimée → vider h.addr pour qu'elle ne soit pas ré-amorcée
+          const del = el.querySelector('[data-adel]'); if (del) del.addEventListener('click', () => { if (!confirm('Supprimer cette adresse ?')) return; const wasActive = a.actif; if (a.id) { h.adrDel = h.adrDel || {}; h.adrDel[a.id] = Date.now(); } h.adresses.splice(ai, 1); if (wasActive && h.adresses.length) h.adresses[0].actif = true; if (!h.adresses.length) { h.addr = emptyAddr(); h.addrNom = ''; } chevalSyncActive(h); renderCh(); saveDraft(); }); // tombstone adresse + vider miroir si plus d'adresse
           const find = el.querySelector('[data-afind]'); if (find) find.addEventListener('change', (e) => { const txt = (e.target.value || '').trim(); if (!txt) return; const places = collectRoutePlaces(); const p = places.find((x) => norm(x.label) === norm(txt)) || places.find((x) => norm(x.label).includes(norm(txt))); if (p && p.addr) { const s = toAddr(p.addr); a.addr = Object.assign(emptyAddr(), { rue: s.rue || '', numero: s.numero || '', cp: s.cp || '', localite: s.localite || '', pays: s.pays || '', lat: s.lat || null, lon: s.lon || null }); if (!a.nom && p.label && String(p.label).includes(' · ')) a.nom = String(p.label).split(' · ').slice(1).join(' · ').trim(); chevalSyncActive(h); saveDraft(); renderCh(); } else { alert('Adresse non trouvée. Choisissez un nom dans la liste proposée.'); } }); // reprend aussi le nom d'écurie (après « · »)
           mountAddress(el.querySelector('[data-amount]'), a.addr, (na) => { a.addr = na; chevalSyncActive(h); saveDraft(); refreshChBadge(); });
         });
@@ -7963,8 +7977,9 @@ function plMarkLegend(ctx, g, typeKey) {
   const SC = PL_PXMM, px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv))), t = markType(typeKey);
   const y1 = px(g.pageH - g.margin - g.footerH - 8), y2 = px(g.pageH - g.margin - g.footerH - 4); let x = px(g.margin);
   ctx.textBaseline = 'middle'; ctx.font = fs(2.7) + 'px sans-serif';
-  // Ligne 1 : nom + couleur de chaque ligne du marqueur.
-  t.lines.forEach((l) => { ctx.fillStyle = markColor(typeKey, l.k); ctx.fillRect(x, y1 - px(1.2), px(2.4), px(2.4)); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; const lbl = l.name; ctx.fillText(lbl, x + px(3), y1); x += px(3) + ctx.measureText(lbl).width + px(5); });
+  // Ligne 1 : nom + couleur de chaque ligne du marqueur (sans déborder de la marge droite).
+  const xMax = px(g.margin + g.gridW);
+  t.lines.forEach((l) => { const lbl = l.name; if (x + px(3) + ctx.measureText(lbl).width > xMax) return; ctx.fillStyle = markColor(typeKey, l.k); ctx.fillRect(x, y1 - px(1.2), px(2.4), px(2.4)); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.fillText(lbl, x + px(3), y1); x += px(3) + ctx.measureText(lbl).width + px(5); });
   // Ligne 2 : référence (valeur saine) + note clinique du type.
   ctx.textAlign = 'left'; ctx.fillStyle = '#555'; ctx.font = 'italic ' + fs(2.6) + 'px sans-serif';
   ctx.fillText(plTrunc(ctx, 'Réf. ' + (t.ref || '') + (t.note ? ' — ' + t.note : ''), px(g.gridW)), px(g.margin), y2);
@@ -7973,7 +7988,7 @@ function plMarkLegend(ctx, g, typeKey) {
 // Une page PDF par TYPE de marqueur : grille (colonnes = angles, lignes = membres) des images marquées + bande d'angle sous chaque image + légende.
 async function plancheMarkerPageCanvas(typeKey) {
   const st = plCreate, land = st.orientation !== 'portrait', t = markType(typeKey), opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
-  const placed = plPlacedCells().filter((c) => st.cellMarks[c.key] && st.cellMarks[c.key][typeKey]);
+  const placed = plPlacedCells().filter((c) => st.markPick && st.markPick[c.key] && st.cellMarks[c.key] && st.cellMarks[c.key][typeKey]);
   const angles = st.angles || [], membres = []; placed.forEach((c) => { if (!membres.includes(c.membre)) membres.push(c.membre); });
   const byMA = {}; placed.forEach((c) => { const k = c.membre + '||' + c.angle; if (!byMA[k]) byMA[k] = c.key; });
   const g = plGeom(land, angles.length, Math.max(1, membres.length), plFormatAspect(st));
@@ -7994,7 +8009,7 @@ async function plancheMarkerPageCanvas(typeKey) {
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
       const m = st.cellMarks[key][typeKey], gg = drawMarkerLines(ctx, typeKey, m, b.x, b.y, b.w, b.h, opacity);
       const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
-      plMarkBand(ctx, cx, ry + imgH, colW, bandH, (gg && gg.measureName ? gg.measureName + ' : ' : '') + ang, t.ref ? 'réf. ' + t.ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
+      plMarkBand(ctx, cx, ry + imgH, colW, bandH, (gg && gg.measureName) ? gg.measureName : '', ang, t.ref ? 'réf. ' + t.ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
     }
   }
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
@@ -8009,7 +8024,7 @@ async function plancheMarkerPageCanvas(typeKey) {
 // déclinée avec chaque marqueur qui y est posé). Max un marqueur par cellule.
 async function plancheComparatifCanvas() {
   const st = plCreate, land = st.orientation !== 'portrait';
-  const rows = plPlacedCells().filter((c) => st.cellMarks[c.key] && Object.keys(st.cellMarks[c.key]).length); // 1 ligne = 1 photo
+  const rows = plPlacedCells().filter((c) => st.markPick && st.markPick[c.key] && st.cellMarks[c.key] && Object.keys(st.cellMarks[c.key]).length); // 1 ligne = 1 photo cochée
   const cols = MARK_TYPES.slice();
   const g = plGeom(land, cols.length, Math.max(1, rows.length), plFormatAspect(st));
   const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
@@ -8030,7 +8045,7 @@ async function plancheComparatifCanvas() {
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
       const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], b.x, b.y, b.w, b.h, opacity);
       const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
-      plMarkBand(ctx, cx, ry + imgH, colW, bandH, ang, cols[ci].ref ? 'réf. ' + cols[ci].ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
+      plMarkBand(ctx, cx, ry + imgH, colW, bandH, '', ang, cols[ci].ref ? 'réf. ' + cols[ci].ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
     }
   }
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
@@ -8050,7 +8065,7 @@ async function planchePdfBlob() {
   // Pages MARQUEURS — toujours en DERNIER (après la page Cheval), si la case « Ajouter les pages Marqueurs » est cochée.
   // Un type n'a une page QUE s'il a au moins une image RÉELLEMENT placée marquée (évite une page vide, cf. B3).
   if (plCreate.markPagesOn !== false) {
-    const marked = plPlacedCells().filter((c) => plCreate.cellMarks[c.key] && Object.keys(plCreate.cellMarks[c.key]).length);
+    const marked = plPlacedCells().filter((c) => plCreate.markPick && plCreate.markPick[c.key] && plCreate.cellMarks[c.key] && Object.keys(plCreate.cellMarks[c.key]).length); // seulement les images cochées (aperçu)
     const usedTypes = {}; marked.forEach((c) => Object.keys(plCreate.cellMarks[c.key]).forEach((ty) => { usedTypes[ty] = true; }));
     for (const t of MARK_TYPES) { if (usedTypes[t.key]) addPage(await plancheMarkerPageCanvas(t.key)); }
     if (Object.keys(usedTypes).length >= 2) addPage(await plancheComparatifCanvas()); // comparatif utile s'il y a ≥2 types
@@ -9629,6 +9644,8 @@ function plDraftRestore(d) {
   // restaure l'état lourd que le pré-remplissage ne porte pas (photos, placements, recadrages, options d'affichage)
   plCreate.photos = d.photos || []; plCreate.cells = d.cells || {}; plCreate.cellT = d.cellT || {}; plCreate.cellCrop = d.cellCrop || {}; plCreate.cellImg = d.cellImg || {}; plCreate.cellCropDef = d.cellCropDef || {}; plCreate.cellMarks = d.cellMarks || {}; plCreate.markPick = d.markPick || {};
   if (d.fitMode) plCreate.fitMode = d.fitMode; if (d.potView) plCreate.potView = d.potView; if (d.pages) plCreate.pages = d.pages; if (d.compar) plCreate.compar = d.compar; if (d.chevalPageOn != null) plCreate.chevalPageOn = d.chevalPageOn; if (d.orientation) plCreate.orientation = d.orientation; if (d.format) plCreate.format = d.format;
+  if (d.markPagesOn != null) plCreate.markPagesOn = d.markPagesOn; if (d.markRefInline != null) plCreate.markRefInline = d.markRefInline; if (d.markMode) plCreate.markMode = d.markMode; // préférences marqueurs restaurées
+  { const b = $('plCmarkBody'); if (b && plCreate.markMode) { b.style.display = ''; const tg = $('plCmarkToggle'); if (tg) { tg.classList.add('primary'); tg.textContent = '✅ Terminer les marqueurs'; } } const rp = $('plCmarkPageInc'); if (rp) rp.checked = plCreate.markPagesOn !== false; const ri = $('plCmarkRefInline'); if (ri) ri.checked = !!plCreate.markRefInline; }
   const cp = $('plCchevalPage'); if (cp) cp.checked = !!plCreate.chevalPageOn; // reflète l'état restauré de la case « page Cheval »
   plRenderPot(); plRenderGrid();
 }
@@ -9976,10 +9993,13 @@ function plCellAspect() { return plMarkRefAspect(); }
 // Sous-boîte (au ratio de référence des marqueurs) centrée dans une case (x,y,w,h) : image + marqueurs y sont dessinés → alignés avec l'éditeur.
 function plMarkFitBox(x, y, w, h) { const r = plMarkRefAspect(); let sw = w, sh = w / r; if (sh > h) { sh = h; sw = h * r; } return { x: x + (w - sw) / 2, y: y + (h - sh) / 2, w: sw, h: sh }; }
 // Bande sous une image (case) : « label » (nom+valeur, ou juste valeur) + référence saine — collée si refInline, sinon 2ᵉ ligne.
-function plMarkBand(ctx, cx, y, colW, bandH, label, refTxt, color, refInline, fs) {
+// namePrefix = nom de mesure (tronquable) ; valueTxt = l'ANGLE (jamais tronqué) ; refTxt = référence saine.
+function plMarkBand(ctx, cx, y, colW, bandH, namePrefix, valueTxt, refTxt, color, refInline, fs) {
   ctx.fillStyle = '#fff'; ctx.fillRect(cx, y, colW, bandH); ctx.textAlign = 'center'; ctx.fillStyle = color || '#333';
-  if (!refTxt || refInline) { ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, label + (refTxt ? ' · ' + refTxt : ''), colW - 4), cx + colW / 2, y + bandH / 2); }
-  else { ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.4) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, label, colW - 4), cx + colW / 2, y + bandH * 0.31); ctx.font = fs(2.1) + 'px sans-serif'; ctx.fillStyle = '#666'; ctx.fillText(plTrunc(ctx, refTxt, colW - 4), cx + colW / 2, y + bandH * 0.72); }
+  // Tronque UNIQUEMENT le préfixe (nom) pour que la valeur (angle) tienne toujours.
+  const fit = (tail, maxW) => { let p = namePrefix || ''; while (p && ctx.measureText(p + ' : ' + tail).width > maxW) p = p.slice(0, -1); return (p ? p + ' : ' : '') + tail; };
+  if (!refTxt || refInline) { ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillText(fit(valueTxt + (refTxt ? ' · ' + refTxt : ''), colW - 4), cx + colW / 2, y + bandH / 2); }
+  else { ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.4) + 'px sans-serif'; ctx.fillText(fit(valueTxt, colW - 4), cx + colW / 2, y + bandH * 0.31); ctx.font = fs(2.1) + 'px sans-serif'; ctx.fillStyle = '#666'; ctx.fillText(plTrunc(ctx, refTxt, colW - 4), cx + colW / 2, y + bandH * 0.72); }
   ctx.textBaseline = 'top';
 }
 function drawMarkerLines(ctx, typeKey, m, x, y, w, h, opacity) {
