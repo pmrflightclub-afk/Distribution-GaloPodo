@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.4';
+const APP_VERSION = '1.7.5';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.5', date: '2026-07-14',
+    ajouts: [
+      'Marqueurs — compte-rendu enrichi : noms de mesure précisés (Axe plan coronal, Axe plan solaire, Déviation paroi dorsale, Déviation de l\'alignement), le 4ᵉ type renommé « Alignement phalangien », et une légende à deux lignes par page (couleurs + référence saine — coronal ≈ 25°, solaire ± 3–6°, paroi 0°, alignement : pas de déviation — avec une note clinique).',
+      'Comparatif par pied revu : une ligne par photo (pied · angle), quatre colonnes = les quatre types de marqueur (la même photo déclinée avec chaque marqueur qui y est posé).',
+    ],
+  },
   {
     version: '1.7.4', date: '2026-07-14',
     ajouts: [
@@ -2228,10 +2235,10 @@ if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.g
 { const gg = S.planche.gridGuide; if (!gg.color1) gg.color1 = '#333333'; if (!gg.color2) gg.color2 = '#2b7bd6'; } // couleurs des repères 1 (coupe) et 2 (cible), réglables dans Gestion → Planche
 // Marqueurs (compas d'angles) — 4 types, chaque ligne NOMMÉE et colorée. La ligne « measure » est celle tracée par l'utilisateur (l'angle mesuré = base ↔ measure). Couleurs réglables dans Gestion → Planche ; transparence GLOBALE (tous types).
 const MARK_TYPES = [
-  { key: 'coronal', label: 'Plan coronal', lines: [{ k: 'sol', name: 'Sol', def: '#8a8f98' }, { k: 'ref25', name: 'Repère 25°', def: '#2e9e5b' }, { k: 'axe', name: 'Axe coronal', def: '#e8722a' }], measure: 'axe' },
-  { key: 'solaire', label: 'Plan solaire', lines: [{ k: 'base', name: 'Base', def: '#8a8f98' }, { k: 'ref3', name: 'Repère 3°', def: '#2e9e5b' }, { k: 'ref6', name: 'Repère 6°', def: '#2563eb' }, { k: 'axe', name: 'Axe solaire', def: '#e8722a' }], measure: 'axe' },
-  { key: 'paroi', label: 'Déviation paroi', lines: [{ k: 'aplomb', name: 'Aplomb', def: '#8a8f98' }, { k: 'base90', name: 'Base 90°', def: '#2e9e5b' }, { k: 'paroi', name: 'Paroi', def: '#e8722a' }], measure: 'paroi' },
-  { key: 'rotation', label: 'Rotation', lines: [{ k: 'seg1', name: 'Segment fixe', def: '#8a8f98' }, { k: 'seg2', name: 'Segment mobile', def: '#e8722a' }], measure: 'seg2' },
+  { key: 'coronal', label: 'Plan coronal', measure: 'axe', ref: 'sain ≈ 25°', note: 'Différent de l\'axe pied-paturon.', lines: [{ k: 'sol', name: 'Sol', def: '#8a8f98' }, { k: 'ref25', name: 'Repère 25°', def: '#2e9e5b' }, { k: 'axe', name: 'Axe plan coronal', def: '#e8722a' }] },
+  { key: 'solaire', label: 'Plan solaire', measure: 'axe', ref: 'sain ± 3–6°', note: 'Angle positif / négatif ou phalange à plat = pathologique.', lines: [{ k: 'base', name: 'Base', def: '#8a8f98' }, { k: 'ref3', name: 'Repère 3°', def: '#2e9e5b' }, { k: 'ref6', name: 'Repère 6°', def: '#2563eb' }, { k: 'axe', name: 'Axe plan solaire', def: '#e8722a' }] },
+  { key: 'paroi', label: 'Déviation paroi', measure: 'paroi', ref: 'sain 0°', note: 'Rotation de la boîte cornée p/r à l\'arche interne.', lines: [{ k: 'aplomb', name: 'Aplomb', def: '#8a8f98' }, { k: 'base90', name: 'Base 90°', def: '#2e9e5b' }, { k: 'paroi', name: 'Déviation paroi dorsale', def: '#e8722a' }] },
+  { key: 'rotation', label: 'Alignement phalangien', measure: 'seg2', ref: 'sain : pas de déviation', note: 'Alignement phalangien.', lines: [{ k: 'seg1', name: 'Segment fixe', def: '#8a8f98' }, { k: 'seg2', name: 'Déviation de l\'alignement', def: '#e8722a' }] },
 ];
 const markType = (key) => MARK_TYPES.find((t) => t.key === key);
 if (!S.planche.markers || typeof S.planche.markers !== 'object') S.planche.markers = {};
@@ -7948,10 +7955,14 @@ async function plMarkHeaderFooter(ctx, g, subtitle) {
 // Légende (une fois par page) : nom + couleur de chaque ligne d'un type, en bas juste au-dessus du pied.
 function plMarkLegend(ctx, g, typeKey) {
   const SC = PL_PXMM, px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv))), t = markType(typeKey);
-  const y = px(g.pageH - g.margin - g.footerH - 5.5); let x = px(g.margin);
+  const y1 = px(g.pageH - g.margin - g.footerH - 8), y2 = px(g.pageH - g.margin - g.footerH - 4); let x = px(g.margin);
   ctx.textBaseline = 'middle'; ctx.font = fs(2.7) + 'px sans-serif';
-  t.lines.forEach((l) => { ctx.fillStyle = markColor(typeKey, l.k); ctx.fillRect(x, y - px(1.2), px(2.4), px(2.4)); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; const lbl = l.name; ctx.fillText(lbl, x + px(3), y); x += px(3) + ctx.measureText(lbl).width + px(5); });
-  ctx.textBaseline = 'top';
+  // Ligne 1 : nom + couleur de chaque ligne du marqueur.
+  t.lines.forEach((l) => { ctx.fillStyle = markColor(typeKey, l.k); ctx.fillRect(x, y1 - px(1.2), px(2.4), px(2.4)); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; const lbl = l.name; ctx.fillText(lbl, x + px(3), y1); x += px(3) + ctx.measureText(lbl).width + px(5); });
+  // Ligne 2 : référence (valeur saine) + note clinique du type.
+  ctx.textAlign = 'left'; ctx.fillStyle = '#555'; ctx.font = 'italic ' + fs(2.6) + 'px sans-serif';
+  ctx.fillText(plTrunc(ctx, 'Réf. ' + (t.ref || '') + (t.note ? ' — ' + t.note : ''), px(g.gridW)), px(g.margin), y2);
+  ctx.font = fs(2.7) + 'px sans-serif'; ctx.textBaseline = 'top';
 }
 // Une page PDF par TYPE de marqueur : grille (colonnes = angles, lignes = membres) des images marquées + bande d'angle sous chaque image + légende.
 async function plancheMarkerPageCanvas(typeKey) {
@@ -7990,27 +8001,28 @@ async function plancheMarkerPageCanvas(typeKey) {
   plMarkLegend(ctx, g, typeKey);
   return cv;
 }
-// Page « Comparatif par pied » : lignes = pied (membre), colonnes = types de marqueur (déclinaisons côte à côte).
+// Page « Comparatif par pied » : UNE LIGNE PAR PHOTO (membre · angle), 4 COLONNES = les 4 types de marqueur (la même photo,
+// déclinée avec chaque marqueur qui y est posé). Max un marqueur par cellule.
 async function plancheComparatifCanvas() {
   const st = plCreate, land = st.orientation !== 'portrait';
-  const placed = plPlacedCells().filter((c) => st.cellMarks[c.key] && Object.keys(st.cellMarks[c.key]).length);
-  const membres = []; placed.forEach((c) => { if (!membres.includes(c.membre)) membres.push(c.membre); });
+  const rows = plPlacedCells().filter((c) => st.cellMarks[c.key] && Object.keys(st.cellMarks[c.key]).length); // 1 ligne = 1 photo
   const cols = MARK_TYPES.slice();
-  const g = plGeom(land, cols.length, Math.max(1, membres.length), plFormatAspect(st));
+  const g = plGeom(land, cols.length, Math.max(1, rows.length), plFormatAspect(st));
   const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
   await plMarkHeaderFooter(ctx, g, 'Comparatif par pied');
   const opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
   const gx = px(g.gridLeft + g.offX), gtop = px(g.gridTop + g.offY), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH), blockW = px(g.blockW), bandH = rowH * PL_MARK_BAND, imgH = rowH - bandH;
   ctx.fillStyle = '#eee'; ctx.fillRect(gx, gtop, blockW, angH); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  cols.forEach((t, ci) => { ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(2.7) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, t.label, colW - 6), gx + labelW + ci * colW + colW / 2, gtop + angH / 2 - fs(1.4)); });
-  for (let ri = 0; ri < membres.length; ri++) {
-    const ry = gtop + angH + ri * rowH; ctx.fillStyle = '#f5f5f5'; ctx.fillRect(gx, ry, labelW, rowH);
-    ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.font = 'bold ' + fs(3.0) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, membres[ri], labelW - 4), gx + labelW / 2, ry + rowH / 2 - fs(1.6));
+  cols.forEach((t, ci) => { ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, t.label, colW - 6), gx + labelW + ci * colW + colW / 2, gtop + angH / 2 - fs(1.4)); });
+  for (let ri = 0; ri < rows.length; ri++) {
+    const c = rows[ri], ry = gtop + angH + ri * rowH; ctx.fillStyle = '#f5f5f5'; ctx.fillRect(gx, ry, labelW, rowH);
+    ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.font = 'bold ' + fs(2.5) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, c.membre, labelW - 2), gx + labelW / 2, ry + rowH / 2 - fs(2.2)); // membre (haut) · angle (bas) — libellé étroit
+    ctx.font = fs(2.2) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, c.angle, labelW - 2), gx + labelW / 2, ry + rowH / 2 + fs(0.4));
+    const src = plMarkCellSrc(c.key), im = src && await plLoadImg(src); // même photo pour les 4 colonnes
     for (let ci = 0; ci < cols.length; ci++) {
-      const ty = cols[ci].key; const c = placed.find((c) => c.membre === membres[ri] && st.cellMarks[c.key][ty]); if (!c) continue;
-      const cx = gx + labelW + ci * colW, src = plMarkCellSrc(c.key), im = src && await plLoadImg(src); if (!im) continue;
-      const b = plMarkFitBox(cx, ry, colW, imgH);
+      const ty = cols[ci].key; if (!st.cellMarks[c.key][ty] || !im) continue;
+      const cx = gx + labelW + ci * colW, b = plMarkFitBox(cx, ry, colW, imgH);
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
       const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], b.x, b.y, b.w, b.h, opacity);
       ctx.fillStyle = '#fff'; ctx.fillRect(cx, ry + imgH, colW, bandH);
@@ -8020,13 +8032,13 @@ async function plancheComparatifCanvas() {
     }
   }
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
-  const gridBottom = gtop + angH + membres.length * rowH, gridRight = gx + labelW + cols.length * colW;
+  const gridBottom = gtop + angH + rows.length * rowH, gridRight = gx + labelW + cols.length * colW;
   for (let ci = 0; ci <= cols.length; ci++) { const xx = gx + labelW + ci * colW; ctx.moveTo(xx, gtop); ctx.lineTo(xx, gridBottom); }
-  for (let ri = 0; ri <= membres.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
+  for (let ri = 0; ri <= rows.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
   ctx.stroke();
-  // Légende : nom + couleur de la MESURE de chaque type (une fois par page).
-  { const ly = px(g.pageH - g.margin - g.footerH - 5.5); let lx = px(g.margin); ctx.textBaseline = 'middle'; ctx.font = fs(2.7) + 'px sans-serif';
-    cols.forEach((t) => { const col = markColor(t.key, t.measure), nm = (t.lines.find((l) => l.k === t.measure) || {}).name || t.label; ctx.fillStyle = col; ctx.fillRect(lx, ly - px(1.2), px(2.4), px(2.4)); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.fillText(t.label + ' (' + nm + ')', lx + px(3), ly); lx += px(3) + ctx.measureText(t.label + ' (' + nm + ')').width + px(5); }); ctx.textBaseline = 'top'; }
+  // Légende compacte (1 ligne) : chaque type → couleur de mesure + référence saine (les notes cliniques détaillées sont sur les pages par type).
+  { const ly = px(g.pageH - g.margin - g.footerH - 5.5); let lx = px(g.margin); ctx.textBaseline = 'middle'; ctx.font = fs(2.5) + 'px sans-serif';
+    cols.forEach((t) => { const col = markColor(t.key, t.measure); const lbl = t.label + (t.ref ? ' (réf. ' + t.ref + ')' : ''); ctx.fillStyle = col; ctx.fillRect(lx, ly - px(1.2), px(2.4), px(2.4)); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.fillText(lbl, lx + px(3), ly); lx += px(3) + ctx.measureText(lbl).width + px(6); }); ctx.textBaseline = 'top'; }
   return cv;
 }
 async function planchePdfBlob() {
