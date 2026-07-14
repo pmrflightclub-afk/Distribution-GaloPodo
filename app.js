@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.11';
+const APP_VERSION = '1.7.12';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.12', date: '2026-07-14',
+    ajouts: [
+      'Marqueurs — déviation de paroi entièrement revue : on place deux « T » (barre noire en tête + bras) — l\'axe de la phalange et la paroi dorsale — et l\'app mesure l\'écart au PARALLÉLISME entre les deux bras. 0° = parallèle (sain) ; lignes qui convergent vers le bas = négatif ; qui s\'écartent = positif ; valeur en ROUGE dès qu\'elles ne sont plus parallèles.',
+    ],
+  },
   {
     version: '1.7.11', date: '2026-07-14',
     ajouts: [
@@ -2287,7 +2293,7 @@ if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.g
 const MARK_TYPES = [
   { key: 'coronal', label: 'Plan coronal', measure: 'axe', ref: 'sain ≈ 25°', note: 'Différent de l\'axe pied-paturon.', lines: [{ k: 'sol', name: 'Sol', def: '#8a8f98' }, { k: 'ref25', name: 'Repère 25°', def: '#2e9e5b' }, { k: 'axe', name: 'Axe plan coronal', def: '#e8722a' }] },
   { key: 'solaire', label: 'Plan solaire', measure: 'axe', ref: 'sain ± 3–6°', note: 'Angle positif / négatif ou phalange à plat = pathologique.', lines: [{ k: 'base', name: 'Base', def: '#8a8f98' }, { k: 'ref3', name: 'Repère 3°', def: '#2e9e5b' }, { k: 'ref6', name: 'Repère 6°', def: '#2563eb' }, { k: 'axe', name: 'Axe plan solaire', def: '#e8722a' }] },
-  { key: 'paroi', label: 'Déviation paroi', measure: 'paroi', ref: 'sain 0°', note: 'Rotation de la boîte cornée p/r à l\'arche interne.', lines: [{ k: 'aplomb', name: 'Aplomb', def: '#8a8f98' }, { k: 'base90', name: 'Base 90°', def: '#2e9e5b' }, { k: 'paroi', name: 'Déviation paroi dorsale', def: '#e8722a' }] },
+  { key: 'paroi', label: 'Déviation paroi', measure: 'arm1', measKeys: ['arm1', 'arm2'], ref: 'parallèle (0°)', note: 'Parallélisme paroi dorsale / axe de la phalange (P3).', lines: [{ k: 'bar1', name: 'Barre T (phalange)', def: '#222222' }, { k: 'arm1', name: 'Axe phalange', def: '#e8722a' }, { k: 'bar2', name: 'Barre T (paroi)', def: '#222222' }, { k: 'arm2', name: 'Paroi dorsale', def: '#2563eb' }] },
   { key: 'rotation', label: 'Alignement phalangien', measure: 'seg2', ref: 'sain : pas de déviation', note: 'Alignement phalangien.', lines: [{ k: 'seg1', name: 'Segment fixe', def: '#8a8f98' }, { k: 'seg2', name: 'Déviation de l\'alignement', def: '#e8722a' }] },
 ];
 const markType = (key) => MARK_TYPES.find((t) => t.key === key);
@@ -2297,9 +2303,14 @@ const markColor = (typeKey, lineKey) => (S.planche.markers && S.planche.markers.
 // Deux transparences GLOBALES (couplées Gestion↔création) : repères vs ligne de mesure. Repli sur l'ancien réglage unique.
 const markOpRef = () => { const o = S.planche.markers || {}; return o.opacityRef != null ? o.opacityRef : (o.opacity != null ? o.opacity : 0.9); };
 const markOpMeasure = () => { const o = S.planche.markers || {}; return o.opacityMeasure != null ? o.opacityMeasure : (o.opacity != null ? o.opacity : 0.9); };
-const markLineOp = (typeKey, lineKey) => (lineKey === ((markType(typeKey) || {}).measure)) ? markOpMeasure() : markOpRef();
-// Couleur de la VALEUR d'angle affichée : rouge quand pathologique (solaire hors 3–6° ou négatif). Sinon null = couleur normale.
-function markValColor(typeKey, angle) { if (typeKey === 'solaire' && angle != null && (angle < 3 || angle > 6)) return '#d1342f'; return null; }
+const markLineOp = (typeKey, lineKey) => { const t = markType(typeKey) || {}; const mk = t.measKeys || (t.measure ? [t.measure] : []); return mk.includes(lineKey) ? markOpMeasure() : markOpRef(); };
+// Couleur de la VALEUR d'angle affichée : rouge quand pathologique — solaire hors 3–6° (ou négatif) ; paroi dès que non parallèle (≠ 0). Sinon null = normal.
+function markValColor(typeKey, angle) {
+  if (angle == null) return null;
+  if (typeKey === 'solaire' && (angle < 3 || angle > 6)) return '#d1342f';
+  if (typeKey === 'paroi' && Math.round(angle * 10) !== 0) return '#d1342f';
+  return null;
+}
 // Deux curseurs de transparence (repères / mesure), partagés Gestion↔création : écrivent dans S.planche.markers (couplés, enregistrés).
 function markOpacityControlsHtml(idRef, idMeas) {
   return `<label>Transparence des repères<input type="range" id="${idRef}" min="0.2" max="1" step="0.05" value="${markOpRef()}"/></label>`
@@ -2314,7 +2325,7 @@ function bindMarkOpacityControls(idRef, idMeas, onChange) {
 function markDefaults(typeKey) {
   if (typeKey === 'coronal') return { pts: { L: { x: 28, y: 68 }, R: { x: 72, y: 68 }, P: { x: 44, y: 30 } } };
   if (typeKey === 'solaire') return { pts: { L: { x: 28, y: 62 }, R: { x: 72, y: 62 }, P: { x: 48, y: 28 } } };
-  if (typeKey === 'paroi') return { pts: { T: { x: 50, y: 24 }, B: { x: 50, y: 76 }, M: { x: 72, y: 56 } } };
+  if (typeKey === 'paroi') return { pts: { T1: { x: 40, y: 24 }, M: { x: 40, y: 80 }, T2: { x: 60, y: 24 }, M1: { x: 60, y: 80 } } };
   if (typeKey === 'rotation') return { pts: { A: { x: 28, y: 66 }, J: { x: 50, y: 50 }, B: { x: 72, y: 34 } } };
   return { pts: {} };
 }
@@ -2363,20 +2374,22 @@ function markGeom(typeKey, m, aspect) {
     out.angle = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(R.x, R.y, P.x, P.y, asp)) * _sideSign(L.x, L.y, R.x, R.y, P.x, P.y, asp); // + = P au-dessus de la Base
     out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
   } else if (typeKey === 'paroi') {
-    const { T, B, M } = p; if (!T || !B || !M) return out;
-    push('aplomb', T.x, T.y, B.x, B.y);
-    const ap = _degA(T.x, T.y, B.x, B.y, asp) * Math.PI / 180, perp = ap + Math.PI / 2, half = (_lenA(T.x, T.y, B.x, B.y, asp) || 40) * 0.55, bxp = B.x * asp; // ⊥ 90° physique, prolongée des 2 côtés
-    push('base90', (bxp - half * Math.cos(perp)) / asp, B.y - half * Math.sin(perp), (bxp + half * Math.cos(perp)) / asp, B.y + half * Math.sin(perp));
-    push('paroi', T.x, T.y, M.x, M.y); // mesure depuis le haut T
-    out.angle = _acute(_degA(T.x, T.y, B.x, B.y, asp), _degA(T.x, T.y, M.x, M.y, asp)) * _sideSign(T.x, T.y, B.x, B.y, M.x, M.y, asp); // + = paroi (M) à droite de l'aplomb
-    out.handles = [{ k: 'T', x: T.x, y: T.y }, { k: 'B', x: B.x, y: B.y }, { k: 'M', x: M.x, y: M.y }];
+    // Deux « T » (barre noire en tête + bras) : bras 1 = axe phalange (T1→M), bras 2 = paroi (T2→M1). Mesure = écart au PARALLÉLISME des 2 bras.
+    const { T1, M, T2, M1 } = p; if (!T1 || !M || !T2 || !M1) return out;
+    const tbar = (T, Mend, k) => { const len = _lenA(T.x, T.y, Mend.x, Mend.y, asp) || 30, a = Math.atan2(Mend.y - T.y, (Mend.x - T.x) * asp) + Math.PI / 2, half = len * 0.28, txp = T.x * asp; push(k, (txp + half * Math.cos(a)) / asp, T.y + half * Math.sin(a), (txp - half * Math.cos(a)) / asp, T.y - half * Math.sin(a)); }; // barre ⊥ au bras (tête du T)
+    tbar(T1, M, 'bar1'); push('arm1', T1.x, T1.y, M.x, M.y);
+    tbar(T2, M1, 'bar2'); push('arm2', T2.x, T2.y, M1.x, M1.y);
+    const aP = _acute(_degA(T1.x, T1.y, M.x, M.y, asp), _degA(T2.x, T2.y, M1.x, M1.y, asp));
+    out.angle = aP * (((M1.x - M.x) < (T2.x - T1.x)) ? -1 : 1); // convergent en bas = − ; divergent = + ; 0 = parallèle
+    out.measureName = 'Parallélisme paroi/phalange'; out.measureColor = '#2e9e5b'; // vert = parallèle ; markValColor met en rouge dès que non nul
+    out.handles = [{ k: 'T1', x: T1.x, y: T1.y }, { k: 'M', x: M.x, y: M.y }, { k: 'T2', x: T2.x, y: T2.y }, { k: 'M1', x: M1.x, y: M1.y }];
   } else if (typeKey === 'rotation') {
     const { A, J, B } = p; if (!A || !J || !B) return out;
     push('seg1', A.x, A.y, J.x, J.y); push('seg2', J.x, J.y, B.x, B.y);
     out.angle = _acute(_degA(A.x, A.y, J.x, J.y, asp), _degA(J.x, J.y, B.x, B.y, asp)) * _sideSign(A.x, A.y, J.x, J.y, B.x, B.y, asp); // écart à l'alignement (0 = aligné) ; + = B au-dessus de A→J
     out.handles = [{ k: 'A', x: A.x, y: A.y }, { k: 'J', x: J.x, y: J.y }, { k: 'B', x: B.x, y: B.y }];
   }
-  out.measureName = (t && (t.lines.find((l) => l.k === t.measure) || {}).name) || '';
+  if (!out.measureName) out.measureName = (t && (t.lines.find((l) => l.k === t.measure) || {}).name) || '';
   return out;
 }
 // Symétrie gauche/droite d'un marqueur : miroir horizontal des poignées autour de leur centre.
