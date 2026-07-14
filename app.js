@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.6.0';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.6.0', date: '2026-07-14',
+    ajouts: [
+      'Planche de contact : les menus « Orientation » et « Format d\'image » sont désormais dans la section « Aperçu / mise en page » (à côté de l\'aperçu). Les nouvelles planches s\'ouvrent par défaut en Paysage 4:3 (tant que vous n\'avez pas choisi vous-même une orientation, auquel cas votre choix est conservé).',
+    ],
+  },
   {
     version: '1.5.1', date: '2026-07-14',
     ajouts: [
@@ -8955,7 +8961,7 @@ function renderPlancheConfig() {
     <label>Format par défaut<select id="plFormatSel">${plFormatOptions(S.planche.format)}</select></label>`;
   body.appendChild(head);
   $('plOri').value = P.orientation || 'portrait';
-  $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; saveSettings(); });
+  $('plOri').addEventListener('change', (e) => { P.orientation = e.target.value; P.orientationUserSet = true; saveSettings(); }); // choix explicite → prime sur le défaut paysage
   $('plGuideLR').addEventListener('change', (e) => { S.planche.gridGuide.marginLR = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
   $('plGuideTB').addEventListener('change', (e) => { S.planche.gridGuide.marginTB = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
   $('plGuideLR2').addEventListener('change', (e) => { S.planche.gridGuide.marginLR2 = Math.max(0, parseFloat(e.target.value) || 0); saveSettings(); });
@@ -9347,7 +9353,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || P.orientation || 'portrait', logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || (P.orientationUserSet && P.orientation ? P.orientation : 'paysage'), logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -9361,7 +9367,6 @@ function modalPlancheCreate(type, prefill) {
         ${plCreate.allowTourPick && !plCreate.queueTotal ? '<div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:8px"><button class="btn small" id="plCwaiting">📋 Waiting list</button><button class="btn small" id="plCfromTour">📅 Depuis une tournée</button></div>' : ''}
         <label style="margin:0 0 4px;font-size:.82rem;color:var(--muted)">Nombre de colonnes (angles)</label>
         <div class="seg" id="plCmod">${['3', '4', '5'].map((m) => `<button type="button" class="seg-btn${m === modele ? ' on' : ''}" data-plcm="${m}">${m} colonnes</button>`).join('')}</div>
-        <div class="row" style="margin-top:8px"><label class="grow">Orientation<select id="plCorient"><option value="portrait"${plCreate.orientation === 'portrait' ? ' selected' : ''}>Portrait</option><option value="paysage"${plCreate.orientation !== 'portrait' ? ' selected' : ''}>Paysage</option></select></label><label class="grow">Format d'image<select id="plCformat">${plFormatOptions(plCreate.format)}</select></label></div>
       </section>
       <section class="card">
         <div class="card-head"><h3 class="rsub" style="margin:0">Cheval &amp; client</h3></div>
@@ -9393,6 +9398,7 @@ function modalPlancheCreate(type, prefill) {
       </section>
       <section class="card">
         <div class="card-head"><h3 class="rsub" style="margin:0">Aperçu / mise en page</h3><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><div class="seg seg-sm" id="plCgridFit"></div><button class="btn small" id="plCgridEdit">✏️ Éditer les images</button></div></div>
+        <div class="row" style="margin-bottom:8px"><label class="grow">Orientation<select id="plCorient"><option value="portrait"${plCreate.orientation === 'portrait' ? ' selected' : ''}>Portrait</option><option value="paysage"${plCreate.orientation !== 'portrait' ? ' selected' : ''}>Paysage</option></select></label><label class="grow">Format d'image<select id="plCformat">${plFormatOptions(plCreate.format)}</select></label></div>
         <div id="plCgridEditCtrls" class="pl-edit-ctrls" style="display:none"></div>
         <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (déplacer, zoomer, tourner). À <b>Valider</b>, l'image est <b>vraiment découpée</b> pour remplir exactement sa case — l'aperçu et le PDF sont alors identiques. Les repères (bords + <b>axe rouge central</b>) aident à centrer le sujet (ils n'apparaissent pas sur le PDF). Édition désactivée : toucher une image la retire.</p>
         <div id="plCgrid"></div>
@@ -9433,7 +9439,7 @@ function modalPlancheCreate(type, prefill) {
     plRenderGrid();
   });
   if ($('plCorient')) $('plCorient').addEventListener('change', (e) => { // Orientation : change la page ET le sens du ratio des cases → recadrages invalidés
-    plCreate.orientation = e.target.value === 'paysage' ? 'paysage' : 'portrait'; P.orientation = plCreate.orientation; saveSettings();
+    plCreate.orientation = e.target.value === 'paysage' ? 'paysage' : 'portrait'; P.orientation = plCreate.orientation; P.orientationUserSet = true; saveSettings();
     plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
     plRenderGrid();
   });
