@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.0', date: '2026-07-14',
+    ajouts: [
+      'Planche de contact — MARQUEURS (compas d\'angles) : nouveau bouton « 📐 Créer des marqueurs ». Cochez les images à marquer, puis pour chaque image le(s) type(s) de marqueur (① Plan coronal, ② Plan solaire, ③ Déviation paroi, ④ Rotation). Touchez une image d\'un type pour placer et régler le marqueur : glissez les points, tournez, « ↔ Symétrie G/D ». Les repères fixes (25° ; 3°/6° ; 90°) suivent automatiquement, et l\'angle mesuré s\'affiche en direct.',
+      'Le PDF ajoute, TOUJOURS EN DERNIER, une page par type de marqueur (grille pied × angle) avec l\'angle sous chaque image et une légende, plus une page « Comparatif par pied » (déclinaisons côte à côte).',
+      'Gestion → Planche de contact : nouvelle section « Marqueurs — couleurs des lignes » (une couleur par ligne nommée, une sous-section par type) + réglage de la transparence des traits.',
+    ],
+  },
   {
     version: '1.6.0', date: '2026-07-14',
     ajouts: [
@@ -2185,6 +2193,77 @@ else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', '
 if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 };
 { const gg = S.planche.gridGuide; if (!(gg.marginLR2 > 0)) gg.marginLR2 = 1.0; if (!(gg.marginTB2 > 0)) gg.marginTB2 = 1.0; } // 2ᵉ repère (cible d'alignement du sujet), défaut 1 cm
 { const gg = S.planche.gridGuide; if (!gg.color1) gg.color1 = '#333333'; if (!gg.color2) gg.color2 = '#2b7bd6'; } // couleurs des repères 1 (coupe) et 2 (cible), réglables dans Gestion → Planche
+// Marqueurs (compas d'angles) — 4 types, chaque ligne NOMMÉE et colorée. La ligne « measure » est celle tracée par l'utilisateur (l'angle mesuré = base ↔ measure). Couleurs réglables dans Gestion → Planche ; transparence GLOBALE (tous types).
+const MARK_TYPES = [
+  { key: 'coronal', label: 'Plan coronal', lines: [{ k: 'sol', name: 'Sol', def: '#8a8f98' }, { k: 'ref25', name: 'Repère 25°', def: '#2e9e5b' }, { k: 'axe', name: 'Axe coronal', def: '#e8722a' }], measure: 'axe' },
+  { key: 'solaire', label: 'Plan solaire', lines: [{ k: 'base', name: 'Base', def: '#8a8f98' }, { k: 'ref3', name: 'Repère 3°', def: '#2e9e5b' }, { k: 'ref6', name: 'Repère 6°', def: '#2563eb' }, { k: 'axe', name: 'Axe solaire', def: '#e8722a' }], measure: 'axe' },
+  { key: 'paroi', label: 'Déviation paroi', lines: [{ k: 'aplomb', name: 'Aplomb', def: '#8a8f98' }, { k: 'base90', name: 'Base 90°', def: '#2e9e5b' }, { k: 'paroi', name: 'Paroi', def: '#e8722a' }], measure: 'paroi' },
+  { key: 'rotation', label: 'Rotation', lines: [{ k: 'seg1', name: 'Segment fixe', def: '#8a8f98' }, { k: 'seg2', name: 'Segment mobile', def: '#e8722a' }], measure: 'seg2' },
+];
+const markType = (key) => MARK_TYPES.find((t) => t.key === key);
+if (!S.planche.markers || typeof S.planche.markers !== 'object') S.planche.markers = {};
+{ const mk = S.planche.markers; if (typeof mk.opacity !== 'number') mk.opacity = 0.9; if (!mk.colors || typeof mk.colors !== 'object') mk.colors = {}; MARK_TYPES.forEach((t) => { mk.colors[t.key] = mk.colors[t.key] || {}; t.lines.forEach((l) => { if (!mk.colors[t.key][l.k]) mk.colors[t.key][l.k] = l.def; }); }); }
+const markColor = (typeKey, lineKey) => (S.planche.markers && S.planche.markers.colors && S.planche.markers.colors[typeKey] && S.planche.markers.colors[typeKey][lineKey]) || (markType(typeKey) && (markType(typeKey).lines.find((l) => l.k === lineKey) || {}).def) || '#e8722a';
+// Points de contrôle par défaut d'un marqueur (coordonnées en % 0-100 de l'image). 3 poignées par type.
+function markDefaults(typeKey) {
+  if (typeKey === 'coronal') return { pts: { L: { x: 28, y: 68 }, R: { x: 72, y: 68 }, P: { x: 44, y: 30 } } };
+  if (typeKey === 'solaire') return { pts: { L: { x: 28, y: 62 }, R: { x: 72, y: 62 }, P: { x: 48, y: 28 } } };
+  if (typeKey === 'paroi') return { pts: { T: { x: 50, y: 24 }, B: { x: 50, y: 76 }, M: { x: 72, y: 56 } } };
+  if (typeKey === 'rotation') return { pts: { A: { x: 28, y: 66 }, J: { x: 50, y: 50 }, B: { x: 72, y: 34 } } };
+  return { pts: {} };
+}
+const _deg = (x1, y1, x2, y2) => Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+const _acute = (a, b) => { let d = Math.abs(a - b) % 180; if (d > 90) d = 180 - d; return d; }; // angle aigu entre 2 droites (0-90)
+const _between = (a, b) => { let d = Math.abs(a - b) % 360; if (d > 180) d = 360 - d; return d; }; // angle entre 2 vecteurs (0-180)
+// Extrémité d'une ligne partant de (qx,qy) le long de `dirDeg`, inclinée de `tiltDeg`, en choisissant le sens qui MONTE (y le plus petit).
+function _tiltUp(qx, qy, dirDeg, tiltDeg, len) {
+  const a1 = (dirDeg - tiltDeg) * Math.PI / 180, a2 = (dirDeg + tiltDeg) * Math.PI / 180;
+  const e1 = { x: qx + len * Math.cos(a1), y: qy + len * Math.sin(a1) };
+  const e2 = { x: qx + len * Math.cos(a2), y: qy + len * Math.sin(a2) };
+  return e1.y <= e2.y ? e1 : e2;
+}
+// Géométrie d'un marqueur : renvoie { lines:[{k,x1,y1,x2,y2}], handles:[{k,x,y}], angle:Number, measureName, measureColor }.
+// Lignes de RÉFÉRENCE (fixes) calculées depuis les poignées ; ligne de MESURE = celle qui donne l'angle affiché.
+function markGeom(typeKey, m) {
+  const p = (m && m.pts) || {}; const t = markType(typeKey); const out = { lines: [], handles: [], angle: null, measureName: '', measureColor: markColor(typeKey, t ? t.measure : '') };
+  const push = (k, x1, y1, x2, y2) => out.lines.push({ k, x1, y1, x2, y2 });
+  if (typeKey === 'coronal') {
+    const { L, R, P } = p; if (!L || !R || !P) return out;
+    const len = Math.hypot(R.x - L.x, R.y - L.y) || 30;
+    push('sol', L.x, L.y, R.x, R.y);
+    const e = _tiltUp(L.x, L.y, _deg(L.x, L.y, R.x, R.y), 25, len); push('ref25', L.x, L.y, e.x, e.y);
+    push('axe', L.x, L.y, P.x, P.y);
+    out.angle = _acute(_deg(L.x, L.y, R.x, R.y), _deg(L.x, L.y, P.x, P.y));
+    out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
+  } else if (typeKey === 'solaire') {
+    const { L, R, P } = p; if (!L || !R || !P) return out;
+    const len = Math.hypot(R.x - L.x, R.y - L.y) || 30;
+    push('base', L.x, L.y, R.x, R.y);
+    const d = _deg(R.x, R.y, L.x, L.y); // direction R→L (les obliques partent de R, montent à gauche)
+    const e3 = _tiltUp(R.x, R.y, d, 3, len); push('ref3', R.x, R.y, e3.x, e3.y);
+    const e6 = _tiltUp(R.x, R.y, d, 6, len); push('ref6', R.x, R.y, e6.x, e6.y);
+    push('axe', R.x, R.y, P.x, P.y); // mesure depuis R
+    out.angle = _acute(_deg(L.x, L.y, R.x, R.y), _deg(R.x, R.y, P.x, P.y));
+    out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
+  } else if (typeKey === 'paroi') {
+    const { T, B, M } = p; if (!T || !B || !M) return out;
+    push('aplomb', T.x, T.y, B.x, B.y);
+    const ap = _deg(T.x, T.y, B.x, B.y); const perp = (ap + 90) * Math.PI / 180; const half = (Math.hypot(B.x - T.x, B.y - T.y) || 40) * 0.55;
+    push('base90', B.x - half * Math.cos(perp), B.y - half * Math.sin(perp), B.x + half * Math.cos(perp), B.y + half * Math.sin(perp)); // ⊥ prolongée des 2 côtés
+    push('paroi', T.x, T.y, M.x, M.y); // mesure depuis le haut T
+    out.angle = _acute(_deg(T.x, T.y, B.x, B.y), _deg(T.x, T.y, M.x, M.y));
+    out.handles = [{ k: 'T', x: T.x, y: T.y }, { k: 'B', x: B.x, y: B.y }, { k: 'M', x: M.x, y: M.y }];
+  } else if (typeKey === 'rotation') {
+    const { A, J, B } = p; if (!A || !J || !B) return out;
+    push('seg1', A.x, A.y, J.x, J.y); push('seg2', J.x, J.y, B.x, B.y);
+    out.angle = 180 - _between(_deg(J.x, J.y, A.x, A.y), _deg(J.x, J.y, B.x, B.y)); // écart à l'alignement (180°)
+    out.handles = [{ k: 'A', x: A.x, y: A.y }, { k: 'J', x: J.x, y: J.y }, { k: 'B', x: B.x, y: B.y }];
+  }
+  out.measureName = (t && (t.lines.find((l) => l.k === t.measure) || {}).name) || '';
+  return out;
+}
+// Symétrie gauche/droite d'un marqueur : miroir horizontal des poignées autour de leur centre.
+function markMirror(m) { const pts = (m && m.pts) || {}; const xs = Object.values(pts).map((q) => q.x); if (!xs.length) return; const cx = (Math.min(...xs) + Math.max(...xs)) / 2; Object.values(pts).forEach((q) => { q.x = 2 * cx - q.x; }); }
 { // Format des cases : schéma orienté ('fill' | 'square' | 'r43' | 'r32' | 'r169') — le SENS (paysage/portrait) est porté par l'orientation de la planche, pas par le format.
   const fmtMap = { ph43: 'r43', ph34: 'r43', reflex32: 'r32', reflex23: 'r32' };
   if (S.planche.format && fmtMap[S.planche.format]) S.planche.format = fmtMap[S.planche.format];
@@ -7769,9 +7848,115 @@ async function planchePageCanvas(pi) {
   ctx.textBaseline = 'top';
   return cv;
 }
+// En-tête + pied communs des pages marqueurs (client · cheval+sous-titre · logo pro ; pied GaloPodo). Renvoie px/fs/g.
+async function plMarkHeaderFooter(ctx, g, subtitle) {
+  const SC = PL_PXMM, px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv))), st = plCreate;
+  const topY = px(g.margin);
+  ctx.textBaseline = 'top'; ctx.textAlign = 'left'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(4.2) + 'px sans-serif';
+  ctx.fillText(plTrunc(ctx, st.client || '—', px(g.gridW * 0.30)), px(g.margin), topY);
+  ctx.fillStyle = '#333'; ctx.font = fs(2.9) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, fmtDateFr(st.date), px(g.gridW * 0.30)), px(g.margin), topY + fs(5.0));
+  ctx.textAlign = 'center'; ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(3.8) + 'px sans-serif';
+  ctx.fillText(plTrunc(ctx, st.cheval || '—', px(g.gridW * 0.4)), px(g.margin + g.gridW * 0.5), topY);
+  ctx.fillStyle = '#b45309'; ctx.font = 'bold ' + fs(3.1) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, subtitle, px(g.gridW * 0.4)), px(g.margin + g.gridW * 0.5), topY + fs(4.6));
+  const headerLogo = (S.proLogo && S.proLogo.data) ? S.proLogo.data : GALOPODO_LOGO;
+  if (headerLogo) { const lg = await plLoadImg(headerLogo); if (lg) { const lh = px(9.5), lw = Math.min(px(g.gridW * 0.30), lg.width * (lh / lg.height)); ctx.drawImage(lg, px(g.pageW - g.margin) - lw, topY, lw, lh); } }
+  ctx.textAlign = 'left';
+  const fy = px(g.pageH - g.margin - g.footerH);
+  const flg = await plLoadImg(GALOPODO_LOGO_FILE), fh = px(6.5), lTop = fy + px(0.3);
+  ctx.fillStyle = '#222'; ctx.font = 'bold ' + fs(2.9) + 'px sans-serif'; ctx.textBaseline = 'alphabetic';
+  const flabel = plTrunc(ctx, plProFooter(), px(g.gridW) - px(20)), tw = ctx.measureText(flabel).width, fw = flg ? flg.width * (fh / flg.height) : 0, gap = px(2);
+  const startX = px(g.margin + g.gridW / 2) - (fw + gap + tw) / 2;
+  if (flg) ctx.drawImage(flg, startX, lTop, fw, fh);
+  ctx.textAlign = 'left'; ctx.fillText(flabel, startX + fw + gap, lTop + fh * 0.72); ctx.textBaseline = 'top';
+}
+// Légende (une fois par page) : nom + couleur de chaque ligne d'un type, en bas juste au-dessus du pied.
+function plMarkLegend(ctx, g, typeKey) {
+  const SC = PL_PXMM, px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv))), t = markType(typeKey);
+  const y = px(g.pageH - g.margin - g.footerH - 5.5); let x = px(g.margin);
+  ctx.textBaseline = 'middle'; ctx.font = fs(2.7) + 'px sans-serif';
+  t.lines.forEach((l) => { ctx.fillStyle = markColor(typeKey, l.k); ctx.fillRect(x, y - px(1.2), px(2.4), px(2.4)); ctx.fillStyle = '#333'; ctx.textAlign = 'left'; const lbl = l.name; ctx.fillText(lbl, x + px(3), y); x += px(3) + ctx.measureText(lbl).width + px(5); });
+  ctx.textBaseline = 'top';
+}
+// Une page PDF par TYPE de marqueur : grille (colonnes = angles, lignes = membres) des images marquées + bande d'angle sous chaque image + légende.
+async function plancheMarkerPageCanvas(typeKey) {
+  const st = plCreate, land = st.orientation !== 'portrait', t = markType(typeKey), opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
+  const placed = plPlacedCells().filter((c) => st.cellMarks[c.key] && st.cellMarks[c.key][typeKey]);
+  const angles = st.angles || [], membres = []; placed.forEach((c) => { if (!membres.includes(c.membre)) membres.push(c.membre); });
+  const byMA = {}; placed.forEach((c) => { const k = c.membre + '||' + c.angle; if (!byMA[k]) byMA[k] = c.key; });
+  const g = plGeom(land, angles.length, Math.max(1, membres.length), plFormatAspect(st));
+  const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  await plMarkHeaderFooter(ctx, g, 'Marqueurs — ' + t.label);
+  const gx = px(g.gridLeft + g.offX), gtop = px(g.gridTop + g.offY), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH), blockW = px(g.blockW), bandH = rowH * PL_MARK_BAND, imgH = rowH - bandH;
+  ctx.fillStyle = '#eee'; ctx.fillRect(gx, gtop, blockW, angH); ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(2.8) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  angles.forEach((a, ci) => ctx.fillText(plTrunc(ctx, a, colW - 6), gx + labelW + ci * colW + colW / 2, gtop + angH / 2 - fs(1.4)));
+  for (let ri = 0; ri < membres.length; ri++) {
+    const ry = gtop + angH + ri * rowH;
+    ctx.fillStyle = '#f5f5f5'; ctx.fillRect(gx, ry, labelW, rowH); ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.font = 'bold ' + fs(3.0) + 'px sans-serif';
+    ctx.fillText(plTrunc(ctx, membres[ri], labelW - 4), gx + labelW / 2, ry + rowH / 2 - fs(1.6));
+    for (let ci = 0; ci < angles.length; ci++) {
+      const key = byMA[membres[ri] + '||' + angles[ci]]; if (!key) continue;
+      const cx = gx + labelW + ci * colW, src = plMarkCellSrc(key), im = src && await plLoadImg(src); if (!im) continue;
+      ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, imgH); ctx.clip(); const s = Math.max(colW / im.width, imgH / im.height); ctx.drawImage(im, cx + (colW - im.width * s) / 2, ry + (imgH - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
+      const m = st.cellMarks[key][typeKey], gg = drawMarkerLines(ctx, typeKey, m, cx, ry, colW, imgH, opacity);
+      ctx.fillStyle = '#fff'; ctx.fillRect(cx, ry + imgH, colW, bandH); // bande d'angle SOUS l'image
+      const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.7) + 'px sans-serif'; ctx.fillStyle = gg ? gg.measureColor : '#333';
+      ctx.fillText(plTrunc(ctx, (gg && gg.measureName ? gg.measureName + ' : ' : '') + ang, colW - 4), cx + colW / 2, ry + imgH + bandH / 2); ctx.textBaseline = 'top';
+    }
+  }
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
+  const gridBottom = gtop + angH + membres.length * rowH, gridRight = gx + labelW + angles.length * colW;
+  for (let ci = 0; ci <= angles.length; ci++) { const xx = gx + labelW + ci * colW; ctx.moveTo(xx, gtop); ctx.lineTo(xx, gridBottom); }
+  for (let ri = 0; ri <= membres.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
+  ctx.stroke();
+  plMarkLegend(ctx, g, typeKey);
+  return cv;
+}
+// Page « Comparatif par pied » : lignes = pied (membre), colonnes = types de marqueur (déclinaisons côte à côte).
+async function plancheComparatifCanvas() {
+  const st = plCreate, land = st.orientation !== 'portrait';
+  const placed = plPlacedCells().filter((c) => st.cellMarks[c.key] && Object.keys(st.cellMarks[c.key]).length);
+  const membres = []; placed.forEach((c) => { if (!membres.includes(c.membre)) membres.push(c.membre); });
+  const cols = MARK_TYPES.slice();
+  const g = plGeom(land, cols.length, Math.max(1, membres.length), plFormatAspect(st));
+  const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  await plMarkHeaderFooter(ctx, g, 'Comparatif par pied');
+  const opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
+  const gx = px(g.gridLeft + g.offX), gtop = px(g.gridTop + g.offY), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH), blockW = px(g.blockW), bandH = rowH * PL_MARK_BAND, imgH = rowH - bandH;
+  ctx.fillStyle = '#eee'; ctx.fillRect(gx, gtop, blockW, angH); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  cols.forEach((t, ci) => { ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(2.7) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, t.label, colW - 6), gx + labelW + ci * colW + colW / 2, gtop + angH / 2 - fs(1.4)); });
+  for (let ri = 0; ri < membres.length; ri++) {
+    const ry = gtop + angH + ri * rowH; ctx.fillStyle = '#f5f5f5'; ctx.fillRect(gx, ry, labelW, rowH);
+    ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.font = 'bold ' + fs(3.0) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, membres[ri], labelW - 4), gx + labelW / 2, ry + rowH / 2 - fs(1.6));
+    for (let ci = 0; ci < cols.length; ci++) {
+      const ty = cols[ci].key; const c = placed.find((c) => c.membre === membres[ri] && st.cellMarks[c.key][ty]); if (!c) continue;
+      const cx = gx + labelW + ci * colW, src = plMarkCellSrc(c.key), im = src && await plLoadImg(src); if (!im) continue;
+      ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, imgH); ctx.clip(); const s = Math.max(colW / im.width, imgH / im.height); ctx.drawImage(im, cx + (colW - im.width * s) / 2, ry + (imgH - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
+      const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], cx, ry, colW, imgH, opacity);
+      ctx.fillStyle = '#fff'; ctx.fillRect(cx, ry + imgH, colW, bandH);
+      const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillStyle = gg ? gg.measureColor : '#333';
+      ctx.fillText(plTrunc(ctx, ang, colW - 4), cx + colW / 2, ry + imgH + bandH / 2); ctx.textBaseline = 'top';
+    }
+  }
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
+  const gridBottom = gtop + angH + membres.length * rowH, gridRight = gx + labelW + cols.length * colW;
+  for (let ci = 0; ci <= cols.length; ci++) { const xx = gx + labelW + ci * colW; ctx.moveTo(xx, gtop); ctx.lineTo(xx, gridBottom); }
+  for (let ri = 0; ri <= membres.length; ri++) { const yy = gtop + angH + ri * rowH; ctx.moveTo(gx, yy); ctx.lineTo(gridRight, yy); }
+  ctx.stroke();
+  return cv;
+}
 async function planchePdfBlob() {
   const land = plCreate.orientation !== 'portrait', pages = [];
-  for (let pi = 0; pi < (plCreate.pages || []).length; pi++) { const cv = await planchePageCanvas(pi); pages.push({ bytes: dataUrlToBytes(cv.toDataURL('image/jpeg', 0.85)), w: cv.width, h: cv.height }); }
+  const addPage = (cv) => pages.push({ bytes: dataUrlToBytes(cv.toDataURL('image/jpeg', 0.85)), w: cv.width, h: cv.height });
+  for (let pi = 0; pi < (plCreate.pages || []).length; pi++) addPage(await planchePageCanvas(pi));
+  // Pages MARQUEURS — toujours en DERNIER (après la page Cheval). Une page par type ayant au moins une image marquée, puis le comparatif.
+  const marks = plCreate.cellMarks || {}; const usedTypes = {}; let anyMark = false;
+  Object.keys(marks).forEach((k) => Object.keys(marks[k] || {}).forEach((ty) => { usedTypes[ty] = true; anyMark = true; }));
+  for (const t of MARK_TYPES) { if (usedTypes[t.key]) addPage(await plancheMarkerPageCanvas(t.key)); }
+  if (anyMark && Object.keys(usedTypes).length >= 2) addPage(await plancheComparatifCanvas()); // comparatif utile s'il y a ≥2 types
   return pdfFromJpegPages(pages, land);
 }
 function printHtml(title, bodyHtml) {
@@ -9000,6 +9185,14 @@ function renderPlancheConfig() {
     ss.innerHTML = `<h3 class="rsub">Types de planche (stades)</h3><p class="hint">Étiquettes proposées à la création (ex. Cheval ferré, Déferrage, Après parage). À la création, on choisit un ou plusieurs stades par cheval ; le stade apparaît dans l'en-tête et le nom du PDF.</p><div id="plStades"></div>`;
     body.appendChild(ss);
     plancheList($('plStades'), S.planche.stades, renderPlancheConfig, '+ Ajouter un stade', true);
+    // Marqueurs (compas d'angles) : couleur de chaque ligne nommée (une sous-section par type) + transparence globale.
+    const mc = document.createElement('section'); mc.className = 'card'; const mk = S.planche.markers;
+    mc.innerHTML = `<h3 class="rsub">Marqueurs — couleurs des lignes</h3><p class="hint">Une couleur par ligne, une sous-section par type. La transparence s'applique à tous les traits.</p>
+      <label>Transparence des traits<input type="range" id="plMkOp" min="0.3" max="1" step="0.05" value="${mk.opacity != null ? mk.opacity : 0.9}"/></label>
+      ${MARK_TYPES.map((t) => `<div class="edit-row"><b>${esc(t.label)}</b><div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:4px">${t.lines.map((l) => `<label style="font-size:.78rem;text-align:center">${esc(l.name)}<br><input type="color" data-mkcol data-mkt="${t.key}" data-mkl="${l.k}" value="${esc(markColor(t.key, l.k))}"/></label>`).join('')}</div></div>`).join('')}`;
+    body.appendChild(mc);
+    $('plMkOp').addEventListener('input', (e) => { S.planche.markers.opacity = parseFloat(e.target.value); saveSettings(); });
+    mc.querySelectorAll('[data-mkcol]').forEach((inp) => inp.addEventListener('change', () => { const ty = inp.dataset.mkt, lk = inp.dataset.mkl; if (!S.planche.markers.colors[ty]) S.planche.markers.colors[ty] = {}; S.planche.markers.colors[ty][lk] = inp.value; saveSettings(); }));
   }
 }
 
@@ -9336,7 +9529,7 @@ function plDraftRestore(d) {
   modalPlancheCreate(d.type === 'avantapres' ? 'avantapres' : 'contact', { cheval: d.cheval, client: d.client, clientId: d.clientId, date: d.date, stade: d.stade, note: d.note, dureeCycleSem: d.dureeCycleSem, modele: d.modele, format: d.format, allowTourPick: d.allowTourPick, queue: d.queue, queueTotal: d.queueTotal, queueIdx: d.queueIdx, todoId: d.todoId });
   if (!plCreate) return;
   // restaure l'état lourd que le pré-remplissage ne porte pas (photos, placements, recadrages, options d'affichage)
-  plCreate.photos = d.photos || []; plCreate.cells = d.cells || {}; plCreate.cellT = d.cellT || {}; plCreate.cellCrop = d.cellCrop || {}; plCreate.cellImg = d.cellImg || {}; plCreate.cellCropDef = d.cellCropDef || {};
+  plCreate.photos = d.photos || []; plCreate.cells = d.cells || {}; plCreate.cellT = d.cellT || {}; plCreate.cellCrop = d.cellCrop || {}; plCreate.cellImg = d.cellImg || {}; plCreate.cellCropDef = d.cellCropDef || {}; plCreate.cellMarks = d.cellMarks || {}; plCreate.markPick = d.markPick || {};
   if (d.fitMode) plCreate.fitMode = d.fitMode; if (d.potView) plCreate.potView = d.potView; if (d.pages) plCreate.pages = d.pages; if (d.compar) plCreate.compar = d.compar; if (d.chevalPageOn != null) plCreate.chevalPageOn = d.chevalPageOn; if (d.orientation) plCreate.orientation = d.orientation; if (d.format) plCreate.format = d.format;
   const cp = $('plCchevalPage'); if (cp) cp.checked = !!plCreate.chevalPageOn; // reflète l'état restauré de la case « page Cheval »
   plRenderPot(); plRenderGrid();
@@ -9353,7 +9546,7 @@ function modalPlancheCreate(type, prefill) {
   type = (type === 'avantapres') ? 'avantapres' : 'contact';
   const P = type === 'avantapres' ? S.planche.avantapres : S.planche.contact;
   const modele = (prefill && prefill.modele && P.modeles[prefill.modele]) ? prefill.modele : (P.modeles[plancheModele] ? plancheModele : '4');
-  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || (P.orientationUserSet && P.orientation ? P.orientation : 'paysage'), logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
+  plCreate = { type, modele, orientation: (prefill && prefill.orientation) || (P.orientationUserSet && P.orientation ? P.orientation : 'paysage'), logo: P.logo !== false, angles: (P.modeles[modele] || []).slice(), pages: JSON.parse(JSON.stringify(P.pages || [])), compar: type === 'avantapres' ? [{ id: uid(), date: todayStr() }] : null, cheval: (prefill && prefill.cheval) || '', client: (prefill && prefill.client) || '', clientId: (prefill && prefill.clientId) || null, date: (prefill && prefill.date) || todayStr(), stade: (prefill && prefill.stade) || (type === 'contact' ? ((S.planche.stades || [])[0] || '') : ''), note: (prefill && prefill.note) || '', dureeCycleSem: (prefill && prefill.dureeCycleSem) || 0, potView: 'grid', photos: [], cells: {}, cellT: {}, cellCrop: {}, cellImg: {}, cellCropDef: {}, cellMarks: {}, markMode: false, markPick: {}, cropMode: false, cropSel: null, gridEdit: false, fitMode: S.planche.fitMode || 'cover', format: (prefill && prefill.format) || S.planche.format || 'fill', sel: null, todoId: (prefill && prefill.todoId) || null };
   plCreate.queue = (prefill && prefill.queue) || null; plCreate.queueTotal = (prefill && prefill.queueTotal) || 0; plCreate.queueIdx = (prefill && prefill.queueIdx) || 0; plCreate.allowTourPick = !!(prefill && prefill.allowTourPick);
   // Planche de contact : la page « Cheval » n'est PAS incluse par défaut ; une case l'ajoute à la volée.
   if (type === 'contact') { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.allPages = JSON.parse(JSON.stringify(plCreate.pages)); plCreate.hasChevalPage = plCreate.allPages.some(isChevalPage); plCreate.chevalPageOn = false; plCreate.pages = plCreate.allPages.filter((pg) => !isChevalPage(pg)); }
@@ -9403,6 +9596,14 @@ function modalPlancheCreate(type, prefill) {
         <p class="hint" id="plCgridEditHint" style="display:none">Mode édition : touchez une image pour la <b>cadrer</b> (déplacer, zoomer, tourner). À <b>Valider</b>, l'image est <b>vraiment découpée</b> pour remplir exactement sa case — l'aperçu et le PDF sont alors identiques. Les repères (bords + <b>axe rouge central</b>) aident à centrer le sujet (ils n'apparaissent pas sur le PDF). Édition désactivée : toucher une image la retire.</p>
         <div id="plCgrid"></div>
       </section>
+      ${type === 'contact' ? `<section class="card" id="plCmarkCard">
+        <div class="card-head"><h3 class="rsub" style="margin:0">Marqueurs (compas d'angles)</h3><button class="btn small" id="plCmarkToggle">📐 Créer des marqueurs</button></div>
+        <div id="plCmarkBody" style="display:none">
+          <p class="hint">① Cochez ci-dessus, dans l'aperçu, les images à marquer. ② Pour chaque image, cochez le(s) type(s) de marqueur. ③ Dans chaque type, touchez une image pour placer et régler le marqueur (déplacer les points, tourner, symétrie). L'angle mesuré s'affiche.</p>
+          <div id="plCmarkGrid"></div>
+          <div id="plCmarkTypes"></div>
+        </div>
+      </section>` : ''}
       <div class="actions"><button class="btn primary block" id="plCmail">💾📧 Enregistrer le PDF et l'envoyer par mail</button>${plCreate.queueTotal && plCreate.queue && plCreate.queue.length ? '<button class="btn block primary" id="plCnext">➡ Passer à la planche suivante (sans enregistrer celle-ci)</button>' : ''}<button class="btn block" id="plCclose">Fermer</button></div>
     </div>`);
   const close = () => { plDraftClear(); plCreate = null; closeModal(); }; // fermer = abandonner → efface le brouillon
@@ -9411,7 +9612,7 @@ function modalPlancheCreate(type, prefill) {
   if ($('plCfromTour')) $('plCfromTour').onclick = () => modalPlancheFromTour();
   if ($('plCnext')) $('plCnext').onclick = () => plQueueAdvance();
   $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((b) => b.addEventListener('click', () => {
-    plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.cellT = {}; plCreate.cellCrop = {}; plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.sel = null;
+    plCreate.modele = b.dataset.plcm; plCreate.angles = (P.modeles[plCreate.modele] || []).slice(); plCreate.cells = {}; plCreate.cellT = {}; plCreate.cellCrop = {}; plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellMarks = {}; plCreate.markPick = {}; plCreate.sel = null;
     $('plCbody').querySelectorAll('#plCmod .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.plcm === plCreate.modele));
     plRenderPot(); plRenderGrid();
   }));
@@ -9429,18 +9630,18 @@ function modalPlancheCreate(type, prefill) {
   $('plCnote').addEventListener('input', (e) => { plCreate.note = e.target.value; });
   if ($('plCcycle')) $('plCcycle').addEventListener('input', (e) => { plCreate.dureeCycleSem = Math.max(0, parseInt(e.target.value, 10) || 0); });
   if ($('plCstade')) $('plCstade').addEventListener('change', (e) => { plCreate.stade = e.target.value; const w = $('plCcycleWrap'); if (w) w.style.display = plancheStadeCareNeeded(plCreate.stade) ? '' : 'none'; }); // le champ « durée du cycle » suit le stade (parage/ferrage/déferrage)
-  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); if (plCreate.cellT) Object.keys(plCreate.cellT).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellT[k]; }); if (plCreate.cellCrop) Object.keys(plCreate.cellCrop).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCrop[k]; }); if (plCreate.cellImg) Object.keys(plCreate.cellImg).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellImg[k]; }); if (plCreate.cellCropDef) Object.keys(plCreate.cellCropDef).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCropDef[k]; }); plRenderPot(); plRenderGrid(); });
+  if ($('plCchevalPage')) $('plCchevalPage').addEventListener('change', (e) => { const isChevalPage = (pg) => (pg.membres || []).length && (pg.membres || []).every((m) => norm(m) === 'cheval'); plCreate.chevalPageOn = e.target.checked; plCreate.pages = e.target.checked ? plCreate.allPages.slice() : plCreate.allPages.filter((pg) => !isChevalPage(pg)); const np = plCreate.pages.length; Object.keys(plCreate.cells).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cells[k]; }); if (plCreate.cellT) Object.keys(plCreate.cellT).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellT[k]; }); if (plCreate.cellCrop) Object.keys(plCreate.cellCrop).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCrop[k]; }); if (plCreate.cellImg) Object.keys(plCreate.cellImg).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellImg[k]; }); if (plCreate.cellCropDef) Object.keys(plCreate.cellCropDef).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellCropDef[k]; }); if (plCreate.cellMarks) Object.keys(plCreate.cellMarks).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.cellMarks[k]; }); if (plCreate.markPick) Object.keys(plCreate.markPick).forEach((k) => { if (+k.split('_')[0] >= np) delete plCreate.markPick[k]; }); plRenderPot(); plRenderGrid(); });
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
   if ($('plCformat')) $('plCformat').addEventListener('change', (e) => { // Format d'image : le ratio des cases change → les recadrages (calés sur l'ancien ratio) ne sont plus valides
     plCreate.format = e.target.value; S.planche.format = e.target.value; saveSettings();
-    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
+    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {}; plCreate.cellMarks = {}; plCreate.markPick = {};
     plRenderGrid();
   });
   if ($('plCorient')) $('plCorient').addEventListener('change', (e) => { // Orientation : change la page ET le sens du ratio des cases → recadrages invalidés
     plCreate.orientation = e.target.value === 'paysage' ? 'paysage' : 'portrait'; P.orientation = plCreate.orientation; P.orientationUserSet = true; saveSettings();
-    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
+    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {}; plCreate.cellMarks = {}; plCreate.markPick = {};
     plRenderGrid();
   });
   if ($('plCgridFit')) { // « Remplir les cases » = curseur (Remplir / Entière), Remplir actif par défaut
@@ -9461,6 +9662,13 @@ function modalPlancheCreate(type, prefill) {
     if ($('plCgridEditCtrls')) $('plCgridEditCtrls').style.display = plCreate.gridEdit ? '' : 'none'; // contrôles de rognage uniquement en mode édition
     plUpdateCropCtrls();
     plRenderGrid();
+  });
+  if ($('plCmarkToggle')) $('plCmarkToggle').addEventListener('click', () => {
+    plCreate.markMode = !plCreate.markMode;
+    $('plCmarkToggle').classList.toggle('primary', plCreate.markMode);
+    $('plCmarkToggle').textContent = plCreate.markMode ? '✅ Terminer les marqueurs' : '📐 Créer des marqueurs';
+    if ($('plCmarkBody')) $('plCmarkBody').style.display = plCreate.markMode ? '' : 'none';
+    plRenderMarkers();
   });
   // Bouton UNIQUE : enregistre d'abord le PDF sur l'appareil (téléchargement), PUIS ouvre l'envoi par mail.
   // Fermer l'envoi sans envoyer est OK — le PDF est déjà enregistré. Dans une file, on enchaîne à la fermeture de l'envoi.
@@ -9533,8 +9741,9 @@ function plPlace(key) {
   if (!plCreate.sel) return;
   if (!plCreate.cellT) plCreate.cellT = {}; if (!plCreate.cellCrop) plCreate.cellCrop = {};
   if (!plCreate.cellImg) plCreate.cellImg = {}; if (!plCreate.cellCropDef) plCreate.cellCropDef = {};
-  Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === plCreate.sel) { delete plCreate.cells[k]; delete plCreate.cellT[k]; delete plCreate.cellCrop[k]; delete plCreate.cellImg[k]; delete plCreate.cellCropDef[k]; } }); // une photo = une seule case (elle déménage → son recadrage tombe)
-  delete plCreate.cellT[key]; delete plCreate.cellCrop[key]; delete plCreate.cellImg[key]; delete plCreate.cellCropDef[key]; // nouvelle photo dans la case → repart neuf
+  if (!plCreate.cellMarks) plCreate.cellMarks = {}; if (!plCreate.markPick) plCreate.markPick = {};
+  Object.keys(plCreate.cells).forEach((k) => { if (plCreate.cells[k] === plCreate.sel) { delete plCreate.cells[k]; delete plCreate.cellT[k]; delete plCreate.cellCrop[k]; delete plCreate.cellImg[k]; delete plCreate.cellCropDef[k]; delete plCreate.cellMarks[k]; delete plCreate.markPick[k]; } }); // une photo = une seule case (elle déménage → son recadrage ET ses marqueurs tombent)
+  delete plCreate.cellT[key]; delete plCreate.cellCrop[key]; delete plCreate.cellImg[key]; delete plCreate.cellCropDef[key]; delete plCreate.cellMarks[key]; delete plCreate.markPick[key]; // nouvelle photo dans la case → repart neuf
   plCreate.cells[key] = plCreate.sel; plCreate.sel = null; plRenderPot(); plRenderGrid();
 }
 
@@ -9597,7 +9806,7 @@ function plRenderGrid() {
           if (st.cropMode) { if (st.cells[key]) { if (!st.cropSel) st.cropSel = new Set(); if (st.cropSel.has(key)) st.cropSel.delete(key); else st.cropSel.add(key); plRenderGrid(); plUpdateCropCtrls(); } return; } // sélection pour le rognage (cadre rouge)
           if (st.cells[key]) modalCellEdit(key); else plPlace(key); return; // mode édition : cadrer l'image (jamais de suppression)
         }
-        if (st.cells[key]) { delete st.cells[key]; if (st.cellT) delete st.cellT[key]; if (st.cellCrop) delete st.cellCrop[key]; if (st.cellImg) delete st.cellImg[key]; if (st.cellCropDef) delete st.cellCropDef[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); }
+        if (st.cells[key]) { delete st.cells[key]; if (st.cellT) delete st.cellT[key]; if (st.cellCrop) delete st.cellCrop[key]; if (st.cellImg) delete st.cellImg[key]; if (st.cellCropDef) delete st.cellCropDef[key]; if (st.cellMarks) delete st.cellMarks[key]; if (st.markPick) delete st.markPick[key]; plRenderPot(); plRenderGrid(); } else { plPlace(key); }
       });
       td.addEventListener('dragover', (e) => e.preventDefault());
       td.addEventListener('drop', (e) => { e.preventDefault(); plPlace(key); });
@@ -9605,6 +9814,92 @@ function plRenderGrid() {
     wrap.appendChild(tbl); box.appendChild(wrap);
   });
   plDraftSave(); // sauvegarde le brouillon (placements/recadrages)
+  plRenderMarkers(); // rafraîchit la 2ᵉ grille des marqueurs (si active)
+}
+// ---------- Marqueurs (compas d'angles) : sélection + sous-sections par type ----------
+function plMarkCellSrc(key) { const st = plCreate; if (!st) return null; const baked = st.fitMode !== 'contain' && st.cellImg && st.cellImg[key]; if (baked) return baked; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid); return ph ? ph.url : null; }
+// Cases placées (avec image) — colonnes = angles, lignes = membres.
+function plPlacedCells() {
+  const st = plCreate; if (!st) return []; const angles = st.angles || []; const out = [];
+  (st.pages || []).forEach((pg, pi) => { plPageRows(pi).forEach((r) => { angles.forEach((a, ci) => { const key = plCellKey(pi, r, ci); if (plMarkCellSrc(key)) out.push({ key, membre: r.label || '', angle: a, label: (r.label || '') + ' · ' + a, ri: r.ri }); }); }); });
+  return out;
+}
+// Overlay SVG (lecture seule) des lignes d'un marqueur — réutilisé dans les vignettes et l'aperçu final.
+function plMarkSvgOverlay(typeKey, m, opacity) {
+  const g = markGeom(typeKey, m); if (!g.lines.length) return '';
+  const op = (opacity != null) ? opacity : ((S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9);
+  const lines = g.lines.map((l) => `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linecap="round"/>`).join('');
+  return `<svg class="pl-mk-svg" viewBox="0 0 100 100" preserveAspectRatio="none" style="opacity:${op}">${lines}</svg>`;
+}
+function plRenderMarkers() {
+  const st = plCreate; if (!st) return;
+  const gridBox = $('plCmarkGrid'), typesBox = $('plCmarkTypes'); if (!gridBox || !typesBox) return;
+  if (!st.markMode) { gridBox.innerHTML = ''; typesBox.innerHTML = ''; return; }
+  const placed = plPlacedCells();
+  if (!placed.length) { gridBox.innerHTML = '<p class="hint">Placez d\'abord des photos dans la grille ci-dessus.</p>'; typesBox.innerHTML = ''; return; }
+  // 2ᵉ grille : chaque image placée + 4 cases (une par type)
+  gridBox.innerHTML = '<div class="pl-mark-grid">' + placed.map((c) => {
+    const marks = st.cellMarks[c.key] || {};
+    const chk = MARK_TYPES.map((t) => `<label class="pl-mk-chk"><input type="checkbox" data-mkkey="${esc(c.key)}" data-mktype="${t.key}" ${marks[t.key] ? 'checked' : ''}/> ${esc(t.label)}</label>`).join('');
+    return `<div class="pl-mk-cell"><div class="pl-mk-thumb" style="background-image:url('${plMarkCellSrc(c.key)}')"></div><div class="pl-mk-lbl">${esc(c.label)}</div><div class="pl-mk-chks">${chk}</div></div>`;
+  }).join('') + '</div>';
+  gridBox.querySelectorAll('[data-mkkey]').forEach((inp) => inp.addEventListener('change', (e) => {
+    const key = inp.dataset.mkkey, ty = inp.dataset.mktype;
+    if (!st.cellMarks[key]) st.cellMarks[key] = {};
+    if (e.target.checked) { if (!st.cellMarks[key][ty]) st.cellMarks[key][ty] = markDefaults(ty); }
+    else { delete st.cellMarks[key][ty]; if (!Object.keys(st.cellMarks[key]).length) delete st.cellMarks[key]; }
+    plRenderMarkers(); plDraftSave();
+  }));
+  // Sous-sections par type (grande vue) → cliquer une image pour la régler
+  typesBox.innerHTML = MARK_TYPES.map((t) => {
+    const imgs = placed.filter((c) => st.cellMarks[c.key] && st.cellMarks[c.key][t.key]);
+    if (!imgs.length) return '';
+    return `<div class="pl-mk-type"><h4 class="rsub" style="margin:10px 0 4px">${esc(t.label)} <span class="li-sub">(${imgs.length})</span></h4><div class="pl-mk-large">${imgs.map((c) => { const m = st.cellMarks[c.key][t.key]; const g = markGeom(t.key, m); const ang = g.angle != null ? Math.round(g.angle) + '°' : '—'; return `<div class="pl-mk-litem" data-editkey="${esc(c.key)}" data-edittype="${t.key}"><div class="pl-mk-lthumb" style="background-image:url('${plMarkCellSrc(c.key)}')">${plMarkSvgOverlay(t.key, m)}</div><div class="pl-mk-llbl">${esc(c.membre)} · ${esc(c.angle)}<br><b style="color:${esc(g.measureColor)}">${esc(g.measureName)} : ${ang}</b></div></div>`; }).join('')}</div></div>`;
+  }).join('') || '<p class="hint">Cochez au moins un type de marqueur sur une image ci-dessus.</p>';
+  typesBox.querySelectorAll('[data-editkey]').forEach((el) => el.addEventListener('click', () => modalMarkEdit(el.dataset.editkey, el.dataset.edittype)));
+}
+const PL_MARK_BAND = 0.16; // fraction de la hauteur de case réservée à la BANDE d'angle (sous l'image). L'éditeur utilise le même ratio d'image → marqueurs alignés avec le PDF.
+function plCellAspect() { const st = plCreate; if (!st) return 4 / 3; const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st)); const rowImg = (g.rowH || 3) * (1 - PL_MARK_BAND); return (g.colW && rowImg) ? g.colW / rowImg : 4 / 3; }
+// Dessine les lignes d'un marqueur (coords % 0-100) dans le rectangle image (x,y,w,h) d'un canvas.
+function drawMarkerLines(ctx, typeKey, m, x, y, w, h, opacity) {
+  const g = markGeom(typeKey, m); if (!g.lines.length) return g;
+  ctx.save(); ctx.globalAlpha = (opacity != null) ? opacity : 0.9; ctx.lineWidth = Math.max(1.4, w * 0.012); ctx.lineCap = 'round';
+  g.lines.forEach((l) => { ctx.strokeStyle = markColor(typeKey, l.k); ctx.beginPath(); ctx.moveTo(x + l.x1 / 100 * w, y + l.y1 / 100 * h); ctx.lineTo(x + l.x2 / 100 * w, y + l.y2 / 100 * h); ctx.stroke(); });
+  ctx.restore(); return g;
+}
+// Éditeur d'un marqueur sur une image : poignées déplaçables (%), lignes de référence + mesure, angle en direct, symétrie, reset.
+function modalMarkEdit(key, typeKey) {
+  const st = plCreate; if (!st) return;
+  if (!st.cellMarks[key]) st.cellMarks[key] = {};
+  if (!st.cellMarks[key][typeKey]) st.cellMarks[key][typeKey] = markDefaults(typeKey);
+  const m = st.cellMarks[key][typeKey], t = markType(typeKey), src = plMarkCellSrc(key), ar = plCellAspect();
+  const o = openOverlay(`<div class="modal-head"><b>📐 ${esc(t.label)}</b><button class="x" data-x>✕</button></div>
+    <div class="pl-me-wrap" style="aspect-ratio:${ar}"><img class="pl-me-img" src="${src || ''}" alt=""/><svg class="pl-me-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
+    <p class="pl-me-angle" id="plMeAngle"></p><div class="pl-me-legend" id="plMeLegend"></div>
+    <p class="hint">Glissez les points pour placer/tourner le marqueur. Les repères fixes (angles connus) suivent automatiquement.</p>
+    <div class="actions two"><button class="btn small" data-mirror>↔ Symétrie G/D</button><button class="btn small" data-reset>↺ Réinitialiser</button></div>
+    <div class="actions"><button class="btn primary block" data-ok>✓ Valider</button></div>`, 'pl-ce-overlay');
+  const svg = o.q('.pl-me-svg'), wrap = o.q('.pl-me-wrap');
+  let dragH = null;
+  const ptTo = (ev) => { const r = wrap.getBoundingClientRect(); return { x: Math.max(0, Math.min(100, (ev.clientX - r.left) / r.width * 100)), y: Math.max(0, Math.min(100, (ev.clientY - r.top) / r.height * 100)) }; };
+  const draw = () => {
+    const g = markGeom(typeKey, m); let s = '';
+    g.lines.forEach((l) => { s += `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.8" vector-effect="non-scaling-stroke" stroke-linecap="round" opacity="0.95"/>`; });
+    g.handles.forEach((h) => { s += `<circle class="pl-me-h" data-h="${h.k}" cx="${h.x}" cy="${h.y}" r="3.4" fill="#fff" stroke="#222" stroke-width="0.7" vector-effect="non-scaling-stroke"/>`; });
+    svg.innerHTML = s;
+    const ang = g.angle != null ? Math.round(g.angle) + '°' : '—';
+    o.q('#plMeAngle').innerHTML = `<b style="color:${esc(g.measureColor)}">${esc(g.measureName)} : ${ang}</b>`;
+    o.q('#plMeLegend').innerHTML = t.lines.map((l) => `<span class="pl-mk-leg"><span class="pl-mk-swatch" style="background:${esc(markColor(typeKey, l.k))}"></span>${esc(l.name)}</span>`).join('');
+    svg.querySelectorAll('[data-h]').forEach((c) => c.addEventListener('pointerdown', (ev) => { ev.preventDefault(); dragH = ev.target.dataset.h; try { ev.target.setPointerCapture(ev.pointerId); } catch (e) {} }));
+  };
+  wrap.addEventListener('pointermove', (ev) => { if (!dragH || !m.pts[dragH]) return; const p = ptTo(ev); m.pts[dragH].x = p.x; m.pts[dragH].y = p.y; draw(); });
+  const up = () => { if (dragH) { dragH = null; plDraftSave(); } };
+  wrap.addEventListener('pointerup', up); wrap.addEventListener('pointercancel', up);
+  o.q('[data-x]').onclick = () => { o.close(); plRenderMarkers(); };
+  o.q('[data-mirror]').addEventListener('click', () => { markMirror(m); draw(); plDraftSave(); });
+  o.q('[data-reset]').addEventListener('click', () => { m.pts = markDefaults(typeKey).pts; draw(); plDraftSave(); });
+  o.q('[data-ok]').addEventListener('click', () => { o.close(); plRenderMarkers(); });
+  draw();
 }
 
 // Cadrillage d'aide (mode édition) : 4 lignes de marge (gauche/droite/haut/bas, cm → % de la case) + axe central rouge.
@@ -9650,6 +9945,7 @@ function modalCellEdit(key) {
   const st = plCreate; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid);
   if (!ph || !ph.url) return;
   if (!st.cellImg) st.cellImg = {}; if (!st.cellCropDef) st.cellCropDef = {};
+  if (!st.cellMarks) st.cellMarks = {}; if (!st.markPick) st.markPick = {};
   const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st));
   const cellAR = g.colW / g.rowH;
   const src = new Image(); src.onload = () => build(); src.onerror = () => {}; src.src = ph.url;
