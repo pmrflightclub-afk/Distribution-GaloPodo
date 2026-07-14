@@ -11,10 +11,22 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.7';
+const APP_VERSION = '1.7.8';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.8', date: '2026-07-14',
+    ajouts: [
+      'Marqueurs : l\'angle est désormais affiché AVEC son signe (+ / −) par rapport à l\'horizontale (ou à l\'aplomb pour la déviation de paroi) et au dixième de degré (ex. « +24,3° »).',
+      'Adresses : à l\'enregistrement d\'une fiche, TOUTES les adresses complètes du client, de sa société et de chaque cheval (y compris les adresses inactives) sont localisées en arrière-plan — plus besoin d\'ouvrir une tournée pour cela.',
+      'Planche : changer le format ou l\'orientation ne supprime plus les marqueurs déjà posés — ils sont conservés (vous les réajustez si besoin sur la nouvelle image).',
+    ],
+    corrections: [
+      'Gérer les images (recadrage) : la file d\'attente parcourt maintenant les cases COLONNE par colonne (colonne 1 entière, puis colonne 2…) ; l\'éditeur de marqueurs, lui, reste ligne par ligne.',
+      'Marqueurs : la valeur d\'angle reste lisible même quand la couleur de la mesure est très claire (jaune, cyan…) ; la légende ne chevauche plus la grille en bas de page.',
+    ],
+  },
   {
     version: '1.7.7', date: '2026-07-14',
     corrections: [
@@ -2271,6 +2283,15 @@ const _acute = (a, b) => { let d = Math.abs(a - b) % 180; if (d > 90) d = 180 - 
 const _between = (a, b) => { let d = Math.abs(a - b) % 360; if (d > 180) d = 360 - d; return d; }; // angle entre 2 vecteurs (0-180)
 const _degA = (x1, y1, x2, y2, asp) => Math.atan2(y2 - y1, (x2 - x1) * asp) * 180 / Math.PI; // angle PHYSIQUE d'une droite
 const _lenA = (x1, y1, x2, y2, asp) => Math.hypot((x2 - x1) * asp, y2 - y1); // longueur physique
+// Angle SIGNÉ (physique) de la mesure (m1→m2) par rapport à la base (b1→b2), réduit à −90..+90 ; + = mesure « au-dessus » de la base (y plus petit).
+function _signedA(bx1, by1, bx2, by2, mx1, my1, mx2, my2, asp) {
+  const bdx = (bx2 - bx1) * asp, bdy = by2 - by1, mdx = (mx2 - mx1) * asp, mdy = my2 - my1;
+  const cross = bdx * mdy - bdy * mdx, dot = bdx * mdx + bdy * mdy;
+  let d = Math.atan2(cross, dot) * 180 / Math.PI; if (d > 90) d -= 180; else if (d < -90) d += 180;
+  return -d;
+}
+// Texte d'un angle signé, 1 décimale, virgule française (ex. « +24,3° », « −2,1° »).
+function plAngTxt(a) { if (a == null || !isFinite(a)) return '—'; const r = Math.round(a * 10) / 10; return (r > 0 ? '+' : r < 0 ? '−' : '') + Math.abs(r).toFixed(1).replace('.', ',') + '°'; }
 // Extrémité (en %) d'une ligne partant de (qx,qy) le long de la direction (dx1,dy1)→(dx2,dy2), inclinée de tiltDeg en espace
 // PHYSIQUE, longueur physique lenP, en choisissant le sens qui MONTE (y le plus petit).
 function _tiltUp(qx, qy, dx1, dy1, dx2, dy2, tiltDeg, lenP, asp) {
@@ -2290,7 +2311,7 @@ function markGeom(typeKey, m, aspect) {
     push('sol', L.x, L.y, R.x, R.y);
     const e = _tiltUp(L.x, L.y, L.x, L.y, R.x, R.y, 25, len, asp); push('ref25', L.x, L.y, e.x, e.y); // 25° FIXE depuis L, monte à droite
     push('axe', L.x, L.y, P.x, P.y);
-    out.angle = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(L.x, L.y, P.x, P.y, asp));
+    out.angle = _signedA(L.x, L.y, R.x, R.y, L.x, L.y, P.x, P.y, asp); // signé / horizontale (Sol)
     out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
   } else if (typeKey === 'solaire') {
     const { L, R, P } = p; if (!L || !R || !P) return out;
@@ -2299,7 +2320,7 @@ function markGeom(typeKey, m, aspect) {
     const e3 = _tiltUp(R.x, R.y, R.x, R.y, L.x, L.y, 3, len, asp); push('ref3', R.x, R.y, e3.x, e3.y); // 3°/6° FIXES depuis R, montent à gauche
     const e6 = _tiltUp(R.x, R.y, R.x, R.y, L.x, L.y, 6, len, asp); push('ref6', R.x, R.y, e6.x, e6.y);
     push('axe', R.x, R.y, P.x, P.y); // mesure depuis R
-    out.angle = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(R.x, R.y, P.x, P.y, asp));
+    out.angle = _signedA(L.x, L.y, R.x, R.y, R.x, R.y, P.x, P.y, asp); // signé / horizontale (Base)
     out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
   } else if (typeKey === 'paroi') {
     const { T, B, M } = p; if (!T || !B || !M) return out;
@@ -2307,12 +2328,12 @@ function markGeom(typeKey, m, aspect) {
     const ap = _degA(T.x, T.y, B.x, B.y, asp) * Math.PI / 180, perp = ap + Math.PI / 2, half = (_lenA(T.x, T.y, B.x, B.y, asp) || 40) * 0.55, bxp = B.x * asp; // ⊥ 90° physique, prolongée des 2 côtés
     push('base90', (bxp - half * Math.cos(perp)) / asp, B.y - half * Math.sin(perp), (bxp + half * Math.cos(perp)) / asp, B.y + half * Math.sin(perp));
     push('paroi', T.x, T.y, M.x, M.y); // mesure depuis le haut T
-    out.angle = _acute(_degA(T.x, T.y, B.x, B.y, asp), _degA(T.x, T.y, M.x, M.y, asp));
+    out.angle = _signedA(T.x, T.y, B.x, B.y, T.x, T.y, M.x, M.y, asp); // signé / aplomb vertical
     out.handles = [{ k: 'T', x: T.x, y: T.y }, { k: 'B', x: B.x, y: B.y }, { k: 'M', x: M.x, y: M.y }];
   } else if (typeKey === 'rotation') {
     const { A, J, B } = p; if (!A || !J || !B) return out;
     push('seg1', A.x, A.y, J.x, J.y); push('seg2', J.x, J.y, B.x, B.y);
-    out.angle = 180 - _between(_degA(J.x, J.y, A.x, A.y, asp), _degA(J.x, J.y, B.x, B.y, asp)); // écart à l'alignement (180°)
+    out.angle = _signedA(A.x, A.y, J.x, J.y, J.x, J.y, B.x, B.y, asp); // écart signé à l'alignement (0 = aligné)
     out.handles = [{ k: 'A', x: A.x, y: A.y }, { k: 'J', x: J.x, y: J.y }, { k: 'B', x: B.x, y: B.y }];
   }
   out.measureName = (t && (t.lines.find((l) => l.k === t.measure) || {}).name) || '';
@@ -4564,8 +4585,22 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
     });
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
     DRAFTS.clear(key); saveClients(); reconcileActiveTours(); closeModal();
+    geocodeClientAddresses(w); // localise en arrière-plan TOUTES les adresses complètes (client, société, chevaux — actives ET inactives)
     if (onSaved) onSaved(w); else renderClients();
   });
+}
+// Une adresse est « complète » (géocodable) si elle a une rue ET (un code postal OU une localité).
+function addrGeoReady(a) { return !!(a && (a.rue || '').trim() && ((a.cp || '').trim() || (a.localite || '').trim())); }
+// À la sauvegarde d'une fiche : géocode en arrière-plan chaque adresse complète encore non localisée (client, société, et toutes les
+// adresses de chaque cheval, actives comme inactives). Best-effort : les échecs (introuvable/incomplet) sont ignorés.
+async function geocodeClientAddresses(w) {
+  if (!w) return; const todo = []; const seen = new Set();
+  const add = (a) => { if (a && !seen.has(a) && !(a.lat != null && a.lon != null) && addrGeoReady(a)) { seen.add(a); todo.push(a); } };
+  add(w.addr); if (w.societe && w.societeMemeAdresse === false) add(w.societeAddr);
+  (w.chevaux || []).forEach((h) => { if (Array.isArray(h.adresses)) h.adresses.forEach((e) => add(e && e.addr)); add(h.addr); });
+  if (!todo.length) return; let changed = false;
+  for (const a of todo) { try { const g = await geocode(a); a.lat = g.lat; a.lon = g.lon; changed = true; } catch { /* introuvable → différé */ } if (S.provider === 'osm') await sleep(1100); }
+  if (changed) { (w.chevaux || []).forEach((h) => chevalSyncActive(h)); saveClients(); }
 }
 
 // Mise en page d'un formulaire (anamnèse / mail) : chaque champ = l'intitulé de référence encadré/surligné, puis la réponse du client en dessous, avec de l'espace pour bien les distinguer.
@@ -5547,7 +5582,12 @@ function modalChangeChevalAddr(c, h, cv) {
   });
   body.querySelector('#chaddrPonct').addEventListener('click', () => {
     const t = targetAddr(); if (!t) { alert('Choisissez une adresse ou encodez-en une.'); return; }
-    if (t.isNew && !h.adresses.some((e) => addrKey(e.addr) === addrKey(t.addr))) h.adresses.push({ id: uid(), nom: '', addr: toAddr(t.addr), actif: false }); // ajoutée à la fiche (inactive), le défaut ne change pas
+    if (t.isNew) {
+      // Cheval encore sans adresses propres (source client/société) : on fige l'adresse par défaut ACTUELLE comme entrée active
+      // et on bascule le cheval en « adresse propre » → la nouvelle adresse ponctuelle devient VISIBLE (fiche + Adresses chevaux), le défaut ne change pas.
+      if (!h.adresses.length) { const cur = chevalAddr(c, h); if (addrStr(cur).trim()) h.adresses.push({ id: uid(), nom: h.addrNom || '', addr: toAddr(cur), actif: true }); h.addrSource = 'specifique'; }
+      if (!h.adresses.some((e) => addrKey(e.addr) === addrKey(t.addr))) h.adresses.push({ id: uid(), nom: '', addr: toAddr(t.addr), actif: false }); // ajoutée à la fiche (inactive), le défaut ne change pas
+    }
     chevalSyncActive(h);
     if (cv) { if (addrKey(t.addr) === defKey) delete cv.addrOverride; else cv.addrOverride = toAddr(t.addr); } // ponctuelle = défaut → pas d'override
     finish();
@@ -7991,7 +8031,7 @@ async function plancheMarkerPageCanvas(typeKey) {
   const placed = plPlacedCells().filter((c) => st.markPick && st.markPick[c.key] && st.cellMarks[c.key] && st.cellMarks[c.key][typeKey]);
   const angles = st.angles || [], membres = []; placed.forEach((c) => { if (!membres.includes(c.membre)) membres.push(c.membre); });
   const byMA = {}; placed.forEach((c) => { const k = c.membre + '||' + c.angle; if (!byMA[k]) byMA[k] = c.key; });
-  const g = plGeom(land, angles.length, Math.max(1, membres.length), plFormatAspect(st));
+  const g = plGeom(land, angles.length, Math.max(1, membres.length), plFormatAspect(st), PL_MARK_LEGEND_H);
   const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
   await plMarkHeaderFooter(ctx, g, 'Marqueurs — ' + t.label);
@@ -8008,7 +8048,7 @@ async function plancheMarkerPageCanvas(typeKey) {
       const b = plMarkFitBox(cx, ry, colW, imgH);
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
       const m = st.cellMarks[key][typeKey], gg = drawMarkerLines(ctx, typeKey, m, b.x, b.y, b.w, b.h, opacity);
-      const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
+      const ang = (gg && gg.angle != null) ? plAngTxt(gg.angle) : '—';
       plMarkBand(ctx, cx, ry + imgH, colW, bandH, (gg && gg.measureName) ? gg.measureName : '', ang, t.ref ? 'réf. ' + t.ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
     }
   }
@@ -8026,7 +8066,7 @@ async function plancheComparatifCanvas() {
   const st = plCreate, land = st.orientation !== 'portrait';
   const rows = plPlacedCells().filter((c) => st.markPick && st.markPick[c.key] && st.cellMarks[c.key] && Object.keys(st.cellMarks[c.key]).length); // 1 ligne = 1 photo cochée
   const cols = MARK_TYPES.slice();
-  const g = plGeom(land, cols.length, Math.max(1, rows.length), plFormatAspect(st));
+  const g = plGeom(land, cols.length, Math.max(1, rows.length), plFormatAspect(st), PL_MARK_LEGEND_H);
   const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
   await plMarkHeaderFooter(ctx, g, 'Comparatif par pied');
@@ -8044,7 +8084,7 @@ async function plancheComparatifCanvas() {
       const cx = gx + labelW + ci * colW, b = plMarkFitBox(cx, ry, colW, imgH);
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
       const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], b.x, b.y, b.w, b.h, opacity);
-      const ang = (gg && gg.angle != null) ? Math.round(gg.angle) + '°' : '—';
+      const ang = (gg && gg.angle != null) ? plAngTxt(gg.angle) : '—';
       plMarkBand(ctx, cx, ry + imgH, colW, bandH, '', ang, cols[ci].ref ? 'réf. ' + cols[ci].ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
     }
   }
@@ -9752,14 +9792,14 @@ function modalPlancheCreate(type, prefill) {
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
-  if ($('plCformat')) $('plCformat').addEventListener('change', (e) => { // Format d'image : le ratio des cases change → les recadrages (calés sur l'ancien ratio) ne sont plus valides
+  if ($('plCformat')) $('plCformat').addEventListener('change', (e) => { // Format d'image : le ratio des cases change → les recadrages (calés sur l'ancien ratio) ne sont plus valides ; les MARQUEURS sont CONSERVÉS (l'utilisateur les réajuste)
     plCreate.format = e.target.value; S.planche.format = e.target.value; saveSettings();
-    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {}; plCreate.cellMarks = {}; plCreate.markPick = {};
+    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
     plRenderGrid();
   });
-  if ($('plCorient')) $('plCorient').addEventListener('change', (e) => { // Orientation : change la page ET le sens du ratio des cases → recadrages invalidés
+  if ($('plCorient')) $('plCorient').addEventListener('change', (e) => { // Orientation : change la page ET le sens du ratio des cases → recadrages invalidés ; MARQUEURS conservés
     plCreate.orientation = e.target.value === 'paysage' ? 'paysage' : 'portrait'; P.orientation = plCreate.orientation; P.orientationUserSet = true; saveSettings();
-    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {}; plCreate.cellMarks = {}; plCreate.markPick = {};
+    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
     plRenderGrid();
   });
   if ($('plCgridFit')) { // « Remplir les cases » = curseur (Remplir / Entière), Remplir actif par défaut
@@ -9944,9 +9984,16 @@ function plRenderGrid() {
 // ---------- Marqueurs (compas d'angles) : sélection + sous-sections par type ----------
 function plMarkCellSrc(key) { const st = plCreate; if (!st) return null; const baked = st.fitMode !== 'contain' && st.cellImg && st.cellImg[key]; if (baked) return baked; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid); return ph ? ph.url : null; }
 // Cases placées (avec image) — colonnes = angles, lignes = membres.
-function plPlacedCells() {
+// colMajor=false (défaut) → parcours par LIGNE (chaque ligne, ses colonnes) : ordre des marqueurs + rendu PDF.
+// colMajor=true → parcours par COLONNE (colonne 1 toutes ses lignes, puis colonne 2…) : file « Gérer les images » (crop).
+function plPlacedCells(colMajor) {
   const st = plCreate; if (!st) return []; const angles = st.angles || []; const out = [];
-  (st.pages || []).forEach((pg, pi) => { plPageRows(pi).forEach((r) => { angles.forEach((a, ci) => { const key = plCellKey(pi, r, ci); if (plMarkCellSrc(key)) out.push({ key, membre: r.label || '', angle: a, label: (r.label || '') + ' · ' + a, ri: r.ri }); }); }); });
+  const add = (pi, r, a, ci) => { const key = plCellKey(pi, r, ci); if (plMarkCellSrc(key)) out.push({ key, membre: r.label || '', angle: a, label: (r.label || '') + ' · ' + a, ri: r.ri }); };
+  (st.pages || []).forEach((pg, pi) => {
+    const rows = plPageRows(pi);
+    if (colMajor) angles.forEach((a, ci) => rows.forEach((r) => add(pi, r, a, ci)));
+    else rows.forEach((r) => angles.forEach((a, ci) => add(pi, r, a, ci)));
+  });
   return out;
 }
 // Overlay SVG (lecture seule) des lignes d'un marqueur — réutilisé dans les vignettes et l'aperçu final.
@@ -9980,11 +10027,12 @@ function plRenderMarkers() {
   typesBox.innerHTML = MARK_TYPES.map((t) => {
     const imgs = placed.filter((c) => st.cellMarks[c.key] && st.cellMarks[c.key][t.key]);
     if (!imgs.length) return '';
-    return `<div class="pl-mk-type"><h4 class="rsub" style="margin:10px 0 4px">${esc(t.label)} <span class="li-sub">(${imgs.length})</span></h4><div class="pl-mk-large">${imgs.map((c) => { const m = st.cellMarks[c.key][t.key]; const g = markGeom(t.key, m); const ang = g.angle != null ? Math.round(g.angle) + '°' : '—'; return `<div class="pl-mk-litem" data-editkey="${esc(c.key)}" data-edittype="${t.key}"><div class="pl-mk-lthumb" style="background-image:url('${plMarkCellSrc(c.key)}')">${plMarkSvgOverlay(t.key, m)}</div><div class="pl-mk-llbl">${esc(c.membre)} · ${esc(c.angle)}<br><b style="color:${esc(g.measureColor)}">${esc(g.measureName)} : ${ang}</b></div></div>`; }).join('')}</div></div>`;
+    return `<div class="pl-mk-type"><h4 class="rsub" style="margin:10px 0 4px">${esc(t.label)} <span class="li-sub">(${imgs.length})</span></h4><div class="pl-mk-large">${imgs.map((c) => { const m = st.cellMarks[c.key][t.key]; const g = markGeom(t.key, m); const ang = g.angle != null ? plAngTxt(g.angle) : '—'; return `<div class="pl-mk-litem" data-editkey="${esc(c.key)}" data-edittype="${t.key}"><div class="pl-mk-lthumb" style="background-image:url('${plMarkCellSrc(c.key)}')">${plMarkSvgOverlay(t.key, m)}</div><div class="pl-mk-llbl">${esc(c.membre)} · ${esc(c.angle)}<br><b style="color:${esc(plInkColor(g.measureColor))}">${esc(g.measureName)} : ${ang}</b></div></div>`; }).join('')}</div></div>`;
   }).join('') || '<p class="hint">Cochez au moins un type de marqueur sur une image ci-dessus.</p>';
   typesBox.querySelectorAll('[data-editkey]').forEach((el) => el.addEventListener('click', () => modalMarkEdit(el.dataset.editkey, el.dataset.edittype)));
 }
 const PL_MARK_BAND = 0.18; // fraction de la hauteur de case réservée à la BANDE d'angle (sous l'image) — assez pour 2 lignes (valeur + réf).
+const PL_MARK_LEGEND_H = 11; // mm réservés SOUS la grille (pages marqueurs/comparatif) pour la légende → pas de chevauchement.
 // Ratio de référence des marqueurs (image seule), INDÉPENDANT de la grille : format contraint → son ratio ; « Plein page » → 4:3
 // (ou 3:4 en portrait). Éditeur ET PDF utilisent ce même ratio → marqueurs toujours alignés (fini le décalage en Plein page).
 function plMarkRefAspect() { const st = plCreate; if (!st) return 4 / 3; const a = plFormatAspect(st); return a > 0 ? a : (st.orientation === 'portrait' ? 3 / 4 : 4 / 3); }
@@ -9994,8 +10042,17 @@ function plCellAspect() { return plMarkRefAspect(); }
 function plMarkFitBox(x, y, w, h) { const r = plMarkRefAspect(); let sw = w, sh = w / r; if (sh > h) { sh = h; sw = h * r; } return { x: x + (w - sw) / 2, y: y + (h - sh) / 2, w: sw, h: sh }; }
 // Bande sous une image (case) : « label » (nom+valeur, ou juste valeur) + référence saine — collée si refInline, sinon 2ᵉ ligne.
 // namePrefix = nom de mesure (tronquable) ; valueTxt = l'ANGLE (jamais tronqué) ; refTxt = référence saine.
+// Assombrit une couleur TROP CLAIRE (jaune, cyan…) juste assez pour rester lisible sur fond blanc, en conservant sa teinte.
+function plInkColor(color) {
+  const mm = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(String(color || '')); if (!mm) return color || '#333';
+  let h = mm[1]; if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  let r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const lum = () => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; let guard = 0;
+  while (lum() > 0.58 && guard++ < 24) { r *= 0.86; g *= 0.86; b *= 0.86; }
+  return 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
+}
 function plMarkBand(ctx, cx, y, colW, bandH, namePrefix, valueTxt, refTxt, color, refInline, fs) {
-  ctx.fillStyle = '#fff'; ctx.fillRect(cx, y, colW, bandH); ctx.textAlign = 'center'; ctx.fillStyle = color || '#333';
+  ctx.fillStyle = '#fff'; ctx.fillRect(cx, y, colW, bandH); ctx.textAlign = 'center'; ctx.fillStyle = plInkColor(color || '#333');
   // Tronque UNIQUEMENT le préfixe (nom) pour que la valeur (angle) tienne toujours.
   const fit = (tail, maxW) => { let p = namePrefix || ''; while (p && ctx.measureText(p + ' : ' + tail).width > maxW) p = p.slice(0, -1); return (p ? p + ' : ' : '') + tail; };
   if (!refTxt || refInline) { ctx.textBaseline = 'middle'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillText(fit(valueTxt + (refTxt ? ' · ' + refTxt : ''), colW - 4), cx + colW / 2, y + bandH / 2); }
@@ -10031,8 +10088,8 @@ function modalMarkEdit(key, typeKey, onValidate, progress) {
     g.lines.forEach((l) => { s += `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.8" vector-effect="non-scaling-stroke" stroke-linecap="round" opacity="${opacity}"/>`; });
     g.handles.forEach((h) => { s += `<circle cx="${h.x}" cy="${h.y}" r="3.4" fill="#fff" stroke="#222" stroke-width="0.7" vector-effect="non-scaling-stroke"/>`; });
     svg.innerHTML = s;
-    const ang = g.angle != null ? Math.round(g.angle) + '°' : '—';
-    o.q('#plMeAngle').innerHTML = `<b style="color:${esc(g.measureColor)}">${esc(g.measureName)} : ${ang}</b>`;
+    const ang = g.angle != null ? plAngTxt(g.angle) : '—';
+    o.q('#plMeAngle').innerHTML = `<b style="color:${esc(plInkColor(g.measureColor))}">${esc(g.measureName)} : ${ang}</b>`;
     o.q('#plMeLegend').innerHTML = t.lines.map((l) => `<span class="pl-mk-leg"><span class="pl-mk-swatch" style="background:${esc(markColor(typeKey, l.k))}"></span>${esc(l.name)}</span>`).join('');
   };
   // Interaction : capture sur le WRAP (élément STABLE, non recréé) + sélection de la poignée la plus proche → drag fiable (tactile inclus, plus de poignée « collée »).
@@ -10204,7 +10261,7 @@ function plCropQueueRun(keys, i) {
 }
 function plCropQueueAll() {
   if (!plCreate) return;
-  const keys = plPlacedCells().map((c) => c.key);
+  const keys = plPlacedCells(true).map((c) => c.key); // COLONNE par colonne (col 1 toutes ses lignes, puis col 2…)
   if (!keys.length) { alert('Placez d\'abord des photos dans la grille.'); return; }
   plCropQueueRun(keys, 0);
 }
@@ -10281,11 +10338,12 @@ function plFormatOptions(sel) {
   const m = { ph43: 'r43', ph34: 'r43', reflex32: 'r32', reflex23: 'r32' }; sel = m[sel] || sel || 'r43';
   return opts.map((o) => `<option value="${o[0]}"${sel === o[0] ? ' selected' : ''}>${o[1]}</option>`).join('');
 }
-function plGeom(land, nCols, refRows, aspect) {
+function plGeom(land, nCols, refRows, aspect, legendH) {
   const pageW = land ? 297 : 210, pageH = land ? 210 : 297;
   const margin = 0.5, headerH = 17, footerH = 7, labelW = 9, angleHeaderH = 5; // headerH 15→17 : évite le débordement de l'en-tête (client/cheval avec beaucoup d'infos + note) sur la grille
+  legendH = legendH > 0 ? legendH : 0; // bande réservée SOUS la grille pour la légende (pages marqueurs) → évite le chevauchement grille/légende
   const gridLeft = margin, gridTop = margin + headerH;
-  const gridW = pageW - 2 * margin, gridH = pageH - 2 * margin - headerH - footerH;
+  const gridW = pageW - 2 * margin, gridH = pageH - 2 * margin - headerH - footerH - legendH;
   const availW = gridW - labelW, availH = gridH - angleHeaderH;
   let colW = availW / Math.max(1, nCols), rowH = availH / Math.max(1, refRows), offX = 0, offY = 0;
   if (aspect && aspect > 0) { // cases contraintes au ratio choisi, AGRANDIES au max qui rentre, bloc (étiquettes + cases) CENTRÉ dans la grille
@@ -10295,7 +10353,7 @@ function plGeom(land, nCols, refRows, aspect) {
     offY = (gridH - (angleHeaderH + rowH * Math.max(1, refRows))) / 2;
   }
   const blockW = labelW + colW * Math.max(1, nCols), blockH = angleHeaderH + rowH * Math.max(1, refRows);
-  return { pageW, pageH, margin, headerH, footerH, labelW, angleHeaderH, gridLeft, gridTop, gridW, gridH, colW, rowH, nCols, refRows, offX, offY, blockW, blockH };
+  return { pageW, pageH, margin, headerH, footerH, legendH, labelW, angleHeaderH, gridLeft, gridTop, gridW, gridH, colW, rowH, nCols, refRows, offX, offY, blockW, blockH };
 }
 // Nombre de lignes de référence (le plus grand parmi les pages) → cellules de taille FIXE d'une page/planche à l'autre.
 function plRefRows(st) { let m = 1; (st.pages || []).forEach((pg, pi) => { m = Math.max(m, plPageRows(pi).length); }); return m; }
