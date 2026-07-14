@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.9';
+const APP_VERSION = '1.7.10';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.10', date: '2026-07-14',
+    corrections: [
+      'Marqueurs : le SIGNE de l\'angle est désormais cohérent entre les 4 types — il suit le CÔTÉ de la mesure par rapport à la ligne de base : + au-dessus (base horizontale) ou à droite (aplomb vertical), − en dessous ou à gauche, quel que soit le sens de tracé. (Le plan solaire affichait auparavant un signe inversé.)',
+    ],
+  },
   {
     version: '1.7.9', date: '2026-07-14',
     ajouts: [
@@ -2292,12 +2298,11 @@ const _acute = (a, b) => { let d = Math.abs(a - b) % 180; if (d > 90) d = 180 - 
 const _between = (a, b) => { let d = Math.abs(a - b) % 360; if (d > 180) d = 360 - d; return d; }; // angle entre 2 vecteurs (0-180)
 const _degA = (x1, y1, x2, y2, asp) => Math.atan2(y2 - y1, (x2 - x1) * asp) * 180 / Math.PI; // angle PHYSIQUE d'une droite
 const _lenA = (x1, y1, x2, y2, asp) => Math.hypot((x2 - x1) * asp, y2 - y1); // longueur physique
-// Angle SIGNÉ (physique) de la mesure (m1→m2) par rapport à la base (b1→b2), réduit à −90..+90 ; + = mesure « au-dessus » de la base (y plus petit).
-function _signedA(bx1, by1, bx2, by2, mx1, my1, mx2, my2, asp) {
-  const bdx = (bx2 - bx1) * asp, bdy = by2 - by1, mdx = (mx2 - mx1) * asp, mdy = my2 - my1;
-  const cross = bdx * mdy - bdy * mdx, dot = bdx * mdx + bdy * mdy;
-  let d = Math.atan2(cross, dot) * 180 / Math.PI; if (d > 90) d -= 180; else if (d < -90) d += 180;
-  return -d;
+// Signe de l'angle = CÔTÉ de l'extrémité mesurée (ex,ey) par rapport à la DROITE de base (b1→b2), indépendant du sens de tracé :
+// + = extrémité AU-DESSUS (base horizontale) ou À DROITE (base verticale) ; − = en dessous / à gauche. Intuitif et cohérent entre types.
+function _sideSign(bx1, by1, bx2, by2, ex, ey, asp) {
+  const cross = (bx2 - bx1) * asp * (ey - by1) - (by2 - by1) * ((ex - bx1) * asp);
+  return cross > 0 ? -1 : 1;
 }
 // Texte d'un angle signé, 1 décimale, virgule française (ex. « +24,3° », « −2,1° »).
 function plAngTxt(a) { if (a == null || !isFinite(a)) return '—'; const r = Math.round(a * 10) / 10; return (r > 0 ? '+' : r < 0 ? '−' : '') + Math.abs(r).toFixed(1).replace('.', ',') + '°'; }
@@ -2320,7 +2325,7 @@ function markGeom(typeKey, m, aspect) {
     push('sol', L.x, L.y, R.x, R.y);
     const e = _tiltUp(L.x, L.y, L.x, L.y, R.x, R.y, 25, len, asp); push('ref25', L.x, L.y, e.x, e.y); // 25° FIXE depuis L, monte à droite
     push('axe', L.x, L.y, P.x, P.y);
-    out.angle = _signedA(L.x, L.y, R.x, R.y, L.x, L.y, P.x, P.y, asp); // signé / horizontale (Sol)
+    out.angle = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(L.x, L.y, P.x, P.y, asp)) * _sideSign(L.x, L.y, R.x, R.y, P.x, P.y, asp); // + = P au-dessus du Sol
     out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
   } else if (typeKey === 'solaire') {
     const { L, R, P } = p; if (!L || !R || !P) return out;
@@ -2329,7 +2334,7 @@ function markGeom(typeKey, m, aspect) {
     const e3 = _tiltUp(R.x, R.y, R.x, R.y, L.x, L.y, 3, len, asp); push('ref3', R.x, R.y, e3.x, e3.y); // 3°/6° FIXES depuis R, montent à gauche
     const e6 = _tiltUp(R.x, R.y, R.x, R.y, L.x, L.y, 6, len, asp); push('ref6', R.x, R.y, e6.x, e6.y);
     push('axe', R.x, R.y, P.x, P.y); // mesure depuis R
-    out.angle = _signedA(L.x, L.y, R.x, R.y, R.x, R.y, P.x, P.y, asp); // signé / horizontale (Base)
+    out.angle = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(R.x, R.y, P.x, P.y, asp)) * _sideSign(L.x, L.y, R.x, R.y, P.x, P.y, asp); // + = P au-dessus de la Base
     out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
   } else if (typeKey === 'paroi') {
     const { T, B, M } = p; if (!T || !B || !M) return out;
@@ -2337,12 +2342,12 @@ function markGeom(typeKey, m, aspect) {
     const ap = _degA(T.x, T.y, B.x, B.y, asp) * Math.PI / 180, perp = ap + Math.PI / 2, half = (_lenA(T.x, T.y, B.x, B.y, asp) || 40) * 0.55, bxp = B.x * asp; // ⊥ 90° physique, prolongée des 2 côtés
     push('base90', (bxp - half * Math.cos(perp)) / asp, B.y - half * Math.sin(perp), (bxp + half * Math.cos(perp)) / asp, B.y + half * Math.sin(perp));
     push('paroi', T.x, T.y, M.x, M.y); // mesure depuis le haut T
-    out.angle = _signedA(T.x, T.y, B.x, B.y, T.x, T.y, M.x, M.y, asp); // signé / aplomb vertical
+    out.angle = _acute(_degA(T.x, T.y, B.x, B.y, asp), _degA(T.x, T.y, M.x, M.y, asp)) * _sideSign(T.x, T.y, B.x, B.y, M.x, M.y, asp); // + = paroi (M) à droite de l'aplomb
     out.handles = [{ k: 'T', x: T.x, y: T.y }, { k: 'B', x: B.x, y: B.y }, { k: 'M', x: M.x, y: M.y }];
   } else if (typeKey === 'rotation') {
     const { A, J, B } = p; if (!A || !J || !B) return out;
     push('seg1', A.x, A.y, J.x, J.y); push('seg2', J.x, J.y, B.x, B.y);
-    out.angle = _signedA(A.x, A.y, J.x, J.y, J.x, J.y, B.x, B.y, asp); // écart signé à l'alignement (0 = aligné)
+    out.angle = _acute(_degA(A.x, A.y, J.x, J.y, asp), _degA(J.x, J.y, B.x, B.y, asp)) * _sideSign(A.x, A.y, J.x, J.y, B.x, B.y, asp); // écart à l'alignement (0 = aligné) ; + = B au-dessus de A→J
     out.handles = [{ k: 'A', x: A.x, y: A.y }, { k: 'J', x: J.x, y: J.y }, { k: 'B', x: B.x, y: B.y }];
   }
   out.measureName = (t && (t.lines.find((l) => l.k === t.measure) || {}).name) || '';
