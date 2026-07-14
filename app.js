@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.10';
+const APP_VERSION = '1.7.11';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.11', date: '2026-07-14',
+    ajouts: [
+      'Marqueurs — DEUX transparences réglables par marqueur : une pour les repères, une pour la ligne de mesure (orange). Réglables aussi bien dans Gestion → Planche de contact que pendant la création d\'une planche ; le réglage est partagé et enregistré (toujours le même pour tous les marqueurs).',
+    ],
+    corrections: [
+      'Marqueurs — plan coronal : la valeur affichée est l\'angle RÉEL du plan ; le signe indique la position par rapport au repère 25° (+ si ≥ 25°, − en dessous).',
+      'Marqueurs — plan solaire : la valeur passe en ROUGE lorsqu\'elle est pathologique (< 3°, > 6° ou négative). Le sain reste entre +3° et +6°.',
+    ],
+  },
   {
     version: '1.7.10', date: '2026-07-14',
     corrections: [
@@ -2282,8 +2292,24 @@ const MARK_TYPES = [
 ];
 const markType = (key) => MARK_TYPES.find((t) => t.key === key);
 if (!S.planche.markers || typeof S.planche.markers !== 'object') S.planche.markers = {};
-{ const mk = S.planche.markers; if (typeof mk.opacity !== 'number') mk.opacity = 0.9; if (!mk.colors || typeof mk.colors !== 'object') mk.colors = {}; MARK_TYPES.forEach((t) => { mk.colors[t.key] = mk.colors[t.key] || {}; t.lines.forEach((l) => { if (!mk.colors[t.key][l.k]) mk.colors[t.key][l.k] = l.def; }); }); }
+{ const mk = S.planche.markers; if (typeof mk.opacity !== 'number') mk.opacity = 0.9; if (typeof mk.opacityRef !== 'number') mk.opacityRef = mk.opacity; if (typeof mk.opacityMeasure !== 'number') mk.opacityMeasure = mk.opacity; if (!mk.colors || typeof mk.colors !== 'object') mk.colors = {}; MARK_TYPES.forEach((t) => { mk.colors[t.key] = mk.colors[t.key] || {}; t.lines.forEach((l) => { if (!mk.colors[t.key][l.k]) mk.colors[t.key][l.k] = l.def; }); }); }
 const markColor = (typeKey, lineKey) => (S.planche.markers && S.planche.markers.colors && S.planche.markers.colors[typeKey] && S.planche.markers.colors[typeKey][lineKey]) || (markType(typeKey) && (markType(typeKey).lines.find((l) => l.k === lineKey) || {}).def) || '#e8722a';
+// Deux transparences GLOBALES (couplées Gestion↔création) : repères vs ligne de mesure. Repli sur l'ancien réglage unique.
+const markOpRef = () => { const o = S.planche.markers || {}; return o.opacityRef != null ? o.opacityRef : (o.opacity != null ? o.opacity : 0.9); };
+const markOpMeasure = () => { const o = S.planche.markers || {}; return o.opacityMeasure != null ? o.opacityMeasure : (o.opacity != null ? o.opacity : 0.9); };
+const markLineOp = (typeKey, lineKey) => (lineKey === ((markType(typeKey) || {}).measure)) ? markOpMeasure() : markOpRef();
+// Couleur de la VALEUR d'angle affichée : rouge quand pathologique (solaire hors 3–6° ou négatif). Sinon null = couleur normale.
+function markValColor(typeKey, angle) { if (typeKey === 'solaire' && angle != null && (angle < 3 || angle > 6)) return '#d1342f'; return null; }
+// Deux curseurs de transparence (repères / mesure), partagés Gestion↔création : écrivent dans S.planche.markers (couplés, enregistrés).
+function markOpacityControlsHtml(idRef, idMeas) {
+  return `<label>Transparence des repères<input type="range" id="${idRef}" min="0.2" max="1" step="0.05" value="${markOpRef()}"/></label>`
+    + `<label>Transparence de la mesure (ligne orange)<input type="range" id="${idMeas}" min="0.2" max="1" step="0.05" value="${markOpMeasure()}"/></label>`;
+}
+function bindMarkOpacityControls(idRef, idMeas, onChange) {
+  const r = $(idRef), m = $(idMeas);
+  if (r) r.addEventListener('input', (e) => { S.planche.markers.opacityRef = parseFloat(e.target.value); saveSettings(); if (onChange) onChange(); });
+  if (m) m.addEventListener('input', (e) => { S.planche.markers.opacityMeasure = parseFloat(e.target.value); saveSettings(); if (onChange) onChange(); });
+}
 // Points de contrôle par défaut d'un marqueur (coordonnées en % 0-100 de l'image). 3 poignées par type.
 function markDefaults(typeKey) {
   if (typeKey === 'coronal') return { pts: { L: { x: 28, y: 68 }, R: { x: 72, y: 68 }, P: { x: 44, y: 30 } } };
@@ -2325,7 +2351,7 @@ function markGeom(typeKey, m, aspect) {
     push('sol', L.x, L.y, R.x, R.y);
     const e = _tiltUp(L.x, L.y, L.x, L.y, R.x, R.y, 25, len, asp); push('ref25', L.x, L.y, e.x, e.y); // 25° FIXE depuis L, monte à droite
     push('axe', L.x, L.y, P.x, P.y);
-    out.angle = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(L.x, L.y, P.x, P.y, asp)) * _sideSign(L.x, L.y, R.x, R.y, P.x, P.y, asp); // + = P au-dessus du Sol
+    { const aC = _acute(_degA(L.x, L.y, R.x, R.y, asp), _degA(L.x, L.y, P.x, P.y, asp)); out.angle = aC >= 25 ? aC : -aC; } // angle réel du plan ; signe = position / repère 25° (+ ≥ 25°, − < 25°)
     out.handles = [{ k: 'L', x: L.x, y: L.y }, { k: 'R', x: R.x, y: R.y }, { k: 'P', x: P.x, y: P.y }];
   } else if (typeKey === 'solaire') {
     const { L, R, P } = p; if (!L || !R || !P) return out;
@@ -8044,7 +8070,7 @@ function plMarkLegend(ctx, g, typeKey) {
 }
 // Une page PDF par TYPE de marqueur : grille (colonnes = angles, lignes = membres) des images marquées + bande d'angle sous chaque image + légende.
 async function plancheMarkerPageCanvas(typeKey) {
-  const st = plCreate, land = st.orientation !== 'portrait', t = markType(typeKey), opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
+  const st = plCreate, land = st.orientation !== 'portrait', t = markType(typeKey);
   const placed = plPlacedCells().filter((c) => st.markPick && st.markPick[c.key] && st.cellMarks[c.key] && st.cellMarks[c.key][typeKey]);
   const angles = st.angles || [], membres = []; placed.forEach((c) => { if (!membres.includes(c.membre)) membres.push(c.membre); });
   const byMA = {}; placed.forEach((c) => { const k = c.membre + '||' + c.angle; if (!byMA[k]) byMA[k] = c.key; });
@@ -8064,9 +8090,9 @@ async function plancheMarkerPageCanvas(typeKey) {
       const cx = gx + labelW + ci * colW, src = plMarkCellSrc(key), im = src && await plLoadImg(src); if (!im) continue;
       const b = plMarkFitBox(cx, ry, colW, imgH);
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
-      const m = st.cellMarks[key][typeKey], gg = drawMarkerLines(ctx, typeKey, m, b.x, b.y, b.w, b.h, opacity);
+      const m = st.cellMarks[key][typeKey], gg = drawMarkerLines(ctx, typeKey, m, b.x, b.y, b.w, b.h);
       const ang = (gg && gg.angle != null) ? plAngTxt(gg.angle) : '—';
-      plMarkBand(ctx, cx, ry + imgH, colW, bandH, (gg && gg.measureName) ? gg.measureName : '', ang, t.ref ? 'réf. ' + t.ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
+      plMarkBand(ctx, cx, ry + imgH, colW, bandH, (gg && gg.measureName) ? gg.measureName : '', ang, t.ref ? 'réf. ' + t.ref : '', markValColor(typeKey, gg && gg.angle) || (gg ? gg.measureColor : '#333'), st.markRefInline, fs);
     }
   }
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
@@ -8087,7 +8113,6 @@ async function plancheComparatifCanvas() {
   const SC = PL_PXMM, W = Math.round(g.pageW * SC), H = Math.round(g.pageH * SC), px = (v) => v * SC, fs = (mmv) => Math.max(6, Math.round(px(mmv)));
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
   await plMarkHeaderFooter(ctx, g, 'Comparatif par pied');
-  const opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
   const gx = px(g.gridLeft + g.offX), gtop = px(g.gridTop + g.offY), labelW = px(g.labelW), colW = px(g.colW), rowH = px(g.rowH), angH = px(g.angleHeaderH), blockW = px(g.blockW), bandH = rowH * PL_MARK_BAND, imgH = rowH - bandH;
   ctx.fillStyle = '#eee'; ctx.fillRect(gx, gtop, blockW, angH); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   cols.forEach((t, ci) => { ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(2.6) + 'px sans-serif'; ctx.fillText(plTrunc(ctx, t.label, colW - 6), gx + labelW + ci * colW + colW / 2, gtop + angH / 2 - fs(1.4)); });
@@ -8100,9 +8125,9 @@ async function plancheComparatifCanvas() {
       const ty = cols[ci].key; if (!st.cellMarks[c.key][ty] || !im) continue;
       const cx = gx + labelW + ci * colW, b = plMarkFitBox(cx, ry, colW, imgH);
       ctx.save(); ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip(); const s = Math.max(b.w / im.width, b.h / im.height); ctx.drawImage(im, b.x + (b.w - im.width * s) / 2, b.y + (b.h - im.height * s) / 2, im.width * s, im.height * s); ctx.restore();
-      const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], b.x, b.y, b.w, b.h, opacity);
+      const gg = drawMarkerLines(ctx, ty, st.cellMarks[c.key][ty], b.x, b.y, b.w, b.h);
       const ang = (gg && gg.angle != null) ? plAngTxt(gg.angle) : '—';
-      plMarkBand(ctx, cx, ry + imgH, colW, bandH, '', ang, cols[ci].ref ? 'réf. ' + cols[ci].ref : '', gg ? gg.measureColor : '#333', st.markRefInline, fs);
+      plMarkBand(ctx, cx, ry + imgH, colW, bandH, '', ang, cols[ci].ref ? 'réf. ' + cols[ci].ref : '', markValColor(ty, gg && gg.angle) || (gg ? gg.measureColor : '#333'), st.markRefInline, fs);
     }
   }
   ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.beginPath();
@@ -9357,11 +9382,11 @@ function renderPlancheConfig() {
     plancheList($('plStades'), S.planche.stades, renderPlancheConfig, '+ Ajouter un stade', true);
     // Marqueurs (compas d'angles) : couleur de chaque ligne nommée (une sous-section par type) + transparence globale.
     const mc = document.createElement('section'); mc.className = 'card'; const mk = S.planche.markers;
-    mc.innerHTML = `<h3 class="rsub">Marqueurs — couleurs des lignes</h3><p class="hint">Une couleur par ligne, une sous-section par type. La transparence s'applique à tous les traits.</p>
-      <label>Transparence des traits<input type="range" id="plMkOp" min="0.3" max="1" step="0.05" value="${mk.opacity != null ? mk.opacity : 0.9}"/></label>
+    mc.innerHTML = `<h3 class="rsub">Marqueurs — couleurs des lignes</h3><p class="hint">Une couleur par ligne, une sous-section par type. Deux transparences (repères / mesure) s'appliquent à TOUS les marqueurs — réglage partagé avec la planche de contact.</p>
+      ${markOpacityControlsHtml('plMkOpRef', 'plMkOpMeas')}
       ${MARK_TYPES.map((t) => `<div class="edit-row"><b>${esc(t.label)}</b><div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:4px">${t.lines.map((l) => `<label style="font-size:.78rem;text-align:center">${esc(l.name)}<br><input type="color" data-mkcol data-mkt="${t.key}" data-mkl="${l.k}" value="${esc(markColor(t.key, l.k))}"/></label>`).join('')}</div></div>`).join('')}`;
     body.appendChild(mc);
-    $('plMkOp').addEventListener('input', (e) => { S.planche.markers.opacity = parseFloat(e.target.value); saveSettings(); });
+    bindMarkOpacityControls('plMkOpRef', 'plMkOpMeas');
     mc.querySelectorAll('[data-mkcol]').forEach((inp) => inp.addEventListener('change', () => { const ty = inp.dataset.mkt, lk = inp.dataset.mkl; if (!S.planche.markers.colors[ty]) S.planche.markers.colors[ty] = {}; S.planche.markers.colors[ty][lk] = inp.value; saveSettings(); }));
   }
 }
@@ -9774,6 +9799,7 @@ function modalPlancheCreate(type, prefill) {
           <p class="hint">① Cochez, dans la grille d'aperçu ci-dessus, les images à marquer. ② Pour chaque image, cochez le(s) type(s) de marqueur. ③ Dans chaque type, touchez une image pour placer et régler le marqueur (déplacer les points, tourner, taille, symétrie). Ou utilisez « Éditer les marqueurs » pour les enchaîner. L'angle mesuré s'affiche.</p>
           <label class="chk2"><input type="checkbox" id="plCmarkPageInc" checked/> 📄 Ajouter les pages Marqueurs au PDF (toujours en dernier : une par type + comparatif)</label>
           <label class="chk2"><input type="checkbox" id="plCmarkRefInline"/> 📏 Référence saine collée à la valeur mesurée (sinon sur une 2ᵉ ligne sous l'image)</label>
+          <div class="pl-mk-op">${markOpacityControlsHtml('plCmkOpRef', 'plCmkOpMeas')}<span class="hint" style="display:block">Réglage partagé avec Gestion → Planche de contact (enregistré).</span></div>
           <div id="plCmarkGrid"></div>
           <div class="actions" style="margin:6px 0"><button class="btn small" id="plCmarkEditAll">▶️ Éditer les marqueurs (à la suite)</button></div>
           <div id="plCmarkTypes"></div>
@@ -9845,6 +9871,7 @@ function modalPlancheCreate(type, prefill) {
   });
   if ($('plCmarkPageInc')) { $('plCmarkPageInc').checked = plCreate.markPagesOn !== false; $('plCmarkPageInc').addEventListener('change', (e) => { plCreate.markPagesOn = e.target.checked; plDraftSave(); }); }
   if ($('plCmarkRefInline')) { $('plCmarkRefInline').checked = !!plCreate.markRefInline; $('plCmarkRefInline').addEventListener('change', (e) => { plCreate.markRefInline = e.target.checked; plDraftSave(); }); }
+  bindMarkOpacityControls('plCmkOpRef', 'plCmkOpMeas', () => plRenderMarkers()); // transparences couplées à Gestion + rafraîchit l'aperçu
   if ($('plCmarkEditAll')) $('plCmarkEditAll').addEventListener('click', plMarkEditAll);
   if ($('plCgridManage')) $('plCgridManage').addEventListener('click', plCropQueueAll); // cadrer toutes les images à la suite
   // Bouton UNIQUE : enregistre d'abord le PDF sur l'appareil (téléchargement), PUIS ouvre l'envoi par mail.
@@ -10012,11 +10039,10 @@ function plPlacedCells(colMajor) {
   return out;
 }
 // Overlay SVG (lecture seule) des lignes d'un marqueur — réutilisé dans les vignettes et l'aperçu final.
-function plMarkSvgOverlay(typeKey, m, opacity) {
+function plMarkSvgOverlay(typeKey, m) {
   const g = markGeom(typeKey, m); if (!g.lines.length) return '';
-  const op = (opacity != null) ? opacity : ((S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9);
-  const lines = g.lines.map((l) => `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linecap="round"/>`).join('');
-  return `<svg class="pl-mk-svg" viewBox="0 0 100 100" preserveAspectRatio="none" style="opacity:${op}">${lines}</svg>`;
+  const lines = g.lines.map((l) => `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linecap="round" opacity="${markLineOp(typeKey, l.k)}"/>`).join('');
+  return `<svg class="pl-mk-svg" viewBox="0 0 100 100" preserveAspectRatio="none">${lines}</svg>`;
 }
 function plRenderMarkers() {
   const st = plCreate; if (!st) return;
@@ -10042,7 +10068,7 @@ function plRenderMarkers() {
   typesBox.innerHTML = MARK_TYPES.map((t) => {
     const imgs = placed.filter((c) => st.cellMarks[c.key] && st.cellMarks[c.key][t.key]);
     if (!imgs.length) return '';
-    return `<div class="pl-mk-type"><h4 class="rsub" style="margin:10px 0 4px">${esc(t.label)} <span class="li-sub">(${imgs.length})</span></h4><div class="pl-mk-large">${imgs.map((c) => { const m = st.cellMarks[c.key][t.key]; const g = markGeom(t.key, m); const ang = g.angle != null ? plAngTxt(g.angle) : '—'; return `<div class="pl-mk-litem" data-editkey="${esc(c.key)}" data-edittype="${t.key}"><div class="pl-mk-lthumb" style="aspect-ratio:${plMarkRefAspect()};background-image:url('${plMarkCellSrc(c.key)}')">${plMarkSvgOverlay(t.key, m)}</div><div class="pl-mk-llbl">${esc(c.membre)} · ${esc(c.angle)}<br><b style="color:${esc(plInkColor(g.measureColor))}">${esc(g.measureName)} : ${ang}</b></div></div>`; }).join('')}</div></div>`;
+    return `<div class="pl-mk-type"><h4 class="rsub" style="margin:10px 0 4px">${esc(t.label)} <span class="li-sub">(${imgs.length})</span></h4><div class="pl-mk-large">${imgs.map((c) => { const m = st.cellMarks[c.key][t.key]; const g = markGeom(t.key, m); const ang = g.angle != null ? plAngTxt(g.angle) : '—'; return `<div class="pl-mk-litem" data-editkey="${esc(c.key)}" data-edittype="${t.key}"><div class="pl-mk-lthumb" style="aspect-ratio:${plMarkRefAspect()};background-image:url('${plMarkCellSrc(c.key)}')">${plMarkSvgOverlay(t.key, m)}</div><div class="pl-mk-llbl">${esc(c.membre)} · ${esc(c.angle)}<br><b style="color:${esc(markValColor(t.key, g.angle) || plInkColor(g.measureColor))}">${esc(g.measureName)} : ${ang}</b></div></div>`; }).join('')}</div></div>`;
   }).join('') || '<p class="hint">Cochez au moins un type de marqueur sur une image ci-dessus.</p>';
   typesBox.querySelectorAll('[data-editkey]').forEach((el) => el.addEventListener('click', () => modalMarkEdit(el.dataset.editkey, el.dataset.edittype)));
 }
@@ -10078,8 +10104,8 @@ function plMarkBand(ctx, cx, y, colW, bandH, namePrefix, valueTxt, refTxt, color
 function drawMarkerLines(ctx, typeKey, m, x, y, w, h, opacity) {
   const g = markGeom(typeKey, m, w / h); if (!g.lines.length) return g; // aspect = largeur/hauteur de la case image
   ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip(); // ne jamais déborder de la case (B5)
-  ctx.globalAlpha = (opacity != null) ? opacity : 0.9; ctx.lineWidth = Math.max(1.4, w * 0.012); ctx.lineCap = 'round';
-  g.lines.forEach((l) => { ctx.strokeStyle = markColor(typeKey, l.k); ctx.beginPath(); ctx.moveTo(x + l.x1 / 100 * w, y + l.y1 / 100 * h); ctx.lineTo(x + l.x2 / 100 * w, y + l.y2 / 100 * h); ctx.stroke(); });
+  ctx.lineWidth = Math.max(1.4, w * 0.012); ctx.lineCap = 'round';
+  g.lines.forEach((l) => { ctx.globalAlpha = (opacity != null) ? opacity : markLineOp(typeKey, l.k); ctx.strokeStyle = markColor(typeKey, l.k); ctx.beginPath(); ctx.moveTo(x + l.x1 / 100 * w, y + l.y1 / 100 * h); ctx.lineTo(x + l.x2 / 100 * w, y + l.y2 / 100 * h); ctx.stroke(); }); // transparence propre : repères vs mesure
   ctx.restore(); return g;
 }
 // Éditeur d'un marqueur sur une image : poignées déplaçables (%), lignes de référence + mesure, angle en direct, symétrie, reset.
@@ -10096,16 +10122,15 @@ function modalMarkEdit(key, typeKey, onValidate, progress) {
     <div class="actions two"><button class="btn small" data-mirror>↔ Symétrie G/D</button><button class="btn small" data-reset>↺ Réinitialiser</button></div>
     <div class="actions"><button class="btn primary block" data-ok>${onValidate ? '✓ Valider et suivant →' : '✓ Valider'}</button></div>`, 'pl-ce-overlay');
   const svg = o.q('.pl-me-svg'), wrap = o.q('.pl-me-wrap');
-  const opacity = (S.planche.markers && S.planche.markers.opacity != null) ? S.planche.markers.opacity : 0.9;
   let dragH = null;
   const ptTo = (ev) => { const r = wrap.getBoundingClientRect(); return { x: Math.max(0, Math.min(100, (ev.clientX - r.left) / r.width * 100)), y: Math.max(0, Math.min(100, (ev.clientY - r.top) / r.height * 100)) }; };
   const draw = () => {
     const g = markGeom(typeKey, m, ar); let s = '';
-    g.lines.forEach((l) => { s += `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.8" vector-effect="non-scaling-stroke" stroke-linecap="round" opacity="${opacity}"/>`; });
+    g.lines.forEach((l) => { s += `<line x1="${l.x1}" y1="${l.y1}" x2="${l.x2}" y2="${l.y2}" stroke="${esc(markColor(typeKey, l.k))}" stroke-width="1.8" vector-effect="non-scaling-stroke" stroke-linecap="round" opacity="${markLineOp(typeKey, l.k)}"/>`; });
     g.handles.forEach((h) => { s += `<circle cx="${h.x}" cy="${h.y}" r="3.4" fill="#fff" stroke="#222" stroke-width="0.7" vector-effect="non-scaling-stroke"/>`; });
     svg.innerHTML = s;
     const ang = g.angle != null ? plAngTxt(g.angle) : '—';
-    o.q('#plMeAngle').innerHTML = `<b style="color:${esc(plInkColor(g.measureColor))}">${esc(g.measureName)} : ${ang}</b>`;
+    o.q('#plMeAngle').innerHTML = `<b style="color:${esc(markValColor(typeKey, g.angle) || plInkColor(g.measureColor))}">${esc(g.measureName)} : ${ang}</b>`;
     o.q('#plMeLegend').innerHTML = t.lines.map((l) => `<span class="pl-mk-leg"><span class="pl-mk-swatch" style="background:${esc(markColor(typeKey, l.k))}"></span>${esc(l.name)}</span>`).join('');
   };
   // Interaction : capture sur le WRAP (élément STABLE, non recréé) + sélection de la poignée la plus proche → drag fiable (tactile inclus, plus de poignée « collée »).
