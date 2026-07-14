@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.8';
+const APP_VERSION = '1.7.9';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.9', date: '2026-07-14',
+    ajouts: [
+      'Planche : le cadrage des images ET les marqueurs sont désormais ancrés à la PHOTO (ratio de référence fixe : 4:3 en paysage, 3:4 en portrait). Changer de format ne les déplace plus — ils restent alignés ; seule la taille de la case et le découpage s\'adaptent au format choisi.',
+    ],
+    corrections: [
+      'Recadrage / rotation : la case du PDF (et de l\'aperçu) affiche maintenant EXACTEMENT ce que montre la fenêtre « Cadrer / Gérer les images », rotation comprise — y compris en mode « Image entière » (où la rotation était auparavant ignorée).',
+    ],
+  },
   {
     version: '1.7.8', date: '2026-07-14',
     ajouts: [
@@ -7946,7 +7955,7 @@ async function planchePageCanvas(pi) {
   ctx.fillStyle = '#111'; ctx.font = 'bold ' + fs(2.8) + 'px sans-serif'; ctx.textAlign = 'center';
   angles.forEach((a, ci) => ctx.fillText(plTrunc(ctx, a, colW - 6), gx + labelW + ci * colW + colW / 2, gtop + angH / 2 - fs(1.4)));
   const imgs = {};
-  for (const r of rows) for (let ci = 0; ci < angles.length; ci++) { const key = plCellKey(pi, r, ci); const baked = st.fitMode !== 'contain' && st.cellImg && st.cellImg[key]; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid); const src = baked || (ph && ph.url); if (src) imgs[r.ri + '_' + r.pj + '_' + ci] = await plLoadImg(src); } // image DÉJÀ découpée (vrai crop) si présente, sinon l'originale
+  for (const r of rows) for (let ci = 0; ci < angles.length; ci++) { const key = plCellKey(pi, r, ci); const baked = st.cellImg && st.cellImg[key]; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid); const src = baked || (ph && ph.url); if (src) imgs[r.ri + '_' + r.pj + '_' + ci] = await plLoadImg(src); } // image DÉJÀ découpée (vrai crop, rotation incluse) TOUJOURS honorée, sinon l'originale
   ctx.font = 'bold ' + fs(3.2) + 'px sans-serif';
   rows.forEach((r, ri) => {
     const ry = gtop + angH + ri * rowH;
@@ -7955,7 +7964,10 @@ async function planchePageCanvas(pi) {
     angles.forEach((a, ci) => {
       const cx = gx + labelW + ci * colW, im = imgs[r.ri + '_' + r.pj + '_' + ci]; if (!im) return;
       const key = plCellKey(pi, r, ci);
-      if (st.fitMode !== 'contain' && st.cellImg && st.cellImg[key]) { ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip(); ctx.drawImage(im, cx, ry, colW, rowH); ctx.restore(); return; } // image déjà découpée → remplit la case, aucune transfo
+      if (st.cellImg && st.cellImg[key]) { // image déjà découpée (crop + rotation cuits) : la CASE recoupe (cover) ou l'affiche entière (contain) — jamais d'étirement → identique à la modale
+        const cov = st.fitMode !== 'contain', bs = cov ? Math.max(colW / im.width, rowH / im.height) : Math.min(colW / im.width, rowH / im.height);
+        ctx.save(); ctx.beginPath(); ctx.rect(cx, ry, colW, rowH); ctx.clip(); ctx.drawImage(im, cx + (colW - im.width * bs) / 2, ry + (rowH - im.height * bs) / 2, im.width * bs, im.height * bs); ctx.restore(); return;
+      }
       const cover = st.fitMode !== 'contain'; // défaut : « remplir » (cover) → pas de bande blanche ; sinon « image entière » (contain)
       const s = cover ? Math.max(colW / im.width, rowH / im.height) : Math.min(colW / im.width, rowH / im.height);
       const dw = im.width * s, dh = im.height * s;
@@ -9792,14 +9804,12 @@ function modalPlancheCreate(type, prefill) {
   $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((b) => b.addEventListener('click', () => { plCreate.potView = b.dataset.pv === 'large' ? 'large' : 'grid'; $('plCbody').querySelectorAll('#plCpotView .seg-btn').forEach((x) => x.classList.toggle('on', x.dataset.pv === plCreate.potView)); plRenderPot(); }));
   if ($('plCdateAll')) $('plCdateAll').onclick = () => { if (!plCreate.photos.length) { alert('Aucune photo importée.'); return; } if (!confirm('Mettre la date de la planche (' + fmtDateFr(plCreate.date) + ') sur toutes les photos ?')) return; plCreate.photos.forEach((p) => { p.date = plCreate.date; }); plRenderPot(); };
   $('plCfiles').addEventListener('change', plHandleFiles);
-  if ($('plCformat')) $('plCformat').addEventListener('change', (e) => { // Format d'image : le ratio des cases change → les recadrages (calés sur l'ancien ratio) ne sont plus valides ; les MARQUEURS sont CONSERVÉS (l'utilisateur les réajuste)
+  if ($('plCformat')) $('plCformat').addEventListener('change', (e) => { // Format d'image : le cadrage et les marqueurs sont ancrés au ratio de RÉFÉRENCE FIXE → CONSERVÉS ; seule la case recoupe (cover) selon le nouveau format
     plCreate.format = e.target.value; S.planche.format = e.target.value; saveSettings();
-    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
     plRenderGrid();
   });
-  if ($('plCorient')) $('plCorient').addEventListener('change', (e) => { // Orientation : change la page ET le sens du ratio des cases → recadrages invalidés ; MARQUEURS conservés
+  if ($('plCorient')) $('plCorient').addEventListener('change', (e) => { // Orientation : cadrage + marqueurs CONSERVÉS (la case s'adapte) ; le ratio de référence passe de 4:3 à 3:4, l'utilisateur réajuste au besoin
     plCreate.orientation = e.target.value === 'paysage' ? 'paysage' : 'portrait'; P.orientation = plCreate.orientation; P.orientationUserSet = true; saveSettings();
-    plCreate.cellImg = {}; plCreate.cellCropDef = {}; plCreate.cellT = {}; plCreate.cellCrop = {};
     plRenderGrid();
   });
   if ($('plCgridFit')) { // « Remplir les cases » = curseur (Remplir / Entière), Remplir actif par défaut
@@ -9953,8 +9963,8 @@ function plRenderGrid() {
         if (cz !== 1) tParts.push(`scale(${cz})`);
         if (T) tParts.push(`translate(${(T.x || 0) * 100}%,${(T.y || 0) * 100}%) scale(${(T.zoom || 1) * (fit === 'cover' ? plRotCover(T.rot, g.colW, g.rowH) : 1)}) rotate(${T.rot || 0}deg)`); // scale inclut le zoom-de-couverture rotation (fini les coins blancs)
         const imgStyle = `object-fit:${fit}` + (tParts.length ? `;transform:${tParts.join(' ')};transform-origin:center center` : '');
-        const baked = st.fitMode !== 'contain' && st.cellImg && st.cellImg[key]; // image DÉJÀ découpée (vrai crop) → remplit la case telle quelle
-        const imgTag = baked ? `<img src="${baked}" alt="" style="object-fit:cover"/>` : (ph && ph.url ? `<img src="${ph.url}" alt="" style="${imgStyle}"/>` : '<span class="pl-cell-ph">+</span>');
+        const baked = st.cellImg && st.cellImg[key]; // image DÉJÀ découpée (crop + rotation) → TOUJOURS honorée ; la case recoupe (cover) ou l'affiche entière (contain), comme le PDF
+        const imgTag = baked ? `<img src="${baked}" alt="" style="object-fit:${fit}"/>` : (ph && ph.url ? `<img src="${ph.url}" alt="" style="${imgStyle}"/>` : '<span class="pl-cell-ph">+</span>');
         const cropSel = st.gridEdit && st.cropMode && st.cropSel && st.cropSel.has(key); // sélectionnée pour le rognage → cadre rouge
         const hasImg = !!(baked || (ph && ph.url));
         const pick = st.markMode && hasImg ? `<label class="pl-pick-o"><input type="checkbox" class="pl-pick" ${st.markPick && st.markPick[key] ? 'checked' : ''}/></label>` : ''; // marqueurs : cocher l'image à marquer
@@ -9982,7 +9992,7 @@ function plRenderGrid() {
   plRenderMarkers(); // rafraîchit la 2ᵉ grille des marqueurs (si active)
 }
 // ---------- Marqueurs (compas d'angles) : sélection + sous-sections par type ----------
-function plMarkCellSrc(key) { const st = plCreate; if (!st) return null; const baked = st.fitMode !== 'contain' && st.cellImg && st.cellImg[key]; if (baked) return baked; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid); return ph ? ph.url : null; }
+function plMarkCellSrc(key) { const st = plCreate; if (!st) return null; const baked = st.cellImg && st.cellImg[key]; if (baked) return baked; const pid = st.cells[key], ph = pid && st.photos.find((p) => p.id === pid); return ph ? ph.url : null; }
 // Cases placées (avec image) — colonnes = angles, lignes = membres.
 // colMajor=false (défaut) → parcours par LIGNE (chaque ligne, ses colonnes) : ordre des marqueurs + rendu PDF.
 // colMajor=true → parcours par COLONNE (colonne 1 toutes ses lignes, puis colonne 2…) : file « Gérer les images » (crop).
@@ -10014,7 +10024,7 @@ function plRenderMarkers() {
   gridBox.innerHTML = '<div class="pl-mark-grid">' + placed.map((c) => {
     const marks = st.cellMarks[c.key] || {};
     const chk = MARK_TYPES.map((t) => `<label class="pl-mk-chk"><input type="checkbox" data-mkkey="${esc(c.key)}" data-mktype="${t.key}" ${marks[t.key] ? 'checked' : ''}/> ${esc(t.label)}</label>`).join('');
-    return `<div class="pl-mk-cell"><div class="pl-mk-thumb" style="background-image:url('${plMarkCellSrc(c.key)}')"></div><div class="pl-mk-lbl">${esc(c.label)}</div><div class="pl-mk-chks">${chk}</div></div>`;
+    return `<div class="pl-mk-cell"><div class="pl-mk-thumb" style="aspect-ratio:${plMarkRefAspect()};background-image:url('${plMarkCellSrc(c.key)}')"></div><div class="pl-mk-lbl">${esc(c.label)}</div><div class="pl-mk-chks">${chk}</div></div>`;
   }).join('') + '</div>';
   gridBox.querySelectorAll('[data-mkkey]').forEach((inp) => inp.addEventListener('change', (e) => {
     const key = inp.dataset.mkkey, ty = inp.dataset.mktype;
@@ -10027,15 +10037,16 @@ function plRenderMarkers() {
   typesBox.innerHTML = MARK_TYPES.map((t) => {
     const imgs = placed.filter((c) => st.cellMarks[c.key] && st.cellMarks[c.key][t.key]);
     if (!imgs.length) return '';
-    return `<div class="pl-mk-type"><h4 class="rsub" style="margin:10px 0 4px">${esc(t.label)} <span class="li-sub">(${imgs.length})</span></h4><div class="pl-mk-large">${imgs.map((c) => { const m = st.cellMarks[c.key][t.key]; const g = markGeom(t.key, m); const ang = g.angle != null ? plAngTxt(g.angle) : '—'; return `<div class="pl-mk-litem" data-editkey="${esc(c.key)}" data-edittype="${t.key}"><div class="pl-mk-lthumb" style="background-image:url('${plMarkCellSrc(c.key)}')">${plMarkSvgOverlay(t.key, m)}</div><div class="pl-mk-llbl">${esc(c.membre)} · ${esc(c.angle)}<br><b style="color:${esc(plInkColor(g.measureColor))}">${esc(g.measureName)} : ${ang}</b></div></div>`; }).join('')}</div></div>`;
+    return `<div class="pl-mk-type"><h4 class="rsub" style="margin:10px 0 4px">${esc(t.label)} <span class="li-sub">(${imgs.length})</span></h4><div class="pl-mk-large">${imgs.map((c) => { const m = st.cellMarks[c.key][t.key]; const g = markGeom(t.key, m); const ang = g.angle != null ? plAngTxt(g.angle) : '—'; return `<div class="pl-mk-litem" data-editkey="${esc(c.key)}" data-edittype="${t.key}"><div class="pl-mk-lthumb" style="aspect-ratio:${plMarkRefAspect()};background-image:url('${plMarkCellSrc(c.key)}')">${plMarkSvgOverlay(t.key, m)}</div><div class="pl-mk-llbl">${esc(c.membre)} · ${esc(c.angle)}<br><b style="color:${esc(plInkColor(g.measureColor))}">${esc(g.measureName)} : ${ang}</b></div></div>`; }).join('')}</div></div>`;
   }).join('') || '<p class="hint">Cochez au moins un type de marqueur sur une image ci-dessus.</p>';
   typesBox.querySelectorAll('[data-editkey]').forEach((el) => el.addEventListener('click', () => modalMarkEdit(el.dataset.editkey, el.dataset.edittype)));
 }
 const PL_MARK_BAND = 0.18; // fraction de la hauteur de case réservée à la BANDE d'angle (sous l'image) — assez pour 2 lignes (valeur + réf).
 const PL_MARK_LEGEND_H = 11; // mm réservés SOUS la grille (pages marqueurs/comparatif) pour la légende → pas de chevauchement.
-// Ratio de référence des marqueurs (image seule), INDÉPENDANT de la grille : format contraint → son ratio ; « Plein page » → 4:3
-// (ou 3:4 en portrait). Éditeur ET PDF utilisent ce même ratio → marqueurs toujours alignés (fini le décalage en Plein page).
-function plMarkRefAspect() { const st = plCreate; if (!st) return 4 / 3; const a = plFormatAspect(st); return a > 0 ? a : (st.orientation === 'portrait' ? 3 / 4 : 4 / 3); }
+// Ratio de référence FIXE (4:3 paysage, 3:4 portrait), INDÉPENDANT du format des cases : c'est LUI qui ancre le cadrage ET les
+// marqueurs. Changer de FORMAT ne le modifie pas → cadrage/marqueurs restent alignés à l'image ; seule la CASE recoupe (cover).
+// Éditeur de cadrage, éditeur de marqueurs, pages marqueurs et découpe partagent ce même ratio → alignement pixel garanti.
+function plMarkRefAspect() { const st = plCreate; return (st && st.orientation === 'portrait') ? 3 / 4 : 4 / 3; }
 function plCellAspect() { return plMarkRefAspect(); }
 // Dessine les lignes d'un marqueur (coords % 0-100) dans le rectangle image (x,y,w,h) d'un canvas.
 // Sous-boîte (au ratio de référence des marqueurs) centrée dans une case (x,y,w,h) : image + marqueurs y sont dessinés → alignés avec l'éditeur.
@@ -10165,8 +10176,7 @@ function modalCellEdit(key, onValidate, progress) {
   if (!ph || !ph.url) { if (onValidate) onValidate(); return; }
   if (!st.cellImg) st.cellImg = {}; if (!st.cellCropDef) st.cellCropDef = {};
   if (!st.cellMarks) st.cellMarks = {}; if (!st.markPick) st.markPick = {};
-  const g = plGeom(st.orientation !== 'portrait', (st.angles || []).length, plRefRows(st), plFormatAspect(st));
-  const cellAR = g.colW / g.rowH;
+  const cellAR = plMarkRefAspect(); // cadre au ratio de RÉFÉRENCE FIXE (4:3 / 3:4), pas au ratio du format → le cadrage ne bouge plus au changement de format ; la case recoupe (cover)
   const src = new Image(); src.onload = () => build(); src.onerror = () => {}; src.src = ph.url;
   function build() {
     if (plCreate !== st) return; // création de planche fermée/changée pendant le chargement async → on abandonne (F1)
