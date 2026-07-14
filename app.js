@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.7.2';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.2', date: '2026-07-14',
+    ajouts: [
+      'Marqueurs : un curseur « Taille du marqueur » permet d\'agrandir/rétrécir l\'ensemble du marqueur pour l\'adapter au pied sur la photo.',
+      'Planche de contact : nouveau type de planche « Av. Parage » (avant parage) ajouté à la liste des stades.',
+    ],
+  },
   {
     version: '1.7.1', date: '2026-07-14',
     corrections: [
@@ -2195,8 +2202,9 @@ if (!Array.isArray(S.planche.avantapres.pages)) S.planche.avantapres.pages = [{ 
 if (!S.planche.avantapres.modeles) S.planche.avantapres.modeles = _plModeles();
 delete S.planche.avantapres.angles; delete S.planche.avantapres.photosParLigne;
 // Stades = types de planche (étiquette, éditables). Défaut : Ferrage / Parage / Déferrage / Radio. Migration de l'ancien trio par défaut.
-if (!Array.isArray(S.planche.stades)) S.planche.stades = ['Ferrage', 'Parage', 'Déferrage', 'Radio'];
-else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', 'Déferrage', 'Après parage'])) S.planche.stades = ['Ferrage', 'Parage', 'Déferrage', 'Radio'];
+if (!Array.isArray(S.planche.stades)) S.planche.stades = ['Av. Parage', 'Parage', 'Ferrage', 'Déferrage', 'Radio'];
+else if (JSON.stringify(S.planche.stades) === JSON.stringify(['Cheval ferré', 'Déferrage', 'Après parage'])) S.planche.stades = ['Av. Parage', 'Parage', 'Ferrage', 'Déferrage', 'Radio'];
+if (!S.planche.avParageAdded) { if (!(S.planche.stades || []).includes('Av. Parage')) S.planche.stades.unshift('Av. Parage'); S.planche.avParageAdded = true; } // ajout unique du stade « Av. Parage » aux configs existantes
 // Cadrillage d'aide au cadrage des images (mode édition) : marges en cm (gauche/droite liées + haut/bas). Aperçu seulement — jamais dans le PDF.
 if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 };
 { const gg = S.planche.gridGuide; if (!(gg.marginLR2 > 0)) gg.marginLR2 = 1.0; if (!(gg.marginTB2 > 0)) gg.marginTB2 = 1.0; } // 2ᵉ repère (cible d'alignement du sujet), défaut 1 cm
@@ -2275,6 +2283,8 @@ function markGeom(typeKey, m, aspect) {
 }
 // Symétrie gauche/droite d'un marqueur : miroir horizontal des poignées autour de leur centre.
 function markMirror(m) { const pts = (m && m.pts) || {}; const xs = Object.values(pts).map((q) => q.x); if (!xs.length) return; const cx = (Math.min(...xs) + Math.max(...xs)) / 2; Object.values(pts).forEach((q) => { q.x = 2 * cx - q.x; }); }
+// Agrandir/rétrécir un marqueur (facteur f) autour de son centre → adapter sa taille au pied sur la photo.
+function markScale(m, f) { const pts = (m && m.pts) || {}; const v = Object.values(pts); if (!v.length || !(f > 0)) return; const cx = v.reduce((s, q) => s + q.x, 0) / v.length, cy = v.reduce((s, q) => s + q.y, 0) / v.length; v.forEach((q) => { q.x = cx + (q.x - cx) * f; q.y = cy + (q.y - cy) * f; }); }
 { // Format des cases : schéma orienté ('fill' | 'square' | 'r43' | 'r32' | 'r169') — le SENS (paysage/portrait) est porté par l'orientation de la planche, pas par le format.
   const fmtMap = { ph43: 'r43', ph34: 'r43', reflex32: 'r32', reflex23: 'r32' };
   if (S.planche.format && fmtMap[S.planche.format]) S.planche.format = fmtMap[S.planche.format];
@@ -9904,6 +9914,7 @@ function modalMarkEdit(key, typeKey) {
     <div class="pl-me-wrap" style="aspect-ratio:${ar}"><img class="pl-me-img" src="${src || ''}" alt=""/><svg class="pl-me-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg></div>
     <p class="pl-me-angle" id="plMeAngle"></p><div class="pl-me-legend" id="plMeLegend"></div>
     <p class="hint">Glissez les points pour placer/tourner le marqueur. Les repères fixes (angles connus) suivent automatiquement.</p>
+    <label class="pl-me-size">Taille du marqueur<input type="range" id="plMeSize" min="0.4" max="2.4" step="0.05" value="1"/></label>
     <div class="actions two"><button class="btn small" data-mirror>↔ Symétrie G/D</button><button class="btn small" data-reset>↺ Réinitialiser</button></div>
     <div class="actions"><button class="btn primary block" data-ok>✓ Valider</button></div>`, 'pl-ce-overlay');
   const svg = o.q('.pl-me-svg'), wrap = o.q('.pl-me-wrap');
@@ -9929,6 +9940,7 @@ function modalMarkEdit(key, typeKey) {
   const up = () => { if (dragH) { dragH = null; plDraftSave(); } };
   wrap.addEventListener('pointerup', up); wrap.addEventListener('pointercancel', up);
   o.q('[data-x]').onclick = () => { o.close(); plRenderMarkers(); };
+  { let sz = 1; const si = o.q('#plMeSize'); if (si) si.addEventListener('input', (e) => { const v = +e.target.value || 1; markScale(m, v / sz); sz = v; draw(); plDraftSave(); }); } // curseur taille (échelle relative → pas de cumul)
   o.q('[data-mirror]').addEventListener('click', () => { markMirror(m); draw(); plDraftSave(); });
   o.q('[data-reset]').addEventListener('click', () => { m.pts = markDefaults(typeKey).pts; draw(); plDraftSave(); });
   o.q('[data-ok]').addEventListener('click', () => { o.close(); plRenderMarkers(); });
