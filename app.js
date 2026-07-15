@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.16';
+const APP_VERSION = '1.7.17';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.17', date: '2026-07-15',
+    ajouts: [
+      'RÉCUPÉRATION — la restauration d\'une version antérieure (Drive) propose maintenant DEUX options : « Les tournées seulement » (récupère vos tournées clôturées/actives — paiements, clôtures, temps réel — en CONSERVANT vos clients et réglages actuels) ou « Tout ». Fini le tout-ou-rien : on récupère une tournée perdue sans régresser les fiches clients ni les encodages faits depuis.',
+    ],
+  },
   {
     version: '1.7.16', date: '2026-07-15',
     ajouts: [
@@ -3515,6 +3521,18 @@ async function restoreDriveSnapshot(snap, token, fileId) {
   saveSettings(); saveClients(); saveTournees(); saveArchive(); // hash remis à zéro par applyRemoteReplace → tout est ré-horodaté à maintenant
   try { if (token && fileId) { await driveUpload(token, fileId, exportSnapshot()); _lastPushHash = snapshotHash(exportSnapshot()); _syncDirty = false; } } catch (e) { /* pas grave : le ré-horodatage suffit à faire gagner la version restaurée à la prochaine fusion */ }
 }
+// Restauration GRANULAIRE : ne remet QUE les tournées (clôturées + actives) de la version choisie, en CONSERVANT vos clients et réglages ACTUELS.
+// Résout le « tout-ou-rien » : on récupère la tournée perdue sans régresser les fiches clients / encodages faits depuis.
+async function restoreDriveTournees(snap, token, fileId) {
+  downloadSnapshot(); // filet réversible
+  const tours = Array.isArray(snap.tours) ? snap.tours : (Array.isArray(snap.tournees) ? snap.tournees : []);
+  const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
+  const isArch = (t) => { const dd = t.date || ''; return !!dd && (t.closed || dd < todayStr()) && dd < cutoff; };
+  tournees = tours.filter((t) => !isArch(t)); archive = tours.filter(isArch);
+  const m = syncMeta(); m.hash = m.hash || {}; delete m.hash.tournees; saveSyncMeta(m); // force le ré-horodatage à « maintenant » → la version restaurée l'emporte à la prochaine fusion
+  saveTournees(); saveArchive();
+  try { if (token && fileId) { await driveUpload(token, fileId, exportSnapshot()); _lastPushHash = snapshotHash(exportSnapshot()); _syncDirty = false; } } catch (e) {}
+}
 function modalDriveRestore() {
   openModal(`<div class="modal-head"><b>🕓 Restaurer une version antérieure (Drive)</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Récupère une <b>sauvegarde antérieure</b> de vos données (avant une perte). Choisissez une version, <b>analysez-la</b> (sans rien changer), puis restaurez. Une <b>sauvegarde de sécurité</b> de l'état actuel est téléchargée avant toute restauration — c'est réversible.</p>
@@ -3550,12 +3568,13 @@ function modalDriveRestore() {
           catch (err) { info.textContent = 'Analyse impossible : ' + err.message; }
           finally { b.disabled = false; b.textContent = old; }
         });
-        btnR.addEventListener('click', async () => {
+        btnR.addEventListener('click', () => {
           if (!snap) return;
-          if (!confirm('Restaurer cette version ?\n\n1) Une sauvegarde de sécurité de l\'état ACTUEL est téléchargée.\n2) L\'app est remplacée par cette version et rechargée.\n\nVérifiez vos données AVANT de relancer une synchro sur vos autres appareils.')) return;
-          setSt('', 'Restauration en cours…');
-          try { await restoreDriveSnapshot(snap, token, file.id); alert('✅ Version restaurée. L\'app va se recharger.'); location.reload(); }
-          catch (err) { setSt('err', 'Restauration impossible : ' + err.message); }
+          const run = async (fn, msg) => { setSt('', msg); try { await fn(snap, token, file.id); alert('✅ Restauré. L\'app va se recharger.'); location.reload(); } catch (err) { setSt('err', 'Restauration impossible : ' + err.message); } };
+          modalActions('Restaurer — que voulez-vous remettre ?', [
+            { label: '🐴 Les tournées seulement (recommandé)', onClick: () => { if (confirm('Remettre les TOURNÉES de cette version ?\n\nVos CLIENTS et RÉGLAGES actuels sont CONSERVÉS (on ne touche qu\'aux tournées : clôtures, paiements, temps réel…). Une sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveTournees, 'Restauration des tournées…'); } },
+            { label: '♻ Tout (clients + réglages + tournées)', onClick: () => { if (confirm('Remplacer TOUT par cette version ?\n\nVos clients, réglages ET tournées reviennent à l\'état de cette sauvegarde — les modifications faites depuis sont annulées. Une sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveSnapshot, 'Restauration complète…'); } },
+          ]);
         });
       });
     } catch (e) { setSt('err', 'Erreur : ' + (e && e.message || e)); }
