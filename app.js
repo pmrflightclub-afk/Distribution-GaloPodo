@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.15';
+const APP_VERSION = '1.7.16';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.16', date: '2026-07-15',
+    ajouts: [
+      'ANNULATION — les frais de déplacement restent TOUJOURS facturés quand on annule un client (ou un arrêt) : le pro s\'est déplacé, seuls les actes et le matériel sont retirés. Avant, annuler un client entier retirait aussi son déplacement du total. Le kilométrage et les stats de déplacement sont conservés dans tous les cas.',
+    ],
+  },
   {
     version: '1.7.15', date: '2026-07-15',
     ajouts: [
@@ -6346,10 +6352,12 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     const partHT = r.montantHT / r.nbClients, partTTC = r.montantTTC / r.nbClients;
     const kmClient = (r.kmAttribue || 0) / r.nbClients;
     r.clients.forEach((cl) => {
-      if (cl.cancelled) return; // client entièrement annulé : compté dans nbClients (géométrie figée) mais NI déplacement NI acte facturés (manque à gagner)
       const m = getC(cl.clientId, cl.nom);
+      // L6 : le DÉPLACEMENT reste TOUJOURS facturé (le pro s'est déplacé sur place), même si le client est ENTIÈREMENT annulé.
+      // Sa part n'est jamais reportée sur les autres (nbClients reste figé). Seuls les actes + matériel sont retirés à l'annulation.
       m.deplacement.push({ adresse: r.adresse, type: r.type, partHT, partTTC, km: kmClient, tarifHT: r.tarifHT || 0, proche: !!r.proche, chevaux: cl.chevaux.map((c) => c.nom) });
       m.htDep += partHT;
+      if (cl.cancelled) return; // client entièrement annulé : déplacement conservé (ci-dessus), mais AUCUN acte ni matériel (prestation annulée) — le remboursement éventuel relève de l'utilisateur
       cl.chevaux.forEach((c) => {
         // Parage & équilibrage (par cheval) → 1ʳᵉ ligne d'article (remisable). « Offrir » (c.parageOffert) → montant 0 (prixHT conservé pour les stats).
         if (c.parage && S.parage && S.parage.prixHT > 0) {
