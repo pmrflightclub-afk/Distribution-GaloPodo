@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.25';
+const APP_VERSION = '1.7.26';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.26', date: '2026-07-15',
+    ajouts: [
+      'RÉCUPÉRATION — réinjecter une tournée depuis une sauvegarde remet AUSSI ses impayés et ses notes de crédit liés (recâblage complet) : plus de facture réinjectée sans sa créance.',
+      'PHASE DE TEST — nouveau bouton « 🧪 Réinitialiser les tournées de test » (Réglages → Synchro) : supprime toutes les tournées et leurs données liées (impayés, notes de crédit, encaissements, verrous) en PRÉSERVANT vos clients, réglages, comptes, rappels, charges et catalogue. Sauvegarde de sécurité téléchargée avant.',
+    ],
+  },
   {
     version: '1.7.25', date: '2026-07-15',
     ajouts: [
@@ -3220,9 +3227,10 @@ function mergeSnapshots(local, remote) {
   };
 }
 // Instantané local complet (pour export / fusion).
+const DATA_SCHEMA = 1; // Bucket B : numéro de SCHÉMA de données (indépendant de APP_VERSION) → permet de router les migrations / refuser un fichier trop récent à l'import.
 function exportSnapshot() {
   const m = syncMeta();
-  return { app: 'GaloPodo', version: APP_VERSION, at: Date.now(), settings: S, clients, tours: allTours(), tomb: Object.assign({}, m.tomb || {}) };
+  return { app: 'GaloPodo', version: APP_VERSION, schema: DATA_SCHEMA, at: Date.now(), settings: S, clients, tours: allTours(), tomb: Object.assign({}, m.tomb || {}) };
 }
 // Applique le résultat de fusion : réécrit les stores + re-partitionne les tournées (actives / archive > 4 semaines).
 function applyMerged(merged) {
@@ -3591,7 +3599,7 @@ async function restoreDriveTournees(snap, token, fileId) {
 // Réinjection CIBLÉE d'UNE tournée depuis une sauvegarde antérieure : on récupère juste cette tournée (clôtures/paiements/temps réel)
 // et on la FUSIONNE dans l'état actuel — les AUTRES tournées et tout ce qui a été fait depuis sont CONSERVÉS. Réversible (sauvegarde de sécurité).
 let _restoreBackedUp = false;
-function reinjectTour(rt) {
+function reinjectTour(rt, snap) {
   if (!rt || !rt.id) return;
   if (!_restoreBackedUp) { downloadSnapshot(); _restoreBackedUp = true; } // sauvegarde de sécurité (une fois par session de restauration)
   const merged = JSON.parse(JSON.stringify(rt));
@@ -3602,8 +3610,31 @@ function reinjectTour(rt) {
   const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
   const dd = merged.date || ''; const isArch = !!dd && (merged.closed || dd < todayStr()) && dd < cutoff;
   (isArch ? archive : tournees).push(merged);
+  // Bucket B : réinjecter AUSSI les dépendances comptables liées à cette tournée (recâblage) — sinon facture réinjectée sans sa créance / sa note de crédit.
+  if (snap) {
+    (Array.isArray(snap.clients) ? snap.clients : []).forEach((sc) => { const c = clients.find((x) => x.id === sc.id); if (!c) return; if (!Array.isArray(c.impayes)) c.impayes = []; (sc.impayes || []).forEach((im) => { if ((im.sourceTourId === rt.id || im.collectedTourId === rt.id) && !c.impayes.some((x) => x.id === im.id)) c.impayes.push(JSON.parse(JSON.stringify(im))); }); }); // créances nées de / perçues par cette tournée
+    const snapNC = (snap.settings && Array.isArray(snap.settings.notesCredit)) ? snap.settings.notesCredit : [];
+    if (!Array.isArray(S.notesCredit)) S.notesCredit = [];
+    snapNC.forEach((n) => { if (n.tourId === rt.id && !S.notesCredit.some((x) => x.id === n.id)) { const nn = JSON.parse(JSON.stringify(n)); delete nn.tourDeleted; S.notesCredit.push(nn); } }); // note de crédit recâblée (le cv.cancel.creditNoteId de la tournée pointe de nouveau vers elle)
+    saveClients(); saveSettings();
+  }
   const m = syncMeta(); if (m.hash && m.hash.tournees) delete m.hash.tournees[rt.id]; saveSyncMeta(m); // ré-horodatage → cette tournée l'emporte aux fusions futures
   saveTournees(); saveArchive();
+}
+// Bucket B — Réinitialisation des TOURNÉES DE TEST : supprime toutes les tournées + leurs référents (via purgeTourData → tombstones, pas de résurrection),
+// en PRÉSERVANT la config (comptes, rappels, charges, catalogue, provisions setup) ET les clients. Sauvegarde de sécurité avant. GC final.
+function resetTestTournees() {
+  const n = allTours().length;
+  if (!n) { alert('Aucune tournée à réinitialiser.'); return; }
+  if (!confirm('RÉINITIALISER LES TOURNÉES DE TEST\n\nSupprime les ' + n + ' tournée(s) (clôturées + à venir) et nettoie leurs données liées (impayés, notes de crédit, encaissements, verrous de mois).\n\nPRÉSERVE : vos clients, réglages, comptes, rappels, charges, catalogue, provisions.\n\nUne sauvegarde de sécurité est téléchargée avant. Continuer ?')) return;
+  if (!confirm('Confirmer ? Cette action est irréversible (mais réversible via la sauvegarde téléchargée).')) return;
+  try { downloadSnapshot(); } catch (e) {}
+  allTours().map((t) => t.id).forEach((id) => purgeTourData(id)); // purge les référents de chaque tournée
+  tournees = []; archive = [];
+  saveTournees(); saveArchive();   // pose les tombstones (disparition détectée par syncStamp)
+  recalcAllTours();                // GC final : élimine tout référent orphelin restant
+  refreshEverywhere();
+  alert('✅ ' + n + ' tournée(s) réinitialisée(s). Config, clients et comptabilité de base préservés.');
 }
 function modalDriveRestore() {
   _restoreBackedUp = false;
@@ -3644,7 +3675,7 @@ function modalDriveRestore() {
             if (!picker) { picker = document.createElement('div'); picker.className = 'dr-tours'; row.parentNode.insertBefore(picker, row.nextSibling); }
             const tours = (snap.tours || snap.tournees || []).filter((t) => t && t.date).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
             picker.innerHTML = '<div class="li-sub" style="margin:4px 0 2px 12px"><b>Réinjecter UNE tournée</b> de cette sauvegarde (fusion — garde tout le reste) :</div>' + (tours.length ? tours.map((t, ti) => { const arr = t.arrets || []; const nv = arr.filter((a) => typeof a.validatedAt === 'number' || (a.clients || []).some((cl) => typeof cl.validatedAt === 'number')).length; const st = (t.closed || t.endedAt) ? '✅ clôturée' : (t.startedAt ? '🚗 démarrée' : '⏳ non démarrée'); return `<div class="list-item" style="margin-left:12px"><div class="li-main"><b>${esc(fmtDateFr(t.date))}</b>${t.nom && t.nom.trim() ? ' — ' + esc(t.nom.trim()) : ''}<span class="li-sub">${nv}/${arr.length} arrêts clôturés · ${st}</span></div><div class="li-act"><button class="btn small" data-reinj="${ti}">♻ Réinjecter</button></div></div>`; }).join('') : '<div class="li-sub" style="margin-left:12px">Aucune tournée datée dans cette version.</div>');
-            picker.querySelectorAll('[data-reinj]').forEach((rb) => rb.addEventListener('click', () => { const t = tours[+rb.dataset.reinj]; if (!confirm(`Réinjecter la tournée du ${fmtDateFr(t.date)} ?\n\nElle est FUSIONNÉE dans vos données actuelles (ses clôtures / paiements / temps réel reviennent) SANS toucher à vos autres tournées ni aux modifications faites depuis. Une sauvegarde de sécurité est téléchargée avant.`)) return; try { reinjectTour(t); refreshEverywhere(); rb.textContent = '✔ réinjectée'; rb.disabled = true; } catch (err) { alert('Réinjection impossible : ' + err.message); } }));
+            picker.querySelectorAll('[data-reinj]').forEach((rb) => rb.addEventListener('click', () => { const t = tours[+rb.dataset.reinj]; if (!confirm(`Réinjecter la tournée du ${fmtDateFr(t.date)} ?\n\nElle est FUSIONNÉE dans vos données actuelles (ses clôtures / paiements / temps réel reviennent) SANS toucher à vos autres tournées ni aux modifications faites depuis. Une sauvegarde de sécurité est téléchargée avant.`)) return; try { reinjectTour(t, snap); refreshEverywhere(); rb.textContent = '✔ réinjectée'; rb.disabled = true; } catch (err) { alert('Réinjection impossible : ' + err.message); } }));
           }
           catch (err) { info.textContent = 'Analyse impossible : ' + err.message; }
           finally { b.disabled = false; b.textContent = old; }
@@ -13181,6 +13212,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('googleConnect')) $('googleConnect').addEventListener('click', async () => { const h = $('googleStatus'); try { h.className = 'status'; h.textContent = 'Connexion…'; await googleToken(true); h.className = 'status ok'; h.textContent = 'Connecté ✔ — cliquez « Synchroniser ».'; } catch (e) { h.className = 'status err'; h.textContent = 'Erreur : ' + e.message; } });
   if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
   if ($('driveRestore')) $('driveRestore').addEventListener('click', modalDriveRestore);
+  if ($('resetTestTours')) $('resetTestTours').addEventListener('click', resetTestTournees);
   // Synchro Drive + Agenda : lancés SEULEMENT après le contrôle de mise à jour (fiabilité multi-appareils).
   // Si une MAJ est disponible, checkForUpdate recharge l'app (le .then n'est jamais atteint) → la synchro se fera avec le NOUVEAU code.
   const _bootSetupGate = () => { if (!S.setupDone) modalSetup(); }; // config initiale : ouverte seulement si non déjà validée (localement OU via Drive après fusion)
