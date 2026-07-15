@@ -792,3 +792,7 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 
 /* L8 : puce « journée entière » (sans heure) dans l'en-tête de jour de la grille semaine. */
 .wk-allday { font-size: .68rem; line-height: 1.1; margin-top: 2px; padding: 1px 4px; border-radius: 4px; background: rgba(255,255,255,.14); color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Accès direct actes/articles depuis le Trajet du jour : bref surlignage du bloc client dans l'éditeur. */
+.reveal-hi { animation: revealHi 1.6s ease-out; border-radius: 8px; }
+@keyframes revealHi { 0%, 100% { background: transparent; } 18% { background: rgba(232,114,42,.30); } }

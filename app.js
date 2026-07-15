@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.24';
+const APP_VERSION = '1.7.25';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.25', date: '2026-07-15',
+    ajouts: [
+      'TRAJET DU JOUR — nouvel accès « ✏️ Actes / articles » dans le menu « Agir » de chaque client : ouvre directement l\'éditeur de la tournée positionné sur ce client (avec un bref surlignage), pour cocher/ajuster ses actes et articles sans le chercher. L\'édition par client dans l\'éditeur reste inchangée.',
+    ],
+  },
   {
     version: '1.7.24', date: '2026-07-15',
     ajouts: [
@@ -5489,6 +5495,15 @@ function migrateCreditedCancellations() {
   if (ta) saveTournees(); if (tb) saveArchive();
 }
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
+// Accès DIRECT depuis le Trajet du jour : ouvre l'éditeur de la tournée et se positionne sur le bloc du client (actes/articles) avec un bref surlignage.
+function openEditorAtClient(t, cid) {
+  openTour(t);
+  setTimeout(() => {
+    const el = document.querySelector('.ac-name[data-cid="' + cid + '"]');
+    const block = el ? (el.closest('.a-client-hd') || el.parentElement || el) : null;
+    if (block) { try { block.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} block.classList.add('reveal-hi'); setTimeout(() => block.classList.remove('reveal-hi'), 1600); }
+  }, 250);
+}
 
 // Synchronise une tournée non clôturée avec les données client actuelles (chevaux ajoutés/supprimés/renommés
 // ET changements d'adresse client/cheval → l'arrêt suit la nouvelle adresse). Les clôturées restent figées.
@@ -11474,6 +11489,7 @@ function dayJClientAgir(t, a, cl, ctx) {
   };
   return [
     { label: '🕘 Heure RDV', done: !!clientRdvHeure(t, cid), keepOpen: true, onClick: () => modalHeureRdv(t, a, cid) },
+    { label: '✏️ Actes / articles', onClick: () => openEditorAtClient(t, cid) }, // accès direct par client à l'édition prestations/articles (depuis le Trajet du jour)
     { label: navLabel(), onClick: () => openNav(a.addr) },
     { label: 'Route (temps réel)', done: ctx.rDone, orange: ctx.rStale, onClick: () => modalRouteTime(t, a, ctx.est, renderHomeTrajet) },
     { label: 'SMS', keepOpen: true, onClick: () => modalSmsChoice(c, smsDataFor(c, { cheval: chNames, trajet: ctx.trajet, adresse: ctx.adresse })) },
