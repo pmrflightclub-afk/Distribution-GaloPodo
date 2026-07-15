@@ -202,6 +202,7 @@
     <div class="actions"><button class="btn primary block" id="edCalc" style="display:none">Calculer</button>
       <p class="hint" style="text-align:center">🔄 Les frais se recalculent et s'enregistrent automatiquement à chaque changement.</p></div>
     <div class="actions" id="edRecoverWrap" style="display:none"><button class="btn primary block" id="edRecover">📊 Compléter les stats (tournée récupérée)</button></div>
+    <div class="actions two"><button class="btn" id="edExport">📤 Exporter cette tournée</button><button class="btn" id="edReplay">🔁 Rejouer (nouvelle tournée)</button></div>
     <div class="actions"><button class="btn danger block" id="edDelete">Supprimer cette tournée</button></div>
   </main>
 
@@ -1002,7 +1003,7 @@
       <p class="status" id="googleStatus"></p>
       <div class="actions"><button class="btn" id="driveRestore">🕓 Restaurer une version antérieure (récupération)</button></div>
       <p class="hint">Récupère une <b>sauvegarde antérieure</b> de vos données sur le Drive (en cas de perte). Analyse chaque version <b>sans rien écraser</b> ; télécharge une sauvegarde de sécurité avant de restaurer.</p>
-      <div class="actions"><button class="btn danger" id="resetTestTours">🧪 Réinitialiser les tournées de test</button></div>
+      <div class="actions two"><label class="btn" id="importTourLbl" style="text-align:center;cursor:pointer">📥 Importer une tournée (fichier)<input type="file" id="importTourFile" accept="application/json,.json" hidden/></label><button class="btn danger" id="resetTestTours">🧪 Réinitialiser les tournées de test</button></div>
       <p class="hint">Supprime <b>toutes les tournées</b> et leurs données liées (impayés, notes de crédit, encaissements, verrous de mois) en <b>préservant</b> vos clients, réglages, comptes, rappels, charges et catalogue. Une sauvegarde de sécurité est téléchargée avant. <b>Outil de phase de test.</b></p>
       <p class="hint">📅 Le <b>miroir de vos RDV vers Google Agenda</b> se règle désormais dans <b>Réglages → Calendrier</b>.</p>
       <details class="assistant"><summary>❓ Aide détaillée : créer mon ID Google (gratuit, une seule fois)</summary>

@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.26';
+const APP_VERSION = '1.7.27';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.27', date: '2026-07-15',
+    ajouts: [
+      'OUTILS (phase de test) — EXPORT/IMPORT d\'une tournée par fichier : bouton « 📤 Exporter cette tournée » dans l\'éditeur (fichier autonome, avec ses clients référencés, impayés et notes de crédit) ; « 📥 Importer une tournée » (Réglages → Synchro) au choix « Réinjecter » (remet la tournée telle quelle) ou « Rejouer ».',
+      'OUTILS — bouton « 🔁 Rejouer (nouvelle tournée) » dans l\'éditeur : recrée une tournée pré-remplie (actes, articles, chevaux, heures, temps de route repris ; paiements et clôtures à refaire), pour remettre au propre une tournée.',
+    ],
+  },
   {
     version: '1.7.26', date: '2026-07-15',
     ajouts: [
@@ -3635,6 +3642,49 @@ function resetTestTournees() {
   recalcAllTours();                // GC final : élimine tout référent orphelin restant
   refreshEverywhere();
   alert('✅ ' + n + ' tournée(s) réinitialisée(s). Config, clients et comptabilité de base préservés.');
+}
+// Bucket B — EXPORT GRANULAIRE d'UNE tournée dans un fichier autonome (tournée + clients référencés + gel tarifaire + impayés/NC liés).
+function tourReferencedClientIds(t) { const s = new Set(); (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => s.add(cl.clientId))); (t.articles || []).forEach((ar) => { if (ar.clientId) s.add(ar.clientId); }); return s; }
+function exportTourFile(t) {
+  if (!t) return;
+  const cids = tourReferencedClientIds(t);
+  const cls = clients.filter((c) => cids.has(c.id)).map((c) => { const cc = JSON.parse(JSON.stringify(c)); cc.impayes = (cc.impayes || []).filter((im) => im.sourceTourId === t.id || im.collectedTourId === t.id); return cc; }); // fiches clients référencées, impayés limités à cette tournée
+  const nc = (S.notesCredit || []).filter((n) => n.tourId === t.id).map((n) => JSON.parse(JSON.stringify(n)));
+  const settingsFrozen = { tvaRate: S.tvaRate, tvaRegime: S.tvaRegime, reducLiquide: S.reducLiquide, repartition: S.repartition, parage: S.parage, articlesCatalogue: S.articlesCatalogue, materiel: S.materiel }; // gel tarifaire (référence, pour recalcul cohérent)
+  const data = { app: 'GaloPodo', kind: 'tour-export', schema: DATA_SCHEMA, version: APP_VERSION, at: Date.now(), tour: JSON.parse(JSON.stringify(t)), clients: cls, notesCredit: nc, settingsFrozen };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'galopodo-tournee-' + (t.date || 'sansdate') + '.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// Bucket B — REJEU pré-rempli : nouvelle tournée (nouvel id) reprenant actes/articles/chevaux/heures/temps réels, mais paiements et clôtures REMIS À ZÉRO (à refaire).
+function replayTour(t) {
+  if (!t) return;
+  if (!confirm('Créer une NOUVELLE tournée pré-remplie à partir de celle du ' + fmtDateFr(t.date) + ' ?\n\nActes, articles, chevaux, heures et temps de route sont repris ; les PAIEMENTS et les CLÔTURES sont remis à zéro (à refaire). Utile pour rejouer une tournée au propre.')) return;
+  const nt = JSON.parse(JSON.stringify(t));
+  nt.id = uid(); nt.date = todayStr(); nt.nom = ((t.nom || '').trim() ? t.nom.trim() + ' ' : '') + '(rejeu)'; nt.closed = false; delete nt.endedAt; delete nt.startedAt; delete nt.recovered; delete nt._review; delete nt.updatedAt;
+  nt.payments = {}; nt.result = null; nt.createdAt = Date.now();
+  (nt.arrets || []).forEach((a) => { delete a.validatedAt; delete a.rdvDone; (a.clients || []).forEach((cl) => { delete cl.validatedAt; delete cl.rdvDone; }); }); // clôtures/RDV à refaire (on garde actes, articles, heures, realMin)
+  tournees.push(nt); saveTournees();
+  currentTour = JSON.parse(JSON.stringify(nt)); openEditor();
+  alert('✅ Nouvelle tournée pré-remplie créée (« rejeu »). Repassez chaque arrêt : démarrez, validez le paiement, clôturez.');
+}
+// Lecture d'un fichier d'export de tournée → choix réinjecter / rejouer.
+function importTourFile(file) {
+  const r = new FileReader();
+  r.onload = () => { let data; try { data = JSON.parse(r.result); } catch { alert('Fichier illisible.'); return; } if (!data || data.kind !== 'tour-export' || !data.tour) { alert('Ce fichier n\'est pas un export de tournée GaloPodo.'); return; } modalImportTour(data); };
+  r.readAsText(file);
+}
+function modalImportTour(data) {
+  const t = data.tour;
+  const ensureClients = () => { (data.clients || []).forEach((ic) => { if (!clients.some((c) => c.id === ic.id)) clients.push(JSON.parse(JSON.stringify(ic))); }); saveClients(); }; // crée les clients référencés manquants (ne remplace jamais un existant)
+  openModal(`<div class="modal-head"><b>📥 Importer une tournée — ${esc(fmtDateFr(t.date))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Tournée du <b>${esc(fmtDateFr(t.date))}</b>${t.nom ? ' — ' + esc(t.nom) : ''} · ${(t.arrets || []).length} arrêt(s) · ${(data.clients || []).length} client(s). Que voulez-vous faire ?</p>
+    <div class="actions-col">
+      <button class="btn block" id="itReinject">♻ <b>Réinjecter</b><br><span class="li-sub">Remet cette tournée telle quelle (clôtures, paiements, impayés, notes de crédit). Met à jour si elle existe déjà (même id).</span></button>
+      <button class="btn block" id="itReplay">🔁 <b>Rejouer</b><br><span class="li-sub">Crée une NOUVELLE tournée pré-remplie (actes/articles repris, paiements et clôtures à refaire).</span></button>
+    </div>`);
+  $('mX').onclick = closeModal;
+  $('itReinject').onclick = () => { closeModal(); ensureClients(); _restoreBackedUp = false; reinjectTour(JSON.parse(JSON.stringify(t)), { clients: data.clients || [], settings: { notesCredit: data.notesCredit || [] } }); refreshEverywhere(); alert('✅ Tournée réinjectée (avec ses impayés et notes de crédit).'); };
+  $('itReplay').onclick = () => { closeModal(); ensureClients(); replayTour(t); };
 }
 function modalDriveRestore() {
   _restoreBackedUp = false;
@@ -13213,6 +13263,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
   if ($('driveRestore')) $('driveRestore').addEventListener('click', modalDriveRestore);
   if ($('resetTestTours')) $('resetTestTours').addEventListener('click', resetTestTournees);
+  if ($('importTourFile')) $('importTourFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importTourFile(f); e.target.value = ''; });
   // Synchro Drive + Agenda : lancés SEULEMENT après le contrôle de mise à jour (fiabilité multi-appareils).
   // Si une MAJ est disponible, checkForUpdate recharge l'app (le .then n'est jamais atteint) → la synchro se fera avec le NOUVEAU code.
   const _bootSetupGate = () => { if (!S.setupDone) modalSetup(); }; // config initiale : ouverte seulement si non déjà validée (localement OU via Drive après fusion)
@@ -13254,7 +13305,9 @@ window.addEventListener('DOMContentLoaded', () => {
   // (« Recalculer cette tournée » retiré en 1.1.99 : le recalcul complet — fallback calcTour quand la géométrie figée est périmée — est désormais AUTOMATIQUE dans « Corriger les prestations ».)
   if ($('edActes')) $('edActes').addEventListener('click', () => { if (currentTour) modalEditPrestations(currentTour); });
   if ($('edCancelBill')) $('edCancelBill').addEventListener('click', () => { if (currentTour) modalCancelBilling(currentTour); });
-  $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats et ses impayés liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); showTab('tournees'); } });
+  $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats, ses impayés et notes de crédit liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; deleteTourById(id); showTab('tournees'); } }); // M3 : deleteTourById = purge complète + sauvegarde de sécurité si clôturée
+  if ($('edExport')) $('edExport').addEventListener('click', () => { if (currentTour) exportTourFile(currentTour); });
+  if ($('edReplay')) $('edReplay').addEventListener('click', () => { if (currentTour) replayTour(currentTour); });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(recapText(currentTour.result)); $('edStatus').className = 'status ok'; $('edStatus').textContent = 'Récap copié.'; } catch { $('edStatus').textContent = 'Copie impossible.'; } });
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
