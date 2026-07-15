@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.23';
+const APP_VERSION = '1.7.24';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.24', date: '2026-07-15',
+    ajouts: [
+      'FIABILITÉ (zéro orphelin) — supprimer une tournée nettoie désormais AUSSI ses notes de crédit (supprimées si non remboursées, conservées comme pièce détachée si remboursées) et lève le verrou d\'un mois devenu vide. Une sauvegarde de sécurité est téléchargée avant de supprimer une tournée clôturée.',
+      'FIABILITÉ — impossible de supprimer un client qui a des tournées (son historique resterait illisible et la compta incohérente) : supprimez/réattribuez d\'abord ses tournées.',
+      'FIABILITÉ — « Recalculer toutes les tournées » fait le ménage des références orphelines (clés compta/agenda/notes de crédit pointant une tournée disparue). Le retour aux réglages d\'usine préserve les suppressions (plus de « résurrection » de fiches supprimées à la synchro suivante).',
+    ],
+  },
   {
     version: '1.7.23', date: '2026-07-15',
     ajouts: [
@@ -5003,7 +5011,12 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
   $('cEntNum').addEventListener('input', (e) => { w.entrepriseNum = e.target.value; saveDraft(); });
   $('cSocMeme').addEventListener('change', (e) => { w.societeMemeAdresse = e.target.checked; $('cSocAddrWrap').style.display = e.target.checked ? 'none' : ''; saveDraft(); });
   $('cAddCheval').addEventListener('click', () => { w.chevaux.push({ id: uid(), nom: '', addrSource: 'specifique', addr: emptyAddr() }); renderCh(); saveDraft(); revealNew('cChevaux'); });
-  if (existing) $('cDel').addEventListener('click', () => { if (confirm('Supprimer ce client ?')) { DRAFTS.clear(key); clients = clients.filter((x) => x.id !== w.id); saveClients(); closeModal(); renderClients(); } });
+  if (existing) $('cDel').addEventListener('click', () => {
+    // M3 : intégrité référentielle — on ne supprime jamais un client référencé par des tournées (sinon leur historique devient illisible « ? » et la compta incohérente).
+    const nT = allTours().filter((t) => (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === w.id))).length;
+    if (nT > 0) { alert('🔒 Suppression impossible : ce client a ' + nT + ' tournée(s) (clôturées ou à venir). Supprimez ou réattribuez d\'abord ses tournées — sinon leur historique deviendrait illisible et la comptabilité incohérente.'); return; }
+    if (confirm('Supprimer ce client ?')) { DRAFTS.clear(key); clients = clients.filter((x) => x.id !== w.id); saveClients(); closeModal(); renderClients(); }
+  });
   $('cSave').addEventListener('click', () => {
     if (!(w.nom || '').trim() && !(w.prenom || '').trim()) { $('cErr').textContent = 'Le nom (ou le prénom) est obligatoire.'; return; }
     if (!addrStr(w.addr).trim()) { $('cErr').textContent = 'L\'adresse du client est obligatoire.'; return; }
@@ -6690,6 +6703,13 @@ function recalcAllTours() {
   // 2) Articles d'impayé orphelins (référencent un impayé qui n'existe plus) → retirés de toutes les tournées.
   const live = new Set(); clients.forEach((c) => (c.impayes || []).forEach((im) => live.add(im.id)));
   allTours().forEach((t) => { if (Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !a.impaye || (a.impayeId && live.has(a.impayeId))); });
+  // 2bis) M3 — GC GLOBAL des références orphelines (tourId/mois disparu). Filet PERMANENT qui rattrape les chemins ne passant PAS par purgeTourData
+  //       (imports « Remplace tout »/« Données seules », réinjection, fusion). Sans lui, une clé compta/agenda/note de crédit peut pointer une tournée absente.
+  const monthsLive = new Set(allTours().map((t) => (t.date || '').slice(0, 7)).filter(Boolean));
+  ['comptaRecu', 'comptaDemarche'].forEach((k) => { if (S[k]) Object.keys(S[k]).forEach((key) => { if (!tourIds.has(key.split(':')[0])) delete S[k][key]; }); });
+  if (S.agendaImported) Object.keys(S.agendaImported).forEach((eid) => { const im = S.agendaImported[eid]; if (im && im.tourId && !tourIds.has(im.tourId)) delete S.agendaImported[eid]; });
+  if (S.comptaStatus) Object.keys(S.comptaStatus).forEach((ym) => { if (!monthsLive.has(ym)) delete S.comptaStatus[ym]; }); // verrou d'un mois sans aucune tournée → levé
+  if (Array.isArray(S.notesCredit)) S.notesCredit = S.notesCredit.filter((nc) => { if (!nc.tourId || tourIds.has(nc.tourId)) return true; if (nc.rembourse) { nc.tourDeleted = true; return true; } return false; }); // note orpheline NON remboursée → retirée ; remboursée → conservée détachée
   // 3) On NE recalcule PLUS les montants ici (ça pouvait casser une facture : déplacement/matériel qui sautaient).
   //    On rafraîchit seulement les listes de chevaux pour les stats (sanitizeTourStats ne touche jamais les montants)
   //    et on répare les arrondis caisse devenus aberrants. Pour recalculer une facture, ouvrez la tournée (recalcul complet à l'ouverture).
@@ -6699,7 +6719,7 @@ function recalcAllTours() {
     // Arrondi caisse aberrant (|arrondi| > 10 € : un vrai arrondi caisse est de l'ordre de l'euro) → on retire le montant rectifié.
     if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; if (p && p.method === 'liquide' && m && Math.abs(payRectifie(m, p) - (m.totalTTC || 0)) > 3 && !comptaLocked(t, cid)) { p.rectifie = null; p.montantPaye = null; } }); // L8 : purge l'arrondi caisse aberrant (>3 €) — M2 : jamais sur un mois DÉCLARÉ (pièce figée)
   });
-  saveClients(); saveTournees(); saveArchive();
+  saveClients(); saveTournees(); saveArchive(); saveSettings(); // M3 : persiste aussi le GC des références orphelines (S.comptaRecu/Demarche/agendaImported/comptaStatus/notesCredit)
   return { n };
 }
 
@@ -11410,7 +11430,7 @@ function renderComptePhoto() {
     list.appendChild(el);
   });
 }
-function deleteTourById(id) { purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); }
+function deleteTourById(id) { const tt = allTours().find((x) => x.id === id); if (tt && (tt.closed || tt.endedAt)) { try { downloadSnapshot(); } catch (e) {} } /* M3 : sauvegarde de sécurité avant de supprimer une tournée CLÔTURÉE (données réelles/compta) */ purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); }
 // Section dédiée (au-dessus du Trajet du jour) : tournées dépassées non clôturées.
 // Démarrée inachevée → « Finaliser » (arrêts restants) ; jamais démarrée → « Reporter » (client par client) ou « Supprimer ».
 function renderBlockingArrets() {
@@ -12113,6 +12133,11 @@ function purgeTourData(id) {
   [S.comptaRecu, S.comptaDemarche].forEach((map) => { if (map) Object.keys(map).forEach((k) => { if (k.split(':')[0] === id) delete map[k]; }); });
   // Événement d'agenda récupéré vers cette tournée → il redevient disponible dans « Items ».
   Object.keys(S.agendaImported || {}).forEach((eid) => { if (S.agendaImported[eid] && S.agendaImported[eid].tourId === id) delete S.agendaImported[eid]; });
+  // M3 : notes de crédit de cette tournée. NON remboursée → supprimée avec la tournée (elle n'a jamais été un vrai remboursement).
+  // REMBOURSÉE → conservée comme pièce comptable détachée (marquée `tourDeleted`) — un remboursement réel ne disparaît pas.
+  if (Array.isArray(S.notesCredit)) S.notesCredit = S.notesCredit.filter((n) => { if (n.tourId !== id) return true; if (n.rembourse) { n.tourDeleted = true; return true; } return false; });
+  // M3 : dégeler le verrou de période si le mois de cette tournée n'a plus aucune AUTRE tournée (évite verrou fantôme + provisions faussées sur un mois vidé).
+  { const tt = allTours().find((x) => x.id === id); const ym = tt ? (tt.date || '').slice(0, 7) : ''; if (ym && S.comptaStatus && S.comptaStatus[ym] && !allTours().some((x) => x.id !== id && (x.date || '').slice(0, 7) === ym)) delete S.comptaStatus[ym]; }
   deleteTourCalendar(id); // retire de Google Agenda les RDV poussés pour cette tournée (best-effort)
   saveSettings();
 }
@@ -12909,7 +12934,7 @@ function markToursReview(tours) { (tours || []).forEach((t) => { t._review = tru
 function factoryReset() {
   if (!confirm('RETOUR RÉGLAGES D\'USINE : efface TOUTES vos données et réglages de cet appareil et repart à zéro. Faites d\'abord un export/sauvegarde ! Continuer ?')) return;
   if (!confirm('Êtes-vous vraiment sûr ? Cette action est irréversible.')) return;
-  try { localStorage.clear(); } catch { /* ignore */ }
+  try { const tomb = localStorage.getItem('ftr.tomb'); localStorage.clear(); if (tomb != null) localStorage.setItem('ftr.tomb', tomb); } catch { /* ignore */ } // M3 : on PRÉSERVE les tombstones (sinon les fiches/tournées supprimées ressusciteraient à la 1ʳᵉ synchro Drive/import)
   location.reload();
 }
 function modalBackup() {
