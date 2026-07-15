@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.28';
+const APP_VERSION = '1.7.29';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.29', date: '2026-07-15',
+    ajouts: [
+      'GOOGLE — moins de reconnexions : l\'accès Gmail (envoi de mail) est désormais SÉPARÉ de la synchro Drive et de l\'agenda. Le jeton principal (Drive + Agenda) n\'expire plus au bout de 7 jours ; l\'autorisation d\'envoi de mail n\'est demandée qu\'à votre 1ᵉʳ envoi. ⚠️ Une reconnexion Google unique sera demandée après cette mise à jour.',
+      'COMPTA — les tournées clôturées dont la TVA a été gelée à un taux différent des réglages actuels l\'indiquent (« Clôturée · TVA 21 % ») : la facture est figée, c\'est normal — c\'est juste rendu explicite.',
+    ],
+  },
   {
     version: '1.7.28', date: '2026-07-15',
     ajouts: [
@@ -3420,12 +3427,13 @@ let _gTokens = LS.get('ftr.gtokens', {}) || {}; // scope → { token, exp }
 function persistGTokens() { try { LS.set('ftr.gtokens', _gTokens); } catch { /* quota — sans gravité */ } }
 const GDRIVE_FILE = 'galopodo-sync.json';
 // UN SEUL jeton combiné (Drive appData + Calendar lecture) → une seule connexion couvre Drive ET Agenda,
-// persistée une fois. Les deux constantes sont volontairement identiques : même clé de cache, même jeton partagé.
-// UN SEUL jeton mutualisé Drive + Calendar + Gmail : les 3 constantes sont volontairement IDENTIQUES → même clé de cache, une seule connexion couvre tout.
-const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send';
-const GSCOPE_CAL = GSCOPE_DRIVE;
-// Lecture Gmail (scope RESTREINT) — connexion séparée, à activer dans la console Google Cloud de l'utilisateur.
-const GSCOPE_MAIL = GSCOPE_DRIVE; // Gmail mutualisé avec Drive/Calendar (même jeton, une seule connexion)
+// Sécurité : les scopes Gmail sont RESTREINTS (revue CASA + jeton qui EXPIRE en 7 jours en mode « Testing »). On les ISOLE.
+// Jeton principal Drive + Agenda = scopes NON restreints (drive.appdata + calendar.events) → PLUS d'expiration à 7 jours (moins de reconnexions),
+// pas de revue CASA pour le cœur de l'app. Gmail (restreint) n'est demandé qu'à la 1ʳᵉ action mail (jeton séparé), et son expiration éventuelle
+// ne casse plus la synchro ni l'agenda.
+const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.events';
+const GSCOPE_CAL = GSCOPE_DRIVE; // Drive + Agenda partagent le même jeton (une seule connexion couvre les deux)
+const GSCOPE_MAIL = GSCOPE_DRIVE + ' https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send'; // Gmail ISOLÉ : demandé seulement à la 1ʳᵉ action mail
 // Vrai si un jeton VALIDE est déjà en cache pour ce scope → autorise une opération silencieuse SANS jamais afficher d'écran d'auth.
 function gTokenValid(scope) { const c = _gTokens[scope || GSCOPE_DRIVE]; return !!(c && Date.now() < c.exp - 60000); }
 // L2-2b : jeton mort côté Google (révoqué / consentement retiré / partiel) → 401/403. On JETTE le cache (tous scopes mutualisés) pour
@@ -5354,7 +5362,9 @@ function tourListItem(t, showBadge) {
   const titre = `<span class="tour-date">${fmtDateFr(t.date)}</span>` + (t.nom && t.nom.trim() ? ' : ' + esc(t.nom.trim()) : ''); // date en couleur des boutons (accent)
   const clientsLine = (t.arrets || []).flatMap((a) => (a.clients || []).map((cl) => clientName(cl.clientId))).filter(Boolean).join(' · '); // chaque client individuel (non groupé), même au même arrêt
   const badge = (showBadge && st === 'active') ? ' · ' + STATUS_LBL[st] : ''; // « Aujourd'hui » reste dans le titre ; « À venir » retiré (redondant) ; « Clôturée » déplacé à droite
-  const clotHtml = (showBadge && st === 'cloturee') ? '<span class="td-cloturee">Clôturée</span>' : ''; // statut à DROITE, en orange clair
+  // Badge d'obsolescence (transparence) : une facture clôturée est FIGÉE ; si sa TVA gelée diffère des réglages actuels, on le signale (elle ne bougera pas — c'est voulu).
+  const frozenTva = (st === 'cloturee' && t.result && t.result.tvaRate != null && Number(t.result.tvaRate) !== Number(S.tvaRate));
+  const clotHtml = (showBadge && st === 'cloturee') ? `<span class="td-cloturee"${frozenTva ? ' title="Facture figée à TVA ' + esc(String(t.result.tvaRate)) + ' % (réglages actuels : ' + esc(String(S.tvaRate)) + ' %)"' : ''}>Clôturée${frozenTva ? ' · TVA ' + esc(String(t.result.tvaRate)) + ' %' : ''}</span>` : ''; // statut à DROITE, en orange clair
   const eta = tourEta(t.date, st); const etaHtml = eta ? ` <span class="${eta.cls}">${esc(eta.text)}</span>` : '';
   let fin = ''; // badge « prête » = paramétrage complet (adresses + itinéraire + cheval présent + heure), PAS acte/paiement ; « recalculer » prioritaire
   if (st !== 'cloturee') {
