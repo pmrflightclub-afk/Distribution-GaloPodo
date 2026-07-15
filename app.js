@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.21';
+const APP_VERSION = '1.7.22';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.22', date: '2026-07-15',
+    ajouts: [
+      'ANNULATION — comportement UNIFIÉ et identique quel que soit le bouton (⊘ éditeur, « Annuler une facturation », « Annulations groupées ») : virement → note de crédit ; LIQUIDE → remboursement (jamais de note de crédit). Corrige le cas où le bouton ⊘ créait une note de crédit à tort pour un client payé en liquide.',
+      'ANNULATION LIQUIDE — vous encaissez le total, l\'app garde le DÉPLACEMENT (arrondi à l\'euro inférieur, à l\'avantage du client) et calcule automatiquement le MONTANT À REMBOURSER (éditable, sans décimale). Ce remboursement est tracé sur la facture, distinct de l\'arrondi caisse. La page « Annulations groupées » applique désormais réellement ce remboursement (avant, l\'annulation ne réduisait pas l\'encaissé).',
+      'PAIEMENT — garde-fou : le montant impayé ne peut plus dépasser le montant encaissé (plus d\'encaissement négatif possible).',
+    ],
+  },
   {
     version: '1.7.21', date: '2026-07-15',
     ajouts: [
@@ -4552,16 +4560,19 @@ function renderAnnulGroup() {
     if (!checked.length) return;
     const tot = checked.reduce((s, c) => s + (parseFloat(c.dataset.ttc) || 0), 0);
     if (!confirm(`Annuler ${checked.length} prestation(s) pour un total de ${eur(tot)} ?\n\nLe déplacement reste facturé (seuls actes et matériel sont retirés). Le remboursement au client (paiement liquide) est à votre charge.`)) return;
-    const touched = new Set();
+    const touched = new Set(); const affPairs = [];
     checked.forEach((c) => {
       const t = allTours().find((x) => x.id === c.dataset.tid); if (!t) return;
       let cv = null;
       (t.arrets || []).some((a) => (a.clients || []).some((cl) => { if (cl.clientId !== c.dataset.cid) return false; const f = (cl.chevaux || []).find((x) => (c.dataset.chid && x.id != null && String(x.id) === c.dataset.chid) || norm(x.nom) === norm(c.dataset.nom)); if (f) { cv = f; return true; } return false; }));
       if (!cv || chevalCancelled(cv)) return;
-      cv.cancel = { status: 'annule', reason: 'client', note: 'annulation groupée', at: new Date().toISOString(), replacedTourId: null, credited: false }; // liquide → pas de note de crédit (déplacement conservé, remboursement à charge de l'utilisateur)
-      touched.add(t);
+      cv.cancel = { status: 'annule', reason: 'client', note: 'annulation groupée', at: new Date().toISOString(), replacedTourId: null, credited: false }; // liquide → jamais de note de crédit ; remboursement auto ci-dessous
+      touched.add(t); affPairs.push(t.id + ':' + c.dataset.cid);
     });
-    touched.forEach((t) => { recomputeTourLocal(t); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) archive[ai] = t; } });
+    touched.forEach((t) => recomputeTourLocal(t)); // recalcul d'abord → t.result reflète le déplacement seul
+    // M1 : remboursement AUTO par client liquide (garde le déplacement arrondi à l'euro inférieur, rembourse la différence) — même logique que les autres chemins d'annulation.
+    Array.from(new Set(affPairs)).forEach((k) => { const j = k.indexOf(':'); const tid = k.slice(0, j), cid = k.slice(j + 1); const t = allTours().find((x) => x.id === tid); if (t) applyLiquideRefund(t, cid); });
+    touched.forEach((t) => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) archive[ai] = t; } });
     saveTournees(); saveArchive(); refreshEverywhere();
     alert(`✅ ${checked.length} prestation(s) annulée(s). Total à rembourser : ${eur(tot)} (liquide, à votre charge).`);
     renderAnnulGroup();
@@ -6885,7 +6896,7 @@ function clientInvoiceHtml(m, payment) {
   return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(netTTC)} TTC</span></div>
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${row(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}</tfoot></table></div>${tvaMentionHtml()}`;
+    <tfoot>${row(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}${(payment && payment.rembourse > 0) ? `<tr class="inv-reduc"><td colspan="4">↩ Remboursé au client (annulation liquide — à votre charge)</td><td>${eur(payment.rembourse)}</td></tr>` : ''}</tfoot></table></div>${tvaMentionHtml()}`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
@@ -7719,7 +7730,7 @@ function setComptaPayment(tourId, clientId, method) {
   const t = tourById(tourId); if (!t) return;
   if (!t.payments) t.payments = {};
   const prev = t.payments[clientId] || {};
-  const keepLiq = { rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null, comptaPeriod: prev.comptaPeriod || null };
+  const keepLiq = { rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null, comptaPeriod: prev.comptaPeriod || null, rembourse: prev.rembourse || 0 };
   if (method === 'liquide') t.payments[clientId] = Object.assign({ method: 'liquide', facture: false }, keepLiq);
   else if (method === 'facliq') t.payments[clientId] = Object.assign({ method: 'liquide', facture: true }, keepLiq); // facture pro payée en liquide
   else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null };
@@ -11743,9 +11754,12 @@ function modalCancelRdv(nom, opts) {
       if (issue) { if (confirm('Avant d\'annuler ce client, son paiement doit être validé (' + issue + '). Ouvrir le paiement maintenant ?') && opts.arret) { closeModal(); modalPayment(opts.tour, opts.arret, () => modalCancelRdv(nom, opts)); } return; }
     }
     cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
-    if (status === 'annule' && clientPaiementDone(opts.tour, opts.clientId)) { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note); cv.cancel.credited = true; } // RDV payé : facture figée + note de crédit ; le cheval reste facturé (chevalBilled) pour éviter la double réduction du CA
+    const pm = ((opts.tour.payments || {})[opts.clientId] || {}).method; // M1 : le traitement dépend de la MÉTHODE de paiement
+    if (status === 'annule' && clientPaiementDone(opts.tour, opts.clientId) && pm === 'virement') { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note); cv.cancel.credited = true; } // VIREMENT → note de crédit ; LIQUIDE → remboursement (jamais de NC). Le cheval crédité reste facturé (chevalBilled) → pas de double réduction du CA.
     if (status === 'reporte') { const mt = Math.max(0, parseFloat(($('cxMontant') || {}).value) || 0); if (mt > 0.005) { const c = clients.find((x) => x.id === opts.clientId); if (c) { if (!Array.isArray(c.impayes)) c.impayes = []; c.impayes.push({ id: uid(), sourceTourId: opts.tour.id, date: opts.tour.date, ttc: mt, collected: false, collectedTourId: null, reporte: true }); saveClients(); } } } // montant à facturer à la prochaine visite (réinjecté auto)
-    closeModal(); opts.onDone();
+    closeModal();
+    if (status === 'annule' && pm === 'liquide' && clientPaiementDone(opts.tour, opts.clientId)) { recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour(); modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'RDV annulé.'); } // M1 : annulation LIQUIDE payée → remboursement (déplacement gardé, arrondi à l'euro inférieur)
+    else opts.onDone();
   });
 }
 // Corriger les prestations d'une tournée CLÔTURÉE : réactive un cheval « présent » mais sans acte coché (ancien modèle « présent »
@@ -11864,21 +11878,14 @@ function modalCancelBilling(t) {
     });
     recomputeTourLocal(t); // recalcul argent uniquement : réutilise la géométrie figée → km/temps/route/autres clients identiques
     currentTour = t; persistCurrentTour(); // conserve t.closed (reste figée)
-    // Arrondi caisse : pour les clients LIQUIDE SANS facture partiellement annulés, l'utilisateur rend l'espèce et ré-arrondit le reste.
-    // (Facture pro liquide/virement = montants exacts, pas d'arrondi ; virement = NC.)
-    const affected = new Set(checked.map((cb) => cb.dataset.cv.split(':')[1]));
-    const toAdjust = [];
-    affected.forEach((clientId) => {
-      const p = (t.payments || {})[clientId];
-      if (!p || p.method !== 'liquide') return; // liquide → arrondi obligatoire (avec OU sans facture) ; virement = montants exacts
-      const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === clientId);
-      if (!m || (m.totalTTC || 0) <= 0.005) { p.rectifie = null; p.montantPaye = null; return; } // entièrement annulé → plus rien à encaisser
-      toAdjust.push({ clientId, nom: clientName(clientId), total: m.totalTTC });
-    });
+    // M1 : clients LIQUIDE annulés → remboursement unifié (on garde le déplacement arrondi à l'euro inférieur, on rembourse la différence).
+    // Virement = note de crédit (déjà émise ci-dessus) ; liquide (avec ou sans facture) = remboursement, jamais de NC.
+    const affected = Array.from(new Set(checked.map((cb) => cb.dataset.cv.split(':')[1])));
     persistCurrentTour();
     closeModal();
     const msg = `Annulation effectuée : ${nDel} facturation(s) retirée(s)${nNC ? `, ${nNC} note(s) de crédit créée(s)` : ''}.`;
-    if (toAdjust.length) modalAdjustArrondi(t, toAdjust, msg);
+    const refundList = liquideRefundList(t, affected);
+    if (refundList.length) modalCancelRefund(t, refundList, msg);
     else { refreshEverywhere(); openEditor(); alert(msg + ' Stats mises à jour.'); }
   });
 }
@@ -11901,6 +11908,55 @@ function modalAdjustArrondi(t, list, msg) {
   $('mX').addEventListener('click', done);
   $('ajOk').addEventListener('click', () => {
     $('ajList').querySelectorAll('[data-aj]').forEach((inp) => { const c = list[+inp.dataset.aj]; const p = (t.payments || {})[c.clientId]; if (p) { const v = parseFloat(inp.value); p.rectifie = isFinite(v) ? v : Math.round(c.total); p.montantPaye = null; } });
+    currentTour = t; persistCurrentTour();
+    done(); if (msg) alert(msg + ' Stats mises à jour.');
+  });
+}
+// ---------- M1 : annulation LIQUIDE — remboursement au client (déplacement gardé, arrondi à l'euro INFÉRIEUR, différence remboursée) ----------
+const floorEur = (n) => Math.max(0, Math.floor((n || 0) + 1e-9)); // arrondi à l'euro inférieur (toujours à l'avantage du client)
+// Applique le remboursement d'UN client liquide après annulation : pose `rectifie` = ce qui reste en caisse (encaissé − remboursé)
+// et cumule `p.rembourse` (traçabilité, hors CA/caisse). refund omis → calcul auto = encaissé − déplacement arrondi à l'euro inférieur.
+function applyLiquideRefund(t, clientId, refund) {
+  const p = (t.payments || {})[clientId]; if (!p || p.method !== 'liquide') return;
+  const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === clientId);
+  const dep = m ? (m.totalTTC || 0) : 0; // après annulation = déplacement seul
+  const oldEnc = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : Math.round(dep));
+  let r = (refund == null || !isFinite(refund) || refund < 0) ? (oldEnc - floorEur(dep)) : refund;
+  r = Math.max(0, Math.min(Math.round(r), Math.round(oldEnc))); // jamais négatif, jamais plus que l'encaissé
+  p.rembourse = (p.rembourse || 0) + r;
+  const kept = Math.max(0, Math.round(oldEnc - r));
+  if (dep <= 0.005 && kept <= 0) { p.rectifie = null; p.montantPaye = null; } else { p.rectifie = kept; p.montantPaye = null; }
+}
+// Construit la liste des clients LIQUIDE affectés par une annulation, avec le déplacement restant (= nouveau total après annulation) et l'encaissé initial.
+function liquideRefundList(t, clientIds) {
+  const out = [];
+  (clientIds || []).forEach((cid) => {
+    const p = (t.payments || {})[cid]; if (!p || p.method !== 'liquide') return;
+    const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === cid);
+    const dep = m ? (m.totalTTC || 0) : 0; // après annulation des articles+matériel, le total client = déplacement seul
+    const oldEnc = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : Math.round(dep)); // ce qui a été encaissé
+    out.push({ clientId: cid, nom: clientName(cid), dep, oldEnc });
+  });
+  return out;
+}
+// Modale de remboursement (annulation liquide) : on garde le déplacement arrondi à l'euro inférieur, on rembourse la différence (auto, éditable).
+// Pose `p.rectifie` = ce qui reste réellement en caisse et cumule `p.rembourse` (traçabilité — jamais additionné au CA/caisse).
+function modalCancelRefund(t, list, msg) {
+  if (!list.length) { currentTour = t; refreshEverywhere(); openEditor(); if (msg) alert(msg + ' Stats mises à jour.'); return; }
+  let html = `<div class="modal-head"><b>💶 Remboursement (annulation liquide)</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Vous avez encaissé le total. Après annulation des articles/matériel, vous <b>gardez le déplacement</b> (arrondi à l'euro inférieur, à l'avantage du client) et vous <b>remboursez</b> la différence. Montant calculé automatiquement — ajustez-le si besoin (liquide = sans décimale).</p><div id="crList">`;
+  list.forEach((c, i) => {
+    const kept = floorEur(c.dep), refund = Math.max(0, Math.round(c.oldEnc - kept));
+    html += `<div class="pay-block"><h3 style="font-size:.95rem;margin:.3rem 0">${esc(c.nom)}</h3>
+      <p class="hint" style="margin:.2rem 0"><b>Déplacement conservé : ${eur(c.dep)} → gardé ${eur(kept)}</b><br><span class="li-sub">encaissé ${eur(c.oldEnc)} · à rembourser (auto) ${eur(refund)}</span></p>
+      <label>Montant remboursé au client (€, sans décimale)<input type="number" step="1" min="0" inputmode="numeric" data-cr="${i}" value="${refund}"/></label></div>`;
+  });
+  html += `</div><div class="actions"><button class="btn primary block" id="crOk">Enregistrer</button></div>`;
+  openModal(html);
+  const done = () => { closeModal(); refreshEverywhere(); openEditor(); };
+  $('mX').addEventListener('click', done);
+  $('crOk').addEventListener('click', () => {
+    $('crList').querySelectorAll('[data-cr]').forEach((inp) => { const c = list[+inp.dataset.cr]; applyLiquideRefund(t, c.clientId, parseFloat(inp.value)); });
     currentTour = t; persistCurrentTour();
     done(); if (msg) alert(msg + ' Stats mises à jour.');
   });
@@ -11948,7 +12004,7 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
     if (method !== 'liquide' && method !== 'virement') return 'mode de paiement non choisi';
     if (method === 'liquide') {
       if (block.querySelector('[data-rectifie]').value === '') return 'montant liquide non renseigné';
-      if (block.querySelector('[data-partiel]').checked) { const iv = block.querySelector('[data-impaye]').value; if (iv === '' || Math.round(parseNum(iv)) <= 0) return 'montant impayé non renseigné'; }
+      if (block.querySelector('[data-partiel]').checked) { const iv = block.querySelector('[data-impaye]').value; if (iv === '' || Math.round(parseNum(iv)) <= 0) return 'montant impayé non renseigné'; const rv = block.querySelector('[data-rectifie]').value; if (rv !== '' && Math.round(parseNum(iv)) > Math.round(parseNum(rv))) return 'montant impayé supérieur au montant encaissé'; } // M4 : garde impayé ≤ rectifié → encaissé jamais négatif
     }
     return null;
   };
@@ -12001,7 +12057,8 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
         partiel = block.querySelector('[data-partiel]').checked;
         if (partiel) { const iv = block.querySelector('[data-impaye]').value; impaye = iv !== '' ? Math.max(0, Math.round(parseNum(iv))) : 0; resteMode = block.querySelector('[data-restemode]').value; }
       }
-      t.payments[cid] = { method, facture, rectifie, partiel, impaye, resteMode };
+      const prevP = t.payments[cid] || {}; // M1 : préserver le remboursé (traçabilité annulation) et le rattachement de période caisse à la ré-saisie du paiement
+      t.payments[cid] = { method, facture, rectifie, partiel, impaye, resteMode, rembourse: prevP.rembourse || 0, comptaPeriod: prevP.comptaPeriod || null };
       // Impayé « reporté » (prochaine visite) rattaché au client ; « virement » dérivé en Compta (pas d'impayé client).
       const imp = (partiel && impaye != null) ? impaye : 0;
       setClientImpaye(t, cid, resteMode === 'report' ? imp : 0);
