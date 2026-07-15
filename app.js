@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.18';
+const APP_VERSION = '1.7.19';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.19', date: '2026-07-15',
+    ajouts: [
+      'RÉCUPÉRATION — vous pouvez désormais réinjecter UNE tournée précise depuis une sauvegarde antérieure. « Analyser » une version affiche la liste de ses tournées (date, arrêts clôturés) ; « Réinjecter » remet CETTE tournée (clôtures, paiements, temps réel) en FUSION dans vos données actuelles — sans toucher à vos autres tournées ni à ce que vous avez fait depuis. C\'est la bonne façon de récupérer une tournée perdue sans tout régresser.',
+    ],
+  },
   {
     version: '1.7.18', date: '2026-07-15',
     ajouts: [
@@ -3541,7 +3547,25 @@ async function restoreDriveTournees(snap, token, fileId) {
   saveTournees(); saveArchive();
   try { if (token && fileId) { await driveUpload(token, fileId, exportSnapshot()); _lastPushHash = snapshotHash(exportSnapshot()); _syncDirty = false; } } catch (e) {}
 }
+// Réinjection CIBLÉE d'UNE tournée depuis une sauvegarde antérieure : on récupère juste cette tournée (clôtures/paiements/temps réel)
+// et on la FUSIONNE dans l'état actuel — les AUTRES tournées et tout ce qui a été fait depuis sont CONSERVÉS. Réversible (sauvegarde de sécurité).
+let _restoreBackedUp = false;
+function reinjectTour(rt) {
+  if (!rt || !rt.id) return;
+  if (!_restoreBackedUp) { downloadSnapshot(); _restoreBackedUp = true; } // sauvegarde de sécurité (une fois par session de restauration)
+  const merged = JSON.parse(JSON.stringify(rt));
+  const cur = allTours().find((x) => x.id === rt.id);
+  if (cur) graftClosure(merged, cur); // si depuis, cette tournée a reçu des clôtures plus avancées, on les garde (état terminal monotone)
+  merged.updatedAt = Date.now();
+  tournees = tournees.filter((x) => x.id !== rt.id); archive = archive.filter((x) => x.id !== rt.id);
+  const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
+  const dd = merged.date || ''; const isArch = !!dd && (merged.closed || dd < todayStr()) && dd < cutoff;
+  (isArch ? archive : tournees).push(merged);
+  const m = syncMeta(); if (m.hash && m.hash.tournees) delete m.hash.tournees[rt.id]; saveSyncMeta(m); // ré-horodatage → cette tournée l'emporte aux fusions futures
+  saveTournees(); saveArchive();
+}
 function modalDriveRestore() {
+  _restoreBackedUp = false;
   openModal(`<div class="modal-head"><b>🕓 Restaurer une version antérieure (Drive)</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Récupère une <b>sauvegarde antérieure</b> de vos données (avant une perte). Choisissez une version, <b>analysez-la</b> (sans rien changer), puis restaurez. Une <b>sauvegarde de sécurité</b> de l'état actuel est téléchargée avant toute restauration — c'est réversible.</p>
     <p class="status" id="drStatus">Connexion à Google…</p>
@@ -3572,7 +3596,15 @@ function modalDriveRestore() {
         let snap = null;
         row.querySelector('[data-analyze]').addEventListener('click', async (e) => {
           const b = e.currentTarget; b.disabled = true; const old = b.textContent; b.textContent = '…';
-          try { snap = await driveDownloadRevision(token, file.id, revId); info.textContent = snapshotSummary(snap); btnR.disabled = false; btnR.title = ''; }
+          try {
+            snap = await driveDownloadRevision(token, file.id, revId); info.textContent = snapshotSummary(snap); btnR.disabled = false; btnR.title = '';
+            // Sélecteur de RÉINJECTION par tournée : récupérer UNE tournée précise de cette sauvegarde sans toucher au reste.
+            let picker = (row.nextElementSibling && row.nextElementSibling.classList.contains('dr-tours')) ? row.nextElementSibling : null;
+            if (!picker) { picker = document.createElement('div'); picker.className = 'dr-tours'; row.parentNode.insertBefore(picker, row.nextSibling); }
+            const tours = (snap.tours || snap.tournees || []).filter((t) => t && t.date).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+            picker.innerHTML = '<div class="li-sub" style="margin:4px 0 2px 12px"><b>Réinjecter UNE tournée</b> de cette sauvegarde (fusion — garde tout le reste) :</div>' + (tours.length ? tours.map((t, ti) => { const arr = t.arrets || []; const nv = arr.filter((a) => typeof a.validatedAt === 'number' || (a.clients || []).some((cl) => typeof cl.validatedAt === 'number')).length; const st = (t.closed || t.endedAt) ? '✅ clôturée' : (t.startedAt ? '🚗 démarrée' : '⏳ non démarrée'); return `<div class="list-item" style="margin-left:12px"><div class="li-main"><b>${esc(fmtDateFr(t.date))}</b>${t.nom && t.nom.trim() ? ' — ' + esc(t.nom.trim()) : ''}<span class="li-sub">${nv}/${arr.length} arrêts clôturés · ${st}</span></div><div class="li-act"><button class="btn small" data-reinj="${ti}">♻ Réinjecter</button></div></div>`; }).join('') : '<div class="li-sub" style="margin-left:12px">Aucune tournée datée dans cette version.</div>');
+            picker.querySelectorAll('[data-reinj]').forEach((rb) => rb.addEventListener('click', () => { const t = tours[+rb.dataset.reinj]; if (!confirm(`Réinjecter la tournée du ${fmtDateFr(t.date)} ?\n\nElle est FUSIONNÉE dans vos données actuelles (ses clôtures / paiements / temps réel reviennent) SANS toucher à vos autres tournées ni aux modifications faites depuis. Une sauvegarde de sécurité est téléchargée avant.`)) return; try { reinjectTour(t); refreshEverywhere(); rb.textContent = '✔ réinjectée'; rb.disabled = true; } catch (err) { alert('Réinjection impossible : ' + err.message); } }));
+          }
           catch (err) { info.textContent = 'Analyse impossible : ' + err.message; }
           finally { b.disabled = false; b.textContent = old; }
         });
