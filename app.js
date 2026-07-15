@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.17';
+const APP_VERSION = '1.7.18';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.18', date: '2026-07-15',
+    ajouts: [
+      'GESTION — nouvelle page « Annulations groupées » : annulez en une fois des prestations sur des tournées clôturées (clients payés en liquide sans facture), sélection par cheval, avec le TOTAL À REMBOURSER affiché en direct. Le déplacement reste facturé (seuls actes et matériel sont retirés).',
+      'FIABILITÉ — cohérence des chiffres : le « manque à gagner » affiche le même montant dans Gestion et dans Stats ; le déplacement d\'un cheval payé-puis-annulé reste dans le CA (comme en compta) ; l\'arrondi caisse aberrant est corrigé plus tôt (moins de décimales parasites) ; l\'heure de départ estimée utilise la bonne vitesse ; les tranches d\'âge/suivi se classent correctement ; « Retirer » un évènement du Trajet du jour ne l\'efface plus de tout le calendrier.',
+    ],
+  },
   {
     version: '1.7.17', date: '2026-07-15',
     ajouts: [
@@ -3079,6 +3086,7 @@ function mergeSettings(localS, remoteS) {
   merged.agendaInactive = Object.assign({}, (localS && localS.agendaInactive) || {}, (remoteS && remoteS.agendaInactive) || {});
   merged.agendaPrive = Object.assign({}, (localS && localS.agendaPrive) || {}, (remoteS && remoteS.agendaPrive) || {});
   merged.agendaPriveVus = Object.assign({}, (localS && localS.agendaPriveVus) || {}, (remoteS && remoteS.agendaPriveVus) || {}); // « vu/traité » = union → un retrait fait sur un appareil ne réapparaît pas
+  merged.agendaTrajetVus = Object.assign({}, (localS && localS.agendaTrajetVus) || {}, (remoteS && remoteS.agendaTrajetVus) || {}); // L8 : « masqué du Trajet du jour » = union (multi-appareils)
   merged.calPushed = Object.assign({}, (localS && localS.calPushed) || {}, (remoteS && remoteS.calPushed) || {}); // évènements Google poussés : union des mappings (pas de doublon entre appareils)
   // Fond du logo par appareil : ne jamais perdre la valeur de l'autre appareil si celui qui « gagne » ne l'a pas.
   if (merged.logoBg == null) merged.logoBg = ((localS && localS.logoBg != null) ? localS.logoBg : (remoteS && remoteS.logoBg));
@@ -4454,6 +4462,66 @@ function showGestion(sub) {
   if (currentGsub === 'planche') renderPlancheConfig();
   if (currentGsub === 'contactmail') renderContactMail();
   if (currentGsub === 'sms') renderSMS();
+  if (currentGsub === 'annulgroup') renderAnnulGroup();
+}
+// ---------- L7 : Annulations groupées — clients LIQUIDE SANS FACTURE de tournées CLÔTURÉES, sélection par cheval, total à rembourser en direct ----------
+function annulGroupEligible() {
+  const out = [];
+  allTours().forEach((t) => {
+    if (!(t.closed || (t.date || '') < todayStr())) return; // tournées clôturées uniquement
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => {
+      const p = (t.payments || {})[cl.clientId] || {};
+      if (p.method !== 'liquide' || p.facture) return; // LIQUIDE SANS FACTURE seulement (le reste = notes de crédit)
+      if (comptaLocked(t, cl.clientId)) return;         // période comptable verrouillée → non annulable ici
+      const chs = (cl.chevaux || []).filter((cv) => chevalFait(cv)); // annulables = acte fait, pas déjà annulé
+      if (chs.length) out.push({ t, clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: chs });
+    }));
+  });
+  return out;
+}
+function renderAnnulGroup() {
+  const box = $('annulGroupBox'); if (!box) return;
+  const items = annulGroupEligible();
+  if (!items.length) { box.innerHTML = '<p class="hint">Aucune prestation annulable ici (aucun client « liquide sans facture » avec un acte facturé sur une tournée clôturée).</p>'; return; }
+  const byTour = {}; items.forEach((it) => { (byTour[it.t.id] = byTour[it.t.id] || { t: it.t, clients: [] }).clients.push(it); });
+  const tours = Object.values(byTour).sort((a, b) => (b.t.date || '').localeCompare(a.t.date || ''));
+  let html = '<div id="agTree">';
+  tours.forEach((g) => {
+    html += `<div class="cb-arret" style="margin:10px 0 2px 0"><b>🚩 ${esc(fmtDateFr(g.t.date))}${g.t.nom && g.t.nom.trim() ? ' — ' + esc(g.t.nom.trim()) : ''}</b>`;
+    g.clients.forEach((c) => {
+      html += `<div style="padding-left:12px;margin-top:4px"><label class="chk2"><input type="checkbox" data-agclient="${g.t.id}:${c.clientId}"/> <b>${esc(c.nom)}</b></label>`;
+      c.chevaux.forEach((cv) => { const ttc = chevalInvoicedTTC(g.t, c.clientId, cv); html += `<div style="padding-left:18px"><label class="chk2"><input type="checkbox" class="ag-cv" data-tid="${g.t.id}" data-cid="${c.clientId}" data-chid="${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}" data-ttc="${ttc}"/> 🐴 ${esc(cv.nom)} <span class="li-sub">— ${eur(ttc)}</span></label></div>`; });
+      html += `</div>`;
+    });
+    html += `</div>`;
+  });
+  html += `</div><div class="ag-total" style="margin-top:12px;font-weight:600">Total à rembourser : <span id="agTotal">${eur(0)}</span></div>
+    <div class="actions"><button class="btn danger block" id="agOk" disabled>Annuler les prestations cochées</button></div>`;
+  box.innerHTML = html;
+  const tree = $('agTree');
+  const recalc = () => { let tot = 0, n = 0; tree.querySelectorAll('.ag-cv:checked').forEach((c) => { tot += parseFloat(c.dataset.ttc) || 0; n++; }); $('agTotal').textContent = eur(tot); $('agOk').disabled = !n; $('agOk').textContent = n ? `Annuler ${n} prestation(s) — ${eur(tot)}` : 'Annuler les prestations cochées'; };
+  tree.querySelectorAll('[data-agclient]').forEach((cc) => cc.addEventListener('change', (e) => { tree.querySelectorAll('.ag-cv').forEach((c) => { if (c.dataset.tid + ':' + c.dataset.cid === cc.dataset.agclient) c.checked = e.target.checked; }); recalc(); }));
+  tree.querySelectorAll('.ag-cv').forEach((c) => c.addEventListener('change', recalc));
+  recalc();
+  $('agOk').addEventListener('click', () => {
+    const checked = Array.from(tree.querySelectorAll('.ag-cv:checked'));
+    if (!checked.length) return;
+    const tot = checked.reduce((s, c) => s + (parseFloat(c.dataset.ttc) || 0), 0);
+    if (!confirm(`Annuler ${checked.length} prestation(s) pour un total de ${eur(tot)} ?\n\nLe déplacement reste facturé (seuls actes et matériel sont retirés). Le remboursement au client (paiement liquide) est à votre charge.`)) return;
+    const touched = new Set();
+    checked.forEach((c) => {
+      const t = allTours().find((x) => x.id === c.dataset.tid); if (!t) return;
+      let cv = null;
+      (t.arrets || []).some((a) => (a.clients || []).some((cl) => { if (cl.clientId !== c.dataset.cid) return false; const f = (cl.chevaux || []).find((x) => (c.dataset.chid && x.id != null && String(x.id) === c.dataset.chid) || norm(x.nom) === norm(c.dataset.nom)); if (f) { cv = f; return true; } return false; }));
+      if (!cv || chevalCancelled(cv)) return;
+      cv.cancel = { status: 'annule', reason: 'client', note: 'annulation groupée', at: new Date().toISOString(), replacedTourId: null, credited: false }; // liquide → pas de note de crédit (déplacement conservé, remboursement à charge de l'utilisateur)
+      touched.add(t);
+    });
+    touched.forEach((t) => { recomputeTourLocal(t); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) archive[ai] = t; } });
+    saveTournees(); saveArchive(); refreshEverywhere();
+    alert(`✅ ${checked.length} prestation(s) annulée(s). Total à rembourser : ${eur(tot)} (liquide, à votre charge).`);
+    renderAnnulGroup();
+  });
 }
 
 // ================= AGENDA (Google Calendar) — onglet Items =================
@@ -5213,7 +5281,7 @@ function renderAnnulations() {
   const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));       // section 1 : période sélectionnée
   const others = all.filter((c) => !range.has((c.date || '').slice(0, 7)));     // section 2 : toutes les autres (non supprimées)
   if ($('annulEmpty')) $('annulEmpty').style.display = all.length ? 'none' : 'block';
-  const perte = list.filter((c) => !c.replaced); // un cheval replacé a été servi ailleurs → hors « manque à gagner »
+  const perte = list.filter((c) => !c.replaced && !chevalCredited(c.cv)); // L8 : replacé (servi ailleurs) OU crédité (facture + note de crédit se neutralisent) → hors « manque à gagner » — même règle que la page Stats
   const totA = perte.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), totR = perte.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0);
   if ($('annulTot')) $('annulTot').innerHTML = list.length ? `Période : annulés <b>${eur(totA)}</b> · reportés <b>${eur(totR)}</b> (manque à gagner, replacés exclus)` : (all.length ? 'Aucune annulation dans cette période — voir « Autres annulations » ci-dessous.' : '');
   box.innerHTML = '';
@@ -6499,7 +6567,7 @@ function recomputeMoney() {
   if (!R || !R.rows || R.rows.length !== currentTour.arrets.length) { if (currentTour && currentTour.arrets && currentTour.arrets.length) scheduleGeoRecalc(); return; } // géométrie absente/périmée → recalcul complet différé (la réduction/l'article sera alors reflété)
   const rows = currentTour.arrets.map((a, i) => rowFromArret(a, R.rows[i]));
   const prov = (R.providerMin != null ? R.providerMin : R.totalMin); // durée brute du service de carte
-  const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 50));
+  const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 90));
   const geom = { totalKm: R.totalKm, totalMin, kmHomeFirst: R.kmHomeFirst, kmLastHome: R.kmLastHome };
   const geo = R.routeGeo;
   currentTour.result = computeResultMoney(rows, geom);
@@ -6516,7 +6584,7 @@ function recomputeTourLocal(t) {
   if (!R || !R.rows || R.rows.length !== (t.arrets || []).length) return false; // géométrie absente/périmée
   const rows = t.arrets.map((a, i) => rowFromArret(a, R.rows[i]));
   const prov = (R.providerMin != null ? R.providerMin : R.totalMin);
-  const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 50));
+  const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 90));
   const geom = { totalKm: R.totalKm, totalMin, kmHomeFirst: R.kmHomeFirst, kmLastHome: R.kmLastHome };
   const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff, t.payments);
   res.providerMin = prov; res.routeGeo = R.routeGeo || [];
@@ -6559,7 +6627,7 @@ function recalcAllTours() {
   allTours().forEach((t) => {
     if (sanitizeTourStats(t)) n++;
     // Arrondi caisse aberrant (|arrondi| > 10 € : un vrai arrondi caisse est de l'ordre de l'euro) → on retire le montant rectifié.
-    if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; if (p && p.method === 'liquide' && m && Math.abs(payRectifie(m, p) - (m.totalTTC || 0)) > 10) { p.rectifie = null; p.montantPaye = null; } });
+    if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; if (p && p.method === 'liquide' && m && Math.abs(payRectifie(m, p) - (m.totalTTC || 0)) > 3) { p.rectifie = null; p.montantPaye = null; } }); // L8 : purge l'arrondi caisse aberrant dès 3 € d'écart (au lieu de 10) — moins de décimales parasites
   });
   saveClients(); saveTournees(); saveArchive();
   return { n };
@@ -6605,7 +6673,7 @@ async function calcTour(silent) {
 
     const rows = currentTour.arrets.map((a, i) => rowFromArret(a, { segKm: legs[i] != null ? legs[i] : 0, directKm: directs[i] }));
     // Durée : service de carte (auto) OU estimation km ÷ vitesse moyenne réglée par le pro.
-    const totalMin = (S.dureeAuto && rt.totalMin) ? rt.totalMin : (rt.totalKm * 60 / (S.vitesseKmh || 50));
+    const totalMin = (S.dureeAuto && rt.totalMin) ? rt.totalMin : (rt.totalKm * 60 / (S.vitesseKmh || 90));
     const geom = { totalKm: rt.totalKm, kmHomeFirst: legs.length ? legs[0] : 0, kmLastHome: legs.length ? legs[legs.length - 1] : 0, totalMin };
     currentTour.result = computeResultMoney(rows, geom);
     currentTour.result.providerMin = rt.totalMin || totalMin; // durée brute du service de carte (conservée)
@@ -6641,7 +6709,7 @@ async function recomputeTourGeo(t) {
     const arrXY = (A.lat != null) ? { lat: A.lat, lon: A.lon } : home;
     const rt = await route([home, ...stops, arrXY]); const legs = rt.legsKm;
     const rows = t.arrets.map((a, i) => rowFromArret(a, { segKm: legs[i] != null ? legs[i] : 0, directKm: directs[i] }));
-    const totalMin = (S.dureeAuto && rt.totalMin) ? rt.totalMin : (rt.totalKm * 60 / (S.vitesseKmh || 50));
+    const totalMin = (S.dureeAuto && rt.totalMin) ? rt.totalMin : (rt.totalKm * 60 / (S.vitesseKmh || 90));
     t.result = computeResultMoney(rows, { totalKm: rt.totalKm, kmHomeFirst: legs.length ? legs[0] : 0, kmLastHome: legs.length ? legs[legs.length - 1] : 0, totalMin }, t.articles, t.reductions, t.parageRemiseOff, t.payments);
     t.result.providerMin = rt.totalMin || totalMin; t.result.routeGeo = rt.geo || [];
     saveTournees(); scheduleCalPush(t);
@@ -6665,7 +6733,7 @@ function renderArretInvoices() {
 // Durée de tournée = temps réel encodé (Route par arrêt + retour) là où il existe, sinon estimé — même logique que le Temps de travail.
 function blendedTourMin(t) {
   const R = t && t.result; if (!R) return null;
-  const mpk = (R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 50));
+  const mpk = (R.totalKm > 0 && R.totalMin) ? (R.totalMin / R.totalKm) : (60 / (S.vitesseKmh || 90));
   let total = 0;
   (t.arrets || []).forEach((a, i) => { total += (a.realMin > 0) ? a.realMin : ((R.rows && R.rows[i]) ? (R.rows[i].segKm || 0) * mpk : 0); }); // realMin===0 = périmé → repli sur l'estimé
   total += (t.returnRealMin > 0) ? t.returnRealMin : ((R.kmLastHome != null) ? R.kmLastHome * mpk : 0);
@@ -6883,7 +6951,7 @@ function exampleResult() {
   const kmLastHome = 28;
   const totalKm = rows.reduce((s, r) => s + r.segKm, 0) + kmLastHome;
   const articles = [{ clientId: 'm', chevalNoms: ['Rex'], libelle: 'Plaque orthopédique (ex.)', prixHT: 40, tvaPct: 21 }];
-  return computeResultMoney(rows, { totalKm, kmHomeFirst: rows[0].segKm, kmLastHome, totalMin: Math.round(totalKm * 60 / (S.vitesseKmh || 50)) }, articles, { m: 10 }, {});
+  return computeResultMoney(rows, { totalKm, kmHomeFirst: rows[0].segKm, kmLastHome, totalMin: Math.round(totalKm * 60 / (S.vitesseKmh || 90)) }, articles, { m: 10 }, {});
 }
 function openFactureDetail() {
   openModal(factureDetailHtml(exampleResult()));
@@ -7086,7 +7154,7 @@ function renderProvisionVsReel() {
   box.innerHTML = h;
 }
 // Classe un nombre de mois dans une tranche : 1ʳᵉ dont max==null (et plus) ou months < max.
-function trancheOf(tranches, months) { if (months == null) return null; for (const t of (tranches || [])) { if (t.max == null || months < t.max) return t.label; } const l = (tranches || [])[(tranches || []).length - 1]; return l ? l.label : null; }
+function trancheOf(tranches, months) { if (months == null) return null; const srt = (tranches || []).slice().sort((a, b) => (a.max == null ? Infinity : a.max) - (b.max == null ? Infinity : b.max)); for (const t of srt) { if (t.max == null || months < t.max) return t.label; } const l = srt[srt.length - 1]; return l ? l.label : null; } // L8 : tranches triées par borne (« et plus » en dernier) → classement correct même si l'utilisateur les a créées dans le désordre
 // Compteurs d'actes sur une période (ensemble de mois 'YYYY-MM') : tournées, déplacements (arrêts), chevaux servis distincts, parage/visite/pathologies.
 function chevGenStats(range) {
   let nTour = 0, nArret = 0, parage = 0, visite = 0, fourbure = 0, npas = 0, infection = 0; const chevSet = new Set();
@@ -7550,11 +7618,11 @@ function financeStats() {
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
       const art = (m.articles || []).reduce((s, a) => s + a.ttc, 0); // remise déjà appliquée ligne par ligne
-      // Part des chevaux payés-annulés à retirer des analyses (comptée via la note de crédit en Compta) :
-      const depCred = (m.deplacement || []).reduce((s, l) => { const nn = l.chevaux || []; return nn.length ? s + (l.partTTC / nn.length) * nn.filter(isCred).length : s; }, 0);
+      // L8 : chevaux payés-annulés (note de crédit) → on retire leur MATÉRIEL et ARTICLES des ventes (remboursés par la NC),
+      // mais le DÉPLACEMENT reste ACQUIS (la NC ne rembourse jamais le déplacement — le pro s'est déplacé), cohérent avec la Compta et la règle d'annulation.
       const matCred = (m.materiel || []).reduce((s, x) => s + (isCred(x.nom) ? x.ttc : 0), 0);
       const artCred = (m.articles || []).reduce((s, a) => { const share = artPerCheval(a); return s + (a.chevaux || []).filter(isCred).reduce((ss, n) => ss + share(n), 0); }, 0);
-      c.dep += dep - depCred; c.mat += mat - matCred; c.art += art - artCred;
+      c.dep += dep; c.mat += mat - matCred; c.art += art - artCred;
       // Arrondi caisse (liquide) : le total facturé = total rectifié. Impayé (partiel) suivi à part (créance, ne change pas le CA).
       const pay = (t.payments || {})[m.clientId];
       c.arrondi += payArrondi(m, pay);
@@ -10869,7 +10937,7 @@ function estimatedDepartureHM(t) {
   const [h, mn] = heure0.split(':').map(Number); if (isNaN(h)) return '';
   const R = t.result; let travel = 0;
   if (a0.realMin > 0) travel = a0.realMin;
-  else if (R && R.rows && R.rows[0]) { const mpk = (R.totalKm > 0 && R.totalMin) ? R.totalMin / R.totalKm : 60 / (S.vitesseKmh || 50); travel = (R.rows[0].segKm || 0) * mpk; }
+  else if (R && R.rows && R.rows[0]) { const mpk = (R.totalKm > 0 && R.totalMin) ? R.totalMin / R.totalKm : 60 / (S.vitesseKmh || 90); travel = (R.rows[0].segKm || 0) * mpk; }
   let dep = h * 60 + mn - Math.round(travel); if (dep < 0) dep = 0;
   return String(Math.floor(dep / 60)).padStart(2, '0') + ':' + String(dep % 60).padStart(2, '0');
 }
@@ -11323,7 +11391,7 @@ function renderHomeTrajet() {
   const todays = [...tournees].filter((t) => statusOf(t) === 'active' && !isOverdue(t)).sort((a, b) => (a.date || '').localeCompare(b.date || '')); // du jour ; les dépassées (jour passé) vont dans la section dédiée
   const card = $('homeTrajetCard'); if (card) card.classList.toggle('min', todays.length === 0); // minimisé s'il n'y a pas de tournée du jour
   // Agenda privé du jour (événements perso récupérés du calendrier) — en tête du Trajet du jour.
-  const priv = privateEventsForDay(todayStr());
+  const priv = privateEventsForDay(todayStr()).filter((p) => !((S.agendaTrajetVus || {})[p.id])); // L8 : « Retirer » ne masque QUE le Trajet du jour (pas tout le calendrier)
   if (priv.length) {
     const sec = document.createElement('div'); sec.className = 'card'; sec.style.marginBottom = '10px';
     sec.innerHTML = '<div class="a-art-head"><span>📅 Agenda privé du jour</span></div>';
@@ -11332,7 +11400,7 @@ function renderHomeTrajet() {
       const heure = eventHeure(p);
       const row = document.createElement('div'); row.className = 'list-item';
       row.innerHTML = `<div class="li-main"><b>${heure ? '🕘 ' + heure + ' · ' : ''}${esc(p.title)}</b>${p.location ? '<span class="li-sub">📍 ' + esc(p.location) + '</span>' : ''}</div><div class="li-act"><button class="btn small" data-rm>Retirer</button></div>`;
-      row.querySelector('[data-rm]').addEventListener('click', () => { S.agendaPriveVus[p.id] = true; saveSettings(); renderHomeTrajet(); }); // « vu/traité » persistant (ne réapparaît plus, même après resync)
+      row.querySelector('[data-rm]').addEventListener('click', () => { (S.agendaTrajetVus = S.agendaTrajetVus || {})[p.id] = true; saveSettings(); renderHomeTrajet(); }); // L8 : masque l'évènement du Trajet du jour SEULEMENT (reste visible dans le calendrier mois/semaine)
       list.appendChild(row);
     });
     sec.appendChild(list); box.appendChild(sec);
@@ -11670,7 +11738,7 @@ function cashClientsNeedingArrondi(t) {
     const p = (t.payments || {})[m.clientId];
     if (!p || p.method !== 'liquide' || (m.totalTTC || 0) <= 0.005) return;
     const rect = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null && !p.partiel ? p.montantPaye : null);
-    if (rect == null || Math.abs(rect - m.totalTTC) > 1.5) out.push({ clientId: m.clientId, nom: clientName(m.clientId), total: m.totalTTC });
+    if (rect == null || Math.abs(rect - m.totalTTC) > 1.0) out.push({ clientId: m.clientId, nom: clientName(m.clientId), total: m.totalTTC }); // L8 : redemande un ré-arrondi dès 1,0 € d'écart (au lieu de 1,5)
   });
   return out;
 }

@@ -355,6 +355,7 @@
         <button class="subtab" data-gsub="planche">Planche contact</button>
         <button class="subtab" data-gsub="contactmail">Contact mail</button>
         <button class="subtab" data-gsub="sms">SMS</button>
+        <button class="subtab" data-gsub="annulgroup">Annulations groupées</button>
       </div>
     </nav>
 
@@ -623,6 +624,13 @@
         <div class="sms-fields" id="smsFieldsPrev"></div>
         <textarea id="smsTemplatePrev" class="bk-area" spellcheck="false" style="height:130px"></textarea>
         <p class="hint" id="smsPreviewPrev"></p>
+      </section>
+    </div>
+    <div id="gsub-annulgroup" class="subpanel">
+      <section class="card">
+        <h2>Annulations groupées</h2>
+        <p class="hint">Annulez en une fois des prestations sur des tournées <b>clôturées</b>, pour les clients ayant payé en <b>liquide sans facture</b> (les clients par virement/facture passent par les notes de crédit, pas ici). Cochez les chevaux à annuler : le <b>total à rembourser</b> s'affiche en direct. Le <b>déplacement reste facturé</b> — seuls actes et matériel sont retirés ; le remboursement au client est à votre charge.</p>
+        <div id="annulGroupBox"></div>
       </section>
     </div>
   </main>
