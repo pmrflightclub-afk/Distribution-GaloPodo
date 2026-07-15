@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.22';
+const APP_VERSION = '1.7.23';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.23', date: '2026-07-15',
+    ajouts: [
+      'COMPTA — une facture d\'un mois DÉJÀ DÉCLARÉ est désormais figée définitivement : « Corriger les prestations » est bloqué sur une tournée d\'une période comptable verrouillée (comme un vrai logiciel comptable, on ne modifie plus une pièce déclarée). Avant déclaration, la correction reste libre.',
+      'COMPTA — la maintenance automatique (« Recalculer toutes les tournées ») ne touche plus l\'encaissement d\'un mois déclaré.',
+    ],
+  },
   {
     version: '1.7.22', date: '2026-07-15',
     ajouts: [
@@ -6690,7 +6697,7 @@ function recalcAllTours() {
   allTours().forEach((t) => {
     if (sanitizeTourStats(t)) n++;
     // Arrondi caisse aberrant (|arrondi| > 10 € : un vrai arrondi caisse est de l'ordre de l'euro) → on retire le montant rectifié.
-    if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; if (p && p.method === 'liquide' && m && Math.abs(payRectifie(m, p) - (m.totalTTC || 0)) > 3) { p.rectifie = null; p.montantPaye = null; } }); // L8 : purge l'arrondi caisse aberrant dès 3 € d'écart (au lieu de 10) — moins de décimales parasites
+    if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; if (p && p.method === 'liquide' && m && Math.abs(payRectifie(m, p) - (m.totalTTC || 0)) > 3 && !comptaLocked(t, cid)) { p.rectifie = null; p.montantPaye = null; } }); // L8 : purge l'arrondi caisse aberrant (>3 €) — M2 : jamais sur un mois DÉCLARÉ (pièce figée)
   });
   saveClients(); saveTournees(); saveArchive();
   return { n };
@@ -11656,6 +11663,8 @@ function comptaLocked(tour, clientId) {
   const ym = (tour.date || '').slice(0, 7); const st = S.comptaStatus && S.comptaStatus[ym];
   return !!(st && st.liquide === 'encode');
 }
+// M2 : une tournée est « verrouillée compta » si l'un de ses clients l'est (démarche validée ou mois liquide encodé). Sert à figer définitivement une pièce déclarée.
+function tourComptaLocked(t) { return !!t && (t.arrets || []).some((a) => (a.clients || []).some((cl) => comptaLocked(t, cl.clientId))); }
 // Montant RÉELLEMENT facturé (post-réduction, tarif figé) d'un cheval : lu dans le résultat figé de la tournée
 // (part du cheval dans les lignes d'articles + son matériel), hors déplacement. Repli tarif plein si résultat absent.
 function chevalInvoicedTTC(tour, clientId, cv) {
@@ -11765,6 +11774,12 @@ function modalCancelRdv(nom, opts) {
 // Corriger les prestations d'une tournée CLÔTURÉE : réactive un cheval « présent » mais sans acte coché (ancien modèle « présent »
 // → migré vers parage/visite : ces chevaux étaient devenus INACTIFS = ni déplacement ni matériel facturés, stats vides).
 function modalEditPrestations(t) {
+  if (tourComptaLocked(t)) { // M2 : pièce d'un mois DÉCLARÉ = figée définitivement, on ne re-tarife plus (règle comptable immuable)
+    openModal(`<div class="modal-head"><b>🔒 Période comptable déclarée</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Cette tournée appartient à un mois <b>déjà déclaré</b> (démarche comptable validée). Sa facture est <b>figée définitivement</b> : on ne peut plus corriger ses prestations ni ses montants (règle immuable d'un logiciel comptable). Pour un ajustement, utilisez une <b>note de crédit</b> / une nouvelle tournée.</p>
+      <div class="actions"><button class="btn block" id="epClose">Fermer</button></div>`);
+    $('mX').onclick = closeModal; $('epClose').onclick = closeModal; return;
+  }
   const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
   const rows = [];
   (t.arrets || []).forEach((a, ai) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => {
