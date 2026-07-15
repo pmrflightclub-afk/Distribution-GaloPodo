@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.19';
+const APP_VERSION = '1.7.20';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.20', date: '2026-07-15',
+    ajouts: [
+      'CONFORT & FIABILITÉ — la touche Échap ferme les fenêtres ; dans le calendrier semaine, les évènements sans heure s\'affichent dans l\'en-tête du jour (au lieu de s\'empiler à 7h) ; la fenêtre « replacer un RDV » ne saute plus en haut à chaque coche ; un recadrage d\'image qui portait des marqueurs vous avertit de les revérifier ; corrections internes (connexion base photos, géocodage plus sûr, classement des tranches).',
+    ],
+  },
   {
     version: '1.7.19', date: '2026-07-15',
     ajouts: [
@@ -4662,11 +4668,16 @@ function renderWeekGrid(host) {
   }
   grid.innerHTML = html; scroll.appendChild(grid); host.appendChild(scroll);
   days.forEach((ds) => dayAgendaEntries(ds).forEach((e) => {
-    let idx = 0;
-    if (e.heure && /^\d{1,2}:\d{2}$/.test(e.heure)) { const [H, M] = e.heure.split(':').map(Number); idx = Math.round(((H * 60 + M) - startH * 60) / 30); }
-    idx = Math.max(0, Math.min(slots - 1, idx));
+    const hasTime = e.heure && /^\d{1,2}:\d{2}$/.test(e.heure);
+    if (!hasTime) { // L8 : évènement SANS heure (journée entière) → puce dans l'en-tête du jour, au lieu d'empiler à 07:00
+      const hd = grid.querySelector(`.wk-dayhd[data-day="${ds}"]`);
+      if (hd) { const chip = document.createElement('div'); chip.className = `wk-allday pl-${e.type}`; chip.textContent = e.label; chip.title = e.label; hd.appendChild(chip); }
+      return;
+    }
+    const [H, M] = e.heure.split(':').map(Number);
+    const idx = Math.max(0, Math.min(slots - 1, Math.round(((H * 60 + M) - startH * 60) / 30)));
     const cell = grid.querySelector(`.wk-slot[data-day="${ds}"][data-slot="${idx}"]`);
-    if (cell) { const ev = document.createElement('div'); ev.className = `wk-ev pl-${e.type}`; ev.innerHTML = `${e.heure ? '<b>' + esc(e.heure) + '</b> ' : ''}${esc(e.label)}`; ev.title = (e.heure ? e.heure + ' ' : '') + e.label; cell.appendChild(ev); }
+    if (cell) { const ev = document.createElement('div'); ev.className = `wk-ev pl-${e.type}`; ev.innerHTML = `<b>${esc(e.heure)}</b> ${esc(e.label)}`; ev.title = e.heure + ' ' + e.label; cell.appendChild(ev); }
   }));
   grid.querySelectorAll('.wk-dayhd').forEach((hd) => hd.addEventListener('click', () => modalDay(hd.dataset.day)));
   requestAnimationFrame(() => { const now = new Date(); const cur = grid.querySelector(`.wk-slot[data-slot="${Math.max(0, Math.min(slots - 1, Math.round(((now.getHours() * 60 + now.getMinutes()) - startH * 60) / 30)))}"]`); if (cur) try { cur.scrollIntoView({ block: 'center' }); } catch { } });
@@ -5000,7 +5011,8 @@ async function geocodeClientAddresses(w) {
   (w.chevaux || []).forEach((h) => { if (Array.isArray(h.adresses)) h.adresses.forEach((e) => add(e && e.addr)); add(h.addr); });
   if (!todo.length) return; let changed = false;
   for (const a of todo) { try { const g = await geocode(a); a.lat = g.lat; a.lon = g.lon; changed = true; } catch { /* introuvable → différé */ } if (S.provider === 'osm') await sleep(1100); }
-  if (changed) { (w.chevaux || []).forEach((h) => chevalSyncActive(h)); saveClients(); }
+  // L8 : n'écrit les coordonnées QUE si la fiche n'a pas été remplacée entre-temps (ré-édition/synchro) → évite d'écraser une version plus récente ; sinon le géocodage se refera au prochain passage.
+  if (changed && clients.find((c) => c.id === w.id) === w) { (w.chevaux || []).forEach((h) => chevalSyncActive(h)); saveClients(); }
 }
 
 // Mise en page d'un formulaire (anamnèse / mail) : chaque champ = l'intitulé de référence encadré/surligné, puis la réponse du client en dessous, avec de l'espace pour bien les distinguer.
@@ -5363,17 +5375,19 @@ function modalReplacerDate(g) {
     const cp = $('rpCommonPrev'); const upCommon = () => { if (cp) cp.innerHTML = previewHtml(common.date); };
     $('rpCommon').addEventListener('change', (e) => { common.date = e.target.value; upCommon(); }); upCommon();
     const box = $('rpChevaux');
-    entries.forEach((en) => {
+    // L8 : chaque bloc cheval se rafraîchit SEUL (replaceWith) au lieu de reconstruire toute la modale → plus de perte de scroll/focus.
+    const buildWrap = (en) => {
       const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.ignore ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
       let inner = `<div class="rdv-ch-head"><b>🐴 ${esc(en.nom)}</b>${en.cvObj ? '' : ' <span class="li-sub">(cheval introuvable)</span>'}<label class="rdv-ch-opt"><input type="checkbox" data-ign ${en.ignore ? 'checked' : ''}/> ne pas replacer</label></div>`;
       if (!en.ignore && en.cvObj) { inner += `<label class="rdv-ch-opt"><input type="checkbox" data-sep ${en.sep ? 'checked' : ''}/> date différente</label>`; inner += en.sep ? `<label>Date du RDV<input type="date" data-date value="${en.date}"/></label><p class="hint" data-prev></p>` : `<p class="hint">→ sur le RDV commun</p>`; }
       wrap.innerHTML = inner;
-      wrap.querySelector('[data-ign]').addEventListener('change', (e) => { en.ignore = e.target.checked; render(); });
-      const sep = wrap.querySelector('[data-sep]'); if (sep) sep.addEventListener('change', (e) => { en.sep = e.target.checked; render(); });
+      wrap.querySelector('[data-ign]').addEventListener('change', (e) => { en.ignore = e.target.checked; wrap.replaceWith(buildWrap(en)); });
+      const sep = wrap.querySelector('[data-sep]'); if (sep) sep.addEventListener('change', (e) => { en.sep = e.target.checked; wrap.replaceWith(buildWrap(en)); });
       const dt = wrap.querySelector('[data-date]'), prev = wrap.querySelector('[data-prev]');
       if (dt) { const up = () => { if (prev) prev.innerHTML = previewHtml(dt.value); }; dt.addEventListener('change', (e) => { en.date = e.target.value; up(); }); up(); }
-      box.appendChild(wrap);
-    });
+      return wrap;
+    };
+    entries.forEach((en) => box.appendChild(buildWrap(en)));
     $('rpOk').addEventListener('click', () => {
       const groups = {};
       entries.forEach((en) => { if (en.ignore || !en.cvObj) return; const d = en.sep ? en.date : common.date; if (!d) return; (groups[d] = groups[d] || []).push(en); });
@@ -10071,11 +10085,14 @@ function plPickCheval() {
 // La planche en cours (plCreate, PHOTOS comprises = dataURL) est sauvée en continu ; restaurée à la réouverture ;
 // EFFACÉE dès qu'elle est générée/envoyée ou fermée. Rien de permanent : jamais dans le PDF ni dans l'historique.
 const PL_DRAFT_DB = 'galopodo-draft', PL_DRAFT_STORE = 'draft', PL_DRAFT_KEY = 'plancheEnCours';
+let _plDraftDbConn = null; // L8 : connexion IndexedDB mémoïsée (une seule) — évitait d'ouvrir une NOUVELLE connexion à chaque sauvegarde de brouillon (fuite de ressources).
 function plDraftDB() {
+  if (_plDraftDbConn) return Promise.resolve(_plDraftDbConn);
   return new Promise((res, rej) => {
     let rq; try { rq = indexedDB.open(PL_DRAFT_DB, 1); } catch (e) { return rej(e); }
     rq.onupgradeneeded = () => { const db = rq.result; if (!db.objectStoreNames.contains(PL_DRAFT_STORE)) db.createObjectStore(PL_DRAFT_STORE); };
-    rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => { _plDraftDbConn = rq.result; _plDraftDbConn.onclose = () => { _plDraftDbConn = null; }; res(_plDraftDbConn); };
+    rq.onerror = () => rej(rq.error);
   });
 }
 async function plDraftPut(obj) { try { const db = await plDraftDB(); await new Promise((res, rej) => { const tx = db.transaction(PL_DRAFT_STORE, 'readwrite'); tx.objectStore(PL_DRAFT_STORE).put(obj, PL_DRAFT_KEY); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch (e) {} }
@@ -10660,7 +10677,9 @@ function modalCellEdit(key, onValidate, progress) {
       if (!data) { alert('Découpe impossible (image protégée). Réimportez la photo.'); return; } // pas de mutation si rien n'a été produit (F2)
       st.cellImg[key] = data; st.cellCropDef[key] = { rot, relX, relY, relW, relH };
       if (st.cellT) delete st.cellT[key]; if (st.cellCrop) delete st.cellCrop[key];
+      const hadMarks = !!(st.cellMarks && st.cellMarks[key] && Object.keys(st.cellMarks[key]).length); // L8 : marqueurs présents = à revérifier après recadrage
       close(); if (onValidate) onValidate(); else plRenderGrid(); // file indienne : image suivante à la validation
+      if (hadMarks) setTimeout(() => alert('⚠️ Cette image portait des marqueurs. Le recadrage ne les déplace pas : vérifiez leur position et repositionnez-les si nécessaire.'), 60);
     };
     requestAnimationFrame(layout);
   }
@@ -12997,6 +13016,7 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('resize', updateNavCompact);
   updateNavCompact(); setTimeout(updateNavCompact, 300);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !_lockModal) closeModal(); }); // config initiale = non fermable par clic sur le fond
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !_lockModal) { const m = $('modal'); if (m && !m.classList.contains('hidden')) closeModal(); } }); // L8 : Échap ferme la modale (même garde que le clic sur le fond)
 
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif

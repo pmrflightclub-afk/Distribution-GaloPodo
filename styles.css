@@ -789,3 +789,6 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 
 /* L4 : sous-ligne « un client » sous l'en-tête d'un arrêt partagé (deux clients au même endroit = actions indépendantes). */
 .list-item.li-client-sub { margin-left: 14px; border-left: 3px solid var(--accent, #e8722a); background: rgba(255,255,255,.02); }
+
+/* L8 : puce « journée entière » (sans heure) dans l'en-tête de jour de la grille semaine. */
+.wk-allday { font-size: .68rem; line-height: 1.1; margin-top: 2px; padding: 1px 4px; border-radius: 4px; background: rgba(255,255,255,.14); color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
