@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.13';
+const APP_VERSION = '1.7.14';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.14', date: '2026-07-15',
+    ajouts: [
+      'AGENDA — l\'option « Pousser mes RDV vers Google Agenda » est maintenant dans Réglages → Calendrier (à côté de « Programmation des RDV »), là où on la cherche, et elle est ACTIVÉE PAR DÉFAUT : vos RDV se reflètent automatiquement dans Google Agenda (1 évènement par client).',
+      'AGENDA — rattrapage automatique au démarrage : un RDV qui n\'avait pas pu partir (connexion Google absente au moment de l\'encodage) est renvoyé à l\'ouverture suivante. Plus de doublons entre appareils : l\'évènement déjà créé est réutilisé.',
+      'GOOGLE — quand la connexion Google expire, un bandeau « Reconnecter » apparaît au lieu d\'un échec silencieux ; un jeton refusé/expiré (fréquent sur PC/Edge) est automatiquement redemandé. Fini les synchros et l\'agenda bloqués sans explication.',
+    ],
+  },
   {
     version: '1.7.13', date: '2026-07-14',
     ajouts: [
@@ -2500,7 +2508,9 @@ if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 if (LS.get('ftr.driveLinked', null) === null) LS.set('ftr.driveLinked', !!(S.syncMode === 'drive' && S.googleClientId));
 // Choix de synchro proposé au 1ᵉʳ lancement (après le paramétrage société) : les utilisateurs DÉJÀ configurés sont considérés « déjà choisi ».
 if (LS.get('ftr.syncChoiceDone', null) === null) LS.set('ftr.syncChoiceDone', !!S.setupDone);
-if (typeof S.calPush !== 'boolean') S.calPush = false;                 // pousser automatiquement les RDV de l'app vers Google Agenda (écriture)
+if (typeof S.calPush !== 'boolean') S.calPush = true;                  // L3-3b : miroir agenda activé par défaut (« rien à faire manuellement », cf. doc)
+// L3-3b : bascule UNIQUE des utilisateurs Google existants vers le miroir automatique (ne se fait qu'une fois ; n'active jamais le push sans compte Google configuré).
+if (!S.calPushMigratedOn) { S.calPushMigratedOn = true; if (S.googleClientId && S.googleAutoSync) S.calPush = true; }
 if (!S.calPushed || typeof S.calPushed !== 'object') S.calPushed = {}; // { 'tourId:clientId' : googleEventId } → mise à jour / suppression du bon évènement
 if (typeof S.calDureeMin !== 'number' || S.calDureeMin < 5) S.calDureeMin = 60; // durée par défaut d'un RDV poussé (minutes)
 if (S.syncMode !== 'drive') S.syncMode = 'file'; // défaut = mode fichier (section 1)
@@ -3166,7 +3176,7 @@ async function fetchCalendarEvents(interactive) {
   const now = new Date(); const min = now.toISOString();
   const max = new Date(now.getTime() + 60 * 24 * 3600 * 1000).toISOString(); // 60 jours à venir
   const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(min)}&timeMax=${encodeURIComponent(max)}&singleEvents=true&orderBy=startTime&maxResults=100`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) throw new Error('Calendar HTTP ' + r.status);
+  gCheck(r, 'Calendar HTTP');
   const j = await r.json();
   return (j.items || []).map((ev) => ({ id: ev.id, title: ev.summary || '(sans titre)', start: (ev.start && (ev.start.dateTime || ev.start.date)) || '', day: ((ev.start && (ev.start.dateTime || ev.start.date)) || '').slice(0, 10), location: ev.location || '', desc: ev.description || '' }));
 }
@@ -3186,6 +3196,13 @@ async function agendaAutoSync(allowAcquire) {
 // ======= Push RDV app → Google Agenda (écriture) : 1 évènement par client par tournée, heure obligatoire. =======
 const _calTimers = {}; // débounce PAR tournée (id) → programmer plusieurs tournées d'affilée les pousse toutes (pas seulement la dernière)
 function scheduleCalPush(t) { if (!S.calPush || !S.googleClientId || !t) return; const id = t.id; clearTimeout(_calTimers[id]); _calTimers[id] = setTimeout(() => { delete _calTimers[id]; const tt = allTours().find((x) => x.id === id); if (tt) { bgOp('cal', '📅 Envoi du RDV vers l\'Agenda…'); Promise.resolve(pushTourToCalendar(tt, { interactive: false })).finally(() => bgOp('cal', null)); } }, 1500); }
+// L3-3c : une tournée a-t-elle des RDV (client facturable + heure) PAS encore poussés dans Google Agenda ? (rattrapage : un RDV créé sans jeton n'était jamais envoyé.)
+function tourNeedsCalPush(t) { return t && tourBillableClients(t).some((cid) => clientRdvHeure(t, cid) && !(S.calPushed || {})[t.id + ':' + cid]); }
+// Rattrapage au démarrage : (re)pousse les tournées à venir dont des RDV n'ont jamais atteint l'Agenda. Silencieux ; ne fait rien sans jeton valide.
+function calCatchUp() {
+  if (!S.calPush || !S.googleClientId || !gTokenValid(GSCOPE_CAL)) return;
+  allTours().filter((t) => (t.date || '') >= todayStr() && tourNeedsCalPush(t)).forEach((t) => scheduleCalPush(t));
+}
 // Heure de RDV d'un client sur une tournée = la plus tôt de ses arrêts.
 // Heure de RDV d'un client (pour l'agenda) : heure PROPRE au client dans l'arrêt (cl.heure) si définie, sinon heure de l'arrêt.
 function clientRdvHeure(t, clientId) { let best = ''; (t.arrets || []).forEach((a) => { (a.clients || []).forEach((cl) => { if (cl.clientId !== clientId) return; const h = cl.heure || arretHeure(a); if (h && (!best || h < best)) best = h; }); }); return best; }
@@ -3211,6 +3228,17 @@ async function safeDeleteEvent(token, evId) {
     return (d.ok || d.status === 404 || d.status === 410) ? 'deleted' : 'skip';
   } catch { return 'skip'; }
 }
+// L3-3d : retrouve l'évènement Google déjà créé par l'app pour (tournée, client) via ses propriétés privées — évite un DOUBLON
+// quand un autre appareil l'a déjà poussé mais que S.calPushed local ne le connaît pas encore. Renvoie l'id ou null.
+async function findCalEvent(token, tourId, cid) {
+  try {
+    const u = 'https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1&showDeleted=false'
+      + '&privateExtendedProperty=' + encodeURIComponent('tourId=' + tourId)
+      + '&privateExtendedProperty=' + encodeURIComponent('clientId=' + cid);
+    const r = await fetch(u, { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) return null; const j = await r.json(); return (j.items && j.items[0] && j.items[0].id) || null;
+  } catch { return null; }
+}
 // Crée / met à jour 1 évènement Google par client (heure obligatoire), et supprime ceux qui n'ont plus lieu.
 async function pushTourToCalendar(t, opts) {
   opts = opts || {};
@@ -3228,7 +3256,8 @@ async function pushTourToCalendar(t, opts) {
     const key = t.id + ':' + w.cid; const chevaux = [];
     (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId === w.cid) (cl.chevaux || []).filter(chevalBilled).forEach((cv) => chevaux.push(cv.nom)); }));
     const ev = Object.assign({ summary: '🐴 ' + clientName(w.cid) + (chevaux.length ? ' — ' + chevaux.join(', ') : ''), location: clientTourAddr(t, w.cid), description: 'Rendez-vous GaloPodo' + (t.nom ? ' · ' + t.nom : ''), extendedProperties: { private: { galopodo: '1', tourId: t.id, clientId: w.cid } } }, times(w.heure));
-    const evId = S.calPushed[key];
+    let evId = S.calPushed[key];
+    if (!evId) { evId = await findCalEvent(token, t.id, w.cid); if (evId) S.calPushed[key] = evId; } // L3-3d : réutilise l'évènement existant (pas de doublon multi-appareils)
     try { let r = evId ? await req('PATCH', '/' + encodeURIComponent(evId), ev) : await req('POST', '', ev); if (evId && r.status === 404) r = await req('POST', '', ev); if (r.ok) { const j = await r.json(); S.calPushed[key] = j.id; nOk++; } } catch { /* réseau : réessai au prochain push */ }
   }
   for (const key of Object.keys(S.calPushed)) {
@@ -3289,6 +3318,28 @@ const GSCOPE_CAL = GSCOPE_DRIVE;
 const GSCOPE_MAIL = GSCOPE_DRIVE; // Gmail mutualisé avec Drive/Calendar (même jeton, une seule connexion)
 // Vrai si un jeton VALIDE est déjà en cache pour ce scope → autorise une opération silencieuse SANS jamais afficher d'écran d'auth.
 function gTokenValid(scope) { const c = _gTokens[scope || GSCOPE_DRIVE]; return !!(c && Date.now() < c.exp - 60000); }
+// L2-2b : jeton mort côté Google (révoqué / consentement retiré / partiel) → 401/403. On JETTE le cache (tous scopes mutualisés) pour
+// forcer une ré-acquisition propre au lieu de renvoyer indéfiniment un jeton invalide. À appeler sur toute réponse Google 401/403.
+function gInvalidateToken() { _gTokens = {}; try { persistGTokens(); } catch (e) {} }
+function gCheck(r, label) { if (!r.ok) { if (r.status === 401 || r.status === 403) gInvalidateToken(); throw new Error(label + ' ' + r.status); } }
+// L2-2a : bandeau NON bloquant « Reconnexion Google requise » — remplace l'échec silencieux (catch{} muet) quand une synchro/un push
+// de fond échoue faute de jeton (fréquent sur Edge/PC où le jeton silencieux ne peut pas se renouveler). Un clic relance la connexion.
+let _reauthBanner = null;
+function setGoogleReauthNeeded(on) {
+  if (on) {
+    if (!S.googleClientId || !(S.googleAutoSync || S.calPush)) return; // rien à reconnecter (non configuré / ni synchro auto ni push agenda)
+    if (_reauthBanner || !document.body) return;
+    const b = document.createElement('div'); b.className = 'reauth-banner';
+    b.innerHTML = '<span>⚠️ Connexion Google expirée — synchro et agenda en pause.</span> <button class="btn small" id="reauthBtn">Reconnecter</button> <button class="reauth-x" id="reauthX" title="Masquer">✕</button>';
+    document.body.appendChild(b); _reauthBanner = b;
+    b.querySelector('#reauthX').addEventListener('click', () => setGoogleReauthNeeded(false));
+    b.querySelector('#reauthBtn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'Connexion…';
+      try { await googleToken(true); setGoogleReauthNeeded(false); if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) drivePushNow(); }
+      catch (err) { btn.disabled = false; btn.textContent = 'Reconnecter'; }
+    });
+  } else if (_reauthBanner) { _reauthBanner.remove(); _reauthBanner = null; }
+}
 function loadGis() {
   return new Promise((res, rej) => {
     if (window.google && google.accounts && google.accounts.oauth2) return res();
@@ -3309,7 +3360,7 @@ async function googleToken(interactive, scope) {
     return new Promise((resolve, reject) => {
       const tc = google.accounts.oauth2.initTokenClient({
         client_id: S.googleClientId, scope,
-        callback: (resp) => { if (resp && resp.error) return reject(new Error(resp.error)); _gTokens[scope] = { token: resp.access_token, exp: Date.now() + ((resp.expires_in || 3600) * 1000) }; persistGTokens(); resolve(resp.access_token); },
+        callback: (resp) => { if (resp && resp.error) return reject(new Error(resp.error)); _gTokens[scope] = { token: resp.access_token, exp: Date.now() + ((resp.expires_in || 3600) * 1000) }; persistGTokens(); setGoogleReauthNeeded(false); resolve(resp.access_token); }, // L2-2a : jeton obtenu → masque le bandeau de reconnexion
         error_callback: (err) => reject(new Error((err && err.type) || 'connexion refusée')),
       });
       tc.requestAccessToken({ prompt: interactive ? 'consent' : '' });
@@ -3320,7 +3371,7 @@ async function googleToken(interactive, scope) {
 }
 async function driveFindFile(token) {
   const r = await fetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent("name='" + GDRIVE_FILE + "'")}&fields=files(id,name)`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) throw new Error('Drive HTTP ' + r.status); const j = await r.json(); return (j.files && j.files[0]) || null;
+  gCheck(r, 'Drive HTTP'); const j = await r.json(); return (j.files && j.files[0]) || null;
 }
 // Compresse une chaîne en gzip (octets) si le navigateur le supporte, sinon renvoie null (repli JSON brut).
 async function gzipBytes(str) {
@@ -3341,7 +3392,7 @@ async function decodeVault(buf) {
 }
 async function driveDownload(token, id) {
   const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) throw new Error('Drive téléchargement ' + r.status);
+  gCheck(r, 'Drive téléchargement');
   return decodeVault(new Uint8Array(await r.arrayBuffer()));
 }
 // ---------- L0 — Récupération : révisions du coffre Drive (Google conserve l'historique des versions du fichier appData) ----------
@@ -3351,14 +3402,14 @@ async function driveListRevisions(token, fileId) {
   do {
     const url = `https://www.googleapis.com/drive/v3/files/${fileId}/revisions?fields=nextPageToken,revisions(id,modifiedTime,size)&pageSize=200` + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
     const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
-    if (!r.ok) throw new Error('Drive révisions ' + r.status);
+    gCheck(r, 'Drive révisions');
     const j = await r.json(); (j.revisions || []).forEach((x) => revs.push(x)); pageToken = j.nextPageToken || '';
   } while (pageToken);
   return revs.reverse();
 }
 async function driveDownloadRevision(token, fileId, revId) {
   const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revId}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) throw new Error('Drive révision téléchargement ' + r.status);
+  gCheck(r, 'Drive révision téléchargement');
   const snap = await decodeVault(new Uint8Array(await r.arrayBuffer()));
   if (snap && !snap.tours && Array.isArray(snap.tournees)) snap.tours = snap.tournees; // compat très anciens coffres
   return snap;
@@ -3376,7 +3427,7 @@ async function driveUpload(token, id, data) {
   }
   const url = id ? `https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=multipart` : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
   const r = await fetch(url, { method: id ? 'PATCH' : 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'multipart/related; boundary=' + boundary }, body });
-  if (!r.ok) throw new Error('Drive envoi ' + r.status); return r.json();
+  gCheck(r, 'Drive envoi'); return r.json();
 }
 // Hash de contenu du coffre (ignore l'horodatage volatil `at` et `settings.updatedAt`) → détecte « rien de neuf à envoyer ».
 function snapshotHash(snap) {
@@ -3516,7 +3567,7 @@ function googleSync(interactive, statusEl, reload) {
     await driveUpload(token, f ? f.id : null, snap); _lastPushHash = snapshotHash(snap); _syncDirty = false;
     if (reload) { setS('ok', 'Synchronisé ✔ Rechargement…'); setTimeout(() => location.reload(), 800); }
     else { setS('ok', 'Synchronisé ✔'); refreshEverywhere(); if ($('tab-accueil').classList.contains('active')) renderHome(); if ($('tab-agenda') && $('tab-agenda').classList.contains('active')) renderAgendaItems(); }
-  } catch (e) { setS('err', 'Erreur : ' + e.message); }
+  } catch (e) { setS('err', 'Erreur : ' + e.message); if (!interactive) setGoogleReauthNeeded(true); } // L2-2a : échec d'une synchro de FOND → propose la reconnexion (au lieu d'un échec muet)
   });
 }
 // Modes de synchro EXCLUSIFS : 'file' (multi-appareils par fichier) OU 'drive' (Google Drive). Activer l'un désactive l'autre.
@@ -3559,7 +3610,7 @@ function driveSyncOnExit() {
 function drivePushNow() {
   if (S.syncMode !== 'drive') return Promise.resolve();
   if (!(S.googleAutoSync && S.googleClientId)) return Promise.resolve();
-  if (!gTokenValid(GSCOPE_DRIVE)) return Promise.resolve(); // pas de jeton en cache → on n'ouvre JAMAIS d'écran d'auth ici (évite le renvoi vers Google en pleine navigation) ; la synchro au boot rattrapera
+  if (!gTokenValid(GSCOPE_DRIVE)) { if (_syncDirty) setGoogleReauthNeeded(true); return Promise.resolve(); } // pas de jeton : on n'ouvre pas d'auth en pleine navigation, mais si des modifs attendent, on signale (bandeau) au lieu d'un échec muet
   return withDriveLock(async () => { // L1-1f : sous le même verrou que googleSync (jamais de download/upload concurrents)
     bgOp('drive', '☁️ Synchronisation Google Drive…');
     try {
@@ -8057,7 +8108,7 @@ async function gmailSend(to, subject, bodyText, blob, filename, cc) {
   const mime = await buildMimeEmail(to, subject, bodyText, blob, filename, cc);
   const raw = btoa(mime).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
-  if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('Gmail ' + r.status + ' ' + t.slice(0, 160)); }
+  if (!r.ok) { const t = await r.text().catch(() => ''); if (r.status === 401 || r.status === 403) gInvalidateToken(); throw new Error('Gmail ' + r.status + ' ' + t.slice(0, 160)); }
   return true;
 }
 // Modale d'envoi d'un document : saisie du destinataire + envoi Gmail (PDF joint) OU repli partage/téléchargement.
@@ -12803,6 +12854,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const _bootSetupGate = () => { if (!S.setupDone) modalSetup(); }; // config initiale : ouverte seulement si non déjà validée (localement OU via Drive après fusion)
   _bootUpdate.then(async () => {
     if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { bootSyncSet('Synchronisation des données (Google Drive)…'); try { await googleSync(false, $('googleStatus'), false); renderHome(); } catch { /* ignore */ } }
+    try { calCatchUp(); } catch (e) {} // L3-3c : rattrapage agenda — pousse les RDV à venir qui n'ont jamais atteint Google (ex. créés sans jeton)
     bootSyncFinish(); // données synchronisées (ou rien à synchroniser) → l'app est pleinement opérationnelle
     if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } } // agenda : rafraîchissement en fond, non bloquant
     _bootSetupGate(); // APRÈS la synchro Drive : si le Drive contenait déjà la config validée, la fusion a mis setupDone=true → pas de re-demande
