@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.27';
+const APP_VERSION = '1.7.28';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.28', date: '2026-07-15',
+    ajouts: [
+      'SYNCHRO (correctif MAJEUR) — fin de la perte des tournées EN PRÉPARATION entre téléphone et PC. Ouvrir une tournée pour la regarder ne « rajeunit » plus sa version (le géocodage/recalcul ne compte plus comme une modification) : une version périmée ne peut plus écraser vos vraies modifications (client ajouté, ordre des arrêts, heures de RDV, temps de route) faites sur l\'autre appareil.',
+      'SYNCHRO — protection anti-décalage d\'horloge (une modification ne peut plus « remonter le temps ») et vérification que le coffre Drive n\'a pas changé juste avant d\'écrire (plus d\'écrasement d\'une version plus récente poussée entre-temps par l\'autre appareil).',
+    ],
+  },
   {
     version: '1.7.27', date: '2026-07-15',
     ajouts: [
@@ -3028,7 +3035,10 @@ function hashStr(s) {
 // L1-1b : on IGNORE les champs RECALCULÉS (result, routeGeo) — un recalcul passif ne doit pas « rajeunir » l'enregistrement (updatedAt)
 // et lui faire gagner une fusion en écrasant une version pourtant clôturée sur un autre appareil.
 const _HASH_SKIP = { updatedAt: 1, result: 1, routeGeo: 1 };
-function hashRec(rec) { const c = {}; for (const k in rec) if (!_HASH_SKIP[k]) c[k] = rec[k]; return hashStr(JSON.stringify(c)); }
+// Fix perte-préparation (2) : le hash de CHANGEMENT ignore aussi les COORDONNÉES (lat/lon) — dérivées du texte de l'adresse (géocodage).
+// Ainsi, OUVRIR une tournée (qui déclenche reconcile + géocodage) ne « rajeunit » plus son updatedAt sans édition réelle → une
+// version périmée ne peut plus gagner la fusion contre l'édition réelle d'un autre appareil. (lat/lon restent stockés, juste hors hash.)
+function hashRec(rec) { return hashStr(JSON.stringify(rec, (k, v) => (_HASH_SKIP[k] || k === 'lat' || k === 'lon') ? undefined : v)); }
 // Métadonnées de synchro en DEUX stores distincts :
 //  - « ftr.syncmeta » = empreintes de contenu (m.hash) — reconstructibles, purgeables si le quota déborde.
 //  - « ftr.tomb »     = tombstones (suppressions) — NON reconstructibles, petits, JAMAIS purgés.
@@ -3050,7 +3060,7 @@ function syncStamp(kind, arr) {
   arr.forEach((rec) => {
     if (!rec.id) rec.id = uid(); seen[rec.id] = true;
     const h = hashRec(rec);
-    if (m.hash[kind][rec.id] !== h) { rec.updatedAt = now; m.hash[kind][rec.id] = h; } else if (!rec.updatedAt) rec.updatedAt = now;
+    if (m.hash[kind][rec.id] !== h) { rec.updatedAt = Math.max(now, (rec.updatedAt || 0) + 1); m.hash[kind][rec.id] = h; } else if (!rec.updatedAt) rec.updatedAt = now; // Fix (4) : updatedAt MONOTONE — une édition ne descend jamais sous la dernière valeur connue (garde anti décalage d'horloge / anti-rajeunissement)
     if (m.tomb[kind][rec.id] && m.tomb[kind][rec.id] <= (rec.updatedAt || 0)) delete m.tomb[kind][rec.id]; // réapparu → tombstone périmé
   });
   Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = now; delete m.hash[kind][id]; } }); // disparu → tombstone
@@ -3470,9 +3480,11 @@ async function googleToken(interactive, scope) {
   try { return await pr; } finally { delete _gTokenInflight[scope]; }
 }
 async function driveFindFile(token) {
-  const r = await fetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent("name='" + GDRIVE_FILE + "'")}&fields=files(id,name)`, { headers: { Authorization: 'Bearer ' + token } });
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${encodeURIComponent("name='" + GDRIVE_FILE + "'")}&fields=files(id,name,headRevisionId)`, { headers: { Authorization: 'Bearer ' + token } });
   gCheck(r, 'Drive HTTP'); const j = await r.json(); return (j.files && j.files[0]) || null;
 }
+// Fix (3) compare-and-swap : révision courante du coffre Drive (headRevisionId) → détecte qu'un AUTRE appareil a écrit entre notre download et notre upload.
+async function driveHeadRev(token, fileId) { try { const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=headRevisionId`, { headers: { Authorization: 'Bearer ' + token } }); if (!r.ok) return null; const j = await r.json(); return j.headRevisionId || null; } catch { return null; } }
 // Compresse une chaîne en gzip (octets) si le navigateur le supporte, sinon renvoie null (repli JSON brut).
 async function gzipBytes(str) {
   if (typeof CompressionStream === 'undefined') return null;
@@ -3767,6 +3779,7 @@ function googleSync(interactive, statusEl, reload) {
       if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); // appareil déjà lié, ou Drive sans données → fusion normale
       if (interactive && !linked) LS.set('ftr.driveLinked', true); // 1ʳᵉ synchro interactive (Drive vide) → cet appareil est la référence
     }
+    if (f && f.headRevisionId) { const revNow = await driveHeadRev(token, f.id); if (revNow && revNow !== f.headRevisionId) { const remote2 = await driveDownload(token, f.id); if (remote2 && Array.isArray(remote2.tours)) importSnapshotMerge(remote2); } } // Fix (3) : un autre appareil a écrit depuis notre download → re-fusionner AVANT d'écrire (pas de lost update)
     const snap = exportSnapshot(); const sz = await snapshotUploadSize(snap);
     setS('', 'Envoi… ' + humanSize(sz.gz || sz.json) + (sz.gz ? ' (compressé)' : ''));
     await driveUpload(token, f ? f.id : null, snap); _lastPushHash = snapshotHash(snap); _syncDirty = false;
@@ -3821,10 +3834,12 @@ function drivePushNow() {
     try {
       const token = await googleToken(false); // silencieux : jeton déjà en cache (retour immédiat, aucune UI)
       const f = await driveFindFile(token);
+      let rev0 = f ? f.headRevisionId : null;
       if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); }
-      const snap = exportSnapshot(); const h = snapshotHash(snap);
+      let snap = exportSnapshot(); const h = snapshotHash(snap);
       if (h === _lastPushHash) { _syncDirty = false; return; } // E2 : rien de neuf depuis le dernier envoi → on évite un aller-retour inutile
-      await driveUpload(token, f ? f.id : null, snap); _lastPushHash = h; _syncDirty = false; // envoyé → plus rien en attente
+      if (f && rev0) { const revNow = await driveHeadRev(token, f.id); if (revNow && revNow !== rev0) { const remote2 = await driveDownload(token, f.id); if (remote2 && Array.isArray(remote2.tours)) importSnapshotMerge(remote2); snap = exportSnapshot(); } } // Fix (3) : le Drive a été écrit par un autre appareil depuis notre download → on re-fusionne AVANT d'écrire (pas de lost update)
+      await driveUpload(token, f ? f.id : null, snap); _lastPushHash = snapshotHash(snap); _syncDirty = false; // envoyé → plus rien en attente
     } catch { /* hors-ligne ou jeton non consenti : la synchro au prochain boot rattrapera (on garde _syncDirty pour réessayer) */ }
     finally { bgOp('drive', null); }
   });
