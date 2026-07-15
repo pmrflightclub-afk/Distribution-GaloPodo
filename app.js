@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.20';
+const APP_VERSION = '1.7.21';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.21', date: '2026-07-15',
+    ajouts: [
+      'COMPTA — le détail HT / TVA des encaissements en liquide (et facture pro payée en liquide) est calculé au TAUX DE TVA RÉEL de chaque facture, y compris quand une facture mélange plusieurs taux (ex. un article à 6 % et le parage à 21 %). Le total encaissé était déjà exact ; c\'est la répartition HT/TVA affichée qui est maintenant juste dans tous les cas.',
+    ],
+  },
   {
     version: '1.7.20', date: '2026-07-15',
     ajouts: [
@@ -7725,6 +7731,9 @@ function setComptaPayment(tourId, clientId, method) {
 // 4 sections d'encaissement : Liquide (globalisé) · Virement · Facture pro liquide · Facture pro virement.
 // « Facture » = case « Facture nécessaire » COMBINÉE au mode de paiement (une facture peut être payée en liquide OU virement).
 // Aucun mode choisi → « aclasser » (sous-onglet « Tournée à venir », hors mois en cours).
+// L8 : répartit un encaissement (cash) en HT/TVA selon le taux EFFECTIF RÉEL de la facture du client (m.totalTVA/m.totalTTC),
+// et non au taux standard unique → correct même quand la facture mélange plusieurs taux de TVA (ex. article à 6 % + parage à 21 %).
+function cashSplit(cash, m) { const ttc = (m && m.totalTTC) || 0, tv = (m && m.totalTVA) || 0; const share = ttc > 0.005 ? (tv / ttc) : (rate() / (1 + rate())); const tva = cash * share; return { ht: cash - tva, tva }; }
 function comptaData(ym) {
   const r = rate();
   const liquideClients = [], virementClients = [], factureLiqClients = [], factureVirClients = [], aclasserClients = [];
@@ -7750,17 +7759,17 @@ function comptaData(ym) {
       if (mode === 'aclasser') { if (tourYm === ym) aclasserClients.push(entry); return; }
       if (mode === 'virement') { if (tourYm === ym) virementClients.push(entry); return; }
       if (mode === 'facvir') { if (tourYm === ym) factureVirClients.push(entry); return; }
-      if (mode === 'facliq') { if (tourYm !== ym) return; const cash = payRecu(m, p); factureLiqClients.push(Object.assign({}, entry, { ht: cash / (1 + r), tva: cash - cash / (1 + r), ttc: cash })); return; }
+      if (mode === 'facliq') { if (tourYm !== ym) return; const cash = payRecu(m, p); const cs = cashSplit(cash, m); factureLiqClients.push(Object.assign({}, entry, { ht: cs.ht, tva: cs.tva, ttc: cash })); return; }
       // mode === 'liquide' (caisse globalisée, sans facture) — part cash rattachable via effYm.
       if (p && p.partiel) {
         // Un éventuel reste (virement) N'EST PAS de la caisse : il reste au mois de la tournée.
         const reste = payImpaye(m, p);
-        if (reste > 0.005 && p.resteMode === 'virement' && tourYm === ym) virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: reste / (1 + r), tva: reste - reste / (1 + r), ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' });
+        if (reste > 0.005 && p.resteMode === 'virement' && tourYm === ym) { const cs = cashSplit(reste, m); virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: cs.ht, tva: cs.tva, ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' }); }
       }
       if (effYm !== ym) return; // la part cash est comptée dans son mois de rattachement
-      const cash = payRecu(m, p); const cHT = cash / (1 + r); liquideClients.push({ nom: m.nom, ht: cHT, tva: cash - cHT, ttc: cash });
+      const cash = payRecu(m, p); const cs = cashSplit(cash, m); const cHT = cs.ht, cTVA = cs.tva; liquideClients.push({ nom: m.nom, ht: cHT, tva: cTVA, ttc: cash });
       if (p && p.partiel) {
-        addPost('Acompte liquide (partiel)', cHT, cash - cHT, cash);
+        addPost('Acompte liquide (partiel)', cHT, cTVA, cash);
       } else {
         (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
         if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
