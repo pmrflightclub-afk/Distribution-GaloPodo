@@ -786,3 +786,6 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 .reauth-banner .btn { flex: 0 0 auto; }
 .reauth-x { background: transparent; border: 0; color: #fff; opacity: .8; cursor: pointer; font-size: 1rem; line-height: 1; padding: 2px 4px; }
 .reauth-x:hover { opacity: 1; }
+
+/* L4 : sous-ligne « un client » sous l'en-tête d'un arrêt partagé (deux clients au même endroit = actions indépendantes). */
+.list-item.li-client-sub { margin-left: 14px; border-left: 3px solid var(--accent, #e8722a); background: rgba(255,255,255,.02); }
