@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.12';
+const APP_VERSION = '1.7.13';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.13', date: '2026-07-14',
+    ajouts: [
+      'RÉCUPÉRATION — nouveau bouton « 🕓 Restaurer une version antérieure (Drive) » (Réglages → Synchro) : liste les sauvegardes précédentes de vos données sur le Drive, les ANALYSE sans rien écraser (nombre de tournées clôturées, état de la tournée du jour), et restaure la bonne version. Une sauvegarde de sécurité de l\'état actuel est téléchargée avant — c\'est réversible.',
+      'FIABILITÉ — une tournée (ou un arrêt) CLÔTURÉE ne peut plus « revenir en arrière » après une synchronisation. Les clôtures sont préservées lors de la fusion, même si une autre copie paraît plus récente. (Corrige la perte de clôtures.)',
+      'FIABILITÉ — les réglages propres à l\'appareil (mode de synchro, synchro auto, push agenda, fond du logo) ne sont plus écrasés par la fusion : la synchro Drive ne peut plus se désactiver toute seule à cause d\'un autre appareil.',
+      'FIABILITÉ — un recalcul d\'itinéraire/facture ne « rajeunit » plus une tournée à tort ; le carnet d\'adresses et les tâches photo supprimés ne réapparaissent plus après synchro ; la personnalisation des marqueurs de planche n\'est plus écrasée ; verrou anti-collision quand deux synchronisations se lancent en même temps.',
+    ],
+  },
   {
     version: '1.7.12', date: '2026-07-14',
     ajouts: [
@@ -2804,9 +2813,12 @@ function bgSaveFlash() { // enregistrement local (instantané) : brève confirma
 }
 // Collections id-clés DANS les réglages : elles doivent fusionner par enregistrement (union + tombstones) comme clients/tournées,
 // sinon un ajout/suppression fait sur un appareil est écrasé en bloc par l'autre appareil (perte de rappels, frais, écritures…).
-const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit'];
+// L1-1d : 'adresses' et 'plancheTodo' AJOUTÉES → fusion par enregistrement AVEC tombstones (une suppression ne « ressuscite » plus après synchro).
+const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo'];
+let _lastPlancheHash = null; // L1-1e : empreinte de la config planche pour n'horodater `plancheUpdatedAt` que lorsqu'elle change réellement.
 function saveSettings() {
   S.updatedAt = Date.now();
+  { const ph = hashStr(JSON.stringify(S.planche || {})); if (_lastPlancheHash !== null && ph !== _lastPlancheHash) S.plancheUpdatedAt = Date.now(); _lastPlancheHash = ph; } // la config planche modifiée l'emporte à la fusion (propagation propre)
   SETTINGS_COLLECTIONS.forEach((k) => { if (Array.isArray(S[k])) syncStamp('set:' + k, S[k]); }); // horodatage + tombstones par enregistrement (survit à la fusion multi-appareils)
   LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); markSyncDirty(); bgSaveFlash();
 }
@@ -2915,7 +2927,10 @@ function hashStr(s) {
 // Signature de contenu d'un enregistrement, hors updatedAt (pour détecter un vrai changement). On stocke un CONDENSÉ court
 // (≈ 12 caractères), pas la copie JSON complète — sinon « ftr.syncmeta » dupliquait TOUTES les données (clients + tournées +
 // collections de réglages) et faisait déborder le quota localStorage. Seule l'ÉGALITÉ compte pour détecter un changement.
-function hashRec(rec) { const c = {}; for (const k in rec) if (k !== 'updatedAt') c[k] = rec[k]; return hashStr(JSON.stringify(c)); }
+// L1-1b : on IGNORE les champs RECALCULÉS (result, routeGeo) — un recalcul passif ne doit pas « rajeunir » l'enregistrement (updatedAt)
+// et lui faire gagner une fusion en écrasant une version pourtant clôturée sur un autre appareil.
+const _HASH_SKIP = { updatedAt: 1, result: 1, routeGeo: 1 };
+function hashRec(rec) { const c = {}; for (const k in rec) if (!_HASH_SKIP[k]) c[k] = rec[k]; return hashStr(JSON.stringify(c)); }
 // Métadonnées de synchro en DEUX stores distincts :
 //  - « ftr.syncmeta » = empreintes de contenu (m.hash) — reconstructibles, purgeables si le quota déborde.
 //  - « ftr.tomb »     = tombstones (suppressions) — NON reconstructibles, petits, JAMAIS purgés.
@@ -2953,6 +2968,26 @@ function mergeCollection(localArr, remoteArr, tomb) {
   const byId = {};
   const put = (rec) => { if (!rec || !rec.id) return; const cur = byId[rec.id]; if (!cur || (rec.updatedAt || 0) > (cur.updatedAt || 0)) byId[rec.id] = rec; };
   (localArr || []).forEach(put); (remoteArr || []).forEach(put);
+  return Object.values(byId).filter((rec) => ((tomb && tomb[rec.id]) || 0) <= (rec.updatedAt || 0));
+}
+// L1-1a : fusion des TOURNÉES. Comme mergeCollection (updatedAt le plus récent gagne), MAIS les états de CLÔTURE ne RÉGRESSENT JAMAIS :
+// une tournée/arrêt clôturé sur un appareil le reste après fusion, même si l'autre copie est « plus récente » (rouverte/recalculée).
+// C'est la cause de la perte de données : sans ça, une version concurrente sans clôtures écrasait en bloc la tournée clôturée.
+function graftClosure(to, from) {
+  if (!to || !from) return;
+  if (from.startedAt && !to.startedAt) to.startedAt = from.startedAt;       // démarrage : garder le plus ancien non-nul
+  if (from.endedAt && !to.endedAt) to.endedAt = from.endedAt;
+  if (from.autoClosedAt && !to.autoClosedAt) to.autoClosedAt = from.autoClosedAt;
+  if (from.closed && !to.closed) to.closed = true;                          // clôture = état terminal (aucun « déclôturage » dans l'app)
+  const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } }; // apparie les arrêts par adresse (robuste au réordonnancement)
+  const fromByKey = {}; (from.arrets || []).forEach((a) => { const k = key(a); if (k && typeof a.validatedAt === 'number') fromByKey[k] = Math.min(fromByKey[k] == null ? Infinity : fromByKey[k], a.validatedAt); });
+  (to.arrets || []).forEach((a) => { const k = key(a); if (typeof a.validatedAt !== 'number' && fromByKey[k] != null) a.validatedAt = fromByKey[k]; }); // ne remplit qu'une clôture d'arrêt MANQUANTE (jamais d'écrasement)
+}
+function mergeTours(localArr, remoteArr, tomb) {
+  const byId = {}, other = {};
+  const put = (rec) => { if (!rec || !rec.id) return; const cur = byId[rec.id]; if (!cur) byId[rec.id] = rec; else if ((rec.updatedAt || 0) > (cur.updatedAt || 0)) { other[rec.id] = cur; byId[rec.id] = rec; } else other[rec.id] = rec; };
+  (localArr || []).forEach(put); (remoteArr || []).forEach(put);
+  Object.keys(byId).forEach((id) => { if (other[id]) graftClosure(byId[id], other[id]); });
   return Object.values(byId).filter((rec) => ((tomb && tomb[rec.id]) || 0) <= (rec.updatedAt || 0));
 }
 function mergeTomb(a, b) { const t = Object.assign({}, a || {}); Object.keys(b || {}).forEach((id) => { t[id] = Math.max(t[id] || 0, b[id]); }); return t; }
@@ -3011,14 +3046,13 @@ function mergeSettings(localS, remoteS) {
   // Adresse de départ (domicile) : ne jamais la perdre si l'appareil « gagnant » l'avait vide → reprendre celle qui est renseignée.
   const hasAddr = (a) => { try { return !!addrStr(a).trim(); } catch { return false; } };
   if (!hasAddr(merged.home)) { if (localS && hasAddr(localS.home)) merged.home = localS.home; else if (remoteS && hasAddr(remoteS.home)) merged.home = remoteS.home; }
-  // Carnet « Mes adresses » de départ : union par id (ne pas perdre celles saisies sur l'autre appareil).
-  { const byId = {}; ((localS && localS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); ((remoteS && remoteS.adresses) || []).forEach((a) => { if (a && a.id) byId[a.id] = a; }); merged.adresses = Object.values(byId); }
+  // Carnet « Mes adresses » de départ : géré par SETTINGS_COLLECTIONS (fusion par enregistrement + tombstones) dans mergeSnapshots → plus d'union ici (évitait la résurrection d'une adresse supprimée).
   // Relevés compteur (statut véhicule) : union par mois (ne jamais perdre un relevé fait sur l'autre appareil ; le plus récent gagne pour un même mois).
   { const byYm = {}; const add = (r) => { if (r && r.ym) { const ex = byYm[r.ym]; if (!ex || (r.date || '') >= (ex.date || '')) byYm[r.ym] = r; } }; ((localS && localS.odoReleves) || []).forEach(add); ((remoteS && remoteS.odoReleves) || []).forEach(add); merged.odoReleves = Object.values(byYm).sort((a, b) => (a.date || '').localeCompare(b.date || '')); }
   // Listes accumulatives introduites avec les planches/photos/adresses de référence : union (ne jamais perdre ce qui a été saisi sur l'autre appareil).
   const unionById = (k) => { const byId = {}; ((localS && localS[k]) || []).forEach((x) => { if (x && x.id) byId[x.id] = x; }); ((remoteS && remoteS[k]) || []).forEach((x) => { if (x && x.id) byId[x.id] = x; }); return Object.values(byId); };
   merged.lieuxRefs = unionById('lieuxRefs');
-  merged.plancheTodo = unionById('plancheTodo');
+  // plancheTodo : géré par SETTINGS_COLLECTIONS (tombstones) → plus d'union ici (une tâche photo terminée/retirée ne réapparaît plus).
   merged.plancheHistory = unionById('plancheHistory');
   { const byK = {}, kk = (y) => (y.clientId || '') + '|' + norm(y.chevalNom || '') + '|' + (y.date || '') + '|' + norm(y.type || ''); ((localS && localS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); ((remoteS && remoteS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); merged.plancheDone = Object.values(byK); }
   merged.addrStatus = Object.assign({}, (localS && localS.addrStatus) || {}, (remoteS && remoteS.addrStatus) || {}); // statut de lieu (noir/inactif) : union — un lieu refusé sur un appareil le reste
@@ -3044,9 +3078,16 @@ function mergeSettings(localS, remoteS) {
   merged.mailKeywords = unionStr(localS && localS.mailKeywords, remoteS && remoteS.mailKeywords);
   merged.statOrder = unionStr(localS && localS.statOrder, remoteS && remoteS.statOrder);
   merged.analyticOrder = unionStr(localS && localS.analyticOrder, remoteS && remoteS.analyticOrder);
-  // Config planche : base-wins pour l'objet, mais les STADES (liste de textes) fusionnent en union.
-  merged.planche = Object.assign({}, base.planche);
-  merged.planche.stades = unionStr(localS && localS.planche && localS.planche.stades, remoteS && remoteS.planche && remoteS.planche.stades);
+  // L1-1e : Config planche fusionnée EN PROFONDEUR (plus de « base gagne en bloc » qui perdait les couleurs/transparences/modèles de marqueurs).
+  // La personnalisation suit la source la plus récente (plancheUpdatedAt) ; à égalité, le LOCAL est préservé ; les STADES fusionnent en union.
+  {
+    const lP = (localS && localS.planche) || {}, rP = (remoteS && remoteS.planche) || {};
+    const lT = (localS && localS.plancheUpdatedAt) || 0, rT = (remoteS && remoteS.plancheUpdatedAt) || 0;
+    const pSrc = rT > lT ? rP : lP, pOther = pSrc === rP ? lP : rP;
+    merged.planche = Object.assign({}, pOther, pSrc);
+    merged.plancheUpdatedAt = Math.max(lT, rT);
+    merged.planche.stades = unionStr(lP.stades, rP.stades);
+  }
   // Répartition analytique : union PAR sous-compte (évite le double-comptage des %) ; les lignes sans sous-compte suivent la base.
   merged.analyticAlloc = Object.assign({}, base.analyticAlloc);
   ['mainOeuvre', 'materiel', 'vehicule'].forEach((k) => {
@@ -3060,6 +3101,9 @@ function mergeSettings(localS, remoteS) {
   merged.setupDone = lDone || rDone;
   merged.setupLocked = !!(localS && localS.setupLocked) || !!(remoteS && remoteS.setupLocked);
   if (merged.setupDone) { const src = (rDone && !lDone) ? remoteS : (lDone && !rDone) ? localS : base; ['pays', 'tvaRegime', 'formeJuridique', 'tvaRate', 'fiscalParams'].forEach((k) => { if (src && src[k] !== undefined) merged[k] = src[k]; }); }
+  // L1-1c : réglages PROPRES à l'appareil — ne JAMAIS les importer d'une fusion, sinon la synchro/agenda d'un appareil bascule silencieusement
+  // à cause de l'autre (ex. `syncMode:'file'` ou `googleAutoSync:false` du « gagnant » coupait la synchro Drive de cet appareil).
+  ['syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile'].forEach((k) => { if (localS && localS[k] !== undefined) merged[k] = localS[k]; });
   return merged;
 }
 // Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
@@ -3076,7 +3120,7 @@ function mergeSnapshots(local, remote) {
   return {
     settings,
     clients: mergeClients(local.clients, remote.clients, tomb.clients),
-    tours: mergeCollection(local.tours, remote.tours, tomb.tournees),
+    tours: mergeTours(local.tours, remote.tours, tomb.tournees), // L1-1a : clôtures monotones (pas de régression)
     tomb,
   };
 }
@@ -3088,12 +3132,19 @@ function exportSnapshot() {
 // Applique le résultat de fusion : réécrit les stores + re-partitionne les tournées (actives / archive > 4 semaines).
 function applyMerged(merged) {
   S = Object.assign(S, merged.settings);
+  // L1-1e : re-normaliser la config planche après fusion — un coffre venu d'un appareil ancien peut manquer `markers`/`gridGuide`,
+  // ce qui ferait planter les écrans/handlers planche (accès `S.planche.markers.…` sur undefined).
+  if (!S.planche || typeof S.planche !== 'object') S.planche = {};
+  if (!S.planche.markers || typeof S.planche.markers !== 'object') S.planche.markers = {};
+  if (!S.planche.markers.colors || typeof S.planche.markers.colors !== 'object') S.planche.markers.colors = {};
+  if (!S.planche.gridGuide || typeof S.planche.gridGuide !== 'object') S.planche.gridGuide = { marginLR: 0.5, marginTB: 0.5 };
+  _lastPlancheHash = hashStr(JSON.stringify(S.planche || {})); // recale l'empreinte planche sur l'état fusionné (pas de faux bump au prochain saveSettings)
   clients = merged.clients;
   // Après fusion, `h.adresses` a été reconstruit (nouveaux objets) → re-partager le miroir h.addr ↔ adresse active pour que
   // tout le code legacy (géocodage, assistant) qui lit/écrit `h.addr` reste solidaire de l'entrée active (évite les mesures perdues).
   (clients || []).forEach((c) => (c.chevaux || []).forEach((h) => { try { chevalSyncActive(h); } catch (e) {} }));
   const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
-  const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
+  const isArch = (t) => { const d = t.date || ''; return !!d && (t.closed || d < todayStr()) && d < cutoff; }; // L1-1h : une tournée SANS date reste active (ne part pas en archive à chaque fusion)
   tournees = merged.tours.filter((t) => !isArch(t));
   archive = merged.tours.filter((t) => isArch(t));
   const m = syncMeta(); m.tomb = Object.assign({}, m.tomb, merged.tomb); // conserve TOUS les tombstones fusionnés (clients, tournées, collections réglages)
@@ -3279,18 +3330,38 @@ async function gzipBytes(str) {
 // Taille (octets) du coffre tel qu'il sera envoyé (gzip si dispo) — pour l'afficher à l'utilisateur.
 async function snapshotUploadSize(data) { const json = JSON.stringify(data); const gz = await gzipBytes(json); return { gz: gz ? gz.length : 0, json: json.length }; }
 function humanSize(b) { if (!b) return '0 o'; if (b < 1024) return b + ' o'; if (b < 1048576) return (b / 1024).toFixed(0) + ' Ko'; return (b / 1048576).toFixed(1) + ' Mo'; }
-// Lecture du coffre : détecte le gzip (octets magiques 1f 8b) → décompresse ; sinon JSON brut (RÉTRO-COMPATIBLE avec les anciens coffres non compressés).
-async function driveDownload(token, id) {
-  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
-  if (!r.ok) throw new Error('Drive téléchargement ' + r.status);
-  const buf = new Uint8Array(await r.arrayBuffer());
-  let text;
+// Décodage d'un coffre téléchargé : détecte le gzip (octets magiques 1f 8b) → décompresse ; sinon JSON brut (RÉTRO-COMPATIBLE avec les anciens coffres non compressés).
+async function decodeVault(buf) {
   if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
     if (typeof DecompressionStream === 'undefined') throw new Error('coffre compressé mais navigateur incompatible (mettez l\'app à jour)');
     const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
-    text = await new Response(stream).text();
-  } else { text = new TextDecoder().decode(buf); }
-  return JSON.parse(text);
+    return JSON.parse(await new Response(stream).text());
+  }
+  return JSON.parse(new TextDecoder().decode(buf));
+}
+async function driveDownload(token, id) {
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw new Error('Drive téléchargement ' + r.status);
+  return decodeVault(new Uint8Array(await r.arrayBuffer()));
+}
+// ---------- L0 — Récupération : révisions du coffre Drive (Google conserve l'historique des versions du fichier appData) ----------
+// Liste les révisions (l'API les renvoie de la plus ANCIENNE à la plus récente → on inverse pour afficher la plus récente d'abord).
+async function driveListRevisions(token, fileId) {
+  const revs = []; let pageToken = '';
+  do {
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}/revisions?fields=nextPageToken,revisions(id,modifiedTime,size)&pageSize=200` + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+    if (!r.ok) throw new Error('Drive révisions ' + r.status);
+    const j = await r.json(); (j.revisions || []).forEach((x) => revs.push(x)); pageToken = j.nextPageToken || '';
+  } while (pageToken);
+  return revs.reverse();
+}
+async function driveDownloadRevision(token, fileId, revId) {
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revId}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) throw new Error('Drive révision téléchargement ' + r.status);
+  const snap = await decodeVault(new Uint8Array(await r.arrayBuffer()));
+  if (snap && !snap.tours && Array.isArray(snap.tournees)) snap.tours = snap.tournees; // compat très anciens coffres
+  return snap;
 }
 async function driveUpload(token, id, data) {
   const meta = { name: GDRIVE_FILE }; if (!id) meta.parents = ['appDataFolder'];
@@ -3341,13 +3412,87 @@ function applyRemoteReplace(remote) {
   clients = Array.isArray(remote.clients) ? remote.clients : [];
   const tours = Array.isArray(remote.tours) ? remote.tours : [];
   const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
-  const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
+  const isArch = (t) => { const d = t.date || ''; return !!d && (t.closed || d < todayStr()) && d < cutoff; }; // L1-1h : une tournée SANS date reste active (ne part pas en archive à chaque fusion)
   tournees = tours.filter((t) => !isArch(t)); archive = tours.filter(isArch);
   const m = syncMeta(); m.tomb = Object.assign({}, remote.tomb || {}); m.hash = {}; saveSyncMeta(m);
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
 }
-async function googleSync(interactive, statusEl, reload) {
+// ---------- L0 — Récupération : restaurer une version antérieure du coffre Drive ----------
+// Résumé lisible d'un instantané (nb de tournées, clôturées, et état de la tournée du jour) — pour choisir la bonne version SANS rien écraser.
+function snapshotSummary(snap) {
+  const tours = (snap && Array.isArray(snap.tours)) ? snap.tours : [];
+  const closed = tours.filter((t) => t.closed || t.endedAt).length;
+  const today = tours.find((t) => (t.date || '') === todayStr());
+  let todayTxt = 'aucune tournée du jour';
+  if (today) {
+    const arr = today.arrets || [];
+    const valid = arr.filter((a) => typeof a.validatedAt === 'number').length;
+    todayTxt = `aujourd'hui : ${valid}/${arr.length} arrêts clôturés` + ((today.closed || today.endedAt) ? ' · ✅ tournée clôturée' : (today.startedAt ? ' · 🚗 démarrée' : ' · ⏳ non démarrée'));
+  }
+  return `${tours.length} tournées · ${closed} clôturées · ${todayTxt} · ${(snap && snap.clients || []).length} clients`;
+}
+// Restaure un instantané (révision) : sauvegarde de sécurité de l'état actuel, remplacement (réglages device-local préservés),
+// RE-HORODATAGE de tout à « maintenant » (pour que la version restaurée l'emporte sur toute copie corrompue d'un autre appareil),
+// puis pousse la version restaurée comme référence sur Drive, et recharge.
+async function restoreDriveSnapshot(snap, token, fileId) {
+  downloadSnapshot();                 // filet : télécharge l'état ACTUEL avant de le remplacer (réversible)
+  applyRemoteReplace(snap);           // remplace le local par la version choisie (garde ID Google, mode synchro, logo…)
+  saveSettings(); saveClients(); saveTournees(); saveArchive(); // hash remis à zéro par applyRemoteReplace → tout est ré-horodaté à maintenant
+  try { if (token && fileId) { await driveUpload(token, fileId, exportSnapshot()); _lastPushHash = snapshotHash(exportSnapshot()); _syncDirty = false; } } catch (e) { /* pas grave : le ré-horodatage suffit à faire gagner la version restaurée à la prochaine fusion */ }
+}
+function modalDriveRestore() {
+  openModal(`<div class="modal-head"><b>🕓 Restaurer une version antérieure (Drive)</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Récupère une <b>sauvegarde antérieure</b> de vos données (avant une perte). Choisissez une version, <b>analysez-la</b> (sans rien changer), puis restaurez. Une <b>sauvegarde de sécurité</b> de l'état actuel est téléchargée avant toute restauration — c'est réversible.</p>
+    <p class="status" id="drStatus">Connexion à Google…</p>
+    <div id="drList" class="list"></div>`);
+  $('mX').onclick = closeModal;
+  const setSt = (cls, txt) => { const e = $('drStatus'); if (e) { e.className = 'status ' + (cls || ''); e.textContent = txt; } };
+  (async () => {
+    let token, file;
+    try {
+      if (!S.googleClientId) { setSt('err', 'Renseignez d\'abord votre ID client Google (ci-dessus).'); return; }
+      token = await googleToken(true);                 // interactif : on veut réussir l'accès pour récupérer
+      setSt('', 'Recherche du coffre sur votre Drive…');
+      file = await driveFindFile(token);
+      if (!file) { setSt('err', 'Aucun coffre GaloPodo trouvé sur ce compte Drive.'); return; }
+      setSt('', 'Lecture de l\'historique des versions…');
+      const revs = await driveListRevisions(token, file.id);
+      if (!revs.length) { setSt('err', 'Aucune version antérieure disponible pour ce coffre.'); return; }
+      setSt('ok', `${revs.length} version(s). Analysez celle juste AVANT la perte, puis restaurez.`);
+      const list = $('drList'); if (!list) return;
+      list.innerHTML = revs.map((rv, i) => `<div class="list-item" data-rev="${esc(rv.id)}">
+          <div class="li-main"><b>${esc(new Date(rv.modifiedTime).toLocaleString('fr-FR'))}</b>${i === 0 ? ' <span class="badge">version actuelle</span>' : ''}<span class="li-sub" data-info>${humanSize(+rv.size || 0)} · non analysée</span></div>
+          <div class="li-act"><button class="btn small" data-analyze>🔍 Analyser</button> <button class="btn small" data-restore disabled title="Analysez d'abord">♻ Restaurer</button></div>
+        </div>`).join('');
+      list.querySelectorAll('[data-rev]').forEach((row) => {
+        const revId = row.getAttribute('data-rev');
+        const info = row.querySelector('[data-info]');
+        const btnR = row.querySelector('[data-restore]');
+        let snap = null;
+        row.querySelector('[data-analyze]').addEventListener('click', async (e) => {
+          const b = e.currentTarget; b.disabled = true; const old = b.textContent; b.textContent = '…';
+          try { snap = await driveDownloadRevision(token, file.id, revId); info.textContent = snapshotSummary(snap); btnR.disabled = false; btnR.title = ''; }
+          catch (err) { info.textContent = 'Analyse impossible : ' + err.message; }
+          finally { b.disabled = false; b.textContent = old; }
+        });
+        btnR.addEventListener('click', async () => {
+          if (!snap) return;
+          if (!confirm('Restaurer cette version ?\n\n1) Une sauvegarde de sécurité de l\'état ACTUEL est téléchargée.\n2) L\'app est remplacée par cette version et rechargée.\n\nVérifiez vos données AVANT de relancer une synchro sur vos autres appareils.')) return;
+          setSt('', 'Restauration en cours…');
+          try { await restoreDriveSnapshot(snap, token, file.id); alert('✅ Version restaurée. L\'app va se recharger.'); location.reload(); }
+          catch (err) { setSt('err', 'Restauration impossible : ' + err.message); }
+        });
+      });
+    } catch (e) { setSt('err', 'Erreur : ' + (e && e.message || e)); }
+  })();
+}
+// L1-1f : mutex de synchro Drive — sérialise tous les cycles download→fusion→upload (drivePushNow, googleSync, sortie d'app)
+// pour qu'ils ne se chevauchent JAMAIS (une exécution qui téléchargeait un état, pendant qu'une autre uploadait, pouvait perdre des données).
+let _driveBusy = null;
+function withDriveLock(fn) { const prev = _driveBusy ? _driveBusy.catch(() => {}) : Promise.resolve(); const chain = prev.then(fn); _driveBusy = chain; chain.finally(() => { if (_driveBusy === chain) _driveBusy = null; }); return chain; }
+function googleSync(interactive, statusEl, reload) {
   const setS = (cls, txt) => { if (statusEl) { statusEl.className = 'status ' + cls; statusEl.textContent = txt; } };
+  return withDriveLock(async () => {
   try {
     setS('', 'Connexion à Google…'); const token = await googleToken(interactive);
     setS('', 'Synchronisation Drive…'); const f = await driveFindFile(token);
@@ -3359,7 +3504,7 @@ async function googleSync(interactive, statusEl, reload) {
       const choice = await modalDriveLinkChoice();
       if (!choice) { setS('', 'Liaison annulée.'); return; }
       LS.set('ftr.driveLinked', true);
-      if (choice === 'adopt') applyRemoteReplace(remote);
+      if (choice === 'adopt') { if (tournees.length || clients.length || archive.length) { try { downloadSnapshot(); } catch (e) {} } applyRemoteReplace(remote); } // L1-1g : sauvegarde de sécurité avant d'écraser des données locales existantes
       else if (choice === 'merge') importSnapshotMerge(remote);
       // 'push' → on n'importe rien : l'envoi ci-dessous écrase la sauvegarde du Drive
     } else {
@@ -3372,6 +3517,7 @@ async function googleSync(interactive, statusEl, reload) {
     if (reload) { setS('ok', 'Synchronisé ✔ Rechargement…'); setTimeout(() => location.reload(), 800); }
     else { setS('ok', 'Synchronisé ✔'); refreshEverywhere(); if ($('tab-accueil').classList.contains('active')) renderHome(); if ($('tab-agenda') && $('tab-agenda').classList.contains('active')) renderAgendaItems(); }
   } catch (e) { setS('err', 'Erreur : ' + e.message); }
+  });
 }
 // Modes de synchro EXCLUSIFS : 'file' (multi-appareils par fichier) OU 'drive' (Google Drive). Activer l'un désactive l'autre.
 // La section fichier est grisée+inerte quand Drive est actif ; la synchro Drive est en veille quand le mode fichier est actif
@@ -3410,20 +3556,22 @@ function driveSyncOnExit() {
   if (_drivePushTimer) { clearTimeout(_drivePushTimer); _drivePushTimer = null; }
   drivePushNow();
 }
-async function drivePushNow() {
-  if (S.syncMode !== 'drive') return;
-  if (!(S.googleAutoSync && S.googleClientId)) return;
-  if (!gTokenValid(GSCOPE_DRIVE)) return; // pas de jeton en cache → on n'ouvre JAMAIS d'écran d'auth ici (évite le renvoi vers Google en pleine navigation) ; la synchro au boot rattrapera
-  bgOp('drive', '☁️ Synchronisation Google Drive…');
-  try {
-    const token = await googleToken(false); // silencieux : jeton déjà en cache (retour immédiat, aucune UI)
-    const f = await driveFindFile(token);
-    if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); }
-    const snap = exportSnapshot(); const h = snapshotHash(snap);
-    if (h === _lastPushHash) { _syncDirty = false; return; } // E2 : rien de neuf depuis le dernier envoi → on évite un aller-retour inutile
-    await driveUpload(token, f ? f.id : null, snap); _lastPushHash = h; _syncDirty = false; // envoyé → plus rien en attente
-  } catch { /* hors-ligne ou jeton non consenti : la synchro au prochain boot rattrapera (on garde _syncDirty pour réessayer) */ }
-  finally { bgOp('drive', null); }
+function drivePushNow() {
+  if (S.syncMode !== 'drive') return Promise.resolve();
+  if (!(S.googleAutoSync && S.googleClientId)) return Promise.resolve();
+  if (!gTokenValid(GSCOPE_DRIVE)) return Promise.resolve(); // pas de jeton en cache → on n'ouvre JAMAIS d'écran d'auth ici (évite le renvoi vers Google en pleine navigation) ; la synchro au boot rattrapera
+  return withDriveLock(async () => { // L1-1f : sous le même verrou que googleSync (jamais de download/upload concurrents)
+    bgOp('drive', '☁️ Synchronisation Google Drive…');
+    try {
+      const token = await googleToken(false); // silencieux : jeton déjà en cache (retour immédiat, aucune UI)
+      const f = await driveFindFile(token);
+      if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); }
+      const snap = exportSnapshot(); const h = snapshotHash(snap);
+      if (h === _lastPushHash) { _syncDirty = false; return; } // E2 : rien de neuf depuis le dernier envoi → on évite un aller-retour inutile
+      await driveUpload(token, f ? f.id : null, snap); _lastPushHash = h; _syncDirty = false; // envoyé → plus rien en attente
+    } catch { /* hors-ligne ou jeton non consenti : la synchro au prochain boot rattrapera (on garde _syncDirty pour réessayer) */ }
+    finally { bgOp('drive', null); }
+  });
 }
 // D3 (mode fichier) : lit un fichier de synchro et le FUSIONNE (sans écraser).
 function importSyncFile(file, statusEl) {
@@ -12456,7 +12604,7 @@ function modalBackup() {
         LS.set('ftr.settings', S);
       }
       const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
-      const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
+      const isArch = (t) => { const d = t.date || ''; return !!d && (t.closed || d < todayStr()) && d < cutoff; }; // L1-1h : une tournée SANS date reste active (ne part pas en archive à chaque fusion)
       const tours = markToursReview(o.tours);
       LS.set('ftr.tournees', tours.filter((t) => !isArch(t))); LS.set('ftr.archive', tours.filter(isArch));
       $('bkStatus').className = 'status ok'; $('bkStatus').textContent = 'Données importées ✔ (réglages conservés) — Rechargement…';
@@ -12485,7 +12633,7 @@ function modalBackup() {
       if (tours0) {
         const tours = markToursReview(tours0);
         const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
-        const isArch = (t) => (t.closed || (t.date || '') < todayStr()) && (t.date || '') < cutoff;
+        const isArch = (t) => { const d = t.date || ''; return !!d && (t.closed || d < todayStr()) && d < cutoff; }; // L1-1h : une tournée SANS date reste active (ne part pas en archive à chaque fusion)
         LS.set('ftr.tournees', tours.filter((t) => !isArch(t)));
         LS.set('ftr.archive', tours.filter(isArch));
       }
@@ -12649,6 +12797,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('syncFile')) $('syncFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) importSyncFile(f, $('syncStatus')); e.target.value = ''; });
   if ($('googleConnect')) $('googleConnect').addEventListener('click', async () => { const h = $('googleStatus'); try { h.className = 'status'; h.textContent = 'Connexion…'; await googleToken(true); h.className = 'status ok'; h.textContent = 'Connecté ✔ — cliquez « Synchroniser ».'; } catch (e) { h.className = 'status err'; h.textContent = 'Erreur : ' + e.message; } });
   if ($('googleSyncBtn')) $('googleSyncBtn').addEventListener('click', () => googleSync(true, $('googleStatus'), true));
+  if ($('driveRestore')) $('driveRestore').addEventListener('click', modalDriveRestore);
   // Synchro Drive + Agenda : lancés SEULEMENT après le contrôle de mise à jour (fiabilité multi-appareils).
   // Si une MAJ est disponible, checkForUpdate recharge l'app (le .then n'est jamais atteint) → la synchro se fera avec le NOUVEAU code.
   const _bootSetupGate = () => { if (!S.setupDone) modalSetup(); }; // config initiale : ouverte seulement si non déjà validée (localement OU via Drive après fusion)
