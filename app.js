@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.49';
+const APP_VERSION = '1.7.50';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.50', date: '2026-07-16',
+    ajouts: [
+      'RESTAURER UNE VERSION — l\'appareil ne se charge plus que pour les 25 versions les plus récentes (un bouton « charger plus » va chercher les plus anciennes) : plus de téléchargement de tout l\'historique en data mobile à l\'ouverture. La fenêtre « Analyser » se ferme aussi en cliquant à côté.',
+    ],
+  },
   {
     version: '1.7.49', date: '2026-07-16',
     ajouts: [
@@ -4021,15 +4027,22 @@ function modalDriveRestore() {
           ]);
         });
       });
-      // Chargement PROGRESSIF de l'appareil par révision (les plus récentes d'abord) — téléchargements en fond, non bloquants ; s'arrête si la modale se ferme.
-      (async () => {
-        for (const rv of revs) {
+      // Chargement PROGRESSIF de l'appareil par révision (plus récentes d'abord). BORNÉ à un lot (protège la data mobile / le quota Drive : chaque révision = un téléchargement complet) ; bouton « charger plus » pour les versions plus anciennes. S'arrête si la modale se ferme.
+      const BATCH = 25; let loaded = 0;
+      list.insertAdjacentHTML('afterend', `<button class="btn small block" id="drLoadMore" style="margin-top:8px;${revs.length > BATCH ? '' : 'display:none'}"></button>`);
+      const loadBatch = async () => {
+        const btn = $('drLoadMore'); if (btn) btn.disabled = true;
+        const slice = revs.slice(loaded, loaded + BATCH); loaded += slice.length;
+        for (const rv of slice) {
           if (!$('drList')) return; // modale fermée → stop
           const devEl = rowByRev[rv.id]; if (!devEl || devEl.dataset.done) continue;
           try { const s = await driveDownloadRevision(token, file.id, rv.id); if (!$('drList')) return; devEl.textContent = deviceLabel(s && s.device); devEl.dataset.done = '1'; }
           catch { if (devEl) { devEl.textContent = '❔ appareil inconnu'; devEl.dataset.done = '1'; } }
         }
-      })();
+        const b2 = $('drLoadMore'); if (b2) { const rest = revs.length - loaded; if (rest <= 0) b2.style.display = 'none'; else { b2.disabled = false; b2.textContent = `📱 Charger l'appareil des ${Math.min(BATCH, rest)} versions plus anciennes (${rest} restantes)`; } }
+      };
+      const bLM = $('drLoadMore'); if (bLM) bLM.addEventListener('click', loadBatch);
+      loadBatch();
     } catch (e) { setSt('err', 'Erreur : ' + (e && e.message || e)); }
   })();
 }
@@ -4553,7 +4566,7 @@ function closeModal() { closeSubModal(); $('modal').classList.add('hidden'); $('
 // Modale SECONDAIRE empilée au-dessus de la principale (ex. « Analyser » une révision) : se ferme et revient sur la modale du dessous.
 function openSubModal(html) {
   let ov = document.getElementById('modal2');
-  if (!ov) { ov = document.createElement('div'); ov.id = 'modal2'; ov.className = 'modal-overlay'; ov.style.zIndex = '10001'; ov.innerHTML = '<div class="modal" id="modalBox2"></div>'; document.body.appendChild(ov); }
+  if (!ov) { ov = document.createElement('div'); ov.id = 'modal2'; ov.className = 'modal-overlay'; ov.style.zIndex = '10001'; ov.innerHTML = '<div class="modal" id="modalBox2"></div>'; document.body.appendChild(ov); ov.addEventListener('click', (e) => { if (e.target === ov) closeSubModal(); }); } // fermeture au clic sur le fond (cohérent avec la modale principale)
   ov.querySelector('#modalBox2').innerHTML = html; ov.classList.remove('hidden');
 }
 function closeSubModal() { const ov = document.getElementById('modal2'); if (ov) { ov.classList.add('hidden'); ov.querySelector('#modalBox2').innerHTML = ''; } }
