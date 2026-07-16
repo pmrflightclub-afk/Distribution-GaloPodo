@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.38';
+const APP_VERSION = '1.7.39';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.39', date: '2026-07-16',
+    ajouts: [
+      'COMPTA — dans la caisse liquide à plusieurs taux de TVA, les lignes (postes) additionnent maintenant exactement le total de la section (arrondi caisse réparti au taux réel).',
+      'COMPTA — l\'extourne d\'une note de crédit est répartie entre main d\'œuvre et matériel (plus imputée à 100 % à la main d\'œuvre) ; un reste à percevoir par virement n\'est plus compté comme « non reçu » dans le récapitulatif par client.',
+      'IMMUABILITÉ — l\'annulation d\'une facturation re-vérifie au dernier moment que la période comptable n\'a pas été déclarée entre-temps (sécurité multi-appareils).',
+    ],
+  },
   {
     version: '1.7.38', date: '2026-07-16',
     ajouts: [
@@ -7133,7 +7141,7 @@ function payArrondi(m, p) { if (!p || p.method !== 'liquide') return 0; const d 
 function cashRounding(m, payment) {
   const diffTTC = payArrondi(m, payment);
   if (!diffTTC) return { has: false, ht: 0, tva: 0, ttc: 0 };
-  const r = rate(); const ht = diffTTC / (1 + r); return { has: true, ht, tva: diffTTC - ht, ttc: diffTTC };
+  const cs = cashSplit(diffTTC, m); return { has: true, ht: cs.ht, tva: cs.tva, ttc: diffTTC }; // F4 : arrondi caisse réparti au taux EFFECTIF de la facture (comme cashSplit/liquideTotal) → en multi-taux, les postes somment exactement au total de la section caisse
 }
 // Info paiement partiel (liquide) : reçu + reste impayé (créance). Le total facturé reste le total rectifié.
 function partialPay(m, payment) {
@@ -7973,7 +7981,7 @@ function financeStats() {
       // Arrondi caisse (liquide) : le total facturé = total rectifié. Impayé (partiel) suivi à part (créance, ne change pas le CA).
       const pay = (t.payments || {})[m.clientId];
       c.arrondi += payArrondi(m, pay);
-      c.impaye += payImpaye(m, pay);
+      c.impaye += (pay && pay.partiel && pay.resteMode === 'virement') ? 0 : payImpaye(m, pay); // F3 : un reste à percevoir PAR VIREMENT n'est pas une créance non recouvrée (il rentre par virement) → ne pas amputer durablement le « reçu » du client
       c.rembourse += (pay && pay.rembourse) || 0; // #6 : remboursement annulation liquide (traçabilité — jamais additionné au CA/caisse)
       (m.materiel || []).forEach((x) => { if (isCred(x.nom)) return; const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0 }; ch.mat += x.ttc; });
       (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { if (isCred(n)) return; const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.dep += per; }); });
@@ -8080,7 +8088,7 @@ function comptaData(ym) {
         (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
         if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
         const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
-        const diff = payArrondi(m, p); if (Math.abs(diff) >= 0.005) { const dHT = diff / (1 + r); addPost('Arrondi caisse', dHT, diff - dHT, diff); }
+        const diff = payArrondi(m, p); if (Math.abs(diff) >= 0.005) { const cs = cashSplit(diff, m); addPost('Arrondi caisse', cs.ht, cs.tva, diff); } // F4 : taux effectif (postes ≡ total de section)
       }
     });
   });
@@ -8096,7 +8104,8 @@ function comptaData(ym) {
     liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
     factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
     notesCredit: ncMonth, notesCreditTotal,
-    baseMainOeuvreHT: Math.max(0, baseMO - ncHT), baseMaterielHT: baseMat, baseDeplacementHT: baseDep, tvaCollectee: Math.max(0, tvaCol - ncTVA) };
+    // F5 : l'extourne des notes de crédit (articles + MATÉRIEL du cheval crédité) était imputée à 100 % à la main d'œuvre. On la ventile désormais entre MO et matériel au prorata des bases du mois (le déplacement reste acquis — jamais crédité).
+    baseMainOeuvreHT: Math.max(0, baseMO - ncHT * ((baseMO + baseMat) > 0.005 ? baseMO / (baseMO + baseMat) : 1)), baseMaterielHT: Math.max(0, baseMat - ncHT * ((baseMO + baseMat) > 0.005 ? baseMat / (baseMO + baseMat) : 0)), baseDeplacementHT: baseDep, tvaCollectee: Math.max(0, tvaCol - ncTVA) };
 }
 // ================= F-b : moteur de provisions analytiques =================
 // Garde-fou : l'analytique ne lit QUE les mois « figés » = démarche liquide encodée (S.comptaStatus[ym].liquide === 'encode').
@@ -12047,6 +12056,7 @@ function modalCancelRdv(nom, opts) {
   document.querySelectorAll('#cxReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
   refreshMode();
   $('cxOk').addEventListener('click', () => {
+    if (comptaLocked(opts.tour, opts.clientId)) { alert('🔒 La période comptable de cette tournée a été déclarée entre-temps : l\'annulation/report n\'est plus possible (règle immuable).'); closeModal(); return; } // P2-1 : re-vérifie le verrou au COMMIT (déclaration faite depuis l\'ouverture de la modale, ou par un autre appareil)
     const note = $('cxNote').value.trim();
     if (status === 'reporte' && clientPaiementDone(opts.tour, opts.clientId)) { alert('⛔ Ce RDV est déjà payé (paiement validé) : la prestation est considérée comme effectuée, il ne peut pas être reporté (liquide, virement ou facture). Utilisez « Annulé » si vous devez émettre une note de crédit.'); return; }
     if (status === 'annule') { // ANNULATION : paiement du client OBLIGATOIRE d'abord
@@ -12173,6 +12183,7 @@ function modalCancelBilling(t) {
     checked.forEach((cb) => {
       const parts = cb.dataset.cv.split(':'); const ai = +parts[0], clientId = parts[1], chId = parts[2];
       const a = t.arrets[ai]; if (!a) return;
+      if (comptaLocked(t, clientId)) return; // P2-1 : re-vérifie le verrou au COMMIT (pas seulement l'état DOM `disabled` figé au rendu)
       const cl = (a.clients || []).find((x) => x.clientId === clientId); if (!cl) return;
       const cv = (cl.chevaux || []).find((x) => (chId && x.id != null && String(x.id) === chId) || norm(x.nom) === norm(cb.dataset.nom));
       if (!cv || chevalCancelled(cv)) return;
