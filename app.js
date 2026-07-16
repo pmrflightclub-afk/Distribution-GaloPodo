@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.54';
+const APP_VERSION = '1.7.55';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.55', date: '2026-07-16',
+    ajouts: [
+      'ÉDITEUR — le bouton « 🔒 Clôturer la tournée (figer) » est désormais GRISÉ tant que la tournée n\'est pas au jour J ET que tous les arrêts ne sont pas clôturés par client. Il ne s\'active qu\'une fois la tournée démarrée et chaque arrêt payé/validé (fini le risque de clic prématuré ; un survol explique pourquoi).',
+    ],
+  },
   {
     version: '1.7.54', date: '2026-07-16',
     ajouts: [
@@ -6293,6 +6299,8 @@ function openEditor() {
   if ($('edChangeArrivee')) $('edChangeArrivee').style.display = locked ? 'none' : '';
   if ($('edCloseWrap')) $('edCloseWrap').style.display = locked ? 'none' : '';
   if ($('edCloseWarn')) { const blk = locked ? [] : tourFinalizeBlock(currentTour); $('edCloseWarn').innerHTML = blk.length ? '📋 Finalisation (le jour de la tournée) — la <b>préparation</b> peut être complète ; ceci concerne le <b>stade fin de tournée</b> : chaque arrêt se clôture le jour J une fois payé et validé dans « Trajet du jour » (💶 Paiement & clôture). Restera à finaliser :<br>• ' + blk.map(esc).join('<br>• ') : ''; $('edCloseWarn').classList.toggle('hidden', !blk.length); }
+  // « Clôturer la tournée » n'est ACTIF que le JOUR J (tournée démarrée / non à venir) ET quand tous les arrêts sont clôturés par client.
+  if ($('edClose')) { const fut = statusOf(currentTour) === 'avenir'; const canClose = !locked && !fut && !tourFinalizeBlock(currentTour).length; $('edClose').disabled = !canClose; $('edClose').title = fut ? 'Disponible le jour de la tournée, une fois chaque arrêt clôturé par client (💶 Paiement & clôture)' : (canClose ? 'Figer la tournée' : 'Clôturez d\'abord chaque arrêt (💶 Paiement & clôture) dans « Trajet du jour »'); }
   const review = !!currentTour._review;
   $('edLockBanner').classList.toggle('hidden', !locked && !review);
   if ($('edLockBanner')) { if (review) $('edLockBanner').textContent = '📥 Tournée importée « à revalider » — vérifiez chaque arrêt puis « ✓ Valider » ci-dessous pour recalculer et figer.'; else if (locked) $('edLockBanner').textContent = currentTour.autoClosedAt ? '🤖 Tournée clôturée automatiquement · ' + hm(currentTour.autoClosedAt) + ' (retour + 3 h). Lecture seule.' : '🔒 Tournée clôturée (figée). Lecture seule.'; }
