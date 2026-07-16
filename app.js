@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.30';
+const APP_VERSION = '1.7.31';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.31', date: '2026-07-16',
+    ajouts: [
+      'FIABILITÉ — l\'impayé d\'un paiement partiel ne peut plus dépasser le montant réellement encaissé (contrôle unique appliqué partout) : l\'encaissement net ne peut plus devenir négatif en comptabilité.',
+      'SYNCHRO — un appareil pas encore « lié » au Drive ne fusionne plus ses données en douce avec un coffre distant déjà rempli (évite les doublons) : la liaison reste explicite via Réglages → Synchro.',
+      'SYNCHRO — une fiche ou une tournée supprimée ne peut plus « ressusciter » à cause d\'une horloge en avance sur un autre appareil (marqueur de suppression renforcé).',
+      'FIABILITÉ — un client référencé UNIQUEMENT par un impayé d\'une tournée ne peut plus être supprimé (plus de référence morte en comptabilité).',
+      'FIABILITÉ — un même client présent à DEUX adresses dans une tournée conserve désormais une clôture et une heure distinctes pour chaque arrêt (elles ne se confondent plus).',
+    ],
+  },
   {
     version: '1.7.30', date: '2026-07-16',
     ajouts: [
@@ -3059,7 +3069,7 @@ function hashRec(rec) { return hashStr(JSON.stringify(rec, (k, v) => (_HASH_SKIP
 //  - « ftr.tomb »     = tombstones (suppressions) — NON reconstructibles, petits, JAMAIS purgés.
 // Séparer les deux garantit qu'une libération d'espace ne peut jamais faire réapparaître une fiche supprimée.
 function syncMeta() {
-  const m = LS.get('ftr.syncmeta', {}); m.hash = m.hash || {};
+  const m = LS.get('ftr.syncmeta', {}); m.hash = m.hash || {}; m.upd = m.upd || {}; // m.upd = dernier updatedAt connu par kind/id (Fix (7) : durci les tombstones contre une horloge en avance)
   // Tombstones : store dédié en priorité ; sinon migration depuis l'ancien format combiné (m.tomb dans ftr.syncmeta).
   let tomb = LS.get('ftr.tomb', null);
   if (tomb == null) { tomb = m.tomb || {}; if (m.tomb) LS.set('ftr.tomb', tomb); } // migre une seule fois vers le store durable
@@ -3067,18 +3077,19 @@ function syncMeta() {
   return m;
 }
 // Persiste les métadonnées : d'abord les tombstones (petits, durables), ensuite les empreintes seules (sans les tombstones).
-function saveSyncMeta(m) { LS.set('ftr.tomb', (m && m.tomb) || {}); LS.set('ftr.syncmeta', { hash: (m && m.hash) || {} }); }
+function saveSyncMeta(m) { LS.set('ftr.tomb', (m && m.tomb) || {}); LS.set('ftr.syncmeta', { hash: (m && m.hash) || {}, upd: (m && m.upd) || {} }); }
 // Pose updatedAt sur les enregistrements modifiés et enregistre les suppressions en tombstones (par « kind »).
 function syncStamp(kind, arr) {
-  const m = syncMeta(); m.hash[kind] = m.hash[kind] || {}; m.tomb[kind] = m.tomb[kind] || {};
+  const m = syncMeta(); m.hash[kind] = m.hash[kind] || {}; m.tomb[kind] = m.tomb[kind] || {}; m.upd = m.upd || {}; m.upd[kind] = m.upd[kind] || {};
   const now = Date.now(); const seen = {};
   arr.forEach((rec) => {
     if (!rec.id) rec.id = uid(); seen[rec.id] = true;
     const h = hashRec(rec);
     if (m.hash[kind][rec.id] !== h) { rec.updatedAt = Math.max(now, (rec.updatedAt || 0) + 1); m.hash[kind][rec.id] = h; } else if (!rec.updatedAt) rec.updatedAt = now; // Fix (4) : updatedAt MONOTONE — une édition ne descend jamais sous la dernière valeur connue (garde anti décalage d'horloge / anti-rajeunissement)
+    m.upd[kind][rec.id] = rec.updatedAt; // Fix (7) : mémorise le dernier updatedAt connu par id (pour majorer un futur tombstone)
     if (m.tomb[kind][rec.id] && m.tomb[kind][rec.id] <= (rec.updatedAt || 0)) delete m.tomb[kind][rec.id]; // réapparu → tombstone périmé
   });
-  Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = now; delete m.hash[kind][id]; } }); // disparu → tombstone
+  Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = Math.max(now, (m.upd[kind][id] || 0) + 1); delete m.hash[kind][id]; delete m.upd[kind][id]; } }); // disparu → tombstone MAJORÉ sur le dernier updatedAt connu (Fix (7) : une suppression ne peut plus être ressuscitée par un updatedAt futur laissé par une dérive d'horloge)
   saveSyncMeta(m);
 }
 function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); markSyncDirty(); bgSaveFlash(); }
@@ -3852,7 +3863,10 @@ function drivePushNow() {
       const token = await googleToken(false); // silencieux : jeton déjà en cache (retour immédiat, aucune UI)
       const f = await driveFindFile(token);
       let rev0 = f ? f.headRevisionId : null;
-      if (f) { const remote = await driveDownload(token, f.id); if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote); }
+      const remote = f ? await driveDownload(token, f.id) : null;
+      const remoteHasData = !!(remote && Array.isArray(remote.tours) && ((remote.tours || []).length || (remote.clients || []).length || (remote.settings && remote.settings.setupDone)));
+      if (remoteHasData && !LS.get('ftr.driveLinked', false)) return; // #6 : appareil pas encore LIÉ + coffre distant non vide → on NE fusionne PAS en douce (doublons) et on n'écrase pas ; la liaison explicite passe par googleSync (Réglages → Synchro). _syncDirty conservé → réessai plus tard.
+      if (remote && Array.isArray(remote.tours)) importSnapshotMerge(remote);
       let snap = exportSnapshot(); const h = snapshotHash(snap);
       if (h === _lastPushHash) { _syncDirty = false; return; } // E2 : rien de neuf depuis le dernier envoi → on évite un aller-retour inutile
       if (f && rev0) { const revNow = await driveHeadRev(token, f.id); if (revNow && revNow !== rev0) { const remote2 = await driveDownload(token, f.id); if (remote2 && Array.isArray(remote2.tours)) importSnapshotMerge(remote2); snap = exportSnapshot(); } } // Fix (3) : le Drive a été écrit par un autre appareil depuis notre download → on re-fusionne AVANT d'écrire (pas de lost update)
@@ -5132,7 +5146,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
   $('cAddCheval').addEventListener('click', () => { w.chevaux.push({ id: uid(), nom: '', addrSource: 'specifique', addr: emptyAddr() }); renderCh(); saveDraft(); revealNew('cChevaux'); });
   if (existing) $('cDel').addEventListener('click', () => {
     // M3 : intégrité référentielle — on ne supprime jamais un client référencé par des tournées (sinon leur historique devient illisible « ? » et la compta incohérente).
-    const nT = allTours().filter((t) => (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === w.id))).length;
+    const nT = allTours().filter((t) => (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === w.id)) || (t.articles || []).some((ar) => ar.clientId === w.id)).length; // #8 : compte aussi les tournées où le client n'est référencé QUE par un article (impayé) → pas de référence morte
     if (nT > 0) { alert('🔒 Suppression impossible : ce client a ' + nT + ' tournée(s) (clôturées ou à venir). Supprimez ou réattribuez d\'abord ses tournées — sinon leur historique deviendrait illisible et la comptabilité incohérente.'); return; }
     if (confirm('Supprimer ce client ?')) { DRAFTS.clear(key); clients = clients.filter((x) => x.id !== w.id); saveClients(); closeModal(); renderClients(); }
   });
@@ -5654,8 +5668,9 @@ function reconcileTour(tour) {
   newArrets.forEach((na) => { const old = oldArrets.find((o) => norm(addrStr(o.addr)) === norm(addrStr(na.addr))); if (old) { if (typeof old.realMin === 'number') na.realMin = old.realMin; if (typeof old.validatedAt === 'number') na.validatedAt = old.validatedAt; if (old.heure) na.heure = old.heure; if (old.rdvDone) na.rdvDone = old.rdvDone; if (na.addr && (na.addr.lat == null || na.addr.lon == null) && old.addr && old.addr.lat != null && old.addr.lon != null) { na.addr.lat = old.addr.lat; na.addr.lon = old.addr.lon; } } }); // conserve la localisation (lat/lon) déjà calculée quand l'adresse (texte) n'a pas changé → une tournée « prête » ne se « dé-localise » plus si la fiche client perd sa géoloc (édition/synchro)
   // L4/L5 : préserver la clôture/RDV PAR CLIENT (clôtures indépendantes) et réconcilier l'heure (garder la plus tôt, non vide) ; puis recaler a.validatedAt.
   const oldClMap = {}, oldHeure = {};
-  oldArrets.forEach((a) => (a.clients || []).forEach((cl) => { oldClMap[cl.clientId] = cl; if (cl.heure && (!oldHeure[cl.clientId] || cl.heure < oldHeure[cl.clientId])) oldHeure[cl.clientId] = cl.heure; }));
-  newArrets.forEach((na) => { (na.clients || []).forEach((ncl) => { const oc = oldClMap[ncl.clientId]; if (oc) { if (typeof oc.validatedAt === 'number') ncl.validatedAt = oc.validatedAt; if (oc.rdvDone) ncl.rdvDone = true; } if (oldHeure[ncl.clientId] && (!ncl.heure || oldHeure[ncl.clientId] < ncl.heure)) ncl.heure = oldHeure[ncl.clientId]; }); syncArretValidated(na); });
+  const ckey = (cid, addr) => cid + '|' + norm(addrStr(addr)); // #9 : clé composite clientId+adresse → un même client à 2 adresses garde une clôture/heure PAR arrêt (plus d'aplatissement)
+  oldArrets.forEach((a) => (a.clients || []).forEach((cl) => { const k = ckey(cl.clientId, a.addr); oldClMap[k] = cl; if (cl.heure && (!oldHeure[k] || cl.heure < oldHeure[k])) oldHeure[k] = cl.heure; }));
+  newArrets.forEach((na) => { (na.clients || []).forEach((ncl) => { const k = ckey(ncl.clientId, na.addr); const oc = oldClMap[k]; if (oc) { if (typeof oc.validatedAt === 'number') ncl.validatedAt = oc.validatedAt; if (oc.rdvDone) ncl.rdvDone = true; } if (oldHeure[k] && (!ncl.heure || oldHeure[k] < ncl.heure)) ncl.heure = oldHeure[k]; }); syncArretValidated(na); });
   tour.arrets = newArrets.filter((a) => a.clients.length);
   if (JSON.stringify(tour.arrets) !== beforeArrets) changed = true;
   if (beforeAddr !== addrSig(tour.arrets)) { tour.result = null; invalidateTourRoute(oldArrets.map((a) => norm(addrStr(a.addr))), tour); } // adresses modifiées → recalcul géométrie + segments/heures périmés
@@ -5902,6 +5917,7 @@ function clientPaiementIssue(t, cid) {
   if (method === 'liquide') {
     if (!(p.rectifie != null || p.montantPaye != null)) return 'montant liquide non renseigné';
     if (p.partiel && !(p.impaye != null && p.impaye > 0)) return 'montant impayé non renseigné';
+    if (p.partiel) { const rectBase = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : null); if (rectBase != null && Math.round(p.impaye) > Math.round(rectBase)) return 'montant impayé supérieur au montant encaissé'; } // #5 : invariant impayé ≤ encaissé (SOURCE UNIQUE) → l'encaissé net (rectifié − impayé) ne devient jamais négatif
   }
   return null;
 }
@@ -12073,7 +12089,7 @@ function modalAdjustArrondi(t, list, msg) {
   const done = () => { closeModal(); refreshEverywhere(); openEditor(); };
   $('mX').addEventListener('click', done);
   $('ajOk').addEventListener('click', () => {
-    $('ajList').querySelectorAll('[data-aj]').forEach((inp) => { const c = list[+inp.dataset.aj]; const p = (t.payments || {})[c.clientId]; if (p) { const v = parseFloat(inp.value); p.rectifie = isFinite(v) ? v : Math.round(c.total); p.montantPaye = null; } });
+    $('ajList').querySelectorAll('[data-aj]').forEach((inp) => { const c = list[+inp.dataset.aj]; const p = (t.payments || {})[c.clientId]; if (p) { const v = parseFloat(inp.value); p.rectifie = isFinite(v) ? v : Math.round(c.total); p.montantPaye = null; if (p.partiel && p.impaye != null) p.impaye = Math.min(Math.max(0, p.impaye), Math.round(p.rectifie)); } }); // #5 : impayé clampé au nouvel encaissé (jamais > rectifié)
     currentTour = t; persistCurrentTour();
     done(); if (msg) alert(msg + ' Stats mises à jour.');
   });
@@ -12087,7 +12103,7 @@ function applyLiquideRefund(t, clientId, refund) {
   const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === clientId);
   const dep = m ? (m.totalTTC || 0) : 0; // après annulation = déplacement seul
   const gross = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : Math.round(dep));
-  const imp = p.partiel ? Math.max(0, (p.impaye != null ? p.impaye : 0)) : 0; // reste impayé JAMAIS perçu
+  const imp = p.partiel ? Math.min(Math.max(0, (p.impaye != null ? p.impaye : 0)), gross) : 0; // reste impayé JAMAIS perçu (#5 : clampé au brut → cash ≥ 0)
   const cashRecu = Math.max(0, Math.round(gross - imp)); // cash réellement encaissé = rectifié − impayé (on ne rembourse que ce qui a été reçu)
   let r = (refund == null || !isFinite(refund) || refund < 0) ? (cashRecu - floorEur(dep)) : refund;
   r = Math.max(0, Math.min(Math.round(r), cashRecu)); // jamais négatif, jamais plus que le cash réellement encaissé
@@ -12105,7 +12121,7 @@ function liquideRefundList(t, clientIds) {
     const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === cid);
     const dep = m ? (m.totalTTC || 0) : 0; // après annulation des articles+matériel, le total client = déplacement seul
     const gross = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : Math.round(dep));
-    const imp = p.partiel ? Math.max(0, (p.impaye != null ? p.impaye : 0)) : 0;
+    const imp = p.partiel ? Math.min(Math.max(0, (p.impaye != null ? p.impaye : 0)), gross) : 0; // #5 : impayé clampé au brut
     const oldEnc = Math.max(0, Math.round(gross - imp)); // cash réellement encaissé = rectifié − impayé jamais perçu (borne du remboursement)
     out.push({ clientId: cid, nom: clientName(cid), dep, oldEnc });
   });
