@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.58';
+const APP_VERSION = '1.7.59';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.59', date: '2026-07-16',
+    ajouts: [
+      'INTERNE (socle) — préparation de l\'annulation « par service » : pouvoir annuler une prestation précise d\'un cheval (ex. la visite en gardant le parage), et non plus seulement le cheval entier. Aucun changement visible pour l\'instant : le calcul, les factures et les stats restent identiques tant que l\'interface dédiée n\'est pas activée.',
+    ],
+  },
   {
     version: '1.7.58', date: '2026-07-16',
     ajouts: [
@@ -6974,6 +6980,18 @@ function chevalFait(c) { return !chevalCancelled(c) && !!(c && (c.parage || c.fo
 function chevalCredited(c) { return !!(c && c.cancel && c.cancel.credited); }
 // « Facturé » = pris en charge OU payé-puis-annulé (facture figée). Sert au recalcul argent : un cheval crédité ne doit JAMAIS sortir de la facture (sinon double réduction avec la NC).
 function chevalBilled(c) { return chevalFait(c) || chevalCredited(c); }
+// Annulation PAR SERVICE (liquide) — cf. mémoire [[galopodo-annulation-par-service]].
+//  cv.cancel.services = liste des ACTES annulés (parage/visite/fourbure/npas/infection/difficile/lourd/photo) ; cv.cancel.articles = ids d'articles manuels annulés (part du cheval).
+//  Retour : null (pas d'annulation « annule » : non annulé OU reporté) · 'ALL' (cheval ENTIÈREMENT annulé — ou donnée existante sans .services → comportement identique) · Set (annulation PARTIELLE, actes masqués un par un).
+function chevalCancelSet(cv) {
+  if (!cv || !cv.cancel || cv.cancel.status !== 'annule') return null;
+  if (!Array.isArray(cv.cancel.services)) return 'ALL';
+  return new Set(cv.cancel.services);
+}
+function svcCancelled(cv, key) { const s = chevalCancelSet(cv); return s === 'ALL' || (s instanceof Set && s.has(key)); }
+function artCancelledFor(cv, artId) { const s = chevalCancelSet(cv); if (s === 'ALL') return true; return !!(s instanceof Set && Array.isArray(cv.cancel.articles) && cv.cancel.articles.indexOf(artId) >= 0); }
+// Annulation PARTIELLE : reste-t-il une prestation FACTURABLE (parage/visite/photo — seules bases indépendantes ; patho/difficile/lourd ne facturent qu'avec parage OU visite) ? Sert à ne PAS traiter le client comme « entièrement annulé ».
+function chevalHasKeptService(c) { const s = chevalCancelSet(c); if (!(s instanceof Set)) return false; return (!!c.parage && !s.has('parage')) || (!!c.visite && !s.has('visite')) || (photoHasBillableStades(c.photo) && !s.has('photo')); }
 // ===== Photos / planches : tarifs par nombre d'angles + stades facturables =====
 const PHOTO_NB = { 3: 12, 4: 16, 5: 20 }; // nb de photos par modèle d'angles
 // Tarif HT d'un modèle d'angles : 3 = référence (manuel) ; 4 & 5 = manuels OU calculés en % : base/photo (=HT3÷12) × (1−%) × nb photos du modèle.
@@ -6989,7 +7007,7 @@ const plancheStadeBillable = (stade) => !/radio/.test(norm(stade || ''));
 const photoHasBillableStades = (photo) => !!(photo && (photo.stades || []).some(plancheStadeBillable));
 // (Le montant HT « photos » d'un cheval est calculé en ligne dans computeResultMoney.)
 // Client entièrement annulé à un arrêt = avait des chevaux, aucun facturé (→ pas de déplacement facturé, mais compte toujours dans la géométrie figée).
-function clientAllCancelled(cl) { const ch = (cl && cl.chevaux) || []; return ch.length > 0 && !ch.some((c) => chevalBilled(c) || (!chevalCancelled(c) && photoHasBillableStades(c.photo))); } // un cheval avec seule une planche facturable garde le client actif (déplacement + planche)
+function clientAllCancelled(cl) { const ch = (cl && cl.chevaux) || []; return ch.length > 0 && !ch.some((c) => chevalBilled(c) || chevalHasKeptService(c) || (!chevalCancelled(c) && photoHasBillableStades(c.photo))); } // un cheval avec seule une planche facturable — OU une prestation gardée après annulation partielle — garde le client actif (déplacement + prestations restantes)
 function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, payments) {
   articles = articles || (currentTour && currentTour.articles) || [];
   reducs = reducs || (currentTour && currentTour.reductions) || {};
@@ -7066,17 +7084,20 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
       });
     });
   });
-  // Chevaux annulés par client (pour retirer aussi leurs articles manuels — produit non livré).
-  const cancelByClient = {};
-  rows.forEach((r) => r.clients.forEach((cl) => { if (cl.cancelledNoms && cl.cancelledNoms.length) { (cancelByClient[cl.clientId] = cancelByClient[cl.clientId] || new Set()); cl.cancelledNoms.forEach((n) => cancelByClient[cl.clientId].add(n)); } }));
+  // Chevaux annulés par client (pour retirer aussi leurs articles manuels — produit non livré) + annulations d'article CIBLÉES (annulation partielle par service, clé « nom|artId »).
+  const cancelByClient = {}, artCancelByClient = {};
+  rows.forEach((r) => r.clients.forEach((cl) => {
+    if (cl.cancelledNoms && cl.cancelledNoms.length) { (cancelByClient[cl.clientId] = cancelByClient[cl.clientId] || new Set()); cl.cancelledNoms.forEach((n) => cancelByClient[cl.clientId].add(n)); }
+    if (cl.artCancels && cl.artCancels.length) { (artCancelByClient[cl.clientId] = artCancelByClient[cl.clientId] || new Set()); cl.artCancels.forEach((k) => artCancelByClient[cl.clientId].add(k)); }
+  }));
   // Articles (lignes manuelles) — TVA par ligne
   (articles || []).forEach((a) => {
     const orig = a.chevalNoms || [];
     if (!a.impaye && !orig.length) return; // article normal : lié à ≥1 cheval ; impayé : sans cheval, quantité 1
     // Quantité PAR cheval (chevalQtes id→qté) ; à défaut 1/cheval. Carte nom→qté pour la répartition dans les stats.
     const qByNom = {}; if (!a.impaye) orig.forEach((n, idx) => { const id = (a.chevalIds || [])[idx]; qByNom[n] = Math.max(1, (a.chevalQtes && id != null && a.chevalQtes[id]) || 1); });
-    const cancelSet = cancelByClient[a.clientId];
-    const noms = (cancelSet && !a.impaye) ? orig.filter((n) => !cancelSet.has(norm(n))) : orig; // retire les chevaux annulés
+    const cancelSet = cancelByClient[a.clientId], artSet = artCancelByClient[a.clientId];
+    const noms = a.impaye ? orig : orig.filter((n) => !(cancelSet && cancelSet.has(norm(n))) && !(artSet && artSet.has(norm(n) + '|' + a.id))); // retire les chevaux ENTIÈREMENT annulés + les annulations d'article ciblées (par service)
     if (!a.impaye && !noms.length) return; // toutes les cibles annulées → ligne retirée
     const qte = a.impaye ? 1 : noms.reduce((s, n) => s + (qByNom[n] || 1), 0);
     const off = !a.impaye && !!a.offert; // « Offrir » : ligne mise à 0 (prixHT conservé pour les stats)
@@ -7126,7 +7147,21 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
 function rowFromArret(a, geo) {
   return { label: labelFor(a), adresse: addrStr(a.addr), lat: a.addr.lat, lon: a.addr.lon, type: a.type || 'tournee',
     nbClients: Math.max(1, arretNbClients(a)),
-    clients: (a.clients || []).map((cl) => { const cli = clients.find((x) => x.id === cl.clientId); return { clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl), cancelledNoms: (cl.chevaux || []).filter((c) => chevalCancelled(c) && !chevalCredited(c)).map((c) => norm(c.nom)), chevaux: (cl.chevaux || []).filter((c) => chevalBilled(c) || (!chevalCancelled(c) && photoHasBillableStades(c.photo))).map((c) => { const fiche = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null; return { nom: c.nom, fourbure: !!c.fourbure, npas: !!c.npas, infection: !!c.infection, parage: !!c.parage, visite: !!c.visite, visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile, difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined, photo: c.photo || null }; }) }; }),
+    clients: (a.clients || []).map((cl) => {
+      const cli = clients.find((x) => x.id === cl.clientId);
+      // Annulations d'ARTICLES manuels ciblées (annulation partielle par service) : clé « nom|artId ».
+      const artCancels = [];
+      (cl.chevaux || []).forEach((c) => { const s = chevalCancelSet(c); if (s instanceof Set && Array.isArray(c.cancel.articles)) c.cancel.articles.forEach((aid) => artCancels.push(norm(c.nom) + '|' + aid)); });
+      // Garde le cheval dans le calcul si : crédité (NC neutralise) · annulation PARTIELLE (services masqués) · non annulé et facturé/planche. Exclut : cheval ENTIÈREMENT annulé (comportement actuel) et reporté.
+      const keep = (c) => { if (chevalCredited(c)) return true; const s = chevalCancelSet(c); if (s === 'ALL') return false; if (s instanceof Set) return true; if (chevalCancelled(c)) return false; return chevalBilled(c) || photoHasBillableStades(c.photo); };
+      return { clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl),
+        cancelledNoms: (cl.chevaux || []).filter((c) => !chevalCredited(c) && chevalCancelled(c) && !(chevalCancelSet(c) instanceof Set)).map((c) => norm(c.nom)), // cheval ENTIÈREMENT retiré (annulé-total OU reporté) → tous ses articles manuels retirés ; le partiel passe par artCancels
+        artCancels,
+        chevaux: (cl.chevaux || []).filter(keep).map((c) => {
+          const fiche = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null;
+          const cSet = chevalCancelSet(c); const kill = (k) => cSet instanceof Set && cSet.has(k); // 'ALL' déjà exclu par keep() ; ne masque que les annulations PARTIELLES
+          return { nom: c.nom, fourbure: !!c.fourbure && !kill('fourbure'), npas: !!c.npas && !kill('npas'), infection: !!c.infection && !kill('infection'), parage: !!c.parage && !kill('parage'), visite: !!c.visite && !kill('visite'), visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile && !kill('difficile'), difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd) && !kill('lourd'), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined, photo: kill('photo') ? null : (c.photo || null) };
+        }) }; }),
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
