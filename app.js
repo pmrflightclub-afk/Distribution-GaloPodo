@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.42';
+const APP_VERSION = '1.7.43';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.43', date: '2026-07-16',
+    ajouts: [
+      'PAIEMENT — cocher « Facture nécessaire » demande désormais une confirmation, car c\'est une pièce comptable : une facture est émise, un avoir sera créé à l\'annulation, et le paiement passe en section « Facture pro » de la Compta. (Décocher ne demande rien.)',
+    ],
+  },
   {
     version: '1.7.42', date: '2026-07-16',
     ajouts: [
@@ -12399,6 +12405,8 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
       recomputeTourLocal(t); refreshFacture(); upd();
     }));
     const pt = block.querySelector('[data-partiel]'); if (pt) pt.addEventListener('change', () => { const pr = block.querySelector('.pay-reste'); if (pr) pr.style.display = pt.checked ? '' : 'none'; upd(); });
+    // « Facture » = pièce comptable : confirmation à la COCHE (conséquences : avoir à l'annulation, section Compta « Facture pro »). Décocher ne demande rien.
+    const fac = block.querySelector('[data-fac]'); if (fac) fac.addEventListener('change', () => { if (fac.checked && !confirm('Cocher « Facture nécessaire » : une facture (pièce comptable) sera émise pour ' + clientName(cid) + '.\n\n• À l\'annulation d\'une prestation de ce client, un AVOIR (note de crédit) sera créé.\n• En Compta, ce paiement passe en section « Facture pro » (liquide ou virement).\n\nConfirmer ?')) fac.checked = false; });
     // Champs à l'euro : recalcul en direct + normalisation (aucune décimale) à la sortie du champ.
     ['[data-rectifie]', '[data-impaye]'].forEach((sel) => { const i = block.querySelector(sel); if (i) { i.addEventListener('input', upd); i.addEventListener('blur', () => { if (i.value !== '') i.value = String(Math.max(0, Math.round(parseNum(i.value)))); }); } });
     upd();
