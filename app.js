@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.48';
+const APP_VERSION = '1.7.49';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.49', date: '2026-07-16',
+    ajouts: [
+      'CORRECTIFS (auto-audit) — deux appareils du même type restent bien distincts (l\'identifiant d\'appareil ne peut plus être écrasé par une synchro ni changer entre deux ouvertures). La fusion d\'une tournée en préparation ne « ressuscite » plus un cheval retiré (devenu inactif) avec ses actes, et ne dédouble plus une ligne d\'impayé.',
+      'COMPTA (auto-audit) — un RDV REPORTÉ avec montant, encaissé à la visite suivante, est maintenant bien compté dans les bases (TVA/provisions) au mois de son encaissement (il n\'était compté nulle part). L\'arrondi de caisse n\'est plus perdu si l\'on repasse un client liquide→virement→liquide.',
+    ],
+  },
   {
     version: '1.7.48', date: '2026-07-16',
     ajouts: [
@@ -2744,7 +2751,7 @@ if (typeof S.setupLocked !== 'boolean') S.setupLocked = false;
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (typeof S.googleClientId !== 'string') S.googleClientId = '';
 if (typeof S.deviceName !== 'string') S.deviceName = '';                 // nom donné à CET appareil (device-local) → étiquette de synchro
-if (!S.deviceId) S.deviceId = 'dv' + Math.random().toString(36).slice(2, 8); // identifiant STABLE et unique par appareil (différencie 2 supports du même type)
+if (!S.deviceId) { S.deviceId = 'dv' + Math.random().toString(36).slice(2, 8); try { LS.set('ftr.settings', S); } catch (e) {} } // identifiant STABLE et unique par appareil (différencie 2 supports du même type) ; persisté TOUT DE SUITE → id inchangé entre rechargements
 if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 // « Appareil lié au Drive » = drapeau LOCAL (non synchronisé). Les utilisateurs Drive EXISTANTS sont considérés déjà liés (aucune gêne) ;
 // un appareil neuf reste « non lié » tant qu'il n'a pas fait le choix explicite (fusionner / adopter / envoyer) au 1ᵉʳ lien.
@@ -3069,7 +3076,7 @@ function bgSaveFlash() { // enregistrement local (instantané) : brève confirma
 // L1-1d : 'adresses' et 'plancheTodo' AJOUTÉES → fusion par enregistrement AVEC tombstones (une suppression ne « ressuscite » plus après synchro).
 const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone']; // #7a : plancheDone AJOUTÉE → fusion par enregistrement AVEC tombstones (une planche « refaite »/retirée ne ressuscite plus)
 // P1-9 : réglages PROPRES à l'appareil — SOURCE UNIQUE partagée par mergeSettings ET applyRemoteReplace (fin de la classe de bug « deux listes device-local divergentes » : calPush/calDureeMin manquaient côté applyRemoteReplace → bascule silencieuse du push agenda à l'adoption/restauration).
-const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile', 'deviceName'];
+const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile', 'deviceName', 'deviceId'];
 let _lastPlancheHash = null; // L1-1e : empreinte de la config planche pour n'horodater `plancheUpdatedAt` que lorsqu'elle change réellement.
 function saveSettings() {
   S.updatedAt = Date.now();
@@ -3277,23 +3284,25 @@ function deepMergeTourBody(to, from) {
   if (!to || !from || to.closed || from.closed) return;
   if (from.reductions) { to.reductions = to.reductions || {}; Object.keys(from.reductions).forEach((cid) => { const v = to.reductions[cid]; if (v == null || v === '') to.reductions[cid] = from.reductions[cid]; }); }
   if (!(to.returnRealMin > 0) && from.returnRealMin > 0) to.returnRealMin = from.returnRealMin; // temps de retour réel : garder si le gagnant n'en a pas
-  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.id && !to.articles.some((x) => x.id === a.id)) to.articles.push(JSON.parse(JSON.stringify(a))); }); } // article saisi sur l'autre appareil → conservé
+  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.id && !a.impaye && !to.articles.some((x) => x.id === a.id)) to.articles.push(JSON.parse(JSON.stringify(a))); }); } // article saisi sur l'autre appareil → conservé. Les articles d'IMPAYÉ sont EXCLUS (gérés par graftClosure, dédup par impayeId → pas de double-ligne d'une même créance).
+  // Un cheval du perdant n'est réajouté QUE s'il est ACTIF dans la fiche (même autorité que reconcileTour) → un cheval devenu inactif/supprimé de la fiche (donc retiré des tournées) ne « ressuscite » plus avec ses actes.
+  const chevalActive = (cid, cv) => { const c = clients.find((x) => x.id === cid); return !!(c && (typeof activeChevaux === 'function' ? activeChevaux(c) : (c.chevaux || [])).some((h) => (h.id != null && cv.id != null && h.id === cv.id) || (norm(cv.nom) && norm(h.nom) === norm(cv.nom)))); };
   const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } };
   const toByKey = {}; (to.arrets || []).forEach((a) => { const k = key(a); if (k) toByKey[k] = a; });
   (from.arrets || []).forEach((fa) => {
     const k = key(fa); if (!k) return;
     let ta = toByKey[k];
-    if (!ta) { (to.arrets = to.arrets || []).push(JSON.parse(JSON.stringify(fa))); toByKey[k] = ta = fa; return; } // arrêt présent seulement chez l'autre → AJOUTÉ
+    if (!ta) { const clone = JSON.parse(JSON.stringify(fa)); (to.arrets = to.arrets || []).push(clone); toByKey[k] = ta = clone; return; } // arrêt présent seulement chez l'autre → AJOUTÉ (la map pointe sur le CLONE poussé, pas l'original)
     if (!(ta.realMin > 0) && fa.realMin > 0) ta.realMin = fa.realMin;                 // temps de route réel : compléter
     if (!ta.heure && fa.heure) ta.heure = fa.heure;
     const tcById = {}; (ta.clients || []).forEach((cl) => { tcById[cl.clientId] = cl; });
     (fa.clients || []).forEach((fc) => {
       let tc = tcById[fc.clientId];
-      if (!tc) { (ta.clients = ta.clients || []).push(JSON.parse(JSON.stringify(fc))); return; } // client présent seulement chez l'autre → AJOUTÉ
+      if (!tc) { if (!clients.some((x) => x.id === fc.clientId)) return; (ta.clients = ta.clients || []).push(JSON.parse(JSON.stringify(fc))); return; } // client présent seulement chez l'autre → AJOUTÉ (sauf s'il a été SUPPRIMÉ de la fiche)
       if (!tc.heure && fc.heure) tc.heure = fc.heure;
       (fc.chevaux || []).forEach((fcv) => {
-        const tcv = (tc.chevaux || []).find((x) => (x.id != null && x.id === fcv.id) || norm(x.nom) === norm(fcv.nom));
-        if (!tcv) { (tc.chevaux = tc.chevaux || []).push(JSON.parse(JSON.stringify(fcv))); return; } // cheval présent seulement chez l'autre → AJOUTÉ (reconcile validera vs fiche)
+        const tcv = (tc.chevaux || []).find((x) => (x.id != null && fcv.id != null && x.id === fcv.id) || (norm(fcv.nom) && norm(x.nom) === norm(fcv.nom)));
+        if (!tcv) { if (!chevalActive(fc.clientId, fcv)) return; (tc.chevaux = tc.chevaux || []).push(JSON.parse(JSON.stringify(fcv))); return; } // cheval présent seulement chez l'autre → AJOUTÉ seulement s'il est ACTIF dans la fiche (sinon = retrait légitime, ne pas ressusciter)
         if (tcv.consultMin == null && typeof fcv.consultMin === 'number') tcv.consultMin = fcv.consultMin; // consultation : compléter (les ACTES restent ceux du gagnant → pas de fusion ambiguë de facturation)
         if (!tcv.photo && fcv.photo) tcv.photo = fcv.photo;
       });
@@ -3316,7 +3325,7 @@ function mergeOneCheval(a, b) {
   h.adrDel = mergeTomb(b.adrDel, a.adrDel); // tombstones d'ADRESSES (suppressions) : survivent à la fusion → pas de résurrection
   if (Array.isArray(a.addrHistory) || Array.isArray(b.addrHistory)) { const byK = {}; (b.addrHistory || []).concat(a.addrHistory || []).forEach((x) => { const kk = norm(addrStr(x)); if (kk) byK[kk] = x; }); h.addrHistory = Object.values(byK); } // #7b : union de l'historique d'adresses (déménagements) → ne jamais perdre celui de l'autre appareil en fusion
   if (Array.isArray(a.adresses) || Array.isArray(b.adresses)) {
-    const byId = {}; (b.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); (a.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); // récent gagne
+    const byId = {}; const putA = (e) => { if (!e || !e.id) return; const cur = byId[e.id]; if (!cur || (e.updatedAt || 0) >= (cur.updatedAt || 0)) byId[e.id] = e; }; (b.adresses || []).forEach(putA); (a.adresses || []).forEach(putA); // P2-C : version d'une adresse choisie par SA date (updatedAt) — une édition concurrente de la même adresse n'est plus perdue si elle est sur l'appareil au client « plus ancien »
     const aIds = new Set((a.adresses || []).map((e) => e.id)); // présente chez le récent = vivante
     const list = Object.values(byId).filter((e) => aIds.has(e.id) || !((a.adrDel || {})[e.id]) || (e.updatedAt || 0) > ((a.adrDel || {})[e.id] || 0)).map((e) => Object.assign({}, e)); // présente seulement chez l'ancien → gardée SAUF si le récent l'a supprimée APRÈS sa dernière édition (LOT I : tombstone résolu par date → une adresse rééditée ne se fait plus re-supprimer par un tombstone plus ancien)
     const aAct = (a.adresses || []).find((e) => e.actif); const aid = aAct ? aAct.id : null; // l'adresse active du récent fait foi
@@ -3461,7 +3470,7 @@ function deviceInfo() {
   const phone = !tablet && /Mobile|iPhone|iPod|Android/.test(ua);
   return { id: S.deviceId || '', type: phone ? 'phone' : tablet ? 'tablet' : 'pc', name: (S.deviceName || '').trim(), at: Date.now() };
 }
-const deviceLabel = (d) => { if (!d || !d.type) return '❔ appareil inconnu'; const t = d.type === 'phone' ? '📱 Téléphone' : d.type === 'tablet' ? '📱 Tablette' : '💻 PC'; return d.name ? `${t} « ${esc(d.name)} »` : (d.id ? `${t} ·${esc(String(d.id).slice(-4))}` : t); }; // nom si donné, sinon type + suffixe d'id (2 appareils du même type restent distincts)
+const deviceLabel = (d) => { if (!d || !d.type) return '❔ appareil inconnu'; const t = d.type === 'phone' ? '📱 Téléphone' : d.type === 'tablet' ? '📱 Tablette' : '💻 PC'; return d.name ? `${t} « ${d.name} »` : (d.id ? `${t} ·${String(d.id).slice(-4)}` : t); }; // BRUT (non échappé) : les appelants esc() pour le HTML, textContent affiche tel quel → plus de double-échappement des noms avec apostrophe/&
 // Modale de saisie du nom de l'appareil (ouverte par le bandeau rouge d'accueil et par le champ Réglages).
 function modalDeviceName() {
   openModal(`<div class="modal-head"><b>📱 Nom de cet appareil</b><button class="x" id="mX">✕</button></div>
@@ -6490,7 +6499,7 @@ function addClientToTour(c, chevaux) {
   (c.impayes || []).filter((im) => !im.collected).forEach((im) => { // reste « reporté » (liquide) réintégré automatiquement à la tournée du client
     if (currentTour.articles.some((a) => a.impayeId === im.id)) return;
     const r = rate(); const ht = im.ttc / (1 + r);
-    currentTour.articles.push({ id: uid(), clientId: c.id, chevalNoms: [], chevalIds: [], libelle: 'Impayé du ' + fmtDateFr(im.date), prixHT: ht, tvaPct: S.tvaRate, impaye: true, impayeId: im.id });
+    currentTour.articles.push({ id: uid(), clientId: c.id, chevalNoms: [], chevalIds: [], libelle: 'Impayé du ' + fmtDateFr(im.date), prixHT: ht, tvaPct: S.tvaRate, impaye: true, impayeId: im.id, reporte: !!im.reporte }); // F1 : conserver le flag « reporté » → à la collecte, un RDV REPORTÉ (non facturé au mois source) est un CA NEUF ; un impayé partiel (déjà facturé au source) ne l'est pas
     im.collected = true; im.collectedTourId = currentTour.id; addedImpaye = true;
   });
   if (addedImpaye) saveClients();
@@ -8116,7 +8125,7 @@ function financeStats() {
       const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, impaye: 0, rembourse: 0, chevaux: {} };
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
-      const art = (m.articles || []).reduce((s, a) => s + (a.impaye ? 0 : a.ttc), 0); // remise déjà appliquée ligne par ligne ; P1-3 : exclut la ligne « Impayé du … » (collecte d'un CA déjà compté le mois d'origine → pas de double-comptage du total client)
+      const art = (m.articles || []).reduce((s, a) => s + ((a.impaye && !a.reporte) ? 0 : a.ttc), 0); // remise déjà appliquée ligne par ligne ; P1-3/F1 : exclut la ligne « Impayé du … » d'un PARTIEL (déjà compté au mois d'origine) mais garde un REPORTÉ (CA neuf)
       // L8 : chevaux payés-annulés (note de crédit) → on retire leur MATÉRIEL et ARTICLES des ventes (remboursés par la NC),
       // mais le DÉPLACEMENT reste ACQUIS (la NC ne rembourse jamais le déplacement — le pro s'est déplacé), cohérent avec la Compta et la règle d'annulation.
       const matCred = (m.materiel || []).reduce((s, x) => s + (isCred(x.nom) ? x.ttc : 0), 0);
@@ -8171,8 +8180,8 @@ function setComptaPayment(tourId, clientId, method) {
   const keepLiq = { rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null, comptaPeriod: prev.comptaPeriod || null, rembourse: prev.rembourse || 0 };
   if (method === 'liquide') t.payments[clientId] = Object.assign({ method: 'liquide', facture: false }, keepLiq);
   else if (method === 'facliq') t.payments[clientId] = Object.assign({ method: 'liquide', facture: true }, keepLiq); // facture pro payée en liquide
-  else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 };
-  else if (method === 'facvir') t.payments[clientId] = { method: 'virement', facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // facture pro payée par virement
+  else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: (prev.rectifie != null ? prev.rectifie : null), partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // F3 : garder rectifie (ignoré en virement, mais retrouvé si on repasse en liquide → l'arrondi caisse n'est plus perdu)
+  else if (method === 'facvir') t.payments[clientId] = { method: 'virement', facture: true, rectifie: (prev.rectifie != null ? prev.rectifie : null), partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // facture pro payée par virement
   else t.payments[clientId] = { method: null, facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // « à classer » (tournée à venir)
   // #5 : rembourse (traçabilité annulation liquide) conservé dans TOUTES les branches — une bascule de mode en Compta ne l'efface plus.
   // P1-1 : la remise LIQUIDE (S.reducLiquide) est couplée à la MÉTHODE dans computeResultMoney → sans recalcul, `m.totalTTC` reste figé
@@ -8202,8 +8211,8 @@ function comptaData(ym) {
         const depHT = (m.deplacement || []).reduce((s, l) => s + (l.partHT || 0), 0);
         const matHT = m.htMat || 0;
         // P1-3 : une ligne « Impayé du … » réinjectée est la COLLECTE d'un CA déjà accru le mois d'origine, pas un CA neuf → l'exclure de la base analytique (sinon double-comptage → provisions social/TVA surévaluées).
-        const impHT = (m.articles || []).reduce((s, a) => s + (a.impaye ? (a.ht || 0) : 0), 0);
-        const impTVA = (m.articles || []).reduce((s, a) => s + (a.impaye ? (a.tva || 0) : 0), 0);
+        const impHT = (m.articles || []).reduce((s, a) => s + ((a.impaye && !a.reporte) ? (a.ht || 0) : 0), 0);  // F1 : n'exclure que les impayés PARTIELS (déjà facturés au mois source) ; un impayé REPORTÉ = CA neuf à reconnaître à la collecte
+        const impTVA = (m.articles || []).reduce((s, a) => s + ((a.impaye && !a.reporte) ? (a.tva || 0) : 0), 0);
         baseMat += matHT; baseDep += depHT; baseMO += (m.totalHT || 0) - matHT - depHT - impHT; tvaCol += (m.totalTVA || 0) - impTVA;
       }
       const p = (t.payments || {})[m.clientId];
