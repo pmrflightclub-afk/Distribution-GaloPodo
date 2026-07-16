@@ -53,6 +53,7 @@
       <button class="tab" data-tab="reglages">Réglages</button>
     </div>
   </nav>
+  <button type="button" id="deviceNameBanner" class="topbanner topbanner-danger hidden">📱 Nommez cet appareil pour la synchro — cliquez ici</button>
 
   <!-- ============ ACCUEIL ============ -->
   <main id="tab-accueil" class="tab-panel active">
@@ -998,6 +999,7 @@
       <p class="hint">Un <b>seul ID client Google</b> (le vôtre) et une <b>seule connexion</b> activent <b>Drive</b> (synchro auto téléphone↔PC) <b>ET</b> l'<b>Agenda</b>. La connexion se fait avec <b>votre compte Google</b> (votre e-mail). Elle reste active <b>~1 h</b> puis, si l'app est restée fermée longtemps, une reconnexion est demandée (limite Google côté navigateur). Rien n'est partagé avec l'auteur de l'app.</p>
       <p class="hint" id="syncDriveDim" style="display:none">ℹ️ La <b>synchro Drive</b> est en veille (mode fichier actif ci-dessus). L'<b>Agenda</b> reste utilisable ; l'ID client ci-dessous sert aussi à l'Agenda.</p>
       <label>ID client Google (Drive + Agenda)<input type="text" id="setGoogleClientId" placeholder="…apps.googleusercontent.com" autocomplete="off" /></label>
+      <label>Nom de cet appareil (pour la synchro)<input type="text" id="setDeviceName" maxlength="40" placeholder="ex. iPhone Jonathan, PC bureau…" autocomplete="off" /></label>
       <label class="chk2"><input type="checkbox" id="setGoogleAuto"/> Synchroniser Drive automatiquement à l'ouverture</label>
       <div class="actions two"><button class="btn" id="googleConnect">🔗 Connecter Drive</button><button class="btn primary" id="googleSyncBtn">🔄 Synchroniser</button></div>
       <p class="status" id="googleStatus"></p>

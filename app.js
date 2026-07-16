@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.46';
+const APP_VERSION = '1.7.47';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.47', date: '2026-07-16',
+    ajouts: [
+      'APPAREILS — un bandeau rouge pleine largeur (sous la navigation) invite à NOMMER cet appareil tant que ce n\'est pas fait ; un clic ouvre la saisie. Le nom (« iPhone Jonathan », « PC bureau »…) distingue chaque support dans la synchro. Réglable aussi dans Réglages → Synchro. Chaque appareil reçoit en plus un identifiant unique stable → deux appareils du même type restent différenciables.',
+      'AFFICHAGE — le bandeau « reconnexion Google » passe désormais EN HAUT (sous le bandeau nom d\'appareil), au lieu du bas de page.',
+    ],
+  },
   {
     version: '1.7.46', date: '2026-07-16',
     ajouts: [
@@ -2730,6 +2737,8 @@ if (typeof S.setupDone !== 'boolean') S.setupDone = false;
 if (typeof S.setupLocked !== 'boolean') S.setupLocked = false;
 if (S.navApp !== 'gmaps') S.navApp = 'waze';
 if (typeof S.googleClientId !== 'string') S.googleClientId = '';
+if (typeof S.deviceName !== 'string') S.deviceName = '';                 // nom donné à CET appareil (device-local) → étiquette de synchro
+if (!S.deviceId) S.deviceId = 'dv' + Math.random().toString(36).slice(2, 8); // identifiant STABLE et unique par appareil (différencie 2 supports du même type)
 if (typeof S.googleAutoSync !== 'boolean') S.googleAutoSync = false;
 // « Appareil lié au Drive » = drapeau LOCAL (non synchronisé). Les utilisateurs Drive EXISTANTS sont considérés déjà liés (aucune gêne) ;
 // un appareil neuf reste « non lié » tant qu'il n'a pas fait le choix explicite (fusionner / adopter / envoyer) au 1ᵉʳ lien.
@@ -3444,9 +3453,23 @@ function deviceInfo() {
   const touch = (typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 1);
   const tablet = /iPad/.test(ua) || (/Android/.test(ua) && !/Mobile/.test(ua)) || (/Macintosh/.test(ua) && touch);
   const phone = !tablet && /Mobile|iPhone|iPod|Android/.test(ua);
-  return { type: phone ? 'phone' : tablet ? 'tablet' : 'pc', name: (S.deviceName || '').trim(), at: Date.now() };
+  return { id: S.deviceId || '', type: phone ? 'phone' : tablet ? 'tablet' : 'pc', name: (S.deviceName || '').trim(), at: Date.now() };
 }
-const deviceLabel = (d) => { if (!d || !d.type) return '❔ appareil inconnu'; const t = d.type === 'phone' ? '📱 Téléphone' : d.type === 'tablet' ? '📱 Tablette' : '💻 PC'; return d.name ? `${t} « ${esc(d.name)} »` : t; };
+const deviceLabel = (d) => { if (!d || !d.type) return '❔ appareil inconnu'; const t = d.type === 'phone' ? '📱 Téléphone' : d.type === 'tablet' ? '📱 Tablette' : '💻 PC'; return d.name ? `${t} « ${esc(d.name)} »` : (d.id ? `${t} ·${esc(String(d.id).slice(-4))}` : t); }; // nom si donné, sinon type + suffixe d'id (2 appareils du même type restent distincts)
+// Modale de saisie du nom de l'appareil (ouverte par le bandeau rouge d'accueil et par le champ Réglages).
+function modalDeviceName() {
+  openModal(`<div class="modal-head"><b>📱 Nom de cet appareil</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Donnez un nom à <b>CET</b> appareil (ex. « iPhone Jonathan », « iPad », « PC bureau »). Il sert à <b>distinguer les sauvegardes de chaque support</b> dans la synchro (Réglages → Restaurer une version). À faire <b>une fois par appareil</b> — le nom reste propre à cet appareil.</p>
+    <label>Nom de cet appareil<input type="text" id="dnInput" maxlength="40" value="${esc(S.deviceName || '')}" placeholder="ex. iPhone Jonathan"/></label>
+    <div class="actions"><button class="btn primary block" id="dnOk">Enregistrer</button></div>`);
+  $('mX').addEventListener('click', closeModal);
+  setTimeout(() => { const i = $('dnInput'); if (i) { i.focus(); i.select(); } }, 50);
+  const save = () => { S.deviceName = ($('dnInput').value || '').trim().slice(0, 40); saveSettings(); closeModal(); refreshDeviceNameBanner(); const f = $('setDeviceName'); if (f) f.value = S.deviceName; };
+  $('dnOk').addEventListener('click', save);
+  $('dnInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+}
+// Bandeau rouge « nommez cet appareil » : visible tant que le nom n'est pas renseigné (sur toutes les pages, sous la nav).
+function refreshDeviceNameBanner() { const b = $('deviceNameBanner'); if (!b) return; b.onclick = modalDeviceName; b.classList.toggle('hidden', !!(S.deviceName || '').trim()); }
 // Instantané local complet (pour export / fusion).
 const DATA_SCHEMA = 1; // Bucket B : numéro de SCHÉMA de données (indépendant de APP_VERSION) → permet de router les migrations / refuser un fichier trop récent à l'import.
 function exportSnapshot() {
@@ -3662,7 +3685,7 @@ function setGoogleReauthNeeded(on) {
     if (_reauthBanner || !document.body) return;
     const b = document.createElement('div'); b.className = 'reauth-banner';
     b.innerHTML = '<span>⚠️ Connexion Google expirée — synchro et agenda en pause.</span> <button class="btn small" id="reauthBtn">Reconnecter</button> <button class="reauth-x" id="reauthX" title="Masquer">✕</button>';
-    document.body.appendChild(b); _reauthBanner = b;
+    const anchor = $('deviceNameBanner'); if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(b, anchor.nextSibling); else document.body.appendChild(b); _reauthBanner = b; // en HAUT, juste sous le bandeau « nom d'appareil » (ou à sa place s'il est masqué)
     b.querySelector('#reauthX').addEventListener('click', () => setGoogleReauthNeeded(false));
     b.querySelector('#reauthBtn').addEventListener('click', async (e) => {
       const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'Connexion…';
@@ -12824,6 +12847,7 @@ function modalSyncChoice() {
   if (n) n.onclick = done;
 }
 function renderHome() {
+  refreshDeviceNameBanner(); // bandeau rouge « nommez cet appareil » tant que le nom n'est pas renseigné
   autoCloseOverdueTours(); // vérifie à chaque affichage de l'Accueil
   const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
   const upcoming = [...tournees].filter((t) => statusOf(t) === 'avenir').sort(byDate); // du plus proche au plus lointain
@@ -13277,6 +13301,7 @@ function bindSettings() {
   updateReadouts();
   if ($('setNavApp')) { $('setNavApp').value = S.navApp; $('setNavApp').addEventListener('change', (e) => { S.navApp = e.target.value === 'gmaps' ? 'gmaps' : 'waze'; saveSettings(); if ($('tab-accueil').classList.contains('active')) renderHome(); }); }
   if ($('setGoogleClientId')) { $('setGoogleClientId').value = S.googleClientId || ''; $('setGoogleClientId').addEventListener('input', (e) => { S.googleClientId = e.target.value.trim(); saveSettings(); }); }
+  if ($('setDeviceName')) { $('setDeviceName').value = S.deviceName || ''; $('setDeviceName').addEventListener('input', (e) => { S.deviceName = e.target.value.slice(0, 40); saveSettings(); refreshDeviceNameBanner(); }); }
   if ($('setGoogleAuto')) { $('setGoogleAuto').checked = !!S.googleAutoSync; $('setGoogleAuto').addEventListener('change', (e) => { S.googleAutoSync = e.target.checked; saveSettings(); }); }
   if ($('setCalPush')) {
     $('setCalPush').checked = !!S.calPush;

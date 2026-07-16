@@ -782,7 +782,11 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 .rdv-ch-opt { display: flex; justify-content: flex-start; align-items: center; gap: 6px; font-size: .84rem; color: var(--muted); margin: 3px 0; white-space: nowrap; } /* empilés, alignés à gauche, texte sur une ligne */
 
 /* L2-2a : bandeau non bloquant « Reconnexion Google requise » (échec de synchro/agenda de fond). */
-.reauth-banner { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 9999; display: flex; align-items: center; gap: 10px; max-width: 94vw; padding: 8px 12px; border-radius: 10px; background: #7a2e12; color: #fff; box-shadow: 0 6px 22px rgba(0,0,0,.45); font-size: .9rem; }
+/* Bandeaux PLEINE LARGEUR empilés en haut (sous la barre de navigation), même épaisseur que la nav. */
+.topbanner { display: block; width: 100%; border: 0; cursor: pointer; font-weight: 800; font-size: 1.02rem; padding: 16px 12px; text-align: center; letter-spacing: .2px; box-shadow: 0 2px 6px rgba(0,0,0,.18); }
+.topbanner-danger { background: #d1342f; color: #fff; }
+.topbanner-danger:hover { filter: brightness(1.06); }
+.reauth-banner { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 14px 12px; background: #7a2e12; color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.18); font-size: .95rem; font-weight: 600; }
 .reauth-banner .btn { flex: 0 0 auto; }
 .reauth-x { background: transparent; border: 0; color: #fff; opacity: .8; cursor: pointer; font-size: 1rem; line-height: 1; padding: 2px 4px; }
 .reauth-x:hover { opacity: 1; }
