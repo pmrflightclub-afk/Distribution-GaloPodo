@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.41';
+const APP_VERSION = '1.7.42';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.42', date: '2026-07-16',
+    ajouts: [
+      'SYNCHRO — un cheval (ou une adresse) modifié sur un appareil ne peut plus être « re-supprimé » par une suppression PLUS ANCIENNE faite sur un autre appareil : les suppressions se résolvent maintenant par date.',
+      'PRÉPARATION — si un cheval passe inactif ou en liste noire alors que des actes/photos/annulations avaient déjà été saisis pour lui dans une tournée en préparation, ces éléments sont conservés (au lieu d\'être perdus à la réouverture).',
+    ],
+  },
   {
     version: '1.7.41', date: '2026-07-16',
     ajouts: [
@@ -3240,7 +3247,7 @@ function mergeOneCheval(a, b) {
   if (Array.isArray(a.adresses) || Array.isArray(b.adresses)) {
     const byId = {}; (b.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); (a.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); // récent gagne
     const aIds = new Set((a.adresses || []).map((e) => e.id)); // présente chez le récent = vivante
-    const list = Object.values(byId).filter((e) => aIds.has(e.id) || !((a.adrDel || {})[e.id])).map((e) => Object.assign({}, e)); // présente seulement chez l'ancien → gardée SAUF si le récent l'a supprimée
+    const list = Object.values(byId).filter((e) => aIds.has(e.id) || !((a.adrDel || {})[e.id]) || (e.updatedAt || 0) > ((a.adrDel || {})[e.id] || 0)).map((e) => Object.assign({}, e)); // présente seulement chez l'ancien → gardée SAUF si le récent l'a supprimée APRÈS sa dernière édition (LOT I : tombstone résolu par date → une adresse rééditée ne se fait plus re-supprimer par un tombstone plus ancien)
     const aAct = (a.adresses || []).find((e) => e.actif); const aid = aAct ? aAct.id : null; // l'adresse active du récent fait foi
     let has = false; list.forEach((e) => { e.actif = aid ? (e.id === aid) : false; if (e.actif) has = true; });
     if (!has && list.length) list[0].actif = true; // garantir une seule active
@@ -3254,7 +3261,7 @@ function mergeOneClient(a, b) {
   (b.chevaux || []).forEach((h) => { if (h && h.id) chById[h.id] = h; }); // anciens d'abord
   (a.chevaux || []).forEach((h) => { if (!h || !h.id) return; chById[h.id] = chById[h.id] ? mergeOneCheval(h, chById[h.id]) : h; });
   const aIds = new Set((a.chevaux || []).map((h) => h.id)); // présent chez le récent = vivant
-  base.chevaux = Object.values(chById).filter((h) => aIds.has(h.id) || !((a.chDel || {})[h.id])); // présent seulement chez l'ancien → gardé SAUF si le récent l'a supprimé
+  base.chevaux = Object.values(chById).filter((h) => aIds.has(h.id) || !((a.chDel || {})[h.id]) || (h.updatedAt || 0) > ((a.chDel || {})[h.id] || 0)); // présent seulement chez l'ancien → gardé SAUF si le récent l'a supprimé APRÈS sa dernière édition (LOT I : tombstone résolu par date → un cheval réédité ne se fait plus re-supprimer par un tombstone plus ancien)
   // P0-3 : IMPAYÉS (créances) fusionnés par id — sinon `impayes` suivait le client gagnant en bloc (LWW) et une créance saisie sur
   // l'autre appareil était perdue, puis effacée AUSSI de la facture par le GC (recalcAllTours). Conflit sur le même id → on garde la
   // version « perçue » (collected) pour ne jamais re-facturer une créance déjà réglée.
@@ -5288,6 +5295,11 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
       const oldA = chevalAddr(existing, oldH), newK = addrKey(chevalAddr(w, h)), oldK = addrKey(oldA);
       if (oldK && oldK !== newK && addrStr(oldA).trim()) { if (!Array.isArray(h.addrHistory)) h.addrHistory = []; if (!h.addrHistory.some((a) => addrKey(a) === oldK)) h.addrHistory.push(toAddr(oldA)); }
     });
+    // LOT I : estampiller updatedAt par CHEVAL et par ADRESSE, uniquement si le contenu a changé (ou nouveau) → les tombstones chDel/adrDel se résolvent par DATE (un cheval/adresse réédité survit à une suppression concurrente PLUS ANCIENNE), sans churn de synchro sur un enregistrement inchangé.
+    { const now = Date.now(); const strip = (o) => { const c = Object.assign({}, o); delete c.updatedAt; return JSON.stringify(c); };
+      const oldById = {}; ((existing && existing.chevaux) || []).forEach((x) => { if (x && x.id) oldById[x.id] = x; });
+      (w.chevaux || []).forEach((h) => { if (!h) return; const o = h.id ? oldById[h.id] : null; if (!o || strip(o) !== strip(h)) h.updatedAt = now;
+        (h.adresses || []).forEach((a) => { if (!a) return; const oa = o && (o.adresses || []).find((x) => x.id === a.id); if (!oa || strip(oa) !== strip(a)) a.updatedAt = now; }); }); }
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
     DRAFTS.clear(key); saveClients(); reconcileActiveTours(); closeModal();
     geocodeClientAddresses(w); // localise en arrière-plan TOUTES les adresses complètes (client, société, chevaux — actives ET inactives)
@@ -5775,7 +5787,7 @@ function reconcileTour(tour) {
       const c = clients.find((x) => x.id === cl.clientId);
       if (!c) return; // client supprimé → retiré
       const actifs = activeChevaux(c);
-      if (!actifs.length) { const arr = findOrCreate(c.addr, a.type); if (!arr.clients.some((x) => x.clientId === cl.clientId)) arr.clients.push({ clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }); return; } // client sans cheval actif → déplacement seul, à l'adresse ACTUELLE du client
+      if (!actifs.length) { const arr = findOrCreate(c.addr, a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); } (cl.chevaux || []).forEach((cv) => { const hasWork = cv.parage || cv.visite || cv.fourbure || cv.npas || cv.infection || cv.photo || cv.cancel; if (hasWork && !ncl.chevaux.some((x) => (x.id != null && x.id === cv.id) || norm(x.nom) === norm(cv.nom))) ncl.chevaux.push(cv); }); return; } // client sans cheval actif → déplacement seul ; P1-5 : mais on CONSERVE les chevaux portant des actes/photos/annulations déjà saisis (plus de perte silencieuse quand un cheval passe inactif/liste noire pendant la préparation)
       if (!cl.chevaux.length) { // arrêt « déplacement seul » alors que le client a maintenant des chevaux actifs (ex. client créé à la récupération d'un item, chevaux ajoutés depuis) → on les rattache
         actifs.forEach((h) => { const arr = findOrCreate(chevalAddr(c, h), a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); } if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '' }); });
         return;
