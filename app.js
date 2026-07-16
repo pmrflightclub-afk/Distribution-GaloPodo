@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.31';
+const APP_VERSION = '1.7.32';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.32', date: '2026-07-16',
+    ajouts: [
+      'GOOGLE — une erreur d\'accès à Gmail (envoi/lecture de mail) ne déconnecte plus la synchro Drive ni l\'agenda : les accès sont vraiment indépendants. Et un accès Gmail déjà accordé évite une demande de reconnexion inutile pour la synchro.',
+      'SYNCHRO — plus robuste quand la mémoire du navigateur est saturée : le nettoyage automatique ne peut plus provoquer, à la synchro suivante, l\'écrasement de modifications faites sur un autre appareil.',
+      'SYNCHRO — un simple recalcul d\'itinéraire (géolocalisation) ne déclenche plus d\'envoi inutile vers le Drive ; l\'ID client Google et l\'historique d\'adresses d\'un cheval ne sont plus perdus lors d\'une fusion entre appareils ; plus de doublons d\'historique de planches.',
+    ],
+  },
   {
     version: '1.7.31', date: '2026-07-16',
     ajouts: [
@@ -2322,6 +2330,7 @@ const LS = {
           localStorage.setItem('ftr.syncmeta', JSON.stringify({ hash: {} })); // on ne jette QUE les empreintes (reconstructibles)
           localStorage.setItem('ftr.tomb', JSON.stringify(durable));          // petit, durable — JAMAIS purgé
           localStorage.setItem(k, JSON.stringify(v));
+          try { rebuildSyncHashes(); } catch (e3) {} // #1 : reconstruit les empreintes depuis l'état courant SANS bumper updatedAt → le prochain syncStamp ne rebumpe pas TOUT (sinon la version locale gagnerait le LWW et écraserait des éditions distantes)
           return;
         } catch (e2) { /* toujours plein après purge → on laisse remonter l'erreur (pas d'écrasement silencieux) */ }
       }
@@ -3092,6 +3101,16 @@ function syncStamp(kind, arr) {
   Object.keys(m.hash[kind]).forEach((id) => { if (!seen[id]) { m.tomb[kind][id] = Math.max(now, (m.upd[kind][id] || 0) + 1); delete m.hash[kind][id]; delete m.upd[kind][id]; } }); // disparu → tombstone MAJORÉ sur le dernier updatedAt connu (Fix (7) : une suppression ne peut plus être ressuscitée par un updatedAt futur laissé par une dérive d'horloge)
   saveSyncMeta(m);
 }
+// #1 : reconstruit les empreintes de synchro (m.hash/m.upd) depuis l'état COURANT, SANS toucher aux updatedAt. Utilisé après une purge
+// quota (LS.set) — sinon le prochain syncStamp verrait « tout changé » (hash absent) et rebumperait TOUS les updatedAt (perte d'éditions distantes).
+function rebuildSyncHashes() {
+  const m = syncMeta(); // lit hash/tomb/upd courants (hash vidé par la purge)
+  const put = (kind, arr) => { m.hash[kind] = m.hash[kind] || {}; m.upd[kind] = m.upd[kind] || {}; (arr || []).forEach((rec) => { if (!rec || !rec.id) return; m.hash[kind][rec.id] = hashRec(rec); if (rec.updatedAt) m.upd[kind][rec.id] = rec.updatedAt; }); };
+  put('clients', typeof clients !== 'undefined' ? clients : []);
+  put('tournees', typeof allTours === 'function' ? allTours() : []);
+  (typeof SETTINGS_COLLECTIONS !== 'undefined' ? SETTINGS_COLLECTIONS : []).forEach((k) => put('set:' + k, S && S[k]));
+  localStorage.setItem('ftr.syncmeta', JSON.stringify({ hash: m.hash, upd: m.upd })); // écriture DIRECTE (évite de re-déclencher LS.set → quota → récursion)
+}
 function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); markSyncDirty(); bgSaveFlash(); }
 function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); markSyncDirty(); bgSaveFlash(); }
 function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); markSyncDirty(); bgSaveFlash(); }
@@ -3141,6 +3160,7 @@ function mergeTomb(a, b) { const t = Object.assign({}, a || {}); Object.keys(b |
 function mergeOneCheval(a, b) {
   const h = Object.assign({}, a);
   h.adrDel = mergeTomb(b.adrDel, a.adrDel); // tombstones d'ADRESSES (suppressions) : survivent à la fusion → pas de résurrection
+  if (Array.isArray(a.addrHistory) || Array.isArray(b.addrHistory)) { const byK = {}; (b.addrHistory || []).concat(a.addrHistory || []).forEach((x) => { const kk = norm(addrStr(x)); if (kk) byK[kk] = x; }); h.addrHistory = Object.values(byK); } // #7b : union de l'historique d'adresses (déménagements) → ne jamais perdre celui de l'autre appareil en fusion
   if (Array.isArray(a.adresses) || Array.isArray(b.adresses)) {
     const byId = {}; (b.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); (a.adresses || []).forEach((e) => { if (e && e.id) byId[e.id] = e; }); // récent gagne
     const aIds = new Set((a.adresses || []).map((e) => e.id)); // présente chez le récent = vivante
@@ -3188,6 +3208,8 @@ function mergeSettings(localS, remoteS) {
   // Fond du logo par appareil : ne jamais perdre la valeur de l'autre appareil si celui qui « gagne » ne l'a pas.
   if (merged.logoBg == null) merged.logoBg = ((localS && localS.logoBg != null) ? localS.logoBg : (remoteS && remoteS.logoBg));
   if (merged.logoBgMobile == null) merged.logoBgMobile = ((localS && localS.logoBgMobile != null) ? localS.logoBgMobile : (remoteS && remoteS.logoBgMobile));
+  // #8a : réglage DEVICE-LOCAL (aligné sur applyRemoteReplace) — l'ID client Google OAuth reste PROPRE à cet appareil (jamais écrasé/perdu par la fusion).
+  if (localS && localS.googleClientId) merged.googleClientId = localS.googleClientId;
   // Adresse de départ (domicile) : ne jamais la perdre si l'appareil « gagnant » l'avait vide → reprendre celle qui est renseignée.
   const hasAddr = (a) => { try { return !!addrStr(a).trim(); } catch { return false; } };
   if (!hasAddr(merged.home)) { if (localS && hasAddr(localS.home)) merged.home = localS.home; else if (remoteS && hasAddr(remoteS.home)) merged.home = remoteS.home; }
@@ -3198,7 +3220,8 @@ function mergeSettings(localS, remoteS) {
   const unionById = (k) => { const byId = {}; ((localS && localS[k]) || []).forEach((x) => { if (x && x.id) byId[x.id] = x; }); ((remoteS && remoteS[k]) || []).forEach((x) => { if (x && x.id) byId[x.id] = x; }); return Object.values(byId); };
   merged.lieuxRefs = unionById('lieuxRefs');
   // plancheTodo : géré par SETTINGS_COLLECTIONS (tombstones) → plus d'union ici (une tâche photo terminée/retirée ne réapparaît plus).
-  merged.plancheHistory = unionById('plancheHistory');
+  // #7c : plancheHistory dédoublonné par CLÉ DE CONTENU (l'id est aléatoire par appareil → unionById créait des doublons). Même clé que addPlancheHistory ; à conflit, la plus récente (createdAt) gagne.
+  { const byK = {}, kk = (y) => (y.clientId || '') + '|' + norm(y.client || '') + '|' + norm(y.cheval || '') + '|' + (y.date || '') + '|' + norm(y.stade || ''); ((localS && localS.plancheHistory) || []).concat((remoteS && remoteS.plancheHistory) || []).forEach((x) => { const k = kk(x); if (!byK[k] || (x.createdAt || 0) >= (byK[k].createdAt || 0)) byK[k] = x; }); merged.plancheHistory = Object.values(byK); }
   { const byK = {}, kk = (y) => (y.clientId || '') + '|' + norm(y.chevalNom || '') + '|' + (y.date || '') + '|' + norm(y.type || ''); ((localS && localS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); ((remoteS && remoteS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); merged.plancheDone = Object.values(byK); }
   merged.addrStatus = Object.assign({}, (localS && localS.addrStatus) || {}, (remoteS && remoteS.addrStatus) || {}); // statut de lieu (noir/inactif) : union — un lieu refusé sur un appareil le reste
   // Suivi comptable : paiements reçus, démarches faites, périodes verrouillées → UNION (sinon un mois clôturé/encodé rouvrirait, un paiement disparaîtrait, après une synchro). Même protection que l'import « Données seules ».
@@ -3454,11 +3477,17 @@ const GSCOPE_DRIVE = 'https://www.googleapis.com/auth/drive.appdata https://www.
 const GSCOPE_CAL = GSCOPE_DRIVE; // Drive + Agenda partagent le même jeton (une seule connexion couvre les deux)
 const GSCOPE_MAIL = GSCOPE_DRIVE + ' https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send'; // Gmail ISOLÉ : demandé seulement à la 1ʳᵉ action mail
 // Vrai si un jeton VALIDE est déjà en cache pour ce scope → autorise une opération silencieuse SANS jamais afficher d'écran d'auth.
-function gTokenValid(scope) { const c = _gTokens[scope || GSCOPE_DRIVE]; return !!(c && Date.now() < c.exp - 60000); }
-// L2-2b : jeton mort côté Google (révoqué / consentement retiré / partiel) → 401/403. On JETTE le cache (tous scopes mutualisés) pour
-// forcer une ré-acquisition propre au lieu de renvoyer indéfiniment un jeton invalide. À appeler sur toute réponse Google 401/403.
-function gInvalidateToken() { _gTokens = {}; try { persistGTokens(); } catch (e) {} }
-function gCheck(r, label) { if (!r.ok) { if (r.status === 401 || r.status === 403) gInvalidateToken(); throw new Error(label + ' ' + r.status); } }
+// Renvoie l'entrée de jeton EN CACHE (fraîche) dont le scope COUVRE `scope` : le jeton exact, ou un surset (le jeton Gmail inclut Drive/Agenda).
+function gCachedFor(scope) {
+  const want = scope || GSCOPE_DRIVE;
+  const fresh = (c) => (c && Date.now() < c.exp - 60000) ? c : null;
+  return fresh(_gTokens[want]) || (want === GSCOPE_DRIVE ? fresh(_gTokens[GSCOPE_MAIL]) : null); // #3 : un jeton Gmail (surset) satisfait une demande Drive/Agenda → pas de bandeau reconnexion intempestif
+}
+function gTokenValid(scope) { return !!gCachedFor(scope); }
+// L2-2b : jeton mort côté Google (révoqué / consentement retiré / partiel) → 401/403. On jette le cache pour forcer une ré-acquisition propre.
+// #2 : invalidation PAR SCOPE — un 401 Gmail ne doit plus jeter le jeton Drive/Agenda (isolation 1.7.29). scope omis = purge totale (compat).
+function gInvalidateToken(scope) { if (scope) delete _gTokens[scope]; else _gTokens = {}; try { persistGTokens(); } catch (e) {} }
+function gCheck(r, label) { if (!r.ok) { if (r.status === 401 || r.status === 403) gInvalidateToken(GSCOPE_DRIVE); throw new Error(label + ' ' + r.status); } } // Drive/Agenda partagent GSCOPE_DRIVE
 // L2-2a : bandeau NON bloquant « Reconnexion Google requise » — remplace l'échec silencieux (catch{} muet) quand une synchro/un push
 // de fond échoue faute de jeton (fréquent sur Edge/PC où le jeton silencieux ne peut pas se renouveler). Un clic relance la connexion.
 let _reauthBanner = null;
@@ -3489,7 +3518,7 @@ function loadGis() {
 let _gTokenInflight = {}; // scope → Promise en cours (évite 2 fenêtres de connexion au boot : Drive + Agenda partagent la MÊME requête)
 async function googleToken(interactive, scope) {
   scope = scope || GSCOPE_DRIVE;
-  const c = _gTokens[scope]; if (c && Date.now() < c.exp - 60000) return c.token;
+  const cached = gCachedFor(scope); if (cached) return cached.token; // #3 : réutilise un jeton exact OU surset (Gmail couvre Drive/Agenda)
   if (_gTokenInflight[scope]) return _gTokenInflight[scope]; // une demande est déjà en cours pour ce scope → on la partage
   if (!S.googleClientId) throw new Error('Renseignez d\'abord votre ID client Google.');
   const pr = (async () => {
@@ -3571,7 +3600,8 @@ async function driveUpload(token, id, data) {
 // Hash de contenu du coffre (ignore l'horodatage volatil `at` et `settings.updatedAt`) → détecte « rien de neuf à envoyer ».
 function snapshotHash(snap) {
   const s = Object.assign({}, snap && snap.settings); delete s.updatedAt;
-  const str = JSON.stringify([s, snap && snap.clients, snap && snap.tours, snap && snap.tomb]);
+  const tours = ((snap && snap.tours) || []).map((t) => { const c = Object.assign({}, t); delete c.result; delete c.routeGeo; return c; }); // #1 : result/routeGeo sont RECALCULÉS (non structurels) → les exclure de l'empreinte évite qu'un simple recalcul géo ne déclenche un ré-upload et ne gonfle le coffre
+  const str = JSON.stringify([s, snap && snap.clients, tours, snap && snap.tomb]);
   let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0; }
   return str.length + ':' + h.toString(36);
 }
@@ -8476,7 +8506,7 @@ async function gmailSend(to, subject, bodyText, blob, filename, cc) {
   const mime = await buildMimeEmail(to, subject, bodyText, blob, filename, cc);
   const raw = btoa(mime).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
-  if (!r.ok) { const t = await r.text().catch(() => ''); if (r.status === 401 || r.status === 403) gInvalidateToken(); throw new Error('Gmail ' + r.status + ' ' + t.slice(0, 160)); }
+  if (!r.ok) { const t = await r.text().catch(() => ''); if (r.status === 401 || r.status === 403) gInvalidateToken(GSCOPE_MAIL); throw new Error('Gmail ' + r.status + ' ' + t.slice(0, 160)); } // #2 : n'invalide QUE le jeton Gmail (le jeton Drive/Agenda survit)
   return true;
 }
 // Modale d'envoi d'un document : saisie du destinataire + envoi Gmail (PDF joint) OU repli partage/téléchargement.
