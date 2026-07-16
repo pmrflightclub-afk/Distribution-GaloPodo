@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.43';
+const APP_VERSION = '1.7.44';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.44', date: '2026-07-16',
+    ajouts: [
+      'REJEU DE TOURNÉE — une tournée rejouée permet maintenant de renseigner les TIMINGS à la main (« 📊 Compléter les stats » : temps de route par arrêt, consultation par cheval, temps de retour) sans devoir refaire la tournée en temps réel. Le Temps de travail et le Temps de trajet sont donc complets, même pour une tournée reconstituée au bureau.',
+    ],
+  },
   {
     version: '1.7.43', date: '2026-07-16',
     ajouts: [
@@ -3833,15 +3839,16 @@ function exportTourFile(t) {
 // Bucket B — REJEU pré-rempli : nouvelle tournée (nouvel id) reprenant actes/articles/chevaux/heures/temps réels, mais paiements et clôtures REMIS À ZÉRO (à refaire).
 function replayTour(t) {
   if (!t) return;
-  if (!confirm('Créer une NOUVELLE tournée pré-remplie à partir de celle du ' + fmtDateFr(t.date) + ' ?\n\nActes, articles, chevaux, heures et temps de route sont repris ; les PAIEMENTS et les CLÔTURES sont remis à zéro (à refaire). Utile pour rejouer une tournée au propre.')) return;
+  if (!confirm('Créer une NOUVELLE tournée pré-remplie à partir de celle du ' + fmtDateFr(t.date) + ' ?\n\nActes, articles, chevaux, heures et temps de route/consultation sont repris ; les PAIEMENTS et les CLÔTURES sont remis à zéro (à refaire). Les TIMINGS (route, consultation, retour) sont ré-encodables à la main via « 📊 Compléter les stats » — pour le Temps de travail et de trajet, sans refaire la tournée en temps réel. Utile pour rejouer une tournée au propre.')) return;
   const nt = JSON.parse(JSON.stringify(t));
-  nt.id = uid(); nt.date = todayStr(); nt.nom = ((t.nom || '').trim() ? t.nom.trim() + ' ' : '') + '(rejeu)'; nt.closed = false; delete nt.endedAt; delete nt.startedAt; delete nt.recovered; delete nt._review; delete nt.updatedAt;
+  nt.id = uid(); nt.date = todayStr(); nt.nom = ((t.nom || '').trim() ? t.nom.trim() + ' ' : '') + '(rejeu)'; nt.closed = false; delete nt.endedAt; delete nt.startedAt; delete nt._review; delete nt.updatedAt;
+  nt.recovered = true; // Point 2 : rejeu = modèle « durées » (comme une tournée récupérée) → « Compléter les stats » disponible pour saisir route/consultation/retour À LA MAIN (Temps de travail/trajet), sans refaire la tournée en temps réel (les horodatages absolus startedAt/validatedAt ne sont pas reproductibles au bureau)
   nt.payments = {}; nt.result = null; nt.createdAt = Date.now(); delete nt.autoClosedAt; // rejeu = tournée neuve : pas de clôture auto héritée
   nt.articles = (nt.articles || []).filter((art) => !art.impaye); // ne PAS re-facturer une créance déjà encaissée (l'impayé appartient à la tournée d'origine)
   (nt.arrets || []).forEach((a) => { delete a.validatedAt; delete a.rdvDone; (a.clients || []).forEach((cl) => { delete cl.validatedAt; delete cl.rdvDone; delete cl.aPrevenir; delete cl.heureAncienne; delete cl.heureStale; (cl.chevaux || []).forEach((cv) => { delete cv.cancel; }); }); }); // clôtures/RDV à refaire (on garde actes, articles, heures, realMin) ; annulations remises à zéro (l'annulation n'est pas un acte) ; drapeaux de suivi d'heure périmés effacés
   tournees.push(nt); saveTournees();
   currentTour = JSON.parse(JSON.stringify(nt)); openEditor();
-  alert('✅ Nouvelle tournée pré-remplie créée (« rejeu »). Repassez chaque arrêt : démarrez, validez le paiement, clôturez.');
+  alert('✅ Nouvelle tournée pré-remplie créée (« rejeu »). Repassez chaque arrêt (paiement + clôture) pour les stats/compta, et renseignez les temps via « 📊 Compléter les stats » (route, consultation par cheval, retour) — ils alimentent le Temps de travail et le Temps de trajet.');
 }
 // Lecture d'un fichier d'export de tournée → choix réinjecter / rejouer.
 function importTourFile(file) {
