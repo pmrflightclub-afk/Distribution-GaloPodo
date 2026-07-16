@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.51';
+const APP_VERSION = '1.7.52';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.52', date: '2026-07-16',
+    ajouts: [
+      'CORRECTIF — le bandeau rouge « nommez cet appareil » disparaît bien après avoir enregistré le nom (il restait affiché à tort).',
+      'COMPTA (provisions précises) — l\'extourne d\'une note de crédit (avoir) est désormais ventilée selon la composition RÉELLE du cheval annulé : main d\'œuvre (actes/articles) et matériel séparément, le déplacement restant acquis. Les provisions par poste / sous-compte et la TVA collectée sont exactes (fini l\'approximation au ratio mensuel).',
+    ],
+  },
   {
     version: '1.7.51', date: '2026-07-16',
     ajouts: [
@@ -3496,7 +3503,7 @@ function modalDeviceName() {
   $('dnInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
 }
 // Bandeau rouge « nommez cet appareil » : visible tant que le nom n'est pas renseigné (sur toutes les pages, sous la nav).
-function refreshDeviceNameBanner() { const b = $('deviceNameBanner'); if (!b) return; b.onclick = modalDeviceName; b.classList.toggle('hidden', !!(S.deviceName || '').trim()); }
+function refreshDeviceNameBanner() { const b = $('deviceNameBanner'); if (!b) return; b.onclick = modalDeviceName; const named = !!(S.deviceName || '').trim(); b.classList.toggle('hidden', named); b.style.display = named ? 'none' : ''; } // style inline = priorité maximale → le bandeau se cache vraiment (indépendant de l'ordre CSS .topbanner/.hidden)
 // Instantané local complet (pour export / fusion).
 const DATA_SCHEMA = 1; // Bucket B : numéro de SCHÉMA de données (indépendant de APP_VERSION) → permet de router les migrations / refuser un fichier trop récent à l'import.
 function exportSnapshot() {
@@ -6440,54 +6447,6 @@ function chooseClientTargets(c) {
 }
 // Après un +client : si un arrêt NOUVEAU a été ajouté à une tournée qui avait déjà des arrêts → proposer l'intercalation.
 function maybeIntercaler(res) { if (res && res.preExisting && res.placements && res.placements.length) modalIntercaler(currentTour, res.placements); }
-// Changer l'adresse (par défaut) d'un cheval depuis l'éditeur de tournée : choisir une de ses adresses OU en encoder une nouvelle.
-// L'adresse choisie devient l'adresse par défaut du cheval (répercutée fiche + « Adresses chevaux »), et la tournée en cours est
-// reconciliée (l'arrêt migre vers la nouvelle adresse) puis, si un nouvel arrêt apparaît, on propose de le placer (ordre/horaire).
-function modalChangeChevalAddr(c, h, cv) {
-  if (!Array.isArray(h.adresses)) h.adresses = [];
-  if (chevalAddrSrc(h) === 'specifique' && !h.adresses.length && addrStr(h.addr).trim()) h.adresses.push({ id: uid(), nom: h.addrNom || '', addr: toAddr(h.addr), actif: true });
-  chevalSyncActive(h);
-  const defKey = addrKey(chevalAddr(c, h)); // adresse PAR DÉFAUT du cheval
-  const ovrKey = (cv && cv.addrOverride && addrStr(cv.addrOverride).trim()) ? addrKey(cv.addrOverride) : null; // adresse PONCTUELLE en cours (cette tournée)
-  const curKey = ovrKey || defKey; // adresse réellement utilisée dans la tournée
-  const newAddr = emptyAddr();
-  const o = openOverlay('<div class="modal-head"><b>📍 Adresse — ' + esc(h.nom || 'cheval') + '</b><button class="x" data-x>✕</button></div><div id="chaddrBody"></div>');
-  const body = o.q('#chaddrBody');
-  const list = () => h.adresses.map((e, i) => { const k = addrKey(e.addr); const tags = (k === defKey ? ' <span class="badge">⭐ défaut</span>' : '') + (k === ovrKey ? ' <span class="badge">📌 ponctuelle</span>' : ''); return `<label class="chk" style="margin-bottom:6px"><input type="radio" name="chaddrSel" data-sel="${i}" ${k === curKey ? 'checked' : ''}/> <b>${esc(e.nom || 'Adresse')}</b> — ${esc(addrStr(e.addr)) || '<i>adresse ?</i>'}${tags}</label>`; }).join('') || '<p class="hint">Ce cheval suit l\'adresse du client. Encodez une adresse propre ci-dessous.</p>';
-  body.innerHTML = `
-    <p class="hint">Choisissez une adresse de ce cheval (ou encodez-en une), puis dites si elle est <b>ponctuelle</b> (cette tournée seulement) ou <b>par défaut</b> (permanente, répercutée sur la fiche et « Adresses chevaux »).</p>
-    <div class="ch-adr-list">${list()}</div>
-    <details class="ch-menu" id="chaddrNew"><summary class="btn small">＋ Encoder une nouvelle adresse</summary><div data-newmount style="margin-top:6px"></div></details>
-    ${ovrKey ? '<p class="hint">📌 Une adresse <b>ponctuelle</b> est active pour cette tournée. <button type="button" class="btn small" id="chaddrRevert">↩ Revenir au défaut</button></p>' : ''}
-    <div class="actions two"><button class="btn" id="chaddrPonct">📌 Ponctuelle (cette tournée)</button><button class="btn primary" id="chaddrDef">⭐ Par défaut</button></div>`;
-  mountAddress(body.querySelector('[data-newmount]'), newAddr, (na) => { Object.assign(newAddr, na); });
-  o.q('[data-x]').onclick = o.close;
-  // Adresse cible : nouvelle si le volet est ouvert et rempli, sinon la radio sélectionnée.
-  const targetAddr = () => {
-    if (body.querySelector('#chaddrNew').open && addrStr(newAddr).trim()) return { addr: toAddr(newAddr), isNew: true };
-    const sel = body.querySelector('[name="chaddrSel"]:checked'); if (!sel) return null;
-    const e = h.adresses[+sel.dataset.sel]; return e ? { addr: toAddr(e.addr), isNew: false } : null;
-  };
-  const finish = () => { saveClients(); o.close(); applyChevalAddrChangeToTour(); };
-  { const rv = body.querySelector('#chaddrRevert'); if (rv) rv.addEventListener('click', () => { if (cv) delete cv.addrOverride; finish(); }); } // retour à l'adresse par défaut
-  body.querySelector('#chaddrDef').addEventListener('click', () => {
-    const t = targetAddr(); if (!t) { alert('Choisissez une adresse ou encodez-en une.'); return; }
-    setChevalDefaultAddr(h, t.addr); if (cv) delete cv.addrOverride; // devient le défaut permanent → plus d'adresse ponctuelle
-    finish();
-  });
-  body.querySelector('#chaddrPonct').addEventListener('click', () => {
-    const t = targetAddr(); if (!t) { alert('Choisissez une adresse ou encodez-en une.'); return; }
-    if (t.isNew) {
-      // Cheval encore sans adresses propres (source client/société) : on fige l'adresse par défaut ACTUELLE comme entrée active
-      // et on bascule le cheval en « adresse propre » → la nouvelle adresse ponctuelle devient VISIBLE (fiche + Adresses chevaux), le défaut ne change pas.
-      if (!h.adresses.length) { const cur = chevalAddr(c, h); if (addrStr(cur).trim()) h.adresses.push({ id: uid(), nom: h.addrNom || '', addr: toAddr(cur), actif: true }); h.addrSource = 'specifique'; }
-      if (!h.adresses.some((e) => addrKey(e.addr) === addrKey(t.addr))) h.adresses.push({ id: uid(), nom: '', addr: toAddr(t.addr), actif: false }); // ajoutée à la fiche (inactive), le défaut ne change pas
-    }
-    chevalSyncActive(h);
-    if (cv) { if (addrKey(t.addr) === defKey) delete cv.addrOverride; else cv.addrOverride = toAddr(t.addr); } // ponctuelle = défaut → pas d'override
-    finish();
-  });
-}
 // REFONTE — adresse par CLIENT à un arrêt. Modale 1 = consultation de l'adresse UTILISÉE (nom d'écurie, type, privée/non, adresse complète, statut ⭐défaut/📌ponctuelle)
 // + reprendre une adresse connue / « ＋ Entrer une nouvelle adresse ». Modale 2 (superposée) = saisie d'une adresse → 📌 Ponctuelle (cet arrêt, tous ses chevaux, fiche inchangée)
 // OU ⭐ Par défaut (corrige la fiche des chevaux COCHÉS). Ne confond jamais : adresse client (c.addr) / cheval (h.adresses) / écurie (nom d'une adresse spécifique) / arrêt (cv.addrOverride).
@@ -8327,14 +8286,14 @@ function comptaData(ym) {
   // Modèle B : les avoirs DOCUMENTAIRES (facture payée en liquide) ne réduisent PAS le CA — les actes sont déjà retirés de la facture et le liquide remboursé via la caisse. On les liste (pièces) mais on les exclut de l'extourne comptable.
   const ncTTC = ncMonth.filter((n) => !n.documentaire).reduce((s, n) => s + (n.montantTTC || 0), 0);
   const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
-  // Les notes de crédit du mois réduisent la base analytique (extourne de CA) : imputées à la main d'œuvre + TVA collectée.
-  const ncHT = ncTTC / (1 + rr), ncTVA = ncTTC - ncHT;
+  // F2 : extourne des avoirs ventilée selon la COMPOSITION RÉELLE de CHAQUE cheval crédité (main d'œuvre = articles/actes, matériel), le DÉPLACEMENT restant acquis (jamais crédité). → provisions/sous-comptes PRÉCIS, plus un ratio mensuel approximatif.
+  let ncMO = 0, ncMat = 0, ncTVA = 0;
+  ncMonth.filter((n) => !n.documentaire).forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncTVA += b.tva; });
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
     liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
     factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
     notesCredit: ncMonth, notesCreditTotal,
-    // F5 : l'extourne des notes de crédit (articles + MATÉRIEL du cheval crédité) était imputée à 100 % à la main d'œuvre. On la ventile désormais entre MO et matériel au prorata des bases du mois (le déplacement reste acquis — jamais crédité).
-    baseMainOeuvreHT: Math.max(0, baseMO - ncHT * ((baseMO + baseMat) > 0.005 ? baseMO / (baseMO + baseMat) : 1)), baseMaterielHT: Math.max(0, baseMat - ncHT * ((baseMO + baseMat) > 0.005 ? baseMat / (baseMO + baseMat) : 0)), baseDeplacementHT: baseDep, tvaCollectee: Math.max(0, tvaCol - ncTVA) };
+    baseMainOeuvreHT: Math.max(0, baseMO - ncMO), baseMaterielHT: Math.max(0, baseMat - ncMat), baseDeplacementHT: baseDep, tvaCollectee: Math.max(0, tvaCol - ncTVA) };
 }
 // ================= F-b : moteur de provisions analytiques =================
 // Garde-fou : l'analytique ne lit QUE les mois « figés » = démarche liquide encodée (S.comptaStatus[ym].liquide === 'encode').
@@ -12212,11 +12171,29 @@ function chevalInvoicedTTC(tour, clientId, cv) {
   (m.materiel || []).forEach((mt) => { if (norm(mt.nom) === nn) ttc += (mt.ttc || 0); });
   return ttc;
 }
+// F2 : découpage HT/TVA RÉEL d'un cheval facturé — main d'œuvre (articles/actes : parage, visite, patho, difficile/lourd) VS matériel.
+// Le DÉPLACEMENT est EXCLU (jamais crédité — le pro s'est déplacé). Sert à ventiler l'extourne d'un avoir précisément par poste/sous-compte (provisions justes).
+function chevalInvoicedSplit(tour, clientId, chevalNom) {
+  const R = tour && tour.result; const m = R && R.parClient && R.parClient.find((x) => x.clientId === clientId);
+  if (!m) return { moHT: 0, matHT: 0, tva: 0 };
+  const nn = norm(chevalNom); let moHT = 0, moTVA = 0, matHT = 0, matTVA = 0;
+  (m.articles || []).forEach((a) => { if (a.impaye) return; const names = (a.chevaux || []).map(norm); const idx = names.indexOf(nn); if (idx < 0) return; const share = a.qtesByNom ? ((a.qtesByNom[a.chevaux[idx]] || 1) / (a.qte || 1)) : (1 / ((a.chevaux || []).length || 1)); moHT += (a.ht || 0) * share; moTVA += (a.tva || 0) * share; });
+  (m.materiel || []).forEach((mt) => { if (norm(mt.nom) === nn) { matHT += (mt.ht || 0); matTVA += ((mt.ttc || 0) - (mt.ht || 0)); } });
+  return { moHT, matHT, tva: moTVA + matTVA };
+}
+// Extourne d'un avoir ventilée : depuis le découpage figé sur l'avoir (moHT/matHT/tva), sinon recalculé depuis la tournée+cheval, sinon repli (tout en main d'œuvre).
+function ncBreakdown(n) {
+  if (n && (n.moHT != null || n.matHT != null)) { const ttc = n.montantTTC || 0; return { moHT: n.moHT || 0, matHT: n.matHT || 0, tva: (n.tva != null ? n.tva : Math.max(0, ttc - (n.moHT || 0) - (n.matHT || 0))) }; }
+  const t = allTours().find((x) => x.id === (n && n.tourId)); const sp = chevalInvoicedSplit(t, n && n.clientId, n && n.chevalNom);
+  if (sp.moHT || sp.matHT || sp.tva) return sp;
+  const r = rate(); const ttc = (n && n.montantTTC) || 0; const ht = ttc / (1 + r); return { moHT: ht, matHT: 0, tva: ttc - ht };
+}
 // Crée une note de crédit (RDV payé annulé) : montant = ce que le cheval a réellement été facturé (post-réduction). Retourne l'id.
 function createCreditNote(clientId, tour, cv, motif, note, opts) {
   const id = uid();
   const doc = !!(opts && opts.documentaire); // modèle B : facture payée en LIQUIDE annulée → l'avoir est une PIÈCE documentaire. Le CA est déjà neutralisé par le retrait des actes et le cash rendu via la caisse → cette NC ne doit PAS re-réduire le CA, et elle est d'emblée « remboursée » (le liquide a été rendu à l'annulation).
-  S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: chevalInvoicedTTC(tour, clientId, cv), motif: motif || 'client', note: note || '', date: todayStr(), rembourse: doc, rembourseAt: doc ? todayStr() : null, documentaire: doc });
+  const sp = chevalInvoicedSplit(tour, clientId, cv.nom); // F2 : fige le découpage main d'œuvre/matériel (déplacement exclu) → extourne précise en Compta même si la tournée est éditée après
+  S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: chevalInvoicedTTC(tour, clientId, cv), moHT: sp.moHT, matHT: sp.matHT, tva: sp.tva, motif: motif || 'client', note: note || '', date: todayStr(), rembourse: doc, rembourseAt: doc ? todayStr() : null, documentaire: doc });
   saveSettings();
   return id;
 }
