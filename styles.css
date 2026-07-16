@@ -466,6 +466,16 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .ac-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 7px 0; } /* un petit espace entre chaque ligne d'actions */
 .ac-acts > .btn, .ac-acts > .a-heure { flex: 0 1 auto; min-width: 0; height: 38px; min-height: 38px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; line-height: 1; } /* hauteur IDENTIQUE pour tous (heure incluse) → boutons alignés verticalement sur chaque ligne */
 .ac-acts > .a-heure .gp-sel-btn, .ac-acts > .a-heure input[type=time] { height: 100%; } /* la pastille heure remplit la hauteur → pas plus haute que les autres */
+/* Ligne « nom du client » : 🕘 Heure du RDV + 📍 Adresse — alignés verticalement (centrés) */
+.ac-hd-row { align-items: center; margin: 4px 0 8px; }
+.ac-hd-row > .a-heure { height: auto; min-height: 0; } /* pas de hauteur forcée : l'input time natif reste à sa hauteur naturelle, texte centré face au bouton Adresse (sinon « 08:00 » collé en haut → adresse paraît plus basse) */
+.ac-hd-row > .a-heure input[type=time] { height: auto; }
+/* Sous-sections « Sur place » (Prêt/Planche) et « Clôture de l'arrêt » (RDV/Paiement) */
+.ac-sec { margin: 9px 0 0; }
+.ac-sec-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); font-weight: 700; margin: 0 0 3px 2px; }
+.ac-sec .ac-acts { margin-bottom: 0; }
+/* Badge rouge « Définir les actes » : cheval sans aucun acte coché */
+.badge-noacte { background: color-mix(in srgb, var(--danger) 13%, transparent); color: var(--danger); border: 1px solid var(--danger); font-size: .68rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
 .a-client-hd .reduc-row { margin: 8px 0 0; font-size: .85rem; }
 .reduc-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: .85rem; }
 .reduc-row input { margin: 0; }

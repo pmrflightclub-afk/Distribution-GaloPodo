@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.57';
+const APP_VERSION = '1.7.58';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.58', date: '2026-07-16',
+    ajouts: [
+      'ARRÊT — l\'en-tête de chaque client est réorganisé en sous-sections claires : la ligne du nom du client porte 🕘 Heure du RDV + 📍 Adresse (désormais alignés verticalement), puis une section « Sur place » (＋ Prêt · 📷 Planche) et une section « Clôture de l\'arrêt du client » (📅 RDV · 💶 Paiement), juste avant les actes.',
+      'ACTES — un cheval sans aucun acte coché affiche maintenant un badge rouge « ⚠ Définir les actes » (au lieu du discret « aucun acte coché »), pour repérer d\'un coup d\'œil les chevaux à compléter.',
+    ],
+  },
   {
     version: '1.7.57', date: '2026-07-16',
     ajouts: [
@@ -6681,7 +6688,7 @@ function renderEditorArrets(locked) {
         const prevBtn = cl.aPrevenir === true ? ' <button class="btn small prev-on" data-cprevenir>🔔 Prévenir</button>' : (cl.aPrevenir === false ? ' <span class="btn small prev-done">✓ Prévenu</span>' : ''); // orange = heure changée à communiquer ; vert = client prévenu (inactif)
         const prevBadge = cl.aPrevenir === true ? ' <span class="badge prev-badge">🕘 heure modifiée</span>' : '';
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts ac-hd-row"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-sec"><div class="ac-sec-h">📍 Sur place</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div></div><div class="ac-sec"><div class="ac-sec-h">🔒 Clôture de l'arrêt du client</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; if (cl.heureAncienne != null && newH === cl.heureAncienne) { delete cl.aPrevenir; delete cl.heureAncienne; } else if (oldH && newH && oldH !== newH) { if (!cl.aPrevenir) cl.heureAncienne = oldH; cl.aPrevenir = true; } persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
@@ -6751,7 +6758,7 @@ function renderEditorArrets(locked) {
             if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : ''));
             if (isLourd && acte) chips.push('⚖ Lourd (auto)');
           }
-          const chipsHtml = cancelled ? '' : (chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>');
+          const chipsHtml = cancelled ? '' : (chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="badge badge-noacte">⚠ Définir les actes</span>');
           const ck = (attr, checked, label, disabled) => `<label class="ch-opt${disabled ? ' ch-opt-off' : ''}"><input type="checkbox" ${attr} data-pi="${pi}" ${checked ? 'checked' : ''}${disabled ? ' disabled' : ''}/> ${label}</label>`;
           let opts = ck('data-key="parage"', cv && cv.parage, 'Parage', cancelled);
           opts += ck('data-vis', cv && cv.visite, 'Visite', cancelled || !visArts.length);
@@ -6773,7 +6780,7 @@ function renderEditorArrets(locked) {
           const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(pool[pi].nom)) : null;
           const chips = [];
           if (cv && !cancelled) { if (cv.parage) chips.push('Parage'); if (cv.visite) { const art = cv.visiteArtId ? visArts.find((x) => x.id === cv.visiteArtId) : null; chips.push('Visite' + (art ? ' · ' + esc(art.libelle) : '')); } if (cv.photo && (cv.photo.stades || []).length) chips.push('📷 ' + esc((cv.photo.stades || []).join('/')) + ' · ' + (cv.photo.angle || 3) + ' angles'); pathoCols.forEach((c) => { if (cv[c.key]) chips.push(c.label); }); if (cv.difficile) chips.push('Difficile' + (cv.difficileHT ? ' (' + eur(cv.difficileHT * (1 + rr0)) + ')' : '')); if (fiche && fiche.lourd && acte) chips.push('⚖ Lourd (auto)'); }
-          const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="li-sub">aucun acte coché</span>'; }
+          const row = wrap.querySelectorAll('.ch-row')[pi]; if (row) { const cd = row.querySelector('.ch-chips'); if (cd) cd.innerHTML = chips.length ? chips.map((c) => `<span class="ch-chip">${c}</span>`).join('') : '<span class="badge badge-noacte">⚠ Définir les actes</span>'; }
         };
         wrap.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => {
           const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.key;
