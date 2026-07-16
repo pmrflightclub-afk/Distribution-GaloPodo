@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.44';
+const APP_VERSION = '1.7.45';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.45', date: '2026-07-16',
+    ajouts: [
+      'SYNCHRO (majeur) — les modifications d\'une tournée EN PRÉPARATION faites sur des appareils différents ne s\'écrasent plus : ce que vous ajoutez d\'un côté (arrêt, client, cheval, article) et ce que vous renseignez de l\'autre (heures, temps réels, consultation, réductions) sont désormais FUSIONNÉS. Plus de perte quand on prépare la même tournée depuis le téléphone et le PC.',
+    ],
+  },
   {
     version: '1.7.44', date: '2026-07-16',
     ajouts: [
@@ -3241,11 +3247,43 @@ function graftClosure(to, from) {
     if (typeof syncArretValidated === 'function') syncArretValidated(a);
   });
 }
+// FUSION PROFONDE du CORPS d'une tournée EN PRÉPARATION (Phase A+B). `to` = version gagnante (updatedAt le plus haut), `from` = l'autre.
+// Principe : UNION ADDITIVE au profit du gagnant — on AJOUTE ce que seul `from` possède (arrêt/client/cheval/article), on COMPLÈTE les
+// champs de saisie vides du gagnant (heures, temps réels, consultation, réductions), on N'ÉCRASE JAMAIS une valeur non vide de `to` et on
+// NE RETIRE RIEN. Réservé aux tournées non clôturées : reconcileTour re-dérive l'appartenance depuis les fiches à l'ouverture (filet
+// anti-résurrection). Les tournées clôturées restent en dernier-gagne + greffe (graftClosure) — figées = finalisées.
+function deepMergeTourBody(to, from) {
+  if (!to || !from || to.closed || from.closed) return;
+  if (from.reductions) { to.reductions = to.reductions || {}; Object.keys(from.reductions).forEach((cid) => { const v = to.reductions[cid]; if (v == null || v === '') to.reductions[cid] = from.reductions[cid]; }); }
+  if (!(to.returnRealMin > 0) && from.returnRealMin > 0) to.returnRealMin = from.returnRealMin; // temps de retour réel : garder si le gagnant n'en a pas
+  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.id && !to.articles.some((x) => x.id === a.id)) to.articles.push(JSON.parse(JSON.stringify(a))); }); } // article saisi sur l'autre appareil → conservé
+  const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } };
+  const toByKey = {}; (to.arrets || []).forEach((a) => { const k = key(a); if (k) toByKey[k] = a; });
+  (from.arrets || []).forEach((fa) => {
+    const k = key(fa); if (!k) return;
+    let ta = toByKey[k];
+    if (!ta) { (to.arrets = to.arrets || []).push(JSON.parse(JSON.stringify(fa))); toByKey[k] = ta = fa; return; } // arrêt présent seulement chez l'autre → AJOUTÉ
+    if (!(ta.realMin > 0) && fa.realMin > 0) ta.realMin = fa.realMin;                 // temps de route réel : compléter
+    if (!ta.heure && fa.heure) ta.heure = fa.heure;
+    const tcById = {}; (ta.clients || []).forEach((cl) => { tcById[cl.clientId] = cl; });
+    (fa.clients || []).forEach((fc) => {
+      let tc = tcById[fc.clientId];
+      if (!tc) { (ta.clients = ta.clients || []).push(JSON.parse(JSON.stringify(fc))); return; } // client présent seulement chez l'autre → AJOUTÉ
+      if (!tc.heure && fc.heure) tc.heure = fc.heure;
+      (fc.chevaux || []).forEach((fcv) => {
+        const tcv = (tc.chevaux || []).find((x) => (x.id != null && x.id === fcv.id) || norm(x.nom) === norm(fcv.nom));
+        if (!tcv) { (tc.chevaux = tc.chevaux || []).push(JSON.parse(JSON.stringify(fcv))); return; } // cheval présent seulement chez l'autre → AJOUTÉ (reconcile validera vs fiche)
+        if (tcv.consultMin == null && typeof fcv.consultMin === 'number') tcv.consultMin = fcv.consultMin; // consultation : compléter (les ACTES restent ceux du gagnant → pas de fusion ambiguë de facturation)
+        if (!tcv.photo && fcv.photo) tcv.photo = fcv.photo;
+      });
+    });
+  });
+}
 function mergeTours(localArr, remoteArr, tomb) {
   const byId = {}, other = {};
   const put = (rec) => { if (!rec || !rec.id) return; const cur = byId[rec.id]; if (!cur) byId[rec.id] = rec; else if ((rec.updatedAt || 0) > (cur.updatedAt || 0)) { other[rec.id] = cur; byId[rec.id] = rec; } else other[rec.id] = rec; };
   (localArr || []).forEach(put); (remoteArr || []).forEach(put);
-  Object.keys(byId).forEach((id) => { if (other[id]) graftClosure(byId[id], other[id]); });
+  Object.keys(byId).forEach((id) => { if (other[id]) { graftClosure(byId[id], other[id]); deepMergeTourBody(byId[id], other[id]); } }); // clôtures/paiements greffés PUIS corps fusionné (si les 2 restent en préparation)
   return Object.values(byId).filter((rec) => ((tomb && tomb[rec.id]) || 0) <= (rec.updatedAt || 0));
 }
 function mergeTomb(a, b) { const t = Object.assign({}, a || {}); Object.keys(b || {}).forEach((id) => { t[id] = Math.max(t[id] || 0, b[id]); }); return t; }
