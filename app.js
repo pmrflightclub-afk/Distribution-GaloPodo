@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.34';
+const APP_VERSION = '1.7.35';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.35', date: '2026-07-16',
+    ajouts: [
+      'FIABILITÉ (majeur) — une tournée ne peut plus être clôturée tant que ses frais ne sont pas calculés : plus de risque qu\'une tournée clôturée disparaisse des comptes (chiffre d\'affaires, TVA, km).',
+      'SYNCHRO (majeur) — lors d\'une fusion entre appareils, les paiements encaissés et les créances (impayés) d\'un client ne peuvent plus être perdus : ils sont désormais récupérés/fusionnés au lieu de suivre en bloc la dernière version.',
+    ],
+  },
   {
     version: '1.7.34', date: '2026-07-16',
     ajouts: [
@@ -3150,6 +3157,12 @@ function graftClosure(to, from) {
   if (from.endedAt && !to.endedAt) to.endedAt = from.endedAt;
   if (from.autoClosedAt && !to.autoClosedAt) to.autoClosedAt = from.autoClosedAt;
   if (from.closed && !to.closed) to.closed = true;                          // clôture = état terminal (aucun « déclôturage » dans l'app)
+  // P0-2 : greffer l'ÉTAT FINANCIER manquant. La greffe de clôture protégeait les jalons mais PAS les paiements : une tournée
+  // pouvait devenir « clôturée » avec un encaissement perdu (le gagnant LWW n'avait pas les payments). On ne fait que COMPLÉTER
+  // (jamais écraser un paiement présent sur `to`) → aucune régression d'une édition légitime du gagnant.
+  if (from.payments) { to.payments = to.payments || {}; Object.keys(from.payments).forEach((cid) => { const fp = from.payments[cid]; if (fp && fp.method && !(to.payments[cid] && to.payments[cid].method)) to.payments[cid] = fp; }); }
+  // Articles d'IMPAYÉ (créances) présents seulement côté `from` → récupérés (sinon la créance disparaît de la facture après fusion).
+  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.impaye && a.impayeId && !to.articles.some((x) => x.impaye && x.impayeId === a.impayeId)) to.articles.push(a); }); }
   const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } }; // apparie les arrêts par adresse (robuste au réordonnancement)
   const fromByKey = {}; (from.arrets || []).forEach((a) => { const k = key(a); if (k) fromByKey[k] = a; });
   (to.arrets || []).forEach((a) => {
@@ -3197,6 +3210,14 @@ function mergeOneClient(a, b) {
   (a.chevaux || []).forEach((h) => { if (!h || !h.id) return; chById[h.id] = chById[h.id] ? mergeOneCheval(h, chById[h.id]) : h; });
   const aIds = new Set((a.chevaux || []).map((h) => h.id)); // présent chez le récent = vivant
   base.chevaux = Object.values(chById).filter((h) => aIds.has(h.id) || !((a.chDel || {})[h.id])); // présent seulement chez l'ancien → gardé SAUF si le récent l'a supprimé
+  // P0-3 : IMPAYÉS (créances) fusionnés par id — sinon `impayes` suivait le client gagnant en bloc (LWW) et une créance saisie sur
+  // l'autre appareil était perdue, puis effacée AUSSI de la facture par le GC (recalcAllTours). Conflit sur le même id → on garde la
+  // version « perçue » (collected) pour ne jamais re-facturer une créance déjà réglée.
+  if (Array.isArray(a.impayes) || Array.isArray(b.impayes)) {
+    const byId = {}; const put = (im) => { if (!im || !im.id) return; const cur = byId[im.id]; if (!cur) { byId[im.id] = im; return; } if (im.collected && !cur.collected) byId[im.id] = im; };
+    (b.impayes || []).forEach(put); (a.impayes || []).forEach(put);
+    base.impayes = Object.values(byId);
+  }
   return base;
 }
 function mergeClients(localArr, remoteArr, tomb) {
@@ -13402,11 +13423,18 @@ window.addEventListener('DOMContentLoaded', () => {
     if (currentTour.arrets && currentTour.arrets.length) calcTour(true); // recalcul complet avec les réglages actuels
     openEditor();
   });
-  if ($('edClose')) $('edClose').addEventListener('click', () => {
+  if ($('edClose')) $('edClose').addEventListener('click', async () => {
     if (!currentTour || currentTour.closed) return;
     const blk = tourFinalizeBlock(currentTour);
     if (blk.length) { alert('🔒 Clôture bloquée — finalisez chaque arrêt dans « Trajet du jour » (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; }
     { const miss = calMissingHeure(currentTour); if (miss.length) { alert('🕘 L\'heure de RDV est obligatoire pour chaque client.\n\nRenseignez l\'heure de : ' + miss.join(', ') + '\n(dans l\'arrêt « Heure de RDV », ou Trajet du jour → ⚡ Agir → Heure RDV.)'); return; } } // heure obligatoire à la clôture, synchro Google active ou non
+    // P0-1 : ne JAMAIS figer une tournée dont le calcul des frais (result) est absent ou périmé — sinon CA/TVA/km/matériel disparaissent des comptes. On tente un recalcul (local puis complet) ; si échec, on refuse la clôture.
+    const resultStale = (t) => !t.result || !t.result.rows || t.result.rows.length !== (t.arrets || []).length;
+    if (resultStale(currentTour)) {
+      if (!recomputeTourLocal(currentTour)) { try { await calcTour(false); } catch (e) {} }
+      if (!currentTour || currentTour.closed) return;
+      if (resultStale(currentTour)) { alert('🔒 Clôture bloquée — les frais de la tournée n\'ont pas pu être calculés (itinéraire/adresses incomplets). Utilisez « Calculer les frais » et corrigez le départ/les adresses, puis réessayez.'); return; }
+    }
     if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
     currentTour.closed = true;
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
