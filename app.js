@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.60';
+const APP_VERSION = '1.7.61';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.61', date: '2026-07-16',
+    ajouts: [
+      'Modale d\'annulation : par défaut aucune prestation n\'est cochée — vous cochez précisément celles à annuler (bouton « Tout » pour annuler le cheval entier).',
+    ],
+  },
   {
     version: '1.7.60', date: '2026-07-16',
     ajouts: [
@@ -12377,7 +12383,7 @@ function modalCancelRdv(nom, opts) {
   }
   let status = 'annule', reason = 'client';
   const items = chevalCancelItems(opts.tour, opts.clientId, nom); // prestations annulables (montants figés) — annulation PAR SERVICE (déplacement jamais listé, matériel couplé au parage)
-  const checked = new Set(items.map((it) => it.key)); // défaut : TOUT coché (= annuler le cheval entier, comportement historique) ; décocher pour n'annuler qu'une partie
+  const checked = new Set(); // défaut : RIEN coché — l'utilisateur coche les prestations à annuler (bouton « Tout » = cheval entier)
   openModal(`<div class="modal-head"><b>Annuler / reporter — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Le RDV de ce cheval est retiré de la facture et des stats. Les autres clients et le calcul de la tournée ne changent pas.</p>
     <label>Type</label><div class="seg" id="cxStatus"><button type="button" class="seg-btn on" data-st="annule">Annulé</button><button type="button" class="seg-btn" data-st="reporte">Reporté</button></div>
