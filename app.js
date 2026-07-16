@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.37';
+const APP_VERSION = '1.7.38';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.38', date: '2026-07-16',
+    ajouts: [
+      'AGENDA — « Heure de RDV » affiche et enregistre désormais l\'heure réelle du client (tenue à jour par les décalages) : ré-ouvrir cette fenêtre n\'efface plus un décalage et ne renvoie plus une heure périmée vers Google.',
+      'AGENDA — supprimer une tournée hors-ligne n\'abandonne plus ses RDV dans Google Agenda : ils sont mis en file et retirés dès qu\'une connexion revient.',
+      'FIABILITÉ — « Reporter toute la tournée » respecte l\'immuabilité d\'un mois déclaré ; un paiement n\'est plus laissé « orphelin » quand un client est retiré d\'une tournée en préparation.',
+    ],
+  },
   {
     version: '1.7.37', date: '2026-07-16',
     ajouts: [
@@ -3260,6 +3268,7 @@ function mergeSettings(localS, remoteS) {
   merged.agendaPriveVus = Object.assign({}, (localS && localS.agendaPriveVus) || {}, (remoteS && remoteS.agendaPriveVus) || {}); // « vu/traité » = union → un retrait fait sur un appareil ne réapparaît pas
   merged.agendaTrajetVus = Object.assign({}, (localS && localS.agendaTrajetVus) || {}, (remoteS && remoteS.agendaTrajetVus) || {}); // L8 : « masqué du Trajet du jour » = union (multi-appareils)
   merged.calPushed = Object.assign({}, (localS && localS.calPushed) || {}, (remoteS && remoteS.calPushed) || {}); // évènements Google poussés : union des mappings (pas de doublon entre appareils)
+  merged.calPendingDelete = Array.from(new Set([].concat((localS && localS.calPendingDelete) || [], (remoteS && remoteS.calPendingDelete) || []))); // P1-7 : file de suppression différée = union (n'importe quel appareil connecté finit le nettoyage)
   // Fond du logo par appareil : ne jamais perdre la valeur de l'autre appareil si celui qui « gagne » ne l'a pas.
   if (merged.logoBg == null) merged.logoBg = ((localS && localS.logoBg != null) ? localS.logoBg : (remoteS && remoteS.logoBg));
   if (merged.logoBgMobile == null) merged.logoBgMobile = ((localS && localS.logoBgMobile != null) ? localS.logoBgMobile : (remoteS && remoteS.logoBgMobile));
@@ -3414,6 +3423,16 @@ function tourNeedsCalPush(t) { return t && tourBillableClients(t).some((cid) => 
 function calCatchUp() {
   if (!S.calPush || !S.googleClientId || !gTokenValid(GSCOPE_CAL)) return;
   allTours().filter((t) => (t.date || '') >= todayStr() && tourNeedsCalPush(t)).forEach((t) => scheduleCalPush(t));
+  flushCalPendingDelete(); // P1-7 : rattrape les suppressions d'évènements différées (tournée supprimée hors-ligne)
+}
+// P1-7 : supprime les évènements Google mis en file quand aucun jeton n'était disponible (sinon RDV fantômes définitifs dans l'agenda).
+async function flushCalPendingDelete() {
+  if (!Array.isArray(S.calPendingDelete) || !S.calPendingDelete.length) return;
+  if (!S.googleClientId || !gTokenValid(GSCOPE_CAL)) return;
+  let token; try { token = await googleToken(false, GSCOPE_CAL); } catch { return; }
+  const rest = [];
+  for (const ev of S.calPendingDelete) { const res = await safeDeleteEvent(token, ev); if (res === 'skip') rest.push(ev); } // 'skip' = incertain → garder en file ; supprimé/introuvable → retiré
+  S.calPendingDelete = rest; saveSettings();
 }
 // Heure de RDV d'un client sur une tournée = la plus tôt de ses arrêts.
 // Heure de RDV d'un client (pour l'agenda) : heure PROPRE au client dans l'arrêt (cl.heure) si définie, sinon heure de l'arrêt.
@@ -3486,7 +3505,7 @@ async function pushTourToCalendar(t, opts) {
 async function deleteTourCalendar(tourId) {
   const keys = Object.keys(S.calPushed || {}).filter((k) => k.startsWith(tourId + ':'));
   if (!keys.length) return;
-  if (!S.googleClientId || !gTokenValid(GSCOPE_CAL)) { keys.forEach((k) => delete S.calPushed[k]); saveSettings(); return; }
+  if (!S.googleClientId || !gTokenValid(GSCOPE_CAL)) { S.calPendingDelete = S.calPendingDelete || []; keys.forEach((k) => { const ev = S.calPushed[k]; if (ev && !S.calPendingDelete.includes(ev)) S.calPendingDelete.push(ev); delete S.calPushed[k]; }); saveSettings(); return; } // P1-7 : pas de jeton → file de suppression différée (au lieu d'orpheliner les évènements dans Google Agenda)
   let token; try { token = await googleToken(false, GSCOPE_CAL); } catch { return; }
   for (const k of keys) { const res = await safeDeleteEvent(token, S.calPushed[k]); if (res !== 'skip') delete S.calPushed[k]; } // supprime seulement les évts de l'app ; garde en file ce qui est incertain
   saveSettings();
@@ -5772,6 +5791,9 @@ function reconcileTour(tour) {
   const na = (tour.articles || []).length;
   tour.articles = (tour.articles || []).filter((art) => art.impaye || (art.chevalIds || art.chevalNoms || []).length);
   if ((tour.articles || []).length !== na) changed = true;
+  // P1-5 : purge des PAIEMENTS orphelins — un client retiré de tous les arrêts ET articles laissait un `payments[cid]` inatteignable
+  // (rembourse / impaye / comptaPeriod invisibles des comptes car plus aucun `parClient` ne le porte).
+  if (tour.payments) { const liveCids = new Set(); (tour.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => liveCids.add(cl.clientId))); (tour.articles || []).forEach((ar) => { if (ar.clientId) liveCids.add(ar.clientId); }); Object.keys(tour.payments).forEach((cid) => { if (!liveCids.has(cid)) { delete tour.payments[cid]; changed = true; } }); }
   if (changed) saveTournees();
   return changed;
 }
@@ -11492,7 +11514,8 @@ function modalAssistant() {
 }
 // Reporte TOUS les chevaux (non déjà annulés) d'une tournée → ils rejoignent « Replacer un RDV ».
 function reportAllTour(t) {
-  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) cv.cancel = { status: 'reporte', reason: 'pro', note: '', at: new Date().toISOString(), replacedTourId: null }; })));
+  if (tourComptaLocked(t)) { alert('🔒 Report impossible — le mois comptable de cette tournée est déjà déclaré (période figée, immuable).'); return; } // P1-10 : même garde que les 3 autres chemins d'annulation/report
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) cv.cancel = { status: 'reporte', reason: 'pro', note: '', at: new Date().toISOString(), replacedTourId: null, credited: false }; }))); // credited:false pour l'uniformité du modèle avec les autres chemins
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
   renderHome();
 }
@@ -11850,13 +11873,14 @@ function modalActions(title, actions) {
 }
 // Heure de RDV par cheval (depuis « Agir ») : saisie individuelle de l'heure de chaque cheval de l'arrêt.
 function modalHeureRdv(t, a, cid) {
-  const chs = []; (a.clients || []).forEach((cl) => { if (cid && cl.clientId !== cid) return; (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) chs.push({ cv, cid: cl.clientId }); }); }); // L5 : ciblé sur UN client si cid fourni (deux clients au même arrêt = heures indépendantes)
+  const chs = []; (a.clients || []).forEach((cl) => { if (cid && cl.clientId !== cid) return; (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) chs.push({ cv, cid: cl.clientId, cl }); }); }); // L5 : ciblé sur UN client si cid fourni (deux clients au même arrêt = heures indépendantes)
   openModal(`<div class="modal-head"><b>🕘 Heure de RDV${cid ? ' — ' + esc(clientName(cid)) : ' par cheval'}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Saisissez l'heure de rendez-vous de chaque cheval${cid ? ' de ce client' : ' de cet arrêt'}.</p>
     <div id="hrList"></div>
     <div class="actions"><button class="btn primary block" id="hrOk">Enregistrer</button></div>`);
   const box = $('hrList');
-  chs.forEach((it, idx) => { const row = document.createElement('label'); row.innerHTML = `🐴 ${esc(it.cv.nom)} <span class="li-sub">— ${esc(clientName(it.cid))}</span><input type="time" data-h="${idx}" value="${it.cv.heure || ''}"/>`; box.appendChild(row); });
+  // P1-8 : pré-remplir depuis l'heure RDV du CLIENT (cl.heure = source de vérité, tenue à jour par les décalages) et non depuis cv.heure (legacy, périmé après un décalage) → n'efface plus un décalage à l'enregistrement.
+  chs.forEach((it, idx) => { const row = document.createElement('label'); const val = (it.cl && it.cl.heure) ? it.cl.heure : (it.cv.heure || ''); row.innerHTML = `🐴 ${esc(it.cv.nom)} <span class="li-sub">— ${esc(clientName(it.cid))}</span><input type="time" data-h="${idx}" value="${val}"/>`; box.appendChild(row); });
   if (!chs.length) box.innerHTML = '<p class="hint">Aucun cheval à cet arrêt.</p>';
   $('mX').addEventListener('click', closeModal);
   $('hrOk').addEventListener('click', () => {
