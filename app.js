@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.56';
+const APP_VERSION = '1.7.57';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.57', date: '2026-07-16',
+    ajouts: [
+      'AFFICHAGE — dans un arrêt, les boutons d\'un client (Heure + Adresse · Prêt + Planche · RDV + Paiement) ont maintenant tous la même hauteur et sont alignés verticalement sur chaque ligne, avec un petit espace entre les lignes. Même présentation sur téléphone, tablette et PC.',
+    ],
+  },
   {
     version: '1.7.56', date: '2026-07-16',
     ajouts: [

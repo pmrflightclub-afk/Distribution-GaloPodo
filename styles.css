@@ -463,8 +463,9 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 /* En-tête d'un bloc CLIENT dans un arrêt (multi-clients) : nom + actions individuelles (heure/paiement/RDV/prêt/planche). */
 .a-client-hd { margin-top: 12px; border-top: 2px solid var(--accent); padding-top: 8px; }
 .ac-name { font-size: .95rem; font-weight: 700; color: var(--strong); margin-bottom: 6px; }
-.ac-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.ac-acts > .btn, .ac-acts > .a-heure { flex: 0 1 auto; min-width: 0; height: 34px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+.ac-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 7px 0; } /* un petit espace entre chaque ligne d'actions */
+.ac-acts > .btn, .ac-acts > .a-heure { flex: 0 1 auto; min-width: 0; height: 38px; min-height: 38px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; line-height: 1; } /* hauteur IDENTIQUE pour tous (heure incluse) → boutons alignés verticalement sur chaque ligne */
+.ac-acts > .a-heure .gp-sel-btn, .ac-acts > .a-heure input[type=time] { height: 100%; } /* la pastille heure remplit la hauteur → pas plus haute que les autres */
 .a-client-hd .reduc-row { margin: 8px 0 0; font-size: .85rem; }
 .reduc-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: .85rem; }
 .reduc-row input { margin: 0; }
