@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.61';
+const APP_VERSION = '1.7.62';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.62', date: '2026-07-16',
+    ajouts: [
+      'ANNULATIONS (onglet Tournée) — liste refondue : regroupée PAR TOURNÉE, avec le détail PAR PRESTATION de chaque cheval annulé et les totaux HT / TVA / TTC (par tournée et par période). Les montants affichés sont ceux réellement annulés.',
+      'SUPPRESSION DÉFINITIVE — cochez les annulations à supprimer : un document PDF d\'archive s\'ouvre AVANT la suppression (à enregistrer/imprimer), puis une confirmation. Les prestations restent non facturées, l\'argent déjà remboursé n\'est pas ré-inversé, la tournée est nettoyée et les statistiques mises à jour. Les périodes déjà déclarées restent figées.',
+    ],
+  },
   {
     version: '1.7.61', date: '2026-07-16',
     ajouts: [
@@ -5076,6 +5083,7 @@ function renderAnnulGroup() {
       const partial = allItems.length > 0 && selItems.length < allItems.length;
       cv.cancel = { status: 'annule', reason: 'client', note: 'annulation groupée', at: new Date().toISOString(), replacedTourId: null, credited: false }; // liquide → jamais de note de crédit ; remboursement auto ci-dessous
       if (partial) { cv.cancel.services = selItems.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key); cv.cancel.articles = selItems.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4)); } // partiel → masque prestation par prestation ; sinon cheval entier
+      cv.cancel.items = selItems.map((it) => ({ key: it.key, label: it.label, ttc: it.ttc, ht: it.ht, tva: it.tva, matHT: it.matHT || 0 })); // fige les montants annulés
       touched.add(t); affPairs.push(t.id + ':' + g.cid);
     });
     touched.forEach((t) => recomputeTourLocal(t)); // recalcul d'abord → t.result reflète le déplacement seul
@@ -5829,7 +5837,8 @@ function allCancellations() {
   const out = [];
   allTours().forEach((t) => (t.arrets || []).forEach((a, ai) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => {
     if (!chevalCancelled(cv)) return;
-    out.push({ tour: t, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', at: cv.cancel.at, date: t.date, replaced: !!cv.cancel.replacedTourId, ttc: chevalWouldBeTTC(cv, cl.clientId) });
+    const ttc = (Array.isArray(cv.cancel.items) && cv.cancel.items.length) ? cv.cancel.items.reduce((s, i) => s + (i.ttc || 0), 0) : chevalWouldBeTTC(cv, cl.clientId); // montants FIGÉS (annulation par service) ; repli tarif courant pour l'ancien modèle / le reporté
+    out.push({ tour: t, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', at: cv.cancel.at, date: t.date, replaced: !!cv.cancel.replacedTourId, ttc });
   }))));
   return out.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
 }
@@ -5841,44 +5850,98 @@ function periodOptionsFrom(type, months) {
   if (type === 'semestre') return ys.flatMap((y) => [{ key: y + '-S1', label: '1ᵉʳ semestre ' + y }, { key: y + '-S2', label: '2ᵉ semestre ' + y }]);
   return ys.flatMap((y) => [1, 2, 3, 4].map((q) => ({ key: y + '-T' + q, label: 'Trimestre ' + q + ' ' + y })));
 }
-// Suppression définitive d'un cheval annulé : le retire de la tournée (déjà hors facture) sans toucher aux autres.
-function deleteCancelledCheval(c) {
+// Annulations DÉTAILLÉES par prestation (montants FIGÉS sur cv.cancel.items ; repli tarif courant pour l'ancien modèle / le reporté).
+function cancelEntries() {
+  const out = [];
+  allTours().forEach((t) => (t.arrets || []).forEach((a, ai) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => {
+    if (!chevalCancelled(cv)) return;
+    const r = rate();
+    let items;
+    if (Array.isArray(cv.cancel.items) && cv.cancel.items.length) items = cv.cancel.items.map((it) => ({ label: it.label, ht: it.ht || 0, tva: it.tva || 0, ttc: it.ttc || 0 }));
+    else items = chevalWouldBeLines(cv, cl.clientId).map((l) => ({ label: l.libelle, ttc: l.ttc, ht: l.ttc / (1 + r), tva: l.ttc - l.ttc / (1 + r) })); // ancien modèle / reporté → estimation au tarif courant
+    const ttc = items.reduce((s, i) => s + i.ttc, 0), ht = items.reduce((s, i) => s + i.ht, 0), tva = items.reduce((s, i) => s + i.tva, 0);
+    out.push({ tour: t, tourId: t.id, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', date: t.date, replaced: !!cv.cancel.replacedTourId, credited: chevalCredited(cv), locked: comptaLocked(t, cl.clientId), partial: chevalCancelSet(cv) instanceof Set, items, ht, tva, ttc });
+  }))));
+  return out.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
+}
+// Suppression DÉFINITIVE d'une annulation : l'argent n'est PAS ré-inversé, les prestations restent NON facturées, la trace est effacée de la tournée.
+//  Partiel → retire pour de bon les prestations annulées (flags OFF / matériel via parage / lourd via lourdOff / articles) puis efface cv.cancel ; recalcul si la période n'est pas déclarée (sinon result figé).
+//  Total / reporté → retire le cheval de la tournée (déjà hors facture).
+function deleteCancellation(c) {
   const t = c.tour; const a = (t.arrets || [])[c.arretIdx]; if (!a) return;
   const cl = (a.clients || []).find((x) => x.clientId === c.clientId); if (!cl) return;
-  cl.chevaux = (cl.chevaux || []).filter((cv) => !(norm(cv.nom) === norm(c.cheval) && chevalCancelled(cv)));
-  const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
+  const cv = (cl.chevaux || []).find((x) => norm(x.nom) === norm(c.cheval) && chevalCancelled(x)); if (!cv) return;
+  const set = chevalCancelSet(cv);
+  if (set instanceof Set) {
+    set.forEach((k) => { if (k === 'photo') cv.photo = null; else if (k === 'lourd') cv.lourdOff = true; else if (['parage', 'visite', 'fourbure', 'npas', 'infection', 'difficile'].indexOf(k) >= 0) cv[k] = false; });
+    (cv.cancel.articles || []).forEach((aid) => { const art = (t.articles || []).find((x) => x.id === aid); if (!art) return; const idx = (art.chevalNoms || []).map(norm).indexOf(norm(c.cheval)); if (idx >= 0) { art.chevalNoms.splice(idx, 1); if (Array.isArray(art.chevalIds)) art.chevalIds.splice(idx, 1); } if (!(art.chevalNoms || []).length) t.articles = (t.articles || []).filter((x) => x.id !== aid); });
+    delete cv.cancel;
+    if (!tourComptaLocked(t)) recomputeTourLocal(t);
+  } else {
+    cl.chevaux = (cl.chevaux || []).filter((x) => !(norm(x.nom) === norm(c.cheval) && chevalCancelled(x)));
+  }
+}
+// Document d'archive (PDF via impression) des annulations qu'on s'apprête à supprimer — regroupé par prestation.
+function exportCancellationsPdf(ents) {
+  const rows = ents.map((c) => (c.items.length ? c.items : [{ label: '—', ht: 0, tva: 0, ttc: 0 }]).map((it) => `<tr><td>${esc(fmtDateFr(c.date))}</td><td>${esc((c.tour.nom || '').trim())}</td><td>${esc(c.clientNom)}</td><td>${esc(c.cheval)}</td><td>${esc(it.label)}</td><td style="text-align:right">${eur(it.ht)}</td><td style="text-align:right">${eur(it.tva)}</td><td style="text-align:right">${eur(it.ttc)}</td></tr>`).join('')).join('');
+  const tot = ents.reduce((a, c) => ({ ht: a.ht + c.ht, tva: a.tva + c.tva, ttc: a.ttc + c.ttc }), { ht: 0, tva: 0, ttc: 0 });
+  printHtml('Annulations supprimées — archive', `<h1>Annulations supprimées (archive)</h1><h2>Édité le ${esc(fmtDateFr(todayStr()))} — ${ents.length} annulation(s)</h2><table><thead><tr><th>Date</th><th>Tournée</th><th>Client</th><th>Cheval</th><th>Prestation</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${rows}<tr><td colspan="5" style="text-align:right"><b>Total</b></td><td style="text-align:right"><b>${eur(tot.ht)}</b></td><td style="text-align:right"><b>${eur(tot.tva)}</b></td><td style="text-align:right"><b>${eur(tot.ttc)}</b></td></tr></tbody></table><p style="margin-top:10px;font-size:.85em;color:#555">Document d'archive : ces annulations ont été supprimées définitivement de l'application. Le déplacement reste facturé ; les remboursements déjà effectués ne sont pas ré-inversés.</p>`);
 }
 let annulType = 'trimestre', annulPeriodKey = null;
 function renderAnnulations() {
   const seg = $('annulTypeSeg'), perSel = $('annulPeriod'), box = $('annulList'); if (!seg || !perSel || !box) return;
   seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._aw) { b._aw = true; b.addEventListener('click', () => { annulType = b.dataset.atype; annulPeriodKey = null; renderAnnulations(); }); } b.classList.toggle('on', b.dataset.atype === annulType); });
-  const all = allCancellations();
+  const all = cancelEntries();
   const months = [...new Set(all.map((c) => (c.date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
   const opts = periodOptionsFrom(annulType, months);
   if (!opts.length) { perSel.innerHTML = ''; box.innerHTML = ''; if ($('annulEmpty')) $('annulEmpty').style.display = 'block'; if ($('annulTot')) $('annulTot').textContent = ''; return; }
-  if (annulPeriodKey == null && annulType === 'trimestre') { const ts = todayStr(); const cur = ts.slice(0, 4) + '-T' + Math.ceil(parseInt(ts.slice(5, 7), 10) / 3); if (opts.some((o) => o.key === cur)) annulPeriodKey = cur; } // défaut : trimestre en cours (s'il contient des annulations)
+  if (annulPeriodKey == null && annulType === 'trimestre') { const ts = todayStr(); const cur = ts.slice(0, 4) + '-T' + Math.ceil(parseInt(ts.slice(5, 7), 10) / 3); if (opts.some((o) => o.key === cur)) annulPeriodKey = cur; }
   if (!opts.some((o) => o.key === annulPeriodKey)) annulPeriodKey = opts[0].key;
   perSel.innerHTML = opts.map((o) => `<option value="${o.key}"${o.key === annulPeriodKey ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
   perSel.onchange = () => { annulPeriodKey = perSel.value; renderAnnulations(); };
   const range = new Set(monthsOfRange(annulType, annulPeriodKey));
-  const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));       // section 1 : période sélectionnée
-  const others = all.filter((c) => !range.has((c.date || '').slice(0, 7)));     // section 2 : toutes les autres (non supprimées)
+  const list = all.filter((c) => range.has((c.date || '').slice(0, 7)));
+  const others = all.filter((c) => !range.has((c.date || '').slice(0, 7)));
   if ($('annulEmpty')) $('annulEmpty').style.display = all.length ? 'none' : 'block';
-  const perte = list.filter((c) => !c.replaced && !chevalCredited(c.cv)); // L8 : replacé (servi ailleurs) OU crédité (facture + note de crédit se neutralisent) → hors « manque à gagner » — même règle que la page Stats
-  const totA = perte.filter((c) => c.status === 'annule').reduce((s, c) => s + c.ttc, 0), totR = perte.filter((c) => c.status === 'reporte').reduce((s, c) => s + c.ttc, 0);
-  if ($('annulTot')) $('annulTot').innerHTML = list.length ? `Période : annulés <b>${eur(totA)}</b> · reportés <b>${eur(totR)}</b> (manque à gagner, replacés exclus)` : (all.length ? 'Aucune annulation dans cette période — voir « Autres annulations » ci-dessous.' : '');
+  const perte = list.filter((c) => !c.replaced && !c.credited); // manque à gagner : replacé (servi ailleurs) / crédité (NC neutralise) exclus
+  const sumT = (arr, f) => arr.reduce((s, c) => s + f(c), 0);
+  if ($('annulTot')) $('annulTot').innerHTML = list.length ? `Période : <b>${eur(sumT(perte, (c) => c.ttc))}</b> TTC (HT ${eur(sumT(perte, (c) => c.ht))} · TVA ${eur(sumT(perte, (c) => c.tva))}) — manque à gagner, replacés/crédités exclus` : (all.length ? 'Aucune annulation dans cette période — voir « Autres » ci-dessous.' : '');
   box.innerHTML = '';
-  const mkItem = (c) => {
-    const el = document.createElement('div'); el.className = 'list-item';
-    const stLbl = c.status === 'reporte' ? '↩ reporté' : '🚫 annulé';
-    const paid = chevalCredited(c.cv);
-    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b><span class="li-sub">${esc(fmtDateFr(c.date))} · ${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · <b>replacé</b>' : ''}${paid ? ' · <b>payé (note de crédit)</b>' : ''} · ${eur(c.ttc)}</span></div><div class="li-act"><button class="btn small danger" data-del title="Supprimer définitivement">🗑</button></div>`;
-    el.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer définitivement cet arrêt annulé (' + c.cheval + ') ? Il disparaît des listes et des stats.')) return; deleteCancelledCheval(c); renderAnnulations(); });
-    return el;
+  const entKey = (c) => c.tourId + '|' + c.clientId + '|' + norm(c.cheval);
+  const renderGroupByTour = (items, container) => {
+    const g = {}; items.forEach((c) => { (g[c.tourId] = g[c.tourId] || { t: c.tour, list: [] }).list.push(c); });
+    Object.values(g).sort((x, y) => (y.t.date || '').localeCompare(x.t.date || '')).forEach((grp) => {
+      const card = document.createElement('div'); card.className = 'card'; card.style.margin = '8px 0';
+      const st = sumT(grp.list, (c) => c.ttc), sh = sumT(grp.list, (c) => c.ht), sv = sumT(grp.list, (c) => c.tva);
+      let h = `<div class="card-head"><h3 style="margin:0">🚩 ${esc(fmtDateFr(grp.t.date))}${grp.t.nom && grp.t.nom.trim() ? ' — ' + esc(grp.t.nom.trim()) : ''}</h3><span class="li-sub">${eur(st)} TTC</span></div>`;
+      if (grp.list.some((c) => c.locked)) h += '<p class="hint">🔒 Période déclarée : la suppression est archivée mais les chiffres déclarés restent figés.</p>';
+      grp.list.forEach((c) => {
+        const stLbl = c.status === 'reporte' ? '↩ reporté' : (c.partial ? '🚫 annulé (partiel)' : '🚫 annulé');
+        h += `<div class="list-item"><div class="li-main"><label class="chk2"><input type="checkbox" class="an-del" data-k="${esc(entKey(c))}"/> <b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b></label><span class="li-sub">${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · replacé' : ''}${c.credited ? ' · payé (NC)' : ''}</span><div class="li-sub" style="padding-left:20px">${c.items.map((it) => esc(it.label) + ' — ' + eur(it.ttc)).join('<br>') || '—'}</div><span class="li-sub" style="padding-left:20px">Total : <b>${eur(c.ttc)}</b> TTC · HT ${eur(c.ht)} · TVA ${eur(c.tva)}</span></div></div>`;
+      });
+      h += `<p class="hint" style="text-align:right">Sous-total tournée : <b>${eur(st)}</b> TTC · HT ${eur(sh)} · TVA ${eur(sv)}</p>`;
+      card.innerHTML = h; container.appendChild(card);
+    });
   };
-  const addGroups = (items) => { const g = {}; items.forEach((c) => { const k = (c.date || '').slice(0, 7); (g[k] = g[k] || []).push(c); }); Object.keys(g).sort().reverse().forEach((k) => { const h = document.createElement('h3'); h.className = 'rsub'; h.textContent = monthLabel(k); box.appendChild(h); g[k].forEach((c) => box.appendChild(mkItem(c))); }); }; // classé par mois/année
-  if (list.length) addGroups(list);
-  if (others.length) { const sep = document.createElement('div'); sep.innerHTML = '<h2 class="rsub" style="margin-top:18px;border-top:1px solid var(--line);padding-top:12px">Autres annulations (hors période)</h2><p class="hint">Toutes les annulations encore présentes (non supprimées définitivement), en dehors de la période sélectionnée.</p>'; box.appendChild(sep); addGroups(others); }
+  if (list.length) renderGroupByTour(list, box);
+  if (others.length) { const sep = document.createElement('h2'); sep.className = 'rsub'; sep.style.cssText = 'margin-top:18px;border-top:1px solid var(--line);padding-top:12px'; sep.textContent = 'Autres annulations (hors période)'; box.appendChild(sep); renderGroupByTour(others, box); }
+  const bar = document.createElement('div'); bar.className = 'actions'; bar.style.marginTop = '12px';
+  bar.innerHTML = '<button class="btn danger block" id="anDelBtn" disabled>🗑 Supprimer définitivement les éléments cochés</button>';
+  box.appendChild(bar);
+  const findEnt = (k) => all.find((c) => entKey(c) === k);
+  const refreshBtn = () => { const n = box.querySelectorAll('.an-del:checked').length; $('anDelBtn').disabled = !n; $('anDelBtn').textContent = n ? `🗑 Supprimer définitivement ${n} élément(s) cochés` : '🗑 Supprimer définitivement les éléments cochés'; };
+  box.querySelectorAll('.an-del').forEach((c) => c.addEventListener('change', refreshBtn));
+  $('anDelBtn').addEventListener('click', () => {
+    const ents = Array.from(box.querySelectorAll('.an-del:checked')).map((c) => findEnt(c.dataset.k)).filter(Boolean);
+    if (!ents.length) return;
+    if (!confirm(`Supprimer DÉFINITIVEMENT ${ents.length} annulation(s) ?\n\n⚠️ Irréversible. Un document PDF d'archive va s'ouvrir AVANT la suppression (choisissez « Enregistrer au format PDF » / imprimer). L'argent déjà remboursé n'est pas ré-inversé, les prestations restent non facturées, les stats sont mises à jour.`)) return;
+    exportCancellationsPdf(ents); // 1) archive PDF AVANT
+    if (!confirm('Le document d\'archive a été généré (fenêtre d\'impression). Confirmer la SUPPRESSION DÉFINITIVE maintenant ?')) return; // 2) 2e confirmation après archive
+    ents.forEach(deleteCancellation); // 3) effacement définitif (nettoie la tournée)
+    saveTournees(); saveArchive();
+    refreshEverywhere(); // 4) stats / compta actualisées
+    renderAnnulations();
+  });
 }
 // ---------- Replacer un RDV (chevaux reportés, non encore replacés), groupés par client ----------
 function reportedByClient() {
@@ -7186,7 +7249,7 @@ function rowFromArret(a, geo) {
         chevaux: (cl.chevaux || []).filter(keep).map((c) => {
           const fiche = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null;
           const cSet = chevalCancelSet(c); const kill = (k) => !chevalCredited(c) && cSet instanceof Set && cSet.has(k); // 'ALL' déjà exclu par keep() ; ne masque que les annulations PARTIELLES ; un cheval CRÉDITÉ (virement, NC émise) reste PLEINEMENT facturé (la NC gère la réduction — pas de double)
-          return { nom: c.nom, fourbure: !!c.fourbure && !kill('fourbure'), npas: !!c.npas && !kill('npas'), infection: !!c.infection && !kill('infection'), parage: !!c.parage && !kill('parage'), visite: !!c.visite && !kill('visite'), visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile && !kill('difficile'), difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd) && !kill('lourd'), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined, photo: kill('photo') ? null : (c.photo || null) };
+          return { nom: c.nom, fourbure: !!c.fourbure && !kill('fourbure'), npas: !!c.npas && !kill('npas'), infection: !!c.infection && !kill('infection'), parage: !!c.parage && !kill('parage'), visite: !!c.visite && !kill('visite'), visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile && !kill('difficile'), difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd) && !c.lourdOff && !kill('lourd'), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined, photo: kill('photo') ? null : (c.photo || null) };
         }) }; }),
     segKm: geo.segKm, directKm: geo.directKm };
 }
@@ -12436,6 +12499,7 @@ function modalCancelRdv(nom, opts) {
     const cSplit = cancelItemsSplit(sel);
     cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
     if (status === 'annule' && partial) { cv.cancel.services = services; cv.cancel.articles = artIds; } // PARTIEL → masque prestation par prestation ; TOTAL → pas de .services (= cheval entier, identique à avant)
+    if (status === 'annule') cv.cancel.items = sel.map((it) => ({ key: it.key, label: it.label, ttc: it.ttc, ht: it.ht, tva: it.tva, matHT: it.matHT || 0 })); // fige les montants annulés (les prestations disparaissent du calcul → seule trace fiable pour la liste/PDF)
     const pp = (opts.tour.payments || {})[opts.clientId] || {}, pm = pp.method; // M1 : le traitement dépend de la MÉTHODE de paiement
     if (status === 'annule' && clientPaiementDone(opts.tour, opts.clientId)) {
       const ncOpts = partial ? { cancelSplit: cSplit, cancelTTC: cSplit.ttc, services } : null; // NC ventilée sur les seules prestations annulées (partiel)
