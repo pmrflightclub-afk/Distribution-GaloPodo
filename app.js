@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.39';
+const APP_VERSION = '1.7.40';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.40', date: '2026-07-16',
+    ajouts: [
+      'ROBUSTESSE — identifiants internes plus résistants aux collisions lors des créations en lot (import/réinjection) ; « Km ce mois/année » n\'oublie plus les tournées du jour juste après minuit.',
+      'CORRECTIFS — une planche générée retire bien son « à faire » même si vous changez le stade au moment de la créer ; depuis l\'agenda, « Ouvrir la tournée » ouvre la tournée active du jour et non une éventuelle tournée clôturée du même jour.',
+    ],
+  },
   {
     version: '1.7.39', date: '2026-07-16',
     ajouts: [
@@ -2391,7 +2398,7 @@ const LS = {
     }
   },
 };
-const uid = () => 'id' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+const uid = () => 'id' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); // robustesse : ~8 caractères aléatoires (36^8) au lieu de 1e6 → plus de collision d'id en création groupée (import/réinjection créant clients+chevaux dans le même tick)
 
 // ---------- Brouillons : mémoire par formulaire/modale des saisies non encore enregistrées ----------
 // Clé par page/modale. Effacer un brouillon ne touche pas les autres.
@@ -5033,7 +5040,7 @@ function renderAgendaCalendrier() {
   Object.keys(byDay).sort().forEach((day) => {
     const items = byDay[day];
     const el = document.createElement('div'); el.className = 'inv-client';
-    const existing = allTours().find((x) => x.date === day); // « Récupérer » a déjà créé/rempli la tournée du jour
+    const existing = allTours().find((x) => x.date === day && statusOf(x) !== 'cloturee') || allTours().find((x) => x.date === day); // P2 : préférer la tournée ACTIVE du jour (une tournée clôturée peut coexister avec une nouvelle) → « Ouvrir » n'ouvre plus la clôturée figée
     let h = `<div class="inv-head"><span>${esc(fmtDateFr(day))}</span><button class="btn small primary" data-newtour>${existing ? 'Ouvrir la tournée' : 'Créer la tournée'}</button></div>`;
     items.forEach((x) => { const c = clients.find((cc) => cc.id === x.clientId); h += `<div class="inv-line"><span>${esc(x.title)}</span><span>${c ? esc(fullName(c)) : '⚠ client supprimé'}</span></div>`; });
     el.innerHTML = h;
@@ -5043,7 +5050,7 @@ function renderAgendaCalendrier() {
 }
 // Ouvre la tournée du jour si elle existe déjà (créée par « Récupérer »), sinon en crée une pré-remplie à partir des items.
 function createTourFromDay(day, items) {
-  const existing = allTours().find((x) => x.date === day);
+  const existing = allTours().find((x) => x.date === day && statusOf(x) !== 'cloturee') || allTours().find((x) => x.date === day); // P2 : préférer la tournée active du jour
   if (existing) { openTour(existing); return; } // pas de doublon
   currentTour = { id: uid(), date: day, nom: '', closed: false, arrivee: null, arrets: [], articles: [], reductions: {}, payments: {}, result: null, createdAt: Date.now() };
   const seen = {};
@@ -7316,7 +7323,7 @@ function openFactureDetail() {
 // ================= GESTION → FRAIS VÉHICULE =================
 function kmStats() {
   const now = new Date();
-  const ym = now.toISOString().slice(0, 7), y = now.toISOString().slice(0, 4);
+  const ym = todayStr().slice(0, 7), y = todayStr().slice(0, 4); // robustesse : clé locale (comme t.date) et non UTC → « Km ce mois/année » n'omet plus les tournées du jour dans les 1-2 h après minuit
   let mois = 0, annee = 0; const cmap = {};
   allTours().forEach((t) => {
     if (!t.result) return;
@@ -11148,6 +11155,7 @@ function plancheTodoDone(st) {
   if (st.todoId) { const td = (S.plancheTodo || []).find((y) => y.id === st.todoId); if (td) { clientId = clientId || td.clientId; chevalNom = td.chevalNom || chevalNom; date = td.date || date; if (!type) type = td.type || ''; } }
   if (!clientId && st.client) { const c = clients.find((x) => norm(fullName(x)) === norm(st.client)); if (c) clientId = c.id; }
   if (clientId && chevalNom && date) addPlancheDone(clientId, chevalNom, date, type); // « fait » rattaché au STADE (type) de la planche générée
+  if (st.todoId) S.plancheTodo = (S.plancheTodo || []).filter((y) => y.id !== st.todoId); // P2 : retire explicitement le todo d'origine, même si le stade a été changé à la création (sinon il restait affiché « à faire » indéfiniment)
   saveSettings(); renderComptePhoto();
 }
 
