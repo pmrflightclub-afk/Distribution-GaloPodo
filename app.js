@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.63';
+const APP_VERSION = '1.7.64';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.64', date: '2026-07-16',
+    ajouts: [
+      'COMPTA (mois) — bouton « 🔍 Détail » à côté du PDF de la caisse liquide : ouvre le détail de chaque poste globalisé (parage, matériel, déplacement, arrondi caisse…) ventilé par tournée / client / chevaux, avec les totaux HT / TVA / TTC pour vérifier qu\'ils correspondent exactement au PDF.',
+    ],
+  },
   {
     version: '1.7.63', date: '2026-07-16',
     ajouts: [
@@ -8435,6 +8441,7 @@ function comptaData(ym) {
   const r = rate();
   const liquideClients = [], virementClients = [], factureLiqClients = [], factureVirClients = [], aclasserClients = [];
   const posts = {}; const addPost = (lib, ht, tva, ttc) => { const p = posts[lib] = posts[lib] || { libelle: lib, ht: 0, tva: 0, ttc: 0 }; p.ht += ht; p.tva += tva; p.ttc += ttc; };
+  const postDetail = {}; const addDetail = (lib, src) => { (postDetail[lib] = postDetail[lib] || []).push(src); }; // L4 : détail par poste (tournée/client/chevaux) pour la réconciliation du PDF liquide
   // F-b : décomposition analytique du CA figé du mois (toutes méthodes de paiement confondues, au mois « naturel » de la tournée).
   // 3 bases de répartition : main d'œuvre (parage/visite/patho/difficile/lourd), matériel refacturé, déplacement refacturé + TVA collectée.
   let baseMO = 0, baseMat = 0, baseDep = 0, tvaCol = 0;
@@ -8470,13 +8477,14 @@ function comptaData(ym) {
       }
       if (effYm !== ym) return; // la part cash est comptée dans son mois de rattachement
       const cash = payRecu(m, p); const cs = cashSplit(cash, m); const cHT = cs.ht, cTVA = cs.tva; liquideClients.push({ nom: m.nom, ht: cHT, tva: cTVA, ttc: cash });
+      const srcT = { tourDate: t.date, tourNom: (t.nom || '').trim(), client: m.nom }; // L4 : source du détail (tournée/client)
       if (p && p.partiel) {
-        addPost('Acompte liquide (partiel)', cHT, cTVA, cash);
+        addPost('Acompte liquide (partiel)', cHT, cTVA, cash); addDetail('Acompte liquide (partiel)', Object.assign({ chevaux: '', ht: cHT, tva: cTVA, ttc: cash }, srcT));
       } else {
-        (m.articles || []).forEach((a) => addPost(a.libelle, a.ht, a.tva, a.ttc));
-        if (m.htMat > 0) addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r));
-        const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) addPost('Déplacement', depHT, depHT * r, depHT * (1 + r));
-        const diff = payArrondi(m, p); if (Math.abs(diff) >= 0.005) { const cs = cashSplit(diff, m); addPost('Arrondi caisse', cs.ht, cs.tva, diff); } // F4 : taux effectif (postes ≡ total de section)
+        (m.articles || []).forEach((a) => { addPost(a.libelle, a.ht, a.tva, a.ttc); addDetail(a.libelle, Object.assign({ chevaux: (a.chevaux || []).join(', '), ht: a.ht, tva: a.tva, ttc: a.ttc }, srcT)); });
+        if (m.htMat > 0) { addPost('Matériel', m.htMat, m.htMat * r, m.htMat * (1 + r)); addDetail('Matériel', Object.assign({ chevaux: (m.materiel || []).map((x) => x.nom).join(', '), ht: m.htMat, tva: m.htMat * r, ttc: m.htMat * (1 + r) }, srcT)); }
+        const depHT = (m.deplacement || []).reduce((s, l) => s + l.partHT, 0); if (depHT > 0) { addPost('Déplacement', depHT, depHT * r, depHT * (1 + r)); addDetail('Déplacement', Object.assign({ chevaux: '', ht: depHT, tva: depHT * r, ttc: depHT * (1 + r) }, srcT)); }
+        const diff = payArrondi(m, p); if (Math.abs(diff) >= 0.005) { const cs = cashSplit(diff, m); addPost('Arrondi caisse', cs.ht, cs.tva, diff); addDetail('Arrondi caisse', Object.assign({ chevaux: '', ht: cs.ht, tva: cs.tva, ttc: diff }, srcT)); } // F4 : taux effectif (postes ≡ total de section)
       }
     });
   });
@@ -8491,7 +8499,7 @@ function comptaData(ym) {
   let ncMO = 0, ncMat = 0, ncTVA = 0;
   ncMonth.filter((n) => !n.documentaire).forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncTVA += b.tva; });
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
-    liquidePosts: Object.values(posts), liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
+    liquidePosts: Object.values(posts), liquideDetail: postDetail, liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
     factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
     notesCredit: ncMonth, notesCreditTotal,
     baseMainOeuvreHT: Math.max(0, baseMO - ncMO), baseMaterielHT: Math.max(0, baseMat - ncMat), baseDeplacementHT: baseDep, tvaCollectee: Math.max(0, tvaCol - ncTVA) };
@@ -9404,7 +9412,7 @@ function comptaSectionsHtml(ym) {
   const section = (title, k, total, detail, arr) => `<section class="card"><div class="card-head"><h3 style="margin:0">${title}</h3><button class="btn small" data-print="${k}" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(total)}</p>${arr ? recuRow(arr) : ''}${detail}</section>`;
   const liqDem = archived && statusOfKind('liquide') === 'encode';
   const liquideStatus = archived ? `<label>Démarche comptable (caisse du mois)<select data-status="liquide" data-ym="${ym}"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>` : '';
-  const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><button class="btn small" data-print="liquide" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
+  const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><span style="display:flex;gap:6px"><button class="btn small" data-detail="liquide" data-ym="${ym}">🔍 Détail</button><button class="btn small" data-print="liquide" data-ym="${ym}">🖨 PDF</button></span></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
   const ncTbl = d.notesCredit.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Cheval</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucune.</p>';
   const ncSec = `<section class="card"><div class="card-head"><h3 style="margin:0">↩ Notes de crédit (réduction du CA)</h3><button class="btn small" data-print="nc" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.notesCreditTotal)}</p>${ncTbl}</section>`;
   return liquideSec
@@ -9434,6 +9442,23 @@ function comptaWire(container, rerender) {
   container.querySelectorAll('[data-mode]').forEach((el) => el.addEventListener('change', () => { setComptaPayment(el.dataset.tour, el.dataset.cid, el.value); rerender(); }));
   container.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaRecu[k] = true; else delete S.comptaRecu[k]; saveSettings(); rerender(); }));
   container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => comptaPrint(btn.dataset.ym, btn.dataset.print)));
+  container.querySelectorAll('[data-detail]').forEach((btn) => btn.addEventListener('click', () => modalLiquideDetail(btn.dataset.ym)));
+}
+// L4 : détail de la caisse liquide — chaque poste du PDF « Liquide (globalisé) » ventilé par tournée / client / chevaux, pour vérifier que le total = PDF.
+function modalLiquideDetail(ym) {
+  const d = comptaData(ym); const posts = d.liquidePosts || [], det = d.liquideDetail || {};
+  let body = '';
+  posts.forEach((p) => {
+    const rows = det[p.libelle] || [];
+    body += `<div class="card" style="margin:6px 0"><div class="card-head"><h3 style="margin:0">${esc(p.libelle)}</h3><span class="li-sub">${eur(p.ttc)} TTC</span></div><div class="table-wrap"><table><thead><tr><th>Tournée</th><th>Client</th><th>Chevaux</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${rows.map((x) => `<tr><td>${esc(fmtDateFr(x.tourDate))}${x.tourNom ? ' · ' + esc(x.tourNom) : ''}</td><td>${esc(x.client)}</td><td>${esc(x.chevaux || '—')}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}<tr><td colspan="3" style="text-align:right"><b>Sous-total poste</b></td><td><b>${eur(p.ht)}</b></td><td><b>${eur(p.tva)}</b></td><td><b>${eur(p.ttc)}</b></td></tr></tbody></table></div></div>`;
+  });
+  const t = d.liquideTotal;
+  openModal(`<div class="modal-head"><b>🔍 Détail caisse liquide — ${esc(monthLabel(ym))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Chaque poste du PDF « Liquide (globalisé) », détaillé par tournée / client / chevaux. Le total ci-dessous doit correspondre exactement au PDF.</p>
+    ${body || '<p class="empty">Aucun paiement liquide ce mois.</p>'}
+    <div class="card" style="margin-top:8px;text-align:right"><b>Total caisse liquide : ${eur(t.ttc)} TTC</b> <span class="li-sub">· HT ${eur(t.ht)} · TVA ${eur(t.tva)}</span></div>
+    <div class="actions"><button class="btn block" id="ldClose">Fermer</button></div>`);
+  $('mX').onclick = closeModal; $('ldClose').onclick = closeModal;
 }
 function comptaPrint(ym, k) {
   const d = comptaData(ym), ml = monthLabel(ym);
