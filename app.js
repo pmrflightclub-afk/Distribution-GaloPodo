@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.62';
+const APP_VERSION = '1.7.63';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.63', date: '2026-07-16',
+    ajouts: [
+      'ANNULATIONS — la suppression se fait désormais PRESTATION PAR PRESTATION : cochez précisément les prestations annulées à effacer (une case par prestation). Le PDF d\'archive et la suppression ne portent que sur les prestations cochées ; les autres prestations annulées du cheval restent en mémoire.',
+    ],
+  },
   {
     version: '1.7.62', date: '2026-07-16',
     ajouts: [
@@ -5857,35 +5863,43 @@ function cancelEntries() {
     if (!chevalCancelled(cv)) return;
     const r = rate();
     let items;
-    if (Array.isArray(cv.cancel.items) && cv.cancel.items.length) items = cv.cancel.items.map((it) => ({ label: it.label, ht: it.ht || 0, tva: it.tva || 0, ttc: it.ttc || 0 }));
-    else items = chevalWouldBeLines(cv, cl.clientId).map((l) => ({ label: l.libelle, ttc: l.ttc, ht: l.ttc / (1 + r), tva: l.ttc - l.ttc / (1 + r) })); // ancien modèle / reporté → estimation au tarif courant
+    if (Array.isArray(cv.cancel.items) && cv.cancel.items.length) items = cv.cancel.items.map((it) => ({ key: it.key || null, label: it.label, ht: it.ht || 0, tva: it.tva || 0, ttc: it.ttc || 0 }));
+    else items = chevalWouldBeLines(cv, cl.clientId).map((l) => ({ key: null, label: l.libelle, ttc: l.ttc, ht: l.ttc / (1 + r), tva: l.ttc - l.ttc / (1 + r) })); // ancien modèle / reporté (pas de clé → suppression du cheval entier)
     const ttc = items.reduce((s, i) => s + i.ttc, 0), ht = items.reduce((s, i) => s + i.ht, 0), tva = items.reduce((s, i) => s + i.tva, 0);
     out.push({ tour: t, tourId: t.id, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', date: t.date, replaced: !!cv.cancel.replacedTourId, credited: chevalCredited(cv), locked: comptaLocked(t, cl.clientId), partial: chevalCancelSet(cv) instanceof Set, items, ht, tva, ttc });
   }))));
   return out.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
 }
-// Suppression DÉFINITIVE d'une annulation : l'argent n'est PAS ré-inversé, les prestations restent NON facturées, la trace est effacée de la tournée.
-//  Partiel → retire pour de bon les prestations annulées (flags OFF / matériel via parage / lourd via lourdOff / articles) puis efface cv.cancel ; recalcul si la période n'est pas déclarée (sinon result figé).
-//  Total / reporté → retire le cheval de la tournée (déjà hors facture).
-function deleteCancellation(c) {
+// Suppression DÉFINITIVE de PRESTATIONS annulées précises (par service). L'argent n'est PAS ré-inversé, les prestations restent NON facturées.
+//  Retire pour de bon chaque prestation cochée (flag OFF / photo / lourd via lourdOff / article stripé) ; si toutes les prestations annulées du cheval partent → efface cv.cancel (et retire le cheval s'il ne reste plus rien de facturable) ; sinon convertit en annulation partielle avec le reste. Recalcul si période non déclarée.
+function deleteCancellationItems(c, keys) {
   const t = c.tour; const a = (t.arrets || [])[c.arretIdx]; if (!a) return;
   const cl = (a.clients || []).find((x) => x.clientId === c.clientId); if (!cl) return;
   const cv = (cl.chevaux || []).find((x) => norm(x.nom) === norm(c.cheval) && chevalCancelled(x)); if (!cv) return;
-  const set = chevalCancelSet(cv);
-  if (set instanceof Set) {
-    set.forEach((k) => { if (k === 'photo') cv.photo = null; else if (k === 'lourd') cv.lourdOff = true; else if (['parage', 'visite', 'fourbure', 'npas', 'infection', 'difficile'].indexOf(k) >= 0) cv[k] = false; });
-    (cv.cancel.articles || []).forEach((aid) => { const art = (t.articles || []).find((x) => x.id === aid); if (!art) return; const idx = (art.chevalNoms || []).map(norm).indexOf(norm(c.cheval)); if (idx >= 0) { art.chevalNoms.splice(idx, 1); if (Array.isArray(art.chevalIds)) art.chevalIds.splice(idx, 1); } if (!(art.chevalNoms || []).length) t.articles = (t.articles || []).filter((x) => x.id !== aid); });
-    delete cv.cancel;
-    if (!tourComptaLocked(t)) recomputeTourLocal(t);
-  } else {
-    cl.chevaux = (cl.chevaux || []).filter((x) => !(norm(x.nom) === norm(c.cheval) && chevalCancelled(x)));
-  }
+  const allKeys = (Array.isArray(cv.cancel.items) ? cv.cancel.items : []).map((it) => it.key).filter(Boolean);
+  keys.forEach((k) => {
+    if (k === 'photo') cv.photo = null;
+    else if (k === 'lourd') cv.lourdOff = true;
+    else if (k.indexOf('art:') === 0) { const aid = k.slice(4); const art = (t.articles || []).find((x) => x.id === aid); if (art) { const idx = (art.chevalNoms || []).map(norm).indexOf(norm(c.cheval)); if (idx >= 0) { art.chevalNoms.splice(idx, 1); if (Array.isArray(art.chevalIds)) art.chevalIds.splice(idx, 1); } if (!(art.chevalNoms || []).length) t.articles = (t.articles || []).filter((x) => x.id !== aid); } }
+    else if (['parage', 'visite', 'fourbure', 'npas', 'infection', 'difficile'].indexOf(k) >= 0) cv[k] = false;
+  });
+  const remaining = allKeys.filter((k) => !keys.has(k));
+  cv.cancel.items = (cv.cancel.items || []).filter((it) => !keys.has(it.key));
+  if (!remaining.length) { delete cv.cancel; if (!chevalFait(cv) && !photoHasBillableStades(cv.photo)) cl.chevaux = (cl.chevaux || []).filter((x) => x !== cv); } // plus rien d'annulé → trace effacée ; cheval « fantôme » (rien de facturable) retiré
+  else { cv.cancel.services = remaining.filter((k) => k.indexOf('art:') !== 0); cv.cancel.articles = remaining.filter((k) => k.indexOf('art:') === 0).map((k) => k.slice(4)); } // convertit en annulation PARTIELLE avec les prestations qui restent annulées
+  if (!tourComptaLocked(t)) recomputeTourLocal(t);
 }
-// Document d'archive (PDF via impression) des annulations qu'on s'apprête à supprimer — regroupé par prestation.
-function exportCancellationsPdf(ents) {
-  const rows = ents.map((c) => (c.items.length ? c.items : [{ label: '—', ht: 0, tva: 0, ttc: 0 }]).map((it) => `<tr><td>${esc(fmtDateFr(c.date))}</td><td>${esc((c.tour.nom || '').trim())}</td><td>${esc(c.clientNom)}</td><td>${esc(c.cheval)}</td><td>${esc(it.label)}</td><td style="text-align:right">${eur(it.ht)}</td><td style="text-align:right">${eur(it.tva)}</td><td style="text-align:right">${eur(it.ttc)}</td></tr>`).join('')).join('');
-  const tot = ents.reduce((a, c) => ({ ht: a.ht + c.ht, tva: a.tva + c.tva, ttc: a.ttc + c.ttc }), { ht: 0, tva: 0, ttc: 0 });
-  printHtml('Annulations supprimées — archive', `<h1>Annulations supprimées (archive)</h1><h2>Édité le ${esc(fmtDateFr(todayStr()))} — ${ents.length} annulation(s)</h2><table><thead><tr><th>Date</th><th>Tournée</th><th>Client</th><th>Cheval</th><th>Prestation</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${rows}<tr><td colspan="5" style="text-align:right"><b>Total</b></td><td style="text-align:right"><b>${eur(tot.ht)}</b></td><td style="text-align:right"><b>${eur(tot.tva)}</b></td><td style="text-align:right"><b>${eur(tot.ttc)}</b></td></tr></tbody></table><p style="margin-top:10px;font-size:.85em;color:#555">Document d'archive : ces annulations ont été supprimées définitivement de l'application. Le déplacement reste facturé ; les remboursements déjà effectués ne sont pas ré-inversés.</p>`);
+// Suppression du cheval entier (ancien modèle sans détail / reporté) : le retire de la tournée (déjà hors facture).
+function deleteCancellationWhole(c) {
+  const t = c.tour; const a = (t.arrets || [])[c.arretIdx]; if (!a) return;
+  const cl = (a.clients || []).find((x) => x.clientId === c.clientId); if (!cl) return;
+  cl.chevaux = (cl.chevaux || []).filter((x) => !(norm(x.nom) === norm(c.cheval) && chevalCancelled(x)));
+}
+// Document d'archive (PDF via impression) des prestations qu'on s'apprête à supprimer.
+function exportCancellationsPdf(rows) {
+  const tr = rows.map((r) => `<tr><td>${esc(fmtDateFr(r.date))}</td><td>${esc((r.tourNom || '').trim())}</td><td>${esc(r.clientNom)}</td><td>${esc(r.cheval)}</td><td>${esc(r.label)}</td><td style="text-align:right">${eur(r.ht)}</td><td style="text-align:right">${eur(r.tva)}</td><td style="text-align:right">${eur(r.ttc)}</td></tr>`).join('');
+  const tot = rows.reduce((a, r) => ({ ht: a.ht + r.ht, tva: a.tva + r.tva, ttc: a.ttc + r.ttc }), { ht: 0, tva: 0, ttc: 0 });
+  printHtml('Annulations supprimées — archive', `<h1>Annulations supprimées (archive)</h1><h2>Édité le ${esc(fmtDateFr(todayStr()))} — ${rows.length} prestation(s)</h2><table><thead><tr><th>Date</th><th>Tournée</th><th>Client</th><th>Cheval</th><th>Prestation</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${tr}<tr><td colspan="5" style="text-align:right"><b>Total</b></td><td style="text-align:right"><b>${eur(tot.ht)}</b></td><td style="text-align:right"><b>${eur(tot.tva)}</b></td><td style="text-align:right"><b>${eur(tot.ttc)}</b></td></tr></tbody></table><p style="margin-top:10px;font-size:.85em;color:#555">Document d'archive : ces prestations annulées ont été supprimées définitivement de l'application. Le déplacement reste facturé ; les remboursements déjà effectués ne sont pas ré-inversés.</p>`);
 }
 let annulType = 'trimestre', annulPeriodKey = null;
 function renderAnnulations() {
@@ -5917,7 +5931,11 @@ function renderAnnulations() {
       if (grp.list.some((c) => c.locked)) h += '<p class="hint">🔒 Période déclarée : la suppression est archivée mais les chiffres déclarés restent figés.</p>';
       grp.list.forEach((c) => {
         const stLbl = c.status === 'reporte' ? '↩ reporté' : (c.partial ? '🚫 annulé (partiel)' : '🚫 annulé');
-        h += `<div class="list-item"><div class="li-main"><label class="chk2"><input type="checkbox" class="an-del" data-k="${esc(entKey(c))}"/> <b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b></label><span class="li-sub">${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · replacé' : ''}${c.credited ? ' · payé (NC)' : ''}</span><div class="li-sub" style="padding-left:20px">${c.items.map((it) => esc(it.label) + ' — ' + eur(it.ttc)).join('<br>') || '—'}</div><span class="li-sub" style="padding-left:20px">Total : <b>${eur(c.ttc)}</b> TTC · HT ${eur(c.ht)} · TVA ${eur(c.tva)}</span></div></div>`;
+        const keyed = c.items.length > 0 && c.items.every((it) => it.key); // annulation par service → 1 case PAR PRESTATION ; sinon (ancien modèle / reporté) 1 case cheval entier
+        const detail = keyed
+          ? c.items.map((it) => `<label class="chk2" style="padding-left:20px"><input type="checkbox" class="an-del" data-k="${esc(entKey(c))}" data-key="${esc(it.key)}"/> ${esc(it.label)} — ${eur(it.ttc)}</label>`).join('')
+          : `<label class="chk2" style="padding-left:20px"><input type="checkbox" class="an-del" data-k="${esc(entKey(c))}" data-whole="1"/> ${c.items.map((it) => esc(it.label) + ' — ' + eur(it.ttc)).join(' · ') || '(annulation)'}</label>`;
+        h += `<div class="list-item"><div class="li-main"><b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b><span class="li-sub">${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · replacé' : ''}${c.credited ? ' · payé (NC)' : ''}</span>${detail}<span class="li-sub" style="padding-left:20px">Total : <b>${eur(c.ttc)}</b> TTC · HT ${eur(c.ht)} · TVA ${eur(c.tva)}</span></div></div>`;
       });
       h += `<p class="hint" style="text-align:right">Sous-total tournée : <b>${eur(st)}</b> TTC · HT ${eur(sh)} · TVA ${eur(sv)}</p>`;
       card.innerHTML = h; container.appendChild(card);
@@ -5932,12 +5950,16 @@ function renderAnnulations() {
   const refreshBtn = () => { const n = box.querySelectorAll('.an-del:checked').length; $('anDelBtn').disabled = !n; $('anDelBtn').textContent = n ? `🗑 Supprimer définitivement ${n} élément(s) cochés` : '🗑 Supprimer définitivement les éléments cochés'; };
   box.querySelectorAll('.an-del').forEach((c) => c.addEventListener('change', refreshBtn));
   $('anDelBtn').addEventListener('click', () => {
-    const ents = Array.from(box.querySelectorAll('.an-del:checked')).map((c) => findEnt(c.dataset.k)).filter(Boolean);
-    if (!ents.length) return;
-    if (!confirm(`Supprimer DÉFINITIVEMENT ${ents.length} annulation(s) ?\n\n⚠️ Irréversible. Un document PDF d'archive va s'ouvrir AVANT la suppression (choisissez « Enregistrer au format PDF » / imprimer). L'argent déjà remboursé n'est pas ré-inversé, les prestations restent non facturées, les stats sont mises à jour.`)) return;
-    exportCancellationsPdf(ents); // 1) archive PDF AVANT
+    const boxes = Array.from(box.querySelectorAll('.an-del:checked')); if (!boxes.length) return;
+    const plan = {}; // par entrée (cheval) : prestations cochées OU cheval entier
+    boxes.forEach((b) => { const k = b.dataset.k; const p = plan[k] = plan[k] || { ent: findEnt(k), keys: new Set(), whole: false }; if (!p.ent) return; if (b.dataset.whole) p.whole = true; else p.keys.add(b.dataset.key); });
+    const plans = Object.values(plan).filter((p) => p.ent); if (!plans.length) return;
+    const rows = []; // lignes du PDF = prestations réellement supprimées
+    plans.forEach((p) => { const c = p.ent; const sel = p.whole ? c.items : c.items.filter((it) => p.keys.has(it.key)); (sel.length ? sel : [{ label: '(annulation)', ht: 0, tva: 0, ttc: c.ttc }]).forEach((it) => rows.push({ date: c.date, tourNom: c.tour.nom, clientNom: c.clientNom, cheval: c.cheval, label: it.label, ht: it.ht, tva: it.tva, ttc: it.ttc })); });
+    if (!confirm(`Supprimer DÉFINITIVEMENT ${rows.length} prestation(s) annulée(s) ?\n\n⚠️ Irréversible. Un document PDF d'archive va s'ouvrir AVANT la suppression (choisissez « Enregistrer au format PDF » / imprimer). L'argent déjà remboursé n'est pas ré-inversé, les prestations restent non facturées, les stats sont mises à jour.`)) return;
+    exportCancellationsPdf(rows); // 1) archive PDF AVANT
     if (!confirm('Le document d\'archive a été généré (fenêtre d\'impression). Confirmer la SUPPRESSION DÉFINITIVE maintenant ?')) return; // 2) 2e confirmation après archive
-    ents.forEach(deleteCancellation); // 3) effacement définitif (nettoie la tournée)
+    plans.forEach((p) => { if (p.whole) deleteCancellationWhole(p.ent); else deleteCancellationItems(p.ent, p.keys); }); // 3) effacement définitif (nettoie la tournée)
     saveTournees(); saveArchive();
     refreshEverywhere(); // 4) stats / compta actualisées
     renderAnnulations();
