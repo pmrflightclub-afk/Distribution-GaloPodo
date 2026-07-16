@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.47';
+const APP_VERSION = '1.7.48';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.48', date: '2026-07-16',
+    ajouts: [
+      'RESTAURER UNE VERSION — la liste des versions affiche maintenant l\'APPAREIL qui a fait chaque sauvegarde (📱/💻), chargé progressivement (les plus récentes d\'abord). « Analyser » ouvre une fenêtre par-dessus listant les tournées de cette version (réinjection d\'une tournée) ; la fermer revient à la liste.',
+    ],
+  },
   {
     version: '1.7.47', date: '2026-07-16',
     ajouts: [
@@ -3967,26 +3973,34 @@ function modalDriveRestore() {
       setSt('ok', `${revs.length} version(s). Analysez celle juste AVANT la perte, puis restaurez.`);
       const list = $('drList'); if (!list) return;
       list.innerHTML = revs.map((rv, i) => `<div class="list-item" data-rev="${esc(rv.id)}">
-          <div class="li-main"><b>${esc(new Date(rv.modifiedTime).toLocaleString('fr-FR'))}</b>${i === 0 ? ' <span class="badge">version actuelle</span>' : ''}<span class="li-sub" data-info>${humanSize(+rv.size || 0)} · non analysée</span></div>
+          <div class="li-main"><b>${esc(new Date(rv.modifiedTime).toLocaleString('fr-FR'))}</b>${i === 0 ? ' <span class="badge">version actuelle</span>' : ''}<span class="li-sub"><span data-dev>⏳ appareil…</span> · ${humanSize(+rv.size || 0)}</span></div>
           <div class="li-act"><button class="btn small" data-analyze>🔍 Analyser</button> <button class="btn small" data-restore disabled title="Analysez d'abord">♻ Restaurer</button></div>
         </div>`).join('');
+      const rowByRev = {};
       list.querySelectorAll('[data-rev]').forEach((row) => {
         const revId = row.getAttribute('data-rev');
-        const info = row.querySelector('[data-info]');
+        const devEl = row.querySelector('[data-dev]');
         const btnR = row.querySelector('[data-restore]');
+        rowByRev[revId] = devEl;
         let snap = null;
         row.querySelector('[data-analyze]').addEventListener('click', async (e) => {
           const b = e.currentTarget; b.disabled = true; const old = b.textContent; b.textContent = '…';
           try {
-            snap = await driveDownloadRevision(token, file.id, revId); info.textContent = snapshotSummary(snap); btnR.disabled = false; btnR.title = '';
-            // Sélecteur de RÉINJECTION par tournée : récupérer UNE tournée précise de cette sauvegarde sans toucher au reste.
-            let picker = (row.nextElementSibling && row.nextElementSibling.classList.contains('dr-tours')) ? row.nextElementSibling : null;
-            if (!picker) { picker = document.createElement('div'); picker.className = 'dr-tours'; row.parentNode.insertBefore(picker, row.nextSibling); }
+            snap = await driveDownloadRevision(token, file.id, revId); btnR.disabled = false; btnR.title = '';
+            const dev = deviceLabel(snap && snap.device); if (devEl) { devEl.textContent = dev; devEl.dataset.done = '1'; }
+            const rv = revs.find((r) => r.id === revId);
             const tours = (snap.tours || snap.tournees || []).filter((t) => t && t.date).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-            picker.innerHTML = '<div class="li-sub" style="margin:4px 0 2px 12px"><b>Réinjecter UNE tournée</b> de cette sauvegarde (fusion — garde tout le reste) :</div>' + (tours.length ? tours.map((t, ti) => { const arr = t.arrets || []; const nv = arr.filter((a) => typeof a.validatedAt === 'number' || (a.clients || []).some((cl) => typeof cl.validatedAt === 'number')).length; const st = (t.closed || t.endedAt) ? '✅ clôturée' : (t.startedAt ? '🚗 démarrée' : '⏳ non démarrée'); return `<div class="list-item" style="margin-left:12px"><div class="li-main"><b>${esc(fmtDateFr(t.date))}</b>${t.nom && t.nom.trim() ? ' — ' + esc(t.nom.trim()) : ''}<span class="li-sub">${nv}/${arr.length} arrêts clôturés · ${st}</span></div><div class="li-act"><button class="btn small" data-reinj="${ti}">♻ Réinjecter</button></div></div>`; }).join('') : '<div class="li-sub" style="margin-left:12px">Aucune tournée datée dans cette version.</div>');
-            picker.querySelectorAll('[data-reinj]').forEach((rb) => rb.addEventListener('click', () => { const t = tours[+rb.dataset.reinj]; if (!confirm(`Réinjecter la tournée du ${fmtDateFr(t.date)} ?\n\nElle est FUSIONNÉE dans vos données actuelles (ses clôtures / paiements / temps réel reviennent) SANS toucher à vos autres tournées ni aux modifications faites depuis. Une sauvegarde de sécurité est téléchargée avant.`)) return; try { reinjectTour(t, snap); refreshEverywhere(); rb.textContent = '✔ réinjectée'; rb.disabled = true; } catch (err) { alert('Réinjection impossible : ' + err.message); } }));
+            // Sous-modale (au-dessus) : appareil + résumé + réinjection d'UNE tournée. ✕ → revient sur la liste des versions.
+            openSubModal(`<div class="modal-head"><b>🔍 ${esc(rv ? new Date(rv.modifiedTime).toLocaleString('fr-FR') : 'Version')}</b><button class="x" id="mX2">✕</button></div>
+              <p class="hint"><b>${esc(dev)}</b> · ${esc(snapshotSummary(snap))}</p>
+              <p class="hint" style="margin-top:8px"><b>Réinjecter UNE tournée</b> de cette sauvegarde (fusion — garde tout le reste) :</p>
+              <div class="list" id="drTours2"></div>`);
+            $('mX2').addEventListener('click', closeSubModal);
+            const box2 = $('drTours2');
+            box2.innerHTML = tours.length ? tours.map((t, ti) => { const arr = t.arrets || []; const nv = arr.filter((a) => typeof a.validatedAt === 'number' || (a.clients || []).some((cl) => typeof cl.validatedAt === 'number')).length; const st = (t.closed || t.endedAt) ? '✅ clôturée' : (t.startedAt ? '🚗 démarrée' : '⏳ non démarrée'); return `<div class="list-item"><div class="li-main"><b>${esc(fmtDateFr(t.date))}</b>${t.nom && t.nom.trim() ? ' — ' + esc(t.nom.trim()) : ''}<span class="li-sub">${nv}/${arr.length} arrêts clôturés · ${st}</span></div><div class="li-act"><button class="btn small" data-reinj="${ti}">♻ Réinjecter</button></div></div>`; }).join('') : '<p class="hint">Aucune tournée datée dans cette version.</p>';
+            box2.querySelectorAll('[data-reinj]').forEach((rb) => rb.addEventListener('click', () => { const t = tours[+rb.dataset.reinj]; if (!confirm(`Réinjecter la tournée du ${fmtDateFr(t.date)} ?\n\nElle est FUSIONNÉE dans vos données actuelles (ses clôtures / paiements / temps réel reviennent) SANS toucher à vos autres tournées ni aux modifications faites depuis. Une sauvegarde de sécurité est téléchargée avant.`)) return; try { reinjectTour(t, snap); refreshEverywhere(); rb.textContent = '✔ réinjectée'; rb.disabled = true; } catch (err) { alert('Réinjection impossible : ' + err.message); } }));
           }
-          catch (err) { info.textContent = 'Analyse impossible : ' + err.message; }
+          catch (err) { alert('Analyse impossible : ' + err.message); }
           finally { b.disabled = false; b.textContent = old; }
         });
         btnR.addEventListener('click', () => {
@@ -3998,6 +4012,15 @@ function modalDriveRestore() {
           ]);
         });
       });
+      // Chargement PROGRESSIF de l'appareil par révision (les plus récentes d'abord) — téléchargements en fond, non bloquants ; s'arrête si la modale se ferme.
+      (async () => {
+        for (const rv of revs) {
+          if (!$('drList')) return; // modale fermée → stop
+          const devEl = rowByRev[rv.id]; if (!devEl || devEl.dataset.done) continue;
+          try { const s = await driveDownloadRevision(token, file.id, rv.id); if (!$('drList')) return; devEl.textContent = deviceLabel(s && s.device); devEl.dataset.done = '1'; }
+          catch { if (devEl) { devEl.textContent = '❔ appareil inconnu'; devEl.dataset.done = '1'; } }
+        }
+      })();
     } catch (e) { setSt('err', 'Erreur : ' + (e && e.message || e)); }
   })();
 }
@@ -4517,7 +4540,14 @@ function modalRouteCalc(prefill) {
 
 // ---------- Modal ----------
 function openModal(html) { $('modalBox').innerHTML = html; $('modal').classList.remove('hidden'); }
-function closeModal() { $('modal').classList.add('hidden'); $('modalBox').innerHTML = ''; }
+function closeModal() { closeSubModal(); $('modal').classList.add('hidden'); $('modalBox').innerHTML = ''; }
+// Modale SECONDAIRE empilée au-dessus de la principale (ex. « Analyser » une révision) : se ferme et revient sur la modale du dessous.
+function openSubModal(html) {
+  let ov = document.getElementById('modal2');
+  if (!ov) { ov = document.createElement('div'); ov.id = 'modal2'; ov.className = 'modal-overlay'; ov.style.zIndex = '10001'; ov.innerHTML = '<div class="modal" id="modalBox2"></div>'; document.body.appendChild(ov); }
+  ov.querySelector('#modalBox2').innerHTML = html; ov.classList.remove('hidden');
+}
+function closeSubModal() { const ov = document.getElementById('modal2'); if (ov) { ov.classList.add('hidden'); ov.querySelector('#modalBox2').innerHTML = ''; } }
 // Après un ajout : recentre l'écran sur le nouvel élément (dernier de la liste, hors bouton) + flash bref → l'utilisateur voit ce qui vient d'être créé.
 function revealNew(containerId, targetSel) {
   requestAnimationFrame(() => {
@@ -13539,7 +13569,7 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('resize', updateNavCompact);
   updateNavCompact(); setTimeout(updateNavCompact, 300);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !_lockModal) closeModal(); }); // config initiale = non fermable par clic sur le fond
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !_lockModal) { const m = $('modal'); if (m && !m.classList.contains('hidden')) closeModal(); } }); // L8 : Échap ferme la modale (même garde que le clic sur le fond)
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !_lockModal) { const m2 = document.getElementById('modal2'); if (m2 && !m2.classList.contains('hidden')) { closeSubModal(); return; } const m = $('modal'); if (m && !m.classList.contains('hidden')) closeModal(); } }); // L8 : Échap ferme la sous-modale d'abord, sinon la modale principale
 
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
