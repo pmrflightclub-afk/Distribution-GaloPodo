@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.40';
+const APP_VERSION = '1.7.41';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.41', date: '2026-07-16',
+    ajouts: [
+      'FACTURATION — annuler une prestation qui avait fait l\'objet d\'une FACTURE payée en liquide émet désormais un AVOIR (note de crédit) comme pièce comptable, en plus du remboursement en liquide. L\'avoir n\'est PAS décompté une 2ᵉ fois du chiffre d\'affaires (la prestation est déjà retirée de la facture) — les comptes restent justes.',
+    ],
+  },
   {
     version: '1.7.40', date: '2026-07-16',
     ajouts: [
@@ -8103,7 +8109,8 @@ function comptaData(ym) {
   // Notes de crédit du mois (émission) → réduisent le CA (montant négatif).
   const rr = rate();
   const ncMonth = (S.notesCredit || []).filter((n) => (n.date || '').startsWith(ym));
-  const ncTTC = ncMonth.reduce((s, n) => s + (n.montantTTC || 0), 0);
+  // Modèle B : les avoirs DOCUMENTAIRES (facture payée en liquide) ne réduisent PAS le CA — les actes sont déjà retirés de la facture et le liquide remboursé via la caisse. On les liste (pièces) mais on les exclut de l'extourne comptable.
+  const ncTTC = ncMonth.filter((n) => !n.documentaire).reduce((s, n) => s + (n.montantTTC || 0), 0);
   const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
   // Les notes de crédit du mois réduisent la base analytique (extourne de CA) : imputées à la main d'œuvre + TVA collectée.
   const ncHT = ncTTC / (1 + rr), ncTVA = ncTTC - ncHT;
@@ -11991,9 +11998,10 @@ function chevalInvoicedTTC(tour, clientId, cv) {
   return ttc;
 }
 // Crée une note de crédit (RDV payé annulé) : montant = ce que le cheval a réellement été facturé (post-réduction). Retourne l'id.
-function createCreditNote(clientId, tour, cv, motif, note) {
+function createCreditNote(clientId, tour, cv, motif, note, opts) {
   const id = uid();
-  S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: chevalInvoicedTTC(tour, clientId, cv), motif: motif || 'client', note: note || '', date: todayStr(), rembourse: false, rembourseAt: null });
+  const doc = !!(opts && opts.documentaire); // modèle B : facture payée en LIQUIDE annulée → l'avoir est une PIÈCE documentaire. Le CA est déjà neutralisé par le retrait des actes et le cash rendu via la caisse → cette NC ne doit PAS re-réduire le CA, et elle est d'emblée « remboursée » (le liquide a été rendu à l'annulation).
+  S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: chevalInvoicedTTC(tour, clientId, cv), motif: motif || 'client', note: note || '', date: todayStr(), rembourse: doc, rembourseAt: doc ? todayStr() : null, documentaire: doc });
   saveSettings();
   return id;
 }
@@ -12058,7 +12066,7 @@ function modalCancelRdv(nom, opts) {
     if ($('cxNote2')) { const issue = clientPaiementIssue(opts.tour, opts.clientId);
       $('cxNote2').innerHTML = rep ? (clientPaiementDone(opts.tour, opts.clientId) ? '⛔ <b>Report impossible</b> : ce RDV est déjà payé (prestation effectuée). Choisissez « Annulé » si nécessaire.' : '↩ Report : aucun paiement à valider ; le RDV part dans « Rendez-vous à prendre ».')
         : (issue ? '⚠ <b>Annulation</b> : le paiement du client doit d\'abord être validé (' + esc(issue) + ').'
-          : '✔ Paiement validé → une <b>note de crédit</b> (à rembourser) sera créée pour ce RDV.'); }
+          : (() => { const pp = (opts.tour.payments || {})[opts.clientId] || {}; if (pp.method === 'virement') return '✔ Paiement validé → une <b>note de crédit</b> (à rembourser par virement) sera créée.'; if (pp.method === 'liquide' && pp.facture) return '✔ Paiement validé → un <b>avoir</b> (facture) sera émis et le <b>liquide remboursé</b> (déplacement gardé).'; return '✔ Paiement validé → le <b>liquide sera remboursé</b> (déplacement gardé, à l\'euro inférieur).'; })()); }
   };
   document.querySelectorAll('#cxStatus .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxStatus .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); status = b.dataset.st; refreshMode(); }));
   document.querySelectorAll('#cxReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
@@ -12072,8 +12080,11 @@ function modalCancelRdv(nom, opts) {
       if (issue) { if (confirm('Avant d\'annuler ce client, son paiement doit être validé (' + issue + '). Ouvrir le paiement maintenant ?') && opts.arret) { closeModal(); modalPayment(opts.tour, opts.arret, () => modalCancelRdv(nom, opts)); } return; }
     }
     cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
-    const pm = ((opts.tour.payments || {})[opts.clientId] || {}).method; // M1 : le traitement dépend de la MÉTHODE de paiement
-    if (status === 'annule' && clientPaiementDone(opts.tour, opts.clientId) && pm === 'virement') { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note); cv.cancel.credited = true; } // VIREMENT → note de crédit ; LIQUIDE → remboursement (jamais de NC). Le cheval crédité reste facturé (chevalBilled) → pas de double réduction du CA.
+    const pp = (opts.tour.payments || {})[opts.clientId] || {}, pm = pp.method; // M1 : le traitement dépend de la MÉTHODE de paiement
+    if (status === 'annule' && clientPaiementDone(opts.tour, opts.clientId)) {
+      if (pm === 'virement') { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note); cv.cancel.credited = true; } // VIREMENT → NC qui neutralise le CA (cheval reste facturé)
+      else if (pm === 'liquide' && pp.facture) { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note, { documentaire: true }); } // FACTURE LIQUIDE → avoir DOCUMENTAIRE (modèle B) : credited reste false → actes retirés + remboursement caisse ci-dessous ; la NC est une pièce (n'offset pas le CA)
+    }
     if (status === 'reporte') { const mt = Math.max(0, parseFloat(($('cxMontant') || {}).value) || 0); if (mt > 0.005) { const c = clients.find((x) => x.id === opts.clientId); if (c) { if (!Array.isArray(c.impayes)) c.impayes = []; c.impayes.push({ id: uid(), sourceTourId: opts.tour.id, date: opts.tour.date, ttc: mt, collected: false, collectedTourId: null, reporte: true }); saveClients(); } } } // montant à facturer à la prochaine visite (réinjecté auto)
     closeModal();
     if (status === 'annule' && pm === 'liquide' && clientPaiementDone(opts.tour, opts.clientId)) { recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour(); modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'RDV annulé.'); } // M1 : annulation LIQUIDE payée → remboursement (déplacement gardé, arrondi à l'euro inférieur)
@@ -12165,7 +12176,7 @@ function modalCancelBilling(t) {
     html += `<div class="cb-arret" style="margin:8px 0 2px 0"><label class="chk2"><input type="checkbox" data-arret="${g.ai}"/> <b>${esc(g.label)}</b></label>`;
     g.clients.forEach((c) => {
       const key = g.ai + ':' + c.clientId;
-      const tag = c.locked ? ' <span class="li-sub">🔒 période comptable verrouillée</span>' : (c.nc ? ' <span class="li-sub">→ note de crédit (virement)</span>' : (c.method === 'liquide' ? ' <span class="li-sub">→ suppression liquide, pas de NC</span>' : ' <span class="li-sub">non payé → suppression</span>'));
+      const tag = c.locked ? ' <span class="li-sub">🔒 période comptable verrouillée</span>' : (c.nc ? ' <span class="li-sub">→ note de crédit (virement)</span>' : (c.method === 'liquide' ? (c.fac ? ' <span class="li-sub">→ avoir (facture) + remboursement liquide</span>' : ' <span class="li-sub">→ suppression liquide, pas de NC</span>') : ' <span class="li-sub">non payé → suppression</span>'));
       html += `<div style="padding-left:14px"><label class="chk2"><input type="checkbox" data-client="${key}"${c.locked ? ' disabled' : ''}/> <b>${esc(c.nom)}</b>${tag}</label>`;
       c.chevaux.forEach((cv) => { html += `<div style="padding-left:16px"><label class="chk2"><input type="checkbox" data-cv="${key}:${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}"${c.locked ? ' disabled' : ''}/> 🐴 ${esc(cv.nom)}</label></div>`; });
       html += `</div>`;
@@ -12196,9 +12207,9 @@ function modalCancelBilling(t) {
       const cv = (cl.chevaux || []).find((x) => (chId && x.id != null && String(x.id) === chId) || norm(x.nom) === norm(cb.dataset.nom));
       if (!cv || chevalCancelled(cv)) return;
       const p = (t.payments || {})[clientId] || {};
-      const nc = p.method === 'virement'; // virement → NC obligatoire (avec ou sans facture) ; liquide → jamais de NC
       cv.cancel = { status: 'annule', reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
-      if (nc) { cv.cancel.creditNoteId = createCreditNote(clientId, t, cv, reason, note); cv.cancel.credited = true; nNC++; } // NC lit le montant dans le résultat ENCORE figé (avant recalcul)
+      if (p.method === 'virement') { cv.cancel.creditNoteId = createCreditNote(clientId, t, cv, reason, note); cv.cancel.credited = true; nNC++; } // VIREMENT → NC qui neutralise le CA (NC lit le montant dans le résultat ENCORE figé, avant recalcul)
+      else if (p.method === 'liquide' && p.facture) { cv.cancel.creditNoteId = createCreditNote(clientId, t, cv, reason, note, { documentaire: true }); nNC++; } // modèle B : FACTURE LIQUIDE → avoir documentaire (pièce) ; actes retirés + remboursement liquide (ci-dessous)
       else nDel++;
     });
     recomputeTourLocal(t); // recalcul argent uniquement : réutilise la géométrie figée → km/temps/route/autres clients identiques
