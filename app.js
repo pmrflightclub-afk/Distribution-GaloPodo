@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.29';
+const APP_VERSION = '1.7.30';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.30', date: '2026-07-16',
+    ajouts: [
+      'ANNULATION LIQUIDE (correctifs comptables MAJEURS) — fermer la fenêtre de remboursement par la croix ✕ applique désormais le remboursement AUTOMATIQUE (déplacement gardé, différence rendue) au lieu de l\'abandonner : la caisse n\'est plus surévaluée et le remboursement dû n\'est plus perdu.',
+      'ANNULATION LIQUIDE — sur un paiement PARTIEL, le remboursement est calculé sur l\'argent réellement encaissé (rectifié − impayé) et non sur le total : plus de remboursement d\'un impayé jamais perçu ni de caisse négative. L\'annulation totale d\'un client partiel efface proprement l\'impayé associé.',
+      'REJEU d\'une tournée — les chevaux annulés/reportés repartent actifs (l\'annulation n\'est pas rejouée), les créances (impayés) déjà encaissées ne sont plus refacturées, et les drapeaux de suivi périmés (heure à prévenir, clôture auto) sont effacés.',
+    ],
+  },
   {
     version: '1.7.29', date: '2026-07-15',
     ajouts: [
@@ -3681,8 +3689,9 @@ function replayTour(t) {
   if (!confirm('Créer une NOUVELLE tournée pré-remplie à partir de celle du ' + fmtDateFr(t.date) + ' ?\n\nActes, articles, chevaux, heures et temps de route sont repris ; les PAIEMENTS et les CLÔTURES sont remis à zéro (à refaire). Utile pour rejouer une tournée au propre.')) return;
   const nt = JSON.parse(JSON.stringify(t));
   nt.id = uid(); nt.date = todayStr(); nt.nom = ((t.nom || '').trim() ? t.nom.trim() + ' ' : '') + '(rejeu)'; nt.closed = false; delete nt.endedAt; delete nt.startedAt; delete nt.recovered; delete nt._review; delete nt.updatedAt;
-  nt.payments = {}; nt.result = null; nt.createdAt = Date.now();
-  (nt.arrets || []).forEach((a) => { delete a.validatedAt; delete a.rdvDone; (a.clients || []).forEach((cl) => { delete cl.validatedAt; delete cl.rdvDone; }); }); // clôtures/RDV à refaire (on garde actes, articles, heures, realMin)
+  nt.payments = {}; nt.result = null; nt.createdAt = Date.now(); delete nt.autoClosedAt; // rejeu = tournée neuve : pas de clôture auto héritée
+  nt.articles = (nt.articles || []).filter((art) => !art.impaye); // ne PAS re-facturer une créance déjà encaissée (l'impayé appartient à la tournée d'origine)
+  (nt.arrets || []).forEach((a) => { delete a.validatedAt; delete a.rdvDone; (a.clients || []).forEach((cl) => { delete cl.validatedAt; delete cl.rdvDone; delete cl.aPrevenir; delete cl.heureAncienne; delete cl.heureStale; (cl.chevaux || []).forEach((cv) => { delete cv.cancel; }); }); }); // clôtures/RDV à refaire (on garde actes, articles, heures, realMin) ; annulations remises à zéro (l'annulation n'est pas un acte) ; drapeaux de suivi d'heure périmés effacés
   tournees.push(nt); saveTournees();
   currentTour = JSON.parse(JSON.stringify(nt)); openEditor();
   alert('✅ Nouvelle tournée pré-remplie créée (« rejeu »). Repassez chaque arrêt : démarrez, validez le paiement, clôturez.');
@@ -12077,11 +12086,15 @@ function applyLiquideRefund(t, clientId, refund) {
   const p = (t.payments || {})[clientId]; if (!p || p.method !== 'liquide') return;
   const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === clientId);
   const dep = m ? (m.totalTTC || 0) : 0; // après annulation = déplacement seul
-  const oldEnc = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : Math.round(dep));
-  let r = (refund == null || !isFinite(refund) || refund < 0) ? (oldEnc - floorEur(dep)) : refund;
-  r = Math.max(0, Math.min(Math.round(r), Math.round(oldEnc))); // jamais négatif, jamais plus que l'encaissé
+  const gross = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : Math.round(dep));
+  const imp = p.partiel ? Math.max(0, (p.impaye != null ? p.impaye : 0)) : 0; // reste impayé JAMAIS perçu
+  const cashRecu = Math.max(0, Math.round(gross - imp)); // cash réellement encaissé = rectifié − impayé (on ne rembourse que ce qui a été reçu)
+  let r = (refund == null || !isFinite(refund) || refund < 0) ? (cashRecu - floorEur(dep)) : refund;
+  r = Math.max(0, Math.min(Math.round(r), cashRecu)); // jamais négatif, jamais plus que le cash réellement encaissé
   p.rembourse = (p.rembourse || 0) + r;
-  const kept = Math.max(0, Math.round(oldEnc - r));
+  const kept = Math.max(0, cashRecu - r); // ce qui reste réellement en caisse
+  // Annulation TOTALE d'un client au paiement partiel → la créance disparaît (seul le déplacement subsiste) : on purge partiel/impaye/resteMode et l'impayé client lié.
+  if (p.partiel) { p.partiel = false; p.impaye = null; p.resteMode = null; setClientImpaye(t, clientId, 0); saveClients(); }
   if (dep <= 0.005 && kept <= 0) { p.rectifie = null; p.montantPaye = null; } else { p.rectifie = kept; p.montantPaye = null; }
 }
 // Construit la liste des clients LIQUIDE affectés par une annulation, avec le déplacement restant (= nouveau total après annulation) et l'encaissé initial.
@@ -12091,7 +12104,9 @@ function liquideRefundList(t, clientIds) {
     const p = (t.payments || {})[cid]; if (!p || p.method !== 'liquide') return;
     const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === cid);
     const dep = m ? (m.totalTTC || 0) : 0; // après annulation des articles+matériel, le total client = déplacement seul
-    const oldEnc = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : Math.round(dep)); // ce qui a été encaissé
+    const gross = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : Math.round(dep));
+    const imp = p.partiel ? Math.max(0, (p.impaye != null ? p.impaye : 0)) : 0;
+    const oldEnc = Math.max(0, Math.round(gross - imp)); // cash réellement encaissé = rectifié − impayé jamais perçu (borne du remboursement)
     out.push({ clientId: cid, nom: clientName(cid), dep, oldEnc });
   });
   return out;
@@ -12111,7 +12126,12 @@ function modalCancelRefund(t, list, msg) {
   html += `</div><div class="actions"><button class="btn primary block" id="crOk">Enregistrer</button></div>`;
   openModal(html);
   const done = () => { closeModal(); refreshEverywhere(); openEditor(); };
-  $('mX').addEventListener('click', done);
+  // ✕ / fermeture ≠ abandon : la tournée a déjà été recalculée+persistée (total tombé au déplacement). Sans remboursement appliqué, `rectifie` resterait au plein → « Arrondi caisse » gonflé et remboursement dû perdu. On applique donc le remboursement AUTO (déplacement gardé, différence remboursée), comme le fait renderAnnulGroup.
+  $('mX').addEventListener('click', () => {
+    list.forEach((c) => applyLiquideRefund(t, c.clientId)); // montant omis → calcul auto
+    currentTour = t; persistCurrentTour();
+    done();
+  });
   $('crOk').addEventListener('click', () => {
     $('crList').querySelectorAll('[data-cr]').forEach((inp) => { const c = list[+inp.dataset.cr]; applyLiquideRefund(t, c.clientId, parseFloat(inp.value)); });
     currentTour = t; persistCurrentTour();
