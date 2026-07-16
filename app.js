@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.59';
+const APP_VERSION = '1.7.60';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.60', date: '2026-07-16',
+    ajouts: [
+      'ANNULATION PAR SERVICE — en annulant le RDV d\'un cheval (bouton ⊘ Annuler), on choisit désormais PRÉCISÉMENT les prestations à annuler (ex. annuler la visite en gardant le parage) au lieu du cheval entier. Chaque prestation est listée avec son montant ; un récapitulatif « à annuler / déplacement conservé » se met à jour à chaque coche. Le matériel suit le parage, le déplacement n\'est jamais annulé. Par défaut tout est coché (= annuler le cheval entier) — décochez pour n\'annuler qu\'une partie.',
+      'ANNULATIONS GROUPÉES (Gestion) — même finesse : on coche prestation par prestation (par cheval, par client, par tournée) avec le total HT / TVA / TTC en direct.',
+      'Le remboursement liquide, l\'avoir (facture liquide) et la note de crédit (virement) portent maintenant sur le montant EXACT des prestations réellement annulées.',
+    ],
+  },
   {
     version: '1.7.59', date: '2026-07-16',
     ajouts: [
@@ -5025,32 +5033,44 @@ function renderAnnulGroup() {
     html += `<div class="cb-arret" style="margin:10px 0 2px 0"><b>🚩 ${esc(fmtDateFr(g.t.date))}${g.t.nom && g.t.nom.trim() ? ' — ' + esc(g.t.nom.trim()) : ''}</b>`;
     g.clients.forEach((c) => {
       html += `<div style="padding-left:12px;margin-top:4px"><label class="chk2"><input type="checkbox" data-agclient="${g.t.id}:${c.clientId}"/> <b>${esc(c.nom)}</b></label>`;
-      c.chevaux.forEach((cv) => { const ttc = chevalInvoicedTTC(g.t, c.clientId, cv); html += `<div style="padding-left:18px"><label class="chk2"><input type="checkbox" class="ag-cv" data-tid="${g.t.id}" data-cid="${c.clientId}" data-chid="${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}" data-ttc="${ttc}"/> 🐴 ${esc(cv.nom)} <span class="li-sub">— ${eur(ttc)}</span></label></div>`; });
+      c.chevaux.forEach((cv) => {
+        const its = chevalCancelItems(g.t, c.clientId, cv.nom);
+        html += `<div style="padding-left:18px;margin-top:2px"><div class="li-sub">🐴 ${esc(cv.nom)}</div>`;
+        if (!its.length) html += `<div style="padding-left:12px" class="li-sub">aucune prestation facturable (déplacement seul, conservé)</div>`;
+        its.forEach((it) => { html += `<div style="padding-left:12px"><label class="chk2"><input type="checkbox" class="ag-svc" data-tid="${g.t.id}" data-cid="${c.clientId}" data-chid="${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}" data-key="${esc(it.key)}" data-ttc="${it.ttc}" data-ht="${it.ht}" data-tva="${it.tva}"/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label></div>`; });
+        html += `</div>`;
+      });
       html += `</div>`;
     });
     html += `</div>`;
   });
-  html += `</div><div class="ag-total" style="margin-top:12px;font-weight:600">Total à rembourser : <span id="agTotal">${eur(0)}</span></div>
+  html += `</div><div class="ag-total" style="margin-top:12px;font-weight:600">Total à rembourser : <span id="agTotal">${eur(0)}</span> <span class="li-sub" id="agSub"></span></div>
     <div class="actions"><button class="btn danger block" id="agOk" disabled>Annuler les prestations cochées</button></div>`;
   box.innerHTML = html;
   const tree = $('agTree');
-  const recalc = () => { let tot = 0, n = 0; tree.querySelectorAll('.ag-cv:checked').forEach((c) => { tot += parseFloat(c.dataset.ttc) || 0; n++; }); $('agTotal').textContent = eur(tot); $('agOk').disabled = !n; $('agOk').textContent = n ? `Annuler ${n} prestation(s) — ${eur(tot)}` : 'Annuler les prestations cochées'; };
-  tree.querySelectorAll('[data-agclient]').forEach((cc) => cc.addEventListener('change', (e) => { tree.querySelectorAll('.ag-cv').forEach((c) => { if (c.dataset.tid + ':' + c.dataset.cid === cc.dataset.agclient) c.checked = e.target.checked; }); recalc(); }));
-  tree.querySelectorAll('.ag-cv').forEach((c) => c.addEventListener('change', recalc));
+  const recalc = () => { let ttc = 0, ht = 0, tva = 0, n = 0; tree.querySelectorAll('.ag-svc:checked').forEach((c) => { ttc += parseFloat(c.dataset.ttc) || 0; ht += parseFloat(c.dataset.ht) || 0; tva += parseFloat(c.dataset.tva) || 0; n++; }); $('agTotal').textContent = eur(ttc); $('agSub').textContent = n ? `(HT ${eur(ht)} · TVA ${eur(tva)})` : ''; $('agOk').disabled = !n; $('agOk').textContent = n ? `Annuler ${n} prestation(s) — ${eur(ttc)}` : 'Annuler les prestations cochées'; };
+  tree.querySelectorAll('[data-agclient]').forEach((cc) => cc.addEventListener('change', (e) => { tree.querySelectorAll('.ag-svc').forEach((c) => { if (c.dataset.tid + ':' + c.dataset.cid === cc.dataset.agclient) c.checked = e.target.checked; }); recalc(); }));
+  tree.querySelectorAll('.ag-svc').forEach((c) => c.addEventListener('change', recalc));
   recalc();
   $('agOk').addEventListener('click', () => {
-    const checked = Array.from(tree.querySelectorAll('.ag-cv:checked'));
+    const checked = Array.from(tree.querySelectorAll('.ag-svc:checked'));
     if (!checked.length) return;
     const tot = checked.reduce((s, c) => s + (parseFloat(c.dataset.ttc) || 0), 0);
     if (!confirm(`Annuler ${checked.length} prestation(s) pour un total de ${eur(tot)} ?\n\nLe déplacement reste facturé (seuls actes et matériel sont retirés). Le remboursement au client (paiement liquide) est à votre charge.`)) return;
+    // Regrouper les prestations cochées PAR (tournée, client, cheval) → un cv.cancel par cheval (partiel si toutes ses prestations ne sont pas cochées).
+    const groups = {};
+    checked.forEach((c) => { const k = c.dataset.tid + '|' + c.dataset.cid + '|' + norm(c.dataset.nom); (groups[k] = groups[k] || { tid: c.dataset.tid, cid: c.dataset.cid, nom: c.dataset.nom, chid: c.dataset.chid, keys: new Set() }).keys.add(c.dataset.key); });
     const touched = new Set(); const affPairs = [];
-    checked.forEach((c) => {
-      const t = allTours().find((x) => x.id === c.dataset.tid); if (!t) return;
+    Object.values(groups).forEach((g) => {
+      const t = allTours().find((x) => x.id === g.tid); if (!t) return;
       let cv = null;
-      (t.arrets || []).some((a) => (a.clients || []).some((cl) => { if (cl.clientId !== c.dataset.cid) return false; const f = (cl.chevaux || []).find((x) => (c.dataset.chid && x.id != null && String(x.id) === c.dataset.chid) || norm(x.nom) === norm(c.dataset.nom)); if (f) { cv = f; return true; } return false; }));
+      (t.arrets || []).some((a) => (a.clients || []).some((cl) => { if (cl.clientId !== g.cid) return false; const f = (cl.chevaux || []).find((x) => (g.chid && x.id != null && String(x.id) === g.chid) || norm(x.nom) === norm(g.nom)); if (f) { cv = f; return true; } return false; }));
       if (!cv || chevalCancelled(cv)) return;
+      const allItems = chevalCancelItems(t, g.cid, cv.nom); const selItems = allItems.filter((it) => g.keys.has(it.key));
+      const partial = allItems.length > 0 && selItems.length < allItems.length;
       cv.cancel = { status: 'annule', reason: 'client', note: 'annulation groupée', at: new Date().toISOString(), replacedTourId: null, credited: false }; // liquide → jamais de note de crédit ; remboursement auto ci-dessous
-      touched.add(t); affPairs.push(t.id + ':' + c.dataset.cid);
+      if (partial) { cv.cancel.services = selItems.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key); cv.cancel.articles = selItems.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4)); } // partiel → masque prestation par prestation ; sinon cheval entier
+      touched.add(t); affPairs.push(t.id + ':' + g.cid);
     });
     touched.forEach((t) => recomputeTourLocal(t)); // recalcul d'abord → t.result reflète le déplacement seul
     // M1 : remboursement AUTO par client liquide (garde le déplacement arrondi à l'euro inférieur, rembourse la différence) — même logique que les autres chemins d'annulation.
@@ -7151,7 +7171,7 @@ function rowFromArret(a, geo) {
       const cli = clients.find((x) => x.id === cl.clientId);
       // Annulations d'ARTICLES manuels ciblées (annulation partielle par service) : clé « nom|artId ».
       const artCancels = [];
-      (cl.chevaux || []).forEach((c) => { const s = chevalCancelSet(c); if (s instanceof Set && Array.isArray(c.cancel.articles)) c.cancel.articles.forEach((aid) => artCancels.push(norm(c.nom) + '|' + aid)); });
+      (cl.chevaux || []).forEach((c) => { const s = chevalCancelSet(c); if (!chevalCredited(c) && s instanceof Set && Array.isArray(c.cancel.articles)) c.cancel.articles.forEach((aid) => artCancels.push(norm(c.nom) + '|' + aid)); });
       // Garde le cheval dans le calcul si : crédité (NC neutralise) · annulation PARTIELLE (services masqués) · non annulé et facturé/planche. Exclut : cheval ENTIÈREMENT annulé (comportement actuel) et reporté.
       const keep = (c) => { if (chevalCredited(c)) return true; const s = chevalCancelSet(c); if (s === 'ALL') return false; if (s instanceof Set) return true; if (chevalCancelled(c)) return false; return chevalBilled(c) || photoHasBillableStades(c.photo); };
       return { clientId: cl.clientId, nom: clientName(cl.clientId), cancelled: clientAllCancelled(cl),
@@ -7159,7 +7179,7 @@ function rowFromArret(a, geo) {
         artCancels,
         chevaux: (cl.chevaux || []).filter(keep).map((c) => {
           const fiche = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null;
-          const cSet = chevalCancelSet(c); const kill = (k) => cSet instanceof Set && cSet.has(k); // 'ALL' déjà exclu par keep() ; ne masque que les annulations PARTIELLES
+          const cSet = chevalCancelSet(c); const kill = (k) => !chevalCredited(c) && cSet instanceof Set && cSet.has(k); // 'ALL' déjà exclu par keep() ; ne masque que les annulations PARTIELLES ; un cheval CRÉDITÉ (virement, NC émise) reste PLEINEMENT facturé (la NC gère la réduction — pas de double)
           return { nom: c.nom, fourbure: !!c.fourbure && !kill('fourbure'), npas: !!c.npas && !kill('npas'), infection: !!c.infection && !kill('infection'), parage: !!c.parage && !kill('parage'), visite: !!c.visite && !kill('visite'), visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile && !kill('difficile'), difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd) && !kill('lourd'), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined, photo: kill('photo') ? null : (c.photo || null) };
         }) }; }),
     segKm: geo.segKm, directKm: geo.directKm };
@@ -12271,6 +12291,28 @@ function chevalInvoicedSplit(tour, clientId, chevalNom) {
   (m.materiel || []).forEach((mt) => { if (norm(mt.nom) === nn) { matHT += (mt.ht || 0); matTVA += ((mt.ttc || 0) - (mt.ht || 0)); } });
   return { moHT, matHT, tva: moTVA + matTVA };
 }
+// Prestations ANNULABLES d'un cheval (annulation PAR SERVICE), avec montant FIGÉ (result parClient). Rendu PARTAGÉ (P2) modale « Annuler » + page groupée + section Tournée.
+//  key = acte ('parage'|'visite'|'fourbure'|'npas'|'infection'|'difficile'|'lourd'|'photo') ou 'art:'+id (article manuel). matHT = part matériel (couplée au parage) pour ventiler la NC. Le DÉPLACEMENT n'est JAMAIS listé. Matériel n'a pas de ligne propre (suit le parage).
+function chevalCancelItems(tour, clientId, cvNom) {
+  const R = tour && tour.result; const m = R && R.parClient && R.parClient.find((x) => x.clientId === clientId);
+  const nn = norm(cvNom); const items = []; if (!m) return items;
+  const usedArt = new Set();
+  (m.articles || []).forEach((a) => {
+    if (a.impaye) return; const names = (a.chevaux || []).map(norm); const idx = names.indexOf(nn); if (idx < 0) return;
+    const share = a.qtesByNom ? ((a.qtesByNom[a.chevaux[idx]] || 1) / (a.qte || 1)) : (1 / (names.length || 1));
+    const ht = (a.ht || 0) * share, tva = (a.tva || 0) * share, ttc = (a.ttc || 0) * share;
+    let key = null;
+    if (a.parage) key = 'parage'; else if (a.visite) key = 'visite'; else if (a.patho) key = (a.libelle === 'Fourbure' ? 'fourbure' : a.libelle === 'NPAS' ? 'npas' : 'infection');
+    else if (a.supplement) key = a.supplement; else if (a.photo) key = 'photo';
+    else { const src = (tour.articles || []).find((x) => x.id && !usedArt.has(x.id) && x.clientId === clientId && norm(x.libelle || '') === norm(a.libelle || '') && (x.chevalNoms || []).map(norm).indexOf(nn) >= 0); if (src) { usedArt.add(src.id); key = 'art:' + src.id; } }
+    if (key) items.push({ key, label: a.libelle, ht, tva, ttc, matHT: 0 });
+  });
+  let matHT = 0, matTVA = 0, matTTC = 0; (m.materiel || []).forEach((mt) => { if (norm(mt.nom) === nn) { matHT += mt.ht || 0; matTVA += (mt.ttc || 0) - (mt.ht || 0); matTTC += mt.ttc || 0; } });
+  if (matTTC > 0.005) { const pit = items.find((i) => i.key === 'parage'); if (pit) { pit.ht += matHT; pit.tva += matTVA; pit.ttc += matTTC; pit.matHT = matHT; pit.label = 'Parage + matériel'; } else items.push({ key: 'parage', label: 'Matériel', ht: matHT, tva: matTVA, ttc: matTTC, matHT }); }
+  return items;
+}
+// Ventilation (moHT/matHT/tva/ttc) d'un SOUS-ENSEMBLE de prestations annulées (par service) — pour la NC partielle + le récap remboursement.
+function cancelItemsSplit(items) { const s = { moHT: 0, matHT: 0, tva: 0, ttc: 0 }; (items || []).forEach((it) => { s.tva += it.tva || 0; s.ttc += it.ttc || 0; s.matHT += it.matHT || 0; s.moHT += (it.ht || 0) - (it.matHT || 0); }); return s; }
 // Extourne d'un avoir ventilée : depuis le découpage figé sur l'avoir (moHT/matHT/tva), sinon recalculé depuis la tournée+cheval, sinon repli (tout en main d'œuvre).
 function ncBreakdown(n) {
   if (n && (n.moHT != null || n.matHT != null)) { const ttc = n.montantTTC || 0; return { moHT: n.moHT || 0, matHT: n.matHT || 0, tva: (n.tva != null ? n.tva : Math.max(0, ttc - (n.moHT || 0) - (n.matHT || 0))) }; }
@@ -12282,8 +12324,9 @@ function ncBreakdown(n) {
 function createCreditNote(clientId, tour, cv, motif, note, opts) {
   const id = uid();
   const doc = !!(opts && opts.documentaire); // modèle B : facture payée en LIQUIDE annulée → l'avoir est une PIÈCE documentaire. Le CA est déjà neutralisé par le retrait des actes et le cash rendu via la caisse → cette NC ne doit PAS re-réduire le CA, et elle est d'emblée « remboursée » (le liquide a été rendu à l'annulation).
-  const sp = chevalInvoicedSplit(tour, clientId, cv.nom); // F2 : fige le découpage main d'œuvre/matériel (déplacement exclu) → extourne précise en Compta même si la tournée est éditée après
-  S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: chevalInvoicedTTC(tour, clientId, cv), moHT: sp.moHT, matHT: sp.matHT, tva: sp.tva, motif: motif || 'client', note: note || '', date: todayStr(), rembourse: doc, rembourseAt: doc ? todayStr() : null, documentaire: doc });
+  const sp = (opts && opts.cancelSplit) ? opts.cancelSplit : chevalInvoicedSplit(tour, clientId, cv.nom); // F2 : fige le découpage main d'œuvre/matériel (déplacement exclu). Annulation PARTIELLE (par service) → opts.cancelSplit = ventilation des seules prestations annulées.
+  const ttc = (opts && opts.cancelTTC != null) ? opts.cancelTTC : chevalInvoicedTTC(tour, clientId, cv); // TTC des prestations annulées (partiel) ou du cheval entier
+  S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: ttc, moHT: sp.moHT, matHT: sp.matHT, tva: sp.tva, motif: motif || 'client', note: note || '', date: todayStr(), rembourse: doc, rembourseAt: doc ? todayStr() : null, documentaire: doc, services: (opts && opts.services) ? opts.services.slice() : null });
   saveSettings();
   return id;
 }
@@ -12333,18 +12376,36 @@ function modalCancelRdv(nom, opts) {
     return;
   }
   let status = 'annule', reason = 'client';
+  const items = chevalCancelItems(opts.tour, opts.clientId, nom); // prestations annulables (montants figés) — annulation PAR SERVICE (déplacement jamais listé, matériel couplé au parage)
+  const checked = new Set(items.map((it) => it.key)); // défaut : TOUT coché (= annuler le cheval entier, comportement historique) ; décocher pour n'annuler qu'une partie
   openModal(`<div class="modal-head"><b>Annuler / reporter — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Le RDV de ce cheval est retiré de la facture et des stats. Les autres clients et le calcul de la tournée ne changent pas.</p>
     <label>Type</label><div class="seg" id="cxStatus"><button type="button" class="seg-btn on" data-st="annule">Annulé</button><button type="button" class="seg-btn" data-st="reporte">Reporté</button></div>
     <label>Motif</label><div class="seg" id="cxReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
     <label>Note (facultatif)<input type="text" id="cxNote" placeholder="ex. absent, cheval malade…" /></label>
+    <div id="cxSvc" style="margin:6px 0"></div>
     <div id="cxReportBox" style="display:none"><label>Montant TTC à facturer à la prochaine visite (facultatif)<input type="number" id="cxMontant" step="0.01" min="0" inputmode="decimal"/></label><p class="hint">Mémorisé et ajouté automatiquement à la prochaine tournée de ce client.</p></div>
     <p class="hint" id="cxNote2"></p>
     <div class="actions"><button class="btn primary block" id="cxOk">Confirmer</button></div>`);
   $('mX').addEventListener('click', closeModal);
+  const svcSel = () => items.filter((it) => checked.has(it.key)); // prestations cochées (à annuler)
+  const updateRecap = () => { const r = $('cxRecap'); if (!r) return; const sp = cancelItemsSplit(svcSel()); r.innerHTML = `Annulé : <b>${eur(sp.ttc)}</b> TTC (HT ${eur(sp.moHT + sp.matHT)} · TVA ${eur(sp.tva)}) — <b>déplacement conservé</b>${sp.ttc <= 0.005 ? ' · <span style="color:var(--danger)">rien de coché</span>' : ''}`; };
+  const renderSvc = () => {
+    const box = $('cxSvc'); if (!box) return;
+    if (status !== 'annule') { box.style.display = 'none'; return; }
+    box.style.display = '';
+    if (!items.length) { box.innerHTML = '<p class="hint">Aucune prestation facturable pour ce cheval (seul le déplacement, toujours conservé). « Annuler » retire simplement ce cheval de la tournée.</p>'; return; }
+    const rows = items.map((it, i) => `<label class="ch-opt"><input type="checkbox" data-svc="${i}"${checked.has(it.key) ? ' checked' : ''}/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label>`).join('');
+    box.innerHTML = `<label>Prestations à annuler <button type="button" class="btn small" id="cxAll">Tout</button> <button type="button" class="btn small" id="cxNone">Rien</button></label><div class="ch-opts">${rows}</div><p class="hint" id="cxRecap"></p>`;
+    box.querySelectorAll('[data-svc]').forEach((inp) => inp.addEventListener('change', () => { const it = items[+inp.dataset.svc]; if (inp.checked) checked.add(it.key); else checked.delete(it.key); updateRecap(); }));
+    $('cxAll').onclick = () => { items.forEach((it) => checked.add(it.key)); renderSvc(); };
+    $('cxNone').onclick = () => { checked.clear(); renderSvc(); };
+    updateRecap();
+  };
   const refreshMode = () => {
     const rep = status === 'reporte';
     if ($('cxReportBox')) $('cxReportBox').style.display = rep ? '' : 'none';
+    renderSvc();
     if ($('cxNote2')) { const issue = clientPaiementIssue(opts.tour, opts.clientId);
       $('cxNote2').innerHTML = rep ? (clientPaiementDone(opts.tour, opts.clientId) ? '⛔ <b>Report impossible</b> : ce RDV est déjà payé (prestation effectuée). Choisissez « Annulé » si nécessaire.' : '↩ Report : aucun paiement à valider ; le RDV part dans « Rendez-vous à prendre ».')
         : (issue ? '⚠ <b>Annulation</b> : le paiement du client doit d\'abord être validé (' + esc(issue) + ').'
@@ -12360,16 +12421,24 @@ function modalCancelRdv(nom, opts) {
     if (status === 'annule') { // ANNULATION : paiement du client OBLIGATOIRE d'abord
       const issue = clientPaiementIssue(opts.tour, opts.clientId);
       if (issue) { if (confirm('Avant d\'annuler ce client, son paiement doit être validé (' + issue + '). Ouvrir le paiement maintenant ?') && opts.arret) { closeModal(); modalPayment(opts.tour, opts.arret, () => modalCancelRdv(nom, opts)); } return; }
+      if (items.length && !svcSel().length) { alert('Cochez au moins une prestation à annuler (ou choisissez « Reporté »).'); return; }
     }
+    const sel = svcSel();
+    const partial = items.length > 0 && sel.length < items.length; // annulation PARTIELLE = au moins une prestation gardée (tout coché = cheval entier, chemin historique)
+    const services = sel.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key);
+    const artIds = sel.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4));
+    const cSplit = cancelItemsSplit(sel);
     cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
+    if (status === 'annule' && partial) { cv.cancel.services = services; cv.cancel.articles = artIds; } // PARTIEL → masque prestation par prestation ; TOTAL → pas de .services (= cheval entier, identique à avant)
     const pp = (opts.tour.payments || {})[opts.clientId] || {}, pm = pp.method; // M1 : le traitement dépend de la MÉTHODE de paiement
     if (status === 'annule' && clientPaiementDone(opts.tour, opts.clientId)) {
-      if (pm === 'virement') { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note); cv.cancel.credited = true; } // VIREMENT → NC qui neutralise le CA (cheval reste facturé)
-      else if (pm === 'liquide' && pp.facture) { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note, { documentaire: true }); } // FACTURE LIQUIDE → avoir DOCUMENTAIRE (modèle B) : credited reste false → actes retirés + remboursement caisse ci-dessous ; la NC est une pièce (n'offset pas le CA)
+      const ncOpts = partial ? { cancelSplit: cSplit, cancelTTC: cSplit.ttc, services } : null; // NC ventilée sur les seules prestations annulées (partiel)
+      if (pm === 'virement') { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note, ncOpts || undefined); cv.cancel.credited = true; } // VIREMENT → NC qui neutralise le CA (cheval reste facturé, services non masqués)
+      else if (pm === 'liquide' && pp.facture) { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note, Object.assign({ documentaire: true }, ncOpts || {})); } // FACTURE LIQUIDE → avoir DOCUMENTAIRE (modèle B) : credited reste false → prestations retirées + remboursement caisse ci-dessous
     }
     if (status === 'reporte') { const mt = Math.max(0, parseFloat(($('cxMontant') || {}).value) || 0); if (mt > 0.005) { const c = clients.find((x) => x.id === opts.clientId); if (c) { if (!Array.isArray(c.impayes)) c.impayes = []; c.impayes.push({ id: uid(), sourceTourId: opts.tour.id, date: opts.tour.date, ttc: mt, collected: false, collectedTourId: null, reporte: true }); saveClients(); } } } // montant à facturer à la prochaine visite (réinjecté auto)
     closeModal();
-    if (status === 'annule' && pm === 'liquide' && clientPaiementDone(opts.tour, opts.clientId)) { recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour(); modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'RDV annulé.'); } // M1 : annulation LIQUIDE payée → remboursement (déplacement gardé, arrondi à l'euro inférieur)
+    if (status === 'annule' && pm === 'liquide' && clientPaiementDone(opts.tour, opts.clientId)) { recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour(); modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'RDV annulé.'); } // M1 : annulation LIQUIDE payée → remboursement (déplacement + prestations gardées, arrondi à l'euro inférieur)
     else opts.onDone();
   });
 }
