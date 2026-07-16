@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.33';
+const APP_VERSION = '1.7.34';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.34', date: '2026-07-16',
+    ajouts: [
+      'ANNULATION LIQUIDE — le montant remboursé au client apparaît désormais aussi sur le TICKET et dans la Compta (il figurait déjà sur la facture) ; en « Annulations groupées », le message final indique le montant RÉELLEMENT remboursé (déplacement conservé), et non plus le total des actes.',
+      'PHOTOS — une planche « refaite » ou retirée ne réapparaît plus comme « faite » après une synchronisation entre appareils.',
+      'CORRECTIF — depuis le Trajet du jour, « Actes / articles » ouvre le bon arrêt même pour un client présent à deux adresses.',
+    ],
+  },
   {
     version: '1.7.33', date: '2026-07-16',
     ajouts: [
@@ -2570,6 +2578,8 @@ if (!S.addrStatus || typeof S.addrStatus !== 'object') S.addrStatus = {};
 // Chevaux en attente de planche photo (« Compte rendu photo » sur l'Accueil) : { id, clientId, chevalId, chevalNom, date, tourId, type(stade) }. Aucune image stockée.
 if (!Array.isArray(S.plancheTodo)) S.plancheTodo = [];
 if (!Array.isArray(S.plancheDone)) S.plancheDone = [];
+// #7a : id DÉTERMINISTE ('pd:'+clé de contenu) sur chaque plancheDone → même id sur tous les appareils (pas de doublon en fusion) ET tombstones effectifs (plus de résurrection d'un « fait » retiré). Normalizer inline (norm/plancheTodoKey pas encore définis à ce stade du boot).
+{ const nm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' '); S.plancheDone.forEach((y) => { const want = 'pd:' + (y.clientId || '') + '|' + nm(y.chevalNom) + '|' + (y.date || '') + '|' + nm(y.type); if (y.id !== want) y.id = want; }); }
 if (!Array.isArray(S.plancheHistory)) S.plancheHistory = []; // historique des planches de contact générées (métadonnées : client, cheval, date, stade, note, cycle, modèle) — jamais d'images
 if (!Array.isArray(S.lieuxRefs)) S.lieuxRefs = []; // adresses de référence saisies à la main (écuries connues, hors chevaux actuels) : { id, addr, clientRef, status } — statut répercuté dans S.addrStatus
 // Tarifs « photos / planches » (supplément par cheval). 3 angles = référence ; 4 & 5 = manuels OU calculés en % (base/photo × (1−%) × nb photos).
@@ -2961,7 +2971,7 @@ function bgSaveFlash() { // enregistrement local (instantané) : brève confirma
 // Collections id-clés DANS les réglages : elles doivent fusionner par enregistrement (union + tombstones) comme clients/tournées,
 // sinon un ajout/suppression fait sur un appareil est écrasé en bloc par l'autre appareil (perte de rappels, frais, écritures…).
 // L1-1d : 'adresses' et 'plancheTodo' AJOUTÉES → fusion par enregistrement AVEC tombstones (une suppression ne « ressuscite » plus après synchro).
-const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo'];
+const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone']; // #7a : plancheDone AJOUTÉE → fusion par enregistrement AVEC tombstones (une planche « refaite »/retirée ne ressuscite plus)
 let _lastPlancheHash = null; // L1-1e : empreinte de la config planche pour n'horodater `plancheUpdatedAt` que lorsqu'elle change réellement.
 function saveSettings() {
   S.updatedAt = Date.now();
@@ -3230,7 +3240,7 @@ function mergeSettings(localS, remoteS) {
   // plancheTodo : géré par SETTINGS_COLLECTIONS (tombstones) → plus d'union ici (une tâche photo terminée/retirée ne réapparaît plus).
   // #7c : plancheHistory dédoublonné par CLÉ DE CONTENU (l'id est aléatoire par appareil → unionById créait des doublons). Même clé que addPlancheHistory ; à conflit, la plus récente (createdAt) gagne.
   { const byK = {}, kk = (y) => (y.clientId || '') + '|' + norm(y.client || '') + '|' + norm(y.cheval || '') + '|' + (y.date || '') + '|' + norm(y.stade || ''); ((localS && localS.plancheHistory) || []).concat((remoteS && remoteS.plancheHistory) || []).forEach((x) => { const k = kk(x); if (!byK[k] || (x.createdAt || 0) >= (byK[k].createdAt || 0)) byK[k] = x; }); merged.plancheHistory = Object.values(byK); }
-  { const byK = {}, kk = (y) => (y.clientId || '') + '|' + norm(y.chevalNom || '') + '|' + (y.date || '') + '|' + norm(y.type || ''); ((localS && localS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); ((remoteS && remoteS.plancheDone) || []).forEach((x) => { byK[kk(x)] = x; }); merged.plancheDone = Object.values(byK); }
+  // #7a : plancheDone est désormais géré par SETTINGS_COLLECTIONS (fusion par id + tombstones) dans mergeSnapshots → plus d'union manuelle ici (une planche « refaite »/retirée ne ressuscite plus).
   merged.addrStatus = Object.assign({}, (localS && localS.addrStatus) || {}, (remoteS && remoteS.addrStatus) || {}); // statut de lieu (noir/inactif) : union — un lieu refusé sur un appareil le reste
   // Suivi comptable : paiements reçus, démarches faites, périodes verrouillées → UNION (sinon un mois clôturé/encodé rouvrirait, un paiement disparaîtrait, après une synchro). Même protection que l'import « Données seules ».
   merged.comptaRecu = Object.assign({}, (localS && localS.comptaRecu) || {}, (remoteS && remoteS.comptaRecu) || {});
@@ -4757,10 +4767,11 @@ function renderAnnulGroup() {
     });
     touched.forEach((t) => recomputeTourLocal(t)); // recalcul d'abord → t.result reflète le déplacement seul
     // M1 : remboursement AUTO par client liquide (garde le déplacement arrondi à l'euro inférieur, rembourse la différence) — même logique que les autres chemins d'annulation.
-    Array.from(new Set(affPairs)).forEach((k) => { const j = k.indexOf(':'); const tid = k.slice(0, j), cid = k.slice(j + 1); const t = allTours().find((x) => x.id === tid); if (t) applyLiquideRefund(t, cid); });
+    let realRefund = 0; // #6 : cumul du remboursement RÉELLEMENT appliqué (borné au cash, déplacement conservé) — diffère du TTC des actes annulés
+    Array.from(new Set(affPairs)).forEach((k) => { const j = k.indexOf(':'); const tid = k.slice(0, j), cid = k.slice(j + 1); const t = allTours().find((x) => x.id === tid); if (!t) return; const before = ((t.payments || {})[cid] || {}).rembourse || 0; applyLiquideRefund(t, cid); const after = ((t.payments || {})[cid] || {}).rembourse || 0; realRefund += Math.max(0, after - before); });
     touched.forEach((t) => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) tournees[i] = t; else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) archive[ai] = t; } });
     saveTournees(); saveArchive(); refreshEverywhere();
-    alert(`✅ ${checked.length} prestation(s) annulée(s). Total à rembourser : ${eur(tot)} (liquide, à votre charge).`);
+    alert(`✅ ${checked.length} prestation(s) annulée(s). Total réellement remboursé : ${eur(realRefund)} (liquide, à votre charge) — le déplacement reste acquis.`);
     renderAnnulGroup();
   });
 }
@@ -5663,10 +5674,11 @@ function migrateCreditedCancellations() {
 }
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
 // Accès DIRECT depuis le Trajet du jour : ouvre l'éditeur de la tournée et se positionne sur le bloc du client (actes/articles) avec un bref surlignage.
-function openEditorAtClient(t, cid) {
+function openEditorAtClient(t, cid, ai) {
   openTour(t);
   setTimeout(() => {
-    const el = document.querySelector('.ac-name[data-cid="' + cid + '"]');
+    // #8d : arrêt connu (client présent à plusieurs adresses) → cible le BON bloc (data-ai) ; sinon le 1ᵉʳ.
+    const el = (ai != null && document.querySelector('.ac-name[data-cid="' + cid + '"][data-ai="' + ai + '"]')) || document.querySelector('.ac-name[data-cid="' + cid + '"]');
     const block = el ? (el.closest('.a-client-hd') || el.parentElement || el) : null;
     if (block) { try { block.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} block.classList.add('reveal-hi'); setTimeout(() => block.classList.remove('reveal-hi'), 1600); }
   }, 250);
@@ -6369,7 +6381,7 @@ function renderEditorArrets(locked) {
         const prevBtn = cl.aPrevenir === true ? ' <button class="btn small prev-on" data-cprevenir>🔔 Prévenir</button>' : (cl.aPrevenir === false ? ' <span class="btn small prev-done">✓ Prévenu</span>' : ''); // orange = heure changée à communiquer ; vert = client prévenu (inactif)
         const prevBadge = cl.aPrevenir === true ? ' <span class="badge prev-badge">🕘 heure modifiée</span>' : '';
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button>${prevBtn}</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button>${prevBtn}</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; if (cl.heureAncienne != null && newH === cl.heureAncienne) { delete cl.aPrevenir; delete cl.heureAncienne; } else if (oldH && newH && oldH !== newH) { if (!cl.aPrevenir) cl.heureAncienne = oldH; cl.aPrevenir = true; } persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
@@ -7159,6 +7171,7 @@ function invoiceTextForClient(m, payment) {
   L.push(`Tarif plein : ${eur(pHT)} HT · ${eur(pTVA)} TVA · ${eur(pTTC)} TTC`);
   const pp = partialPay(m, payment);
   if (pp) { L.push(`Montant réellement reçu (liquide) : ${eur(pp.paid)} TTC`); L.push(`Montant impayé (${pp.mode}) : ${eur(pp.reste)} TTC`); }
+  if (payment && payment.rembourse > 0) L.push(`Remboursé au client (annulation liquide) : ${eur(payment.rembourse)} TTC`); // #6 : traçabilité remboursement sur le ticket (comme la facture)
   if (payment && payment.method) L.push(`Paiement : ${payment.method === 'liquide' ? 'liquide' : 'virement'}${payment.facture ? ' · facture demandée' : ''}`);
   return L.join('\n');
 }
@@ -7888,7 +7901,7 @@ function financeStats() {
     const cred = creditedKeySet(t);
     t.result.parClient.forEach((m) => {
       const isCred = (n) => cred.has(m.clientId + '|' + norm(n));
-      const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, impaye: 0, chevaux: {} };
+      const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, impaye: 0, rembourse: 0, chevaux: {} };
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
       const art = (m.articles || []).reduce((s, a) => s + a.ttc, 0); // remise déjà appliquée ligne par ligne
@@ -7901,6 +7914,7 @@ function financeStats() {
       const pay = (t.payments || {})[m.clientId];
       c.arrondi += payArrondi(m, pay);
       c.impaye += payImpaye(m, pay);
+      c.rembourse += (pay && pay.rembourse) || 0; // #6 : remboursement annulation liquide (traçabilité — jamais additionné au CA/caisse)
       (m.materiel || []).forEach((x) => { if (isCred(x.nom)) return; const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0 }; ch.mat += x.ttc; });
       (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { if (isCred(n)) return; const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.dep += per; }); });
       (m.articles || []).forEach((a) => { const share = artPerCheval(a); a.chevaux.forEach((n) => { if (isCred(n)) return; const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0 }; ch.art += share(n); }); });
@@ -7918,6 +7932,7 @@ function renderFinance() {
     h += `<div class="inv-line"><span>Articles</span><span>${eur(c.art)}</span></div><div class="inv-line"><span>Matériel</span><span>${eur(c.mat)}</span></div><div class="inv-line"><span>Déplacement</span><span>${eur(c.dep)}</span></div>`;
     if (Math.abs(c.arrondi || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--warn)"><span>Arrondi caisse (liquide)</span><span>${eur(c.arrondi)}</span></div>`;
     if ((c.impaye || 0) >= 0.005) { h += `<div class="inv-line" style="color:var(--warn)"><span>Montant impayé (créance)</span><span>−${eur(c.impaye)}</span></div>`; h += `<div class="inv-line"><span>Montant réellement reçu</span><span>${eur(c.recu)}</span></div>`; }
+    if ((c.rembourse || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--muted)"><span>Remboursé (annulation liquide, hors CA)</span><span>−${eur(c.rembourse)}</span></div>`; // #6 : info traçabilité (n'entre pas dans le total/CA)
     c.chevaux.forEach((cv) => { h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)} · A ${eur(cv.art)} M ${eur(cv.mat)} D ${eur(cv.dep)}</span><span>${eur(cv.art + cv.mat + cv.dep)}</span></div>`; });
     el.innerHTML = h; box.appendChild(el);
   });
@@ -11533,7 +11548,7 @@ function removePlancheTodo(clientId, chevalNom, date, type) { const k = plancheT
 // Retire TOUS les stades d'un cheval/date (décocher « Photo »).
 function removePlancheTodoAll(clientId, chevalNom, date) { const cn = norm(chevalNom || ''); S.plancheTodo = (S.plancheTodo || []).filter((y) => !(y.clientId === clientId && norm(y.chevalNom || '') === cn && (y.date || '') === (date || ''))); saveSettings(); }
 // Planches FAITES (planche enregistrée/envoyée) — distinctes des « à faire ». Clé identique (client|cheval|date|type).
-function addPlancheDone(clientId, chevalNom, date, type) { if (!Array.isArray(S.plancheDone)) S.plancheDone = []; const k = plancheTodoKey(clientId, chevalNom, date, type); if (!S.plancheDone.some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === k)) { S.plancheDone.push({ clientId, chevalNom: chevalNom || '', date: date || '', type: type || '' }); saveSettings(); } }
+function addPlancheDone(clientId, chevalNom, date, type) { if (!Array.isArray(S.plancheDone)) S.plancheDone = []; const k = plancheTodoKey(clientId, chevalNom, date, type); if (!S.plancheDone.some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === k)) { S.plancheDone.push({ id: 'pd:' + k, clientId, chevalNom: chevalNom || '', date: date || '', type: type || '' }); saveSettings(); } } // #7a : id déterministe → tombstones effectifs + pas de doublon cross-appareil
 const hasPlancheDone = (clientId, chevalNom, date, type) => (S.plancheDone || []).some((y) => plancheTodoKey(y.clientId, y.chevalNom, y.date, y.type) === plancheTodoKey(clientId, chevalNom, date, type));
 // Une planche (N'IMPORTE quel type) a-t-elle été faite pour ce cheval/date ? Sert aux « à faire » SANS type (générique) qui doivent se vider dès qu'une planche est générée.
 const hasAnyPlancheDone = (clientId, chevalNom, date) => { const cn = norm(chevalNom || ''); return (S.plancheDone || []).some((y) => y.clientId === clientId && norm(y.chevalNom || '') === cn && (y.date || '') === (date || '')); };
@@ -11661,7 +11676,7 @@ function dayJClientAgir(t, a, cl, ctx) {
   };
   return [
     { label: '🕘 Heure RDV', done: !!clientRdvHeure(t, cid), keepOpen: true, onClick: () => modalHeureRdv(t, a, cid) },
-    { label: '✏️ Actes / articles', onClick: () => openEditorAtClient(t, cid) }, // accès direct par client à l'édition prestations/articles (depuis le Trajet du jour)
+    { label: '✏️ Actes / articles', onClick: () => openEditorAtClient(t, cid, (t.arrets || []).indexOf(a)) }, // accès direct par client à l'édition prestations/articles (depuis le Trajet du jour) — #8d : cible l'arrêt exact (client à plusieurs adresses)
     { label: navLabel(), onClick: () => openNav(a.addr) },
     { label: 'Route (temps réel)', done: ctx.rDone, orange: ctx.rStale, onClick: () => modalRouteTime(t, a, ctx.est, renderHomeTrajet) },
     { label: 'SMS', keepOpen: true, onClick: () => modalSmsChoice(c, smsDataFor(c, { cheval: chNames, trajet: ctx.trajet, adresse: ctx.adresse })) },
