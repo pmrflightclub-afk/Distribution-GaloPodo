@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.65';
+const APP_VERSION = '1.7.66';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.66', date: '2026-07-16',
+    ajouts: [
+      'ANNULATION DÉFINITIVE — une annulation (ou un report) ne se rétablit plus : ce qui est annulé reste annulé. Le bouton « Rétablir » a été retiré. Pour re-facturer un cheval, ajoutez-le à un arrêt d\'une tournée.',
+      'ANNULER LE RESTE — un cheval déjà partiellement annulé re-propose désormais ses prestations ENCORE facturées : via le bouton ⊘ (« Annuler d\'autres prestations »), et dans « Annulations groupées » où il réapparaît (marqué « déjà partiellement annulé ») avec ses prestations restantes cochables.',
+    ],
+  },
   {
     version: '1.7.65', date: '2026-07-16',
     ajouts: [
@@ -5047,7 +5054,7 @@ function annulGroupEligible() {
       const p = (t.payments || {})[cl.clientId] || {};
       if (p.method !== 'liquide' || p.facture) return; // LIQUIDE SANS FACTURE seulement (le reste = notes de crédit)
       if (comptaLocked(t, cl.clientId)) return;         // période comptable verrouillée → non annulable ici
-      const chs = (cl.chevaux || []).filter((cv) => chevalFait(cv)); // annulables = acte fait, pas déjà annulé
+      const chs = (cl.chevaux || []).filter((cv) => chevalFait(cv) || (chevalCancelSet(cv) instanceof Set && !chevalCredited(cv))); // annulables = acte fait OU cheval PARTIELLEMENT annulé (ses prestations restantes)
       if (chs.length) out.push({ t, clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: chs });
     }));
   });
@@ -5066,7 +5073,7 @@ function renderAnnulGroup() {
       html += `<div style="padding-left:12px;margin-top:4px"><label class="chk2"><input type="checkbox" data-agclient="${g.t.id}:${c.clientId}"/> <b>${esc(c.nom)}</b></label>`;
       c.chevaux.forEach((cv) => {
         const its = chevalCancelItems(g.t, c.clientId, cv.nom);
-        html += `<div style="padding-left:18px;margin-top:2px"><div class="li-sub">🐴 ${esc(cv.nom)}</div>`;
+        html += `<div style="padding-left:18px;margin-top:2px"><div class="li-sub">🐴 ${esc(cv.nom)}${chevalCancelled(cv) ? ' <span class="badge badge-cancel">déjà partiellement annulé</span>' : ''}</div>`;
         if (!its.length) html += `<div style="padding-left:12px" class="li-sub">aucune prestation facturable (déplacement seul, conservé)</div>`;
         its.forEach((it) => { html += `<div style="padding-left:12px"><label class="chk2"><input type="checkbox" class="ag-svc" data-tid="${g.t.id}" data-cid="${c.clientId}" data-chid="${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}" data-key="${esc(it.key)}" data-ttc="${it.ttc}" data-ht="${it.ht}" data-tva="${it.tva}"/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label></div>`; });
         html += `</div>`;
@@ -5096,12 +5103,19 @@ function renderAnnulGroup() {
       const t = allTours().find((x) => x.id === g.tid); if (!t) return;
       let cv = null;
       (t.arrets || []).some((a) => (a.clients || []).some((cl) => { if (cl.clientId !== g.cid) return false; const f = (cl.chevaux || []).find((x) => (g.chid && x.id != null && String(x.id) === g.chid) || norm(x.nom) === norm(g.nom)); if (f) { cv = f; return true; } return false; }));
-      if (!cv || chevalCancelled(cv)) return;
-      const allItems = chevalCancelItems(t, g.cid, cv.nom); const selItems = allItems.filter((it) => g.keys.has(it.key));
-      const partial = allItems.length > 0 && selItems.length < allItems.length;
-      cv.cancel = { status: 'annule', reason: 'client', note: 'annulation groupée', at: new Date().toISOString(), replacedTourId: null, credited: false }; // liquide → jamais de note de crédit ; remboursement auto ci-dessous
-      if (partial) { cv.cancel.services = selItems.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key); cv.cancel.articles = selItems.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4)); } // partiel → masque prestation par prestation ; sinon cheval entier
-      cv.cancel.items = selItems.map((it) => ({ key: it.key, label: it.label, ttc: it.ttc, ht: it.ht, tva: it.tva, matHT: it.matHT || 0 })); // fige les montants annulés
+      if (!cv || chevalCredited(cv)) return; // crédité (virement) intouchable ici ; un cheval PARTIELLEMENT annulé est autorisé (on complète)
+      const allItems = chevalCancelItems(t, g.cid, cv.nom); const selItems = allItems.filter((it) => g.keys.has(it.key)); if (!selItems.length) return;
+      const newServices = selItems.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key);
+      const newArtIds = selItems.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4));
+      const newItems = selItems.map((it) => ({ key: it.key, label: it.label, ttc: it.ttc, ht: it.ht, tva: it.tva, matHT: it.matHT || 0 }));
+      if (chevalCancelled(cv)) { // COMPLÈTE une annulation partielle existante
+        cv.cancel.services = (cv.cancel.services || []).concat(newServices); cv.cancel.articles = (cv.cancel.articles || []).concat(newArtIds); cv.cancel.items = (cv.cancel.items || []).concat(newItems);
+      } else {
+        const partial = allItems.length > 0 && selItems.length < allItems.length;
+        cv.cancel = { status: 'annule', reason: 'client', note: 'annulation groupée', at: new Date().toISOString(), replacedTourId: null, credited: false }; // liquide → jamais de note de crédit ; remboursement auto ci-dessous
+        if (partial) { cv.cancel.services = newServices; cv.cancel.articles = newArtIds; } // partiel → masque prestation par prestation ; sinon cheval entier
+        cv.cancel.items = newItems; // fige les montants annulés
+      }
       touched.add(t); affPairs.push(t.id + ':' + g.cid);
     });
     touched.forEach((t) => recomputeTourLocal(t)); // recalcul d'abord → t.result reflète le déplacement seul
@@ -12497,19 +12511,57 @@ function modalCancelRdv(nom, opts) {
   }
   if (chevalCancelled(cv)) {
     const lbl = cv.cancel.status === 'reporte' ? 'reporté' : 'annulé';
-    if (cv.cancel.credited) { // RDV PAYÉ annulé (note de crédit émise) : rétablissement IMPOSSIBLE — on ne touche jamais à une NC. Refacturation éventuelle = à la main.
-      openModal(`<div class="modal-head"><b>RDV payé ${lbl} — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
-        <p class="hint">Motif : <b>${cv.cancel.reason === 'pro' ? 'professionnel' : 'client'}</b>${cv.cancel.note ? ' · ' + esc(cv.cancel.note) : ''}. Une <b>note de crédit</b> a été émise pour ce RDV (Compta → Notes de crédit).</p>
-        <p class="hint">Ce RDV ne peut pas être rétabli automatiquement : on ne modifie jamais une facture encaissée ni sa note de crédit. Si vous devez refacturer ce cheval, <b>ajoutez-le manuellement à un arrêt d'une tournée</b> — la comptabilité repart alors proprement.</p>
+    // RÈGLE : une annulation/un report est DÉFINITIF — pas de rétablissement (l'utilisateur recrée une facture si besoin en ajoutant le cheval à une tournée).
+    // Cheval crédité (virement, NC émise) ou reporté → information seule. Cheval annulé LIQUIDE partiel → on propose d'annuler les prestations RESTANTES.
+    if (cv.cancel.credited || cv.cancel.status === 'reporte') {
+      openModal(`<div class="modal-head"><b>RDV ${lbl} — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+        <p class="hint">Motif : <b>${cv.cancel.reason === 'pro' ? 'professionnel' : 'client'}</b>${cv.cancel.note ? ' · ' + esc(cv.cancel.note) : ''}.${cv.cancel.credited ? ' Une <b>note de crédit</b> a été émise (Compta → Notes de crédit).' : ''}</p>
+        <p class="hint">Une annulation est <b>définitive</b> : elle ne se rétablit pas. Pour re-facturer ce cheval, ajoutez-le à un arrêt d'une tournée — la comptabilité repart proprement.</p>
         <div class="actions"><button class="btn block" id="cxClose">Fermer</button></div>`);
       $('mX').addEventListener('click', closeModal); $('cxClose').addEventListener('click', closeModal);
       return;
     }
-    openModal(`<div class="modal-head"><b>RDV ${lbl} — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">Motif : <b>${cv.cancel.reason === 'pro' ? 'professionnel' : 'client'}</b>${cv.cancel.note ? ' · ' + esc(cv.cancel.note) : ''}.</p>
-      <div class="actions"><button class="btn primary block" id="cxRestore">↩ Rétablir ce RDV</button></div>`);
+    const remain = chevalCancelItems(opts.tour, opts.clientId, nom); // prestations ENCORE facturées d'un cheval partiellement annulé
+    if (!remain.length) {
+      openModal(`<div class="modal-head"><b>RDV annulé — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+        <p class="hint">Toutes les prestations de ce cheval sont annulées. Une annulation est <b>définitive</b> ; recréez une facture si besoin en l'ajoutant à une tournée.</p>
+        <div class="actions"><button class="btn block" id="cxClose">Fermer</button></div>`);
+      $('mX').addEventListener('click', closeModal); $('cxClose').addEventListener('click', closeModal);
+      return;
+    }
+    const chk = new Set();
+    openModal(`<div class="modal-head"><b>Annuler d'autres prestations — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Ce cheval est <b>déjà partiellement annulé</b> (ce qui est annulé le reste). Cochez les prestations <b>restantes</b> à annuler aussi. Le déplacement reste facturé.</p>
+      <div id="cxSvc2"></div>
+      <p class="hint" id="cxNote3"></p>
+      <div class="actions"><button class="btn primary block" id="cxOk2">Confirmer l'annulation</button></div>`);
     $('mX').addEventListener('click', closeModal);
-    $('cxRestore').addEventListener('click', () => { cv.cancel = null; closeModal(); opts.onDone(); });
+    const sel2 = () => remain.filter((it) => chk.has(it.key));
+    const upd = () => { const sp = cancelItemsSplit(sel2()); const r = $('cxNote3'); if (r) r.innerHTML = `À annuler : <b>${eur(sp.ttc)}</b> TTC (HT ${eur(sp.moHT + sp.matHT)} · TVA ${eur(sp.tva)}) — <b>déplacement conservé</b>${sp.ttc <= 0.005 ? ' · <span style="color:var(--danger)">rien de coché</span>' : ''}`; };
+    const draw = () => {
+      const rows = remain.map((it, i) => `<label class="ch-opt"><input type="checkbox" data-s2="${i}"${chk.has(it.key) ? ' checked' : ''}/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label>`).join('');
+      $('cxSvc2').innerHTML = `<label>Prestations restantes à annuler <button type="button" class="btn small" id="cxAll2">Tout</button> <button type="button" class="btn small" id="cxNone2">Rien</button></label><div class="ch-opts">${rows}</div>`;
+      $('cxSvc2').querySelectorAll('[data-s2]').forEach((inp) => inp.addEventListener('change', () => { const it = remain[+inp.dataset.s2]; if (inp.checked) chk.add(it.key); else chk.delete(it.key); upd(); }));
+      $('cxAll2').onclick = () => { remain.forEach((it) => chk.add(it.key)); draw(); };
+      $('cxNone2').onclick = () => { chk.clear(); draw(); };
+      upd();
+    };
+    draw();
+    $('cxOk2').addEventListener('click', () => {
+      if (comptaLocked(opts.tour, opts.clientId)) { alert('🔒 La période comptable de cette tournée a été déclarée : l\'annulation n\'est plus possible.'); closeModal(); return; }
+      const sel = sel2(); if (!sel.length) { alert('Cochez au moins une prestation à annuler.'); return; }
+      const cSplit = cancelItemsSplit(sel);
+      const newServices = sel.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key);
+      const newArtIds = sel.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4));
+      cv.cancel.services = (cv.cancel.services || []).concat(newServices); // COMPLÈTE l'annulation partielle existante
+      cv.cancel.articles = (cv.cancel.articles || []).concat(newArtIds);
+      cv.cancel.items = (cv.cancel.items || []).concat(sel.map((it) => ({ key: it.key, label: it.label, ttc: it.ttc, ht: it.ht, tva: it.tva, matHT: it.matHT || 0 })));
+      const pp = (opts.tour.payments || {})[opts.clientId] || {}, pm = pp.method;
+      if (pm === 'liquide' && pp.facture && clientPaiementDone(opts.tour, opts.clientId)) createCreditNote(opts.clientId, opts.tour, cv, cv.cancel.reason, cv.cancel.note, { documentaire: true, cancelSplit: cSplit, cancelTTC: cSplit.ttc, services: newServices }); // avoir documentaire pour les NOUVELLES prestations
+      closeModal();
+      if (pm === 'liquide' && clientPaiementDone(opts.tour, opts.clientId)) { recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour(); modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'Prestations annulées.'); }
+      else opts.onDone();
+    });
     return;
   }
   let status = 'annule', reason = 'client';
