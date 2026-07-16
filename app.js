@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.45';
+const APP_VERSION = '1.7.46';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.46', date: '2026-07-16',
+    ajouts: [
+      'SYNCHRO — chaque sauvegarde envoyée sur le Drive est désormais étiquetée avec l\'appareil qui l\'a faite (📱 Téléphone / 📱 Tablette / 💻 PC). Utile pour identifier une version dans « Restaurer une version antérieure ». (Ne concerne que les synchros faites à partir de cette mise à jour.)',
+    ],
+  },
   {
     version: '1.7.45', date: '2026-07-16',
     ajouts: [
@@ -3048,7 +3054,7 @@ function bgSaveFlash() { // enregistrement local (instantané) : brève confirma
 // L1-1d : 'adresses' et 'plancheTodo' AJOUTÉES → fusion par enregistrement AVEC tombstones (une suppression ne « ressuscite » plus après synchro).
 const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone']; // #7a : plancheDone AJOUTÉE → fusion par enregistrement AVEC tombstones (une planche « refaite »/retirée ne ressuscite plus)
 // P1-9 : réglages PROPRES à l'appareil — SOURCE UNIQUE partagée par mergeSettings ET applyRemoteReplace (fin de la classe de bug « deux listes device-local divergentes » : calPush/calDureeMin manquaient côté applyRemoteReplace → bascule silencieuse du push agenda à l'adoption/restauration).
-const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile'];
+const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile', 'deviceName'];
 let _lastPlancheHash = null; // L1-1e : empreinte de la config planche pour n'horodater `plancheUpdatedAt` que lorsqu'elle change réellement.
 function saveSettings() {
   S.updatedAt = Date.now();
@@ -3432,11 +3438,20 @@ function mergeSnapshots(local, remote) {
     tomb,
   };
 }
+// Identité de l'APPAREIL courant (étiquette chaque synchro : qui a écrit cette révision). Auto-détecté ; un nom personnalisé (S.deviceName) prend le dessus.
+function deviceInfo() {
+  const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+  const touch = (typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 1);
+  const tablet = /iPad/.test(ua) || (/Android/.test(ua) && !/Mobile/.test(ua)) || (/Macintosh/.test(ua) && touch);
+  const phone = !tablet && /Mobile|iPhone|iPod|Android/.test(ua);
+  return { type: phone ? 'phone' : tablet ? 'tablet' : 'pc', name: (S.deviceName || '').trim(), at: Date.now() };
+}
+const deviceLabel = (d) => { if (!d || !d.type) return '❔ appareil inconnu'; const t = d.type === 'phone' ? '📱 Téléphone' : d.type === 'tablet' ? '📱 Tablette' : '💻 PC'; return d.name ? `${t} « ${esc(d.name)} »` : t; };
 // Instantané local complet (pour export / fusion).
 const DATA_SCHEMA = 1; // Bucket B : numéro de SCHÉMA de données (indépendant de APP_VERSION) → permet de router les migrations / refuser un fichier trop récent à l'import.
 function exportSnapshot() {
   const m = syncMeta();
-  return { app: 'GaloPodo', version: APP_VERSION, schema: DATA_SCHEMA, at: Date.now(), settings: S, clients, tours: allTours(), tomb: Object.assign({}, m.tomb || {}) };
+  return { app: 'GaloPodo', version: APP_VERSION, schema: DATA_SCHEMA, at: Date.now(), device: deviceInfo(), settings: S, clients, tours: allTours(), tomb: Object.assign({}, m.tomb || {}) };
 }
 // Applique le résultat de fusion : réécrit les stores + re-partitionne les tournées (actives / archive > 4 semaines).
 function applyMerged(merged) {
