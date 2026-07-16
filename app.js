@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.35';
+const APP_VERSION = '1.7.36';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.36', date: '2026-07-16',
+    ajouts: [
+      'COMPTA — corriger le mode de paiement d\'un client depuis la Compta recalcule maintenant sa facture : plus d\'écart de ~20 % (remise liquide) entre le mode affiché et le montant compté en chiffre d\'affaires / TVA.',
+      'COMPTA — un impayé encaissé lors d\'une visite suivante n\'est plus compté deux fois dans les bases de calcul (provisions, total par client) : la prestation reste comptée une seule fois, au mois d\'origine.',
+    ],
+  },
   {
     version: '1.7.35', date: '2026-07-16',
     ajouts: [
@@ -7925,7 +7932,7 @@ function financeStats() {
       const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, impaye: 0, rembourse: 0, chevaux: {} };
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
-      const art = (m.articles || []).reduce((s, a) => s + a.ttc, 0); // remise déjà appliquée ligne par ligne
+      const art = (m.articles || []).reduce((s, a) => s + (a.impaye ? 0 : a.ttc), 0); // remise déjà appliquée ligne par ligne ; P1-3 : exclut la ligne « Impayé du … » (collecte d'un CA déjà compté le mois d'origine → pas de double-comptage du total client)
       // L8 : chevaux payés-annulés (note de crédit) → on retire leur MATÉRIEL et ARTICLES des ventes (remboursés par la NC),
       // mais le DÉPLACEMENT reste ACQUIS (la NC ne rembourse jamais le déplacement — le pro s'est déplacé), cohérent avec la Compta et la règle d'annulation.
       const matCred = (m.materiel || []).reduce((s, x) => s + (isCred(x.nom) ? x.ttc : 0), 0);
@@ -7984,6 +7991,9 @@ function setComptaPayment(tourId, clientId, method) {
   else if (method === 'facvir') t.payments[clientId] = { method: 'virement', facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // facture pro payée par virement
   else t.payments[clientId] = { method: null, facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // « à classer » (tournée à venir)
   // #5 : rembourse (traçabilité annulation liquide) conservé dans TOUTES les branches — une bascule de mode en Compta ne l'efface plus.
+  // P1-1 : la remise LIQUIDE (S.reducLiquide) est couplée à la MÉTHODE dans computeResultMoney → sans recalcul, `m.totalTTC` reste figé
+  // à l'ancienne remise et le CA/TVA du client sont faux de ±20 % après un reclassement. On recalcule — SAUF période déclarée (immuable).
+  if (!tourComptaLocked(t)) recomputeTourLocal(t);
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
 }
 // Agrégats du mois : liquide (postes globalisés, sans nom) + virements + factures (par client).
@@ -8007,7 +8017,10 @@ function comptaData(ym) {
       if (tourYm === ym) { // base analytique = CA figé du mois de la tournée, indépendamment du rattachement caisse
         const depHT = (m.deplacement || []).reduce((s, l) => s + (l.partHT || 0), 0);
         const matHT = m.htMat || 0;
-        baseMat += matHT; baseDep += depHT; baseMO += (m.totalHT || 0) - matHT - depHT; tvaCol += (m.totalTVA || 0);
+        // P1-3 : une ligne « Impayé du … » réinjectée est la COLLECTE d'un CA déjà accru le mois d'origine, pas un CA neuf → l'exclure de la base analytique (sinon double-comptage → provisions social/TVA surévaluées).
+        const impHT = (m.articles || []).reduce((s, a) => s + (a.impaye ? (a.ht || 0) : 0), 0);
+        const impTVA = (m.articles || []).reduce((s, a) => s + (a.impaye ? (a.tva || 0) : 0), 0);
+        baseMat += matHT; baseDep += depHT; baseMO += (m.totalHT || 0) - matHT - depHT - impHT; tvaCol += (m.totalTVA || 0) - impTVA;
       }
       const p = (t.payments || {})[m.clientId];
       const method = p ? p.method : null; const fac = !!(p && p.facture);
