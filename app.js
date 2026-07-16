@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.55';
+const APP_VERSION = '1.7.56';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.56', date: '2026-07-16',
+    ajouts: [
+      'SYNCHRO (100 %) — les paramètres de calcul (TVA, réduction liquide, seuils, forfait, vitesse, prix carburant, suppléments, véhicule…) sont désormais fusionnés CHAMP PAR CHAMP selon leur propre date de modification : changer deux réglages différents sur deux appareils ne peut plus en écraser un. Chaque donnée a maintenant sa date de dernière modification pour trancher correctement à la synchro.',
+    ],
+  },
   {
     version: '1.7.55', date: '2026-07-16',
     ajouts: [
@@ -3114,11 +3120,15 @@ function bgSaveFlash() { // enregistrement local (instantané) : brève confirma
 const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone']; // #7a : plancheDone AJOUTÉE → fusion par enregistrement AVEC tombstones (une planche « refaite »/retirée ne ressuscite plus)
 // P1-9 : réglages PROPRES à l'appareil — SOURCE UNIQUE partagée par mergeSettings ET applyRemoteReplace (fin de la classe de bug « deux listes device-local divergentes » : calPush/calDureeMin manquaient côté applyRemoteReplace → bascule silencieuse du push agenda à l'adoption/restauration).
 const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile', 'deviceName', 'deviceId'];
+// 100 % : champs de réglages EXCLUS de l'horodatage PAR CHAMP (ils sont déjà résolus autrement — maps unies, collections par enregistrement, thème/planche/setup à horodatage dédié, device-local). Tout le RESTE (tarifs de calcul, seuils, carburant, suppléments, véhicule…) est fusionné champ par champ selon sa propre date de modif.
+const PERFIELD_EXCLUDE = new Set(['updatedAt', '_fieldTs', 'changelogRead', 'changelogHideBelow', 'agendaImported', 'agendaInactive', 'agendaPrive', 'agendaPriveVus', 'agendaTrajetVus', 'calPushed', 'calPendingDelete', 'home', 'odoReleves', 'lieuxRefs', 'plancheHistory', 'addrStatus', 'comptaRecu', 'comptaDemarche', 'comptaStatus', 'tileLabels', 'badgeColors', 'accentColor', 'topbarColor', 'appBg', 'navBarColor', 'themeUpdatedAt', 'planche', 'plancheUpdatedAt', 'setupDone', 'setupLocked', 'pays', 'tvaRegime', 'formeJuridique', 'tvaRate', 'fiscalParams', 'mailKeywords', 'statOrder', 'analyticOrder', 'analyticAlloc'].concat(SETTINGS_COLLECTIONS).concat(DEVICE_LOCAL_KEYS));
 let _lastPlancheHash = null; // L1-1e : empreinte de la config planche pour n'horodater `plancheUpdatedAt` que lorsqu'elle change réellement.
 function saveSettings() {
   S.updatedAt = Date.now();
   { const ph = hashStr(JSON.stringify(S.planche || {})); if (_lastPlancheHash !== null && ph !== _lastPlancheHash) S.plancheUpdatedAt = Date.now(); _lastPlancheHash = ph; } // la config planche modifiée l'emporte à la fusion (propagation propre)
   SETTINGS_COLLECTIONS.forEach((k) => { if (Array.isArray(S[k])) syncStamp('set:' + k, S[k]); }); // horodatage + tombstones par enregistrement (survit à la fusion multi-appareils)
+  // 100 % : horodatage PAR CHAMP des paramètres de config → chaque champ modifié mémorise SA date → la fusion prend, champ par champ, la valeur la plus récente (deux réglages différents changés sur deux appareils ne s'écrasent plus).
+  try { const prev = LS.get('ftr.settings', {}) || {}; S._fieldTs = S._fieldTs || {}; const now = S.updatedAt; Object.keys(S).forEach((k) => { if (k === '_fieldTs' || PERFIELD_EXCLUDE.has(k) || typeof S[k] === 'function') return; try { if (JSON.stringify(S[k]) !== JSON.stringify(prev[k])) S._fieldTs[k] = now; } catch (e) {} }); } catch (e) {}
   LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); markSyncDirty(); bgSaveFlash();
 }
 // Sauvegarde d'une personnalisation de couleur (thème / badges) : horodatage DÉDIÉ pour que la fusion Drive garde la
@@ -3479,6 +3489,10 @@ function mergeSettings(localS, remoteS) {
   // L1-1c : réglages PROPRES à l'appareil — ne JAMAIS les importer d'une fusion, sinon la synchro/agenda d'un appareil bascule silencieusement
   // à cause de l'autre (ex. `syncMode:'file'` ou `googleAutoSync:false` du « gagnant » coupait la synchro Drive de cet appareil).
   DEVICE_LOCAL_KEYS.forEach((k) => { if (localS && localS[k] !== undefined) merged[k] = localS[k]; }); // P1-9 : source unique (inclut googleClientId, calPush, calDureeMin)
+  // 100 % : HORODATAGE PAR CHAMP — pour chaque paramètre de config, on prend la valeur de la source dont la date de modif est la PLUS RÉCENTE (indépendant du « gagnant » global du bloc réglages). Les champs sans date connue suivent la base (comportement d'avant). Les champs exclus (maps/collections/thème/setup/device-local) gardent leur résolution dédiée.
+  { const lF = (localS && localS._fieldTs) || {}, rF = (remoteS && remoteS._fieldTs) || {}; const ts = Object.assign({}, lF); Object.keys(rF).forEach((k) => { ts[k] = Math.max(ts[k] || 0, rF[k]); });
+    Object.keys(ts).forEach((k) => { if (PERFIELD_EXCLUDE.has(k)) return; const lt = lF[k] || 0, rt = rF[k] || 0; if (lt === rt) return; const src = rt > lt ? remoteS : localS; if (src && src[k] !== undefined) merged[k] = src[k]; });
+    merged._fieldTs = ts; }
   return merged;
 }
 // Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
