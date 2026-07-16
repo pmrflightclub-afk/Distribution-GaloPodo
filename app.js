@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.36';
+const APP_VERSION = '1.7.37';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.37', date: '2026-07-16',
+    ajouts: [
+      'FIABILITÉ — le calcul des frais ne peut plus s\'enregistrer sur la mauvaise tournée si vous changez de tournée pendant qu\'il se calcule (réseau lent).',
+      'SYNCHRO/GOOGLE — l\'option « pousser les RDV vers l\'Agenda » et la durée par défaut ne basculent plus toutes seules lors d\'une adoption/restauration de données ; et une erreur d\'accès Google ne laisse plus un jeton défectueux boucler en échec de synchro.',
+    ],
+  },
   {
     version: '1.7.36', date: '2026-07-16',
     ajouts: [
@@ -2986,6 +2993,8 @@ function bgSaveFlash() { // enregistrement local (instantané) : brève confirma
 // sinon un ajout/suppression fait sur un appareil est écrasé en bloc par l'autre appareil (perte de rappels, frais, écritures…).
 // L1-1d : 'adresses' et 'plancheTodo' AJOUTÉES → fusion par enregistrement AVEC tombstones (une suppression ne « ressuscite » plus après synchro).
 const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone']; // #7a : plancheDone AJOUTÉE → fusion par enregistrement AVEC tombstones (une planche « refaite »/retirée ne ressuscite plus)
+// P1-9 : réglages PROPRES à l'appareil — SOURCE UNIQUE partagée par mergeSettings ET applyRemoteReplace (fin de la classe de bug « deux listes device-local divergentes » : calPush/calDureeMin manquaient côté applyRemoteReplace → bascule silencieuse du push agenda à l'adoption/restauration).
+const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile'];
 let _lastPlancheHash = null; // L1-1e : empreinte de la config planche pour n'horodater `plancheUpdatedAt` que lorsqu'elle change réellement.
 function saveSettings() {
   S.updatedAt = Date.now();
@@ -3254,8 +3263,6 @@ function mergeSettings(localS, remoteS) {
   // Fond du logo par appareil : ne jamais perdre la valeur de l'autre appareil si celui qui « gagne » ne l'a pas.
   if (merged.logoBg == null) merged.logoBg = ((localS && localS.logoBg != null) ? localS.logoBg : (remoteS && remoteS.logoBg));
   if (merged.logoBgMobile == null) merged.logoBgMobile = ((localS && localS.logoBgMobile != null) ? localS.logoBgMobile : (remoteS && remoteS.logoBgMobile));
-  // #8a : réglage DEVICE-LOCAL (aligné sur applyRemoteReplace) — l'ID client Google OAuth reste PROPRE à cet appareil (jamais écrasé/perdu par la fusion).
-  if (localS && localS.googleClientId) merged.googleClientId = localS.googleClientId;
   // Adresse de départ (domicile) : ne jamais la perdre si l'appareil « gagnant » l'avait vide → reprendre celle qui est renseignée.
   const hasAddr = (a) => { try { return !!addrStr(a).trim(); } catch { return false; } };
   if (!hasAddr(merged.home)) { if (localS && hasAddr(localS.home)) merged.home = localS.home; else if (remoteS && hasAddr(remoteS.home)) merged.home = remoteS.home; }
@@ -3317,7 +3324,7 @@ function mergeSettings(localS, remoteS) {
   if (merged.setupDone) { const src = (rDone && !lDone) ? remoteS : (lDone && !rDone) ? localS : base; ['pays', 'tvaRegime', 'formeJuridique', 'tvaRate', 'fiscalParams'].forEach((k) => { if (src && src[k] !== undefined) merged[k] = src[k]; }); }
   // L1-1c : réglages PROPRES à l'appareil — ne JAMAIS les importer d'une fusion, sinon la synchro/agenda d'un appareil bascule silencieusement
   // à cause de l'autre (ex. `syncMode:'file'` ou `googleAutoSync:false` du « gagnant » coupait la synchro Drive de cet appareil).
-  ['syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile'].forEach((k) => { if (localS && localS[k] !== undefined) merged[k] = localS[k]; });
+  DEVICE_LOCAL_KEYS.forEach((k) => { if (localS && localS[k] !== undefined) merged[k] = localS[k]; }); // P1-9 : source unique (inclut googleClientId, calPush, calDureeMin)
   return merged;
 }
 // Fusionne un instantané distant dans l'instantané local (idempotent : rejouer donne le même résultat).
@@ -3533,7 +3540,7 @@ function gTokenValid(scope) { return !!gCachedFor(scope); }
 // L2-2b : jeton mort côté Google (révoqué / consentement retiré / partiel) → 401/403. On jette le cache pour forcer une ré-acquisition propre.
 // #2 : invalidation PAR SCOPE — un 401 Gmail ne doit plus jeter le jeton Drive/Agenda (isolation 1.7.29). scope omis = purge totale (compat).
 function gInvalidateToken(scope) { if (scope) delete _gTokens[scope]; else _gTokens = {}; try { persistGTokens(); } catch (e) {} }
-function gCheck(r, label) { if (!r.ok) { if (r.status === 401 || r.status === 403) gInvalidateToken(GSCOPE_DRIVE); throw new Error(label + ' ' + r.status); } } // Drive/Agenda partagent GSCOPE_DRIVE
+function gCheck(r, label) { if (!r.ok) { if (r.status === 401 || r.status === 403) { gInvalidateToken(GSCOPE_DRIVE); gInvalidateToken(GSCOPE_MAIL); } throw new Error(label + ' ' + r.status); } } // P1-6 : une requête Drive/Agenda peut être servie par le jeton Gmail SURSET (gCachedFor) → sur 401/403, invalider AUSSI GSCOPE_MAIL, sinon le jeton défectueux resterait en cache et la synchro échouerait en boucle
 // L2-2a : bandeau NON bloquant « Reconnexion Google requise » — remplace l'échec silencieux (catch{} muet) quand une synchro/un push
 // de fond échoue faute de jeton (fréquent sur Edge/PC où le jeton silencieux ne peut pas se renouveler). Un clic relance la connexion.
 let _reauthBanner = null;
@@ -3673,7 +3680,7 @@ function modalDriveLinkChoice() {
 }
 // Adopte l'instantané distant en REMPLAÇANT le local (sans fusion) — mais conserve les réglages PROPRES à cet appareil (ID Google, mode synchro, fond de logo).
 function applyRemoteReplace(remote) {
-  const keep = ['googleClientId', 'syncMode', 'googleAutoSync', 'logoBg', 'logoBgMobile'], saved = {}; keep.forEach((k) => { saved[k] = S[k]; });
+  const keep = DEVICE_LOCAL_KEYS, saved = {}; keep.forEach((k) => { saved[k] = S[k]; }); // P1-9 : même liste que mergeSettings (calPush/calDureeMin inclus → plus de bascule du push agenda à l'adoption/restauration)
   S = Object.assign({}, DEFAULTS, remote.settings || {}, saved);
   clients = Array.isArray(remote.clients) ? remote.clients : [];
   const tours = Array.isArray(remote.tours) ? remote.tours : [];
@@ -6953,7 +6960,9 @@ function scheduleGeoRecalc() { clearTimeout(_geoTimer); _geoTimer = setTimeout((
 
 async function calcTour(silent) {
   if (!currentTour) return; // tournée supprimée entre-temps → ne pas la ré-enregistrer
-  const st = $('edStatus'); st.className = 'status';
+  const tour = currentTour; // P1-2 : capture l'identité — après les await réseau, on refuse d'écrire le résultat si l'utilisateur a changé de tournée entre-temps
+  const st = $('edStatus'); if (!st) return; // éditeur retiré du DOM (navigation) → rien à calculer
+  st.className = 'status';
   currentTour.date = $('edDate').value;
   if (!currentTour.arrets.length) {
     currentTour.result = null;
@@ -6985,6 +6994,7 @@ async function calcTour(silent) {
     const points = [home, ...stops, arrXY];
     const rt = await route(points); const legs = rt.legsKm;
 
+    if (currentTour !== tour) return; // P1-2 : l'utilisateur a ouvert une AUTRE tournée pendant les await → ne pas écrire la géométrie de `tour` sur la tournée courante (facture corrompue)
     const rows = currentTour.arrets.map((a, i) => rowFromArret(a, { segKm: legs[i] != null ? legs[i] : 0, directKm: directs[i] }));
     // Durée : service de carte (auto) OU estimation km ÷ vitesse moyenne réglée par le pro.
     const totalMin = (S.dureeAuto && rt.totalMin) ? rt.totalMin : (rt.totalKm * 60 / (S.vitesseKmh || 90));
