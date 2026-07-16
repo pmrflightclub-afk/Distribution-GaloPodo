@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.32';
+const APP_VERSION = '1.7.33';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.33', date: '2026-07-16',
+    ajouts: [
+      'COMPTA — facture pro payée en liquide avec un reste à percevoir par virement : ce reste est désormais bien comptabilisé côté « Virement » (il n\'était pas suivi).',
+      'COMPTA — le montant remboursé (annulation liquide) n\'est plus perdu si l\'on change le mode de paiement d\'un client dans la Compta.',
+      'CORRECTIFS — « Replacer » un cheval reporté rafraîchit la liste immédiatement ; nettoyage de deux petits défauts d\'affichage internes (rendu du calendrier hors de son onglet, export de tournée).',
+    ],
+  },
   {
     version: '1.7.32', date: '2026-07-16',
     ajouts: [
@@ -3719,8 +3727,8 @@ function exportTourFile(t) {
   const cids = tourReferencedClientIds(t);
   const cls = clients.filter((c) => cids.has(c.id)).map((c) => { const cc = JSON.parse(JSON.stringify(c)); cc.impayes = (cc.impayes || []).filter((im) => im.sourceTourId === t.id || im.collectedTourId === t.id); return cc; }); // fiches clients référencées, impayés limités à cette tournée
   const nc = (S.notesCredit || []).filter((n) => n.tourId === t.id).map((n) => JSON.parse(JSON.stringify(n)));
-  const settingsFrozen = { tvaRate: S.tvaRate, tvaRegime: S.tvaRegime, reducLiquide: S.reducLiquide, repartition: S.repartition, parage: S.parage, articlesCatalogue: S.articlesCatalogue, materiel: S.materiel }; // gel tarifaire (référence, pour recalcul cohérent)
-  const data = { app: 'GaloPodo', kind: 'tour-export', schema: DATA_SCHEMA, version: APP_VERSION, at: Date.now(), tour: JSON.parse(JSON.stringify(t)), clients: cls, notesCredit: nc, settingsFrozen };
+  const tarifsFrozen = { tvaRate: S.tvaRate, tvaRegime: S.tvaRegime, reducLiquide: S.reducLiquide, repartition: S.repartition, parage: S.parage, articlesCatalogue: S.articlesCatalogue, materiel: S.materiel }; // gel tarifaire (référence, pour recalcul cohérent) — #8e : nom distinct de la fonction globale settingsFrozen() (plus de masquage)
+  const data = { app: 'GaloPodo', kind: 'tour-export', schema: DATA_SCHEMA, version: APP_VERSION, at: Date.now(), tour: JSON.parse(JSON.stringify(t)), clients: cls, notesCredit: nc, settingsFrozen: tarifsFrozen };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'galopodo-tournee-' + (t.date || 'sansdate') + '.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -4666,7 +4674,7 @@ function showReglages(sub) {
   if (currentRsub === 'analyse') renderAnalyse();
   if (currentRsub === 'changelog') renderChangelog();
   if (currentRsub === 'badges') renderBadgesSettings();
-  if (currentRsub === 'calendrier') renderAgendaCalendrier();
+  // #8c : ne PLUS appeler renderAgendaCalendrier() ici — il rend dans #agendaDays (onglet Agenda), pas dans les Réglages → il polluait l'onglet Agenda.
   window.scrollTo(0, 0);
 }
 
@@ -5597,7 +5605,7 @@ function modalReplacerDate(g) {
         const res = scheduleClientOnDate(d, client, groups[d].map((en) => en.cvObj));
         groups[d].forEach((en) => { if (en.item.cv && en.item.cv.cancel) en.item.cv.cancel.replacedTourId = res.tour.id; }); // marque replacé (sort de la liste, reste dans Annulations)
       });
-      saveTournees(); saveArchive(); closeModal(); renderHome();
+      saveTournees(); saveArchive(); closeModal(); renderHome(); if (typeof renderReplacer === 'function') renderReplacer(); // #8b : rafraîchit la page Replacer (le/les chevaux replacés quittent la liste)
     });
   };
   render();
@@ -7936,9 +7944,10 @@ function setComptaPayment(tourId, clientId, method) {
   const keepLiq = { rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null, comptaPeriod: prev.comptaPeriod || null, rembourse: prev.rembourse || 0 };
   if (method === 'liquide') t.payments[clientId] = Object.assign({ method: 'liquide', facture: false }, keepLiq);
   else if (method === 'facliq') t.payments[clientId] = Object.assign({ method: 'liquide', facture: true }, keepLiq); // facture pro payée en liquide
-  else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null };
-  else if (method === 'facvir') t.payments[clientId] = { method: 'virement', facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null }; // facture pro payée par virement
-  else t.payments[clientId] = { method: null, facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null }; // « à classer » (tournée à venir)
+  else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 };
+  else if (method === 'facvir') t.payments[clientId] = { method: 'virement', facture: true, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // facture pro payée par virement
+  else t.payments[clientId] = { method: null, facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // « à classer » (tournée à venir)
+  // #5 : rembourse (traçabilité annulation liquide) conservé dans TOUTES les branches — une bascule de mode en Compta ne l'efface plus.
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
 }
 // Agrégats du mois : liquide (postes globalisés, sans nom) + virements + factures (par client).
@@ -7973,7 +7982,9 @@ function comptaData(ym) {
       if (mode === 'aclasser') { if (tourYm === ym) aclasserClients.push(entry); return; }
       if (mode === 'virement') { if (tourYm === ym) virementClients.push(entry); return; }
       if (mode === 'facvir') { if (tourYm === ym) factureVirClients.push(entry); return; }
-      if (mode === 'facliq') { if (tourYm !== ym) return; const cash = payRecu(m, p); const cs = cashSplit(cash, m); factureLiqClients.push(Object.assign({}, entry, { ht: cs.ht, tva: cs.tva, ttc: cash })); return; }
+      if (mode === 'facliq') { if (tourYm !== ym) return;
+        if (p && p.partiel) { const reste = payImpaye(m, p); if (reste > 0.005 && p.resteMode === 'virement') { const cs = cashSplit(reste, m); virementClients.push({ tourId: t.id, clientId: m.clientId, nom: m.nom + ' — reste impayé', ht: cs.ht, tva: cs.tva, ttc: reste, mode: 'virement', derived: true, recuKey: t.id + ':' + m.clientId + ':reste' }); } } // #4 : reste par virement d'une FACTURE liquide partielle → suivi comme virement (comme la branche liquide-sans-facture)
+        const cash = payRecu(m, p); const cs = cashSplit(cash, m); factureLiqClients.push(Object.assign({}, entry, { ht: cs.ht, tva: cs.tva, ttc: cash })); return; }
       // mode === 'liquide' (caisse globalisée, sans facture) — part cash rattachable via effYm.
       if (p && p.partiel) {
         // Un éventuel reste (virement) N'EST PAS de la caisse : il reste au mois de la tournée.
