@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.52';
+const APP_VERSION = '1.7.53';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.53', date: '2026-07-16',
+    ajouts: [
+      'ADRESSE (suite refonte) — la fenêtre « 📍 Adresse » d\'un client montre maintenant TOUS ses arrêts de la tournée (adresse, type, écurie, statut ⭐/📌, chevaux). Pour chaque arrêt : « Modifier / entrer une nouvelle adresse » → choisir les chevaux à déplacer, puis 📌 Ponctuelle ou ⭐ Par défaut (fiche). Les chevaux NON cochés passent dans une étape « à replacer » : les reporter (ils quittent la tournée du jour → « RDV à prendre ») ou les garder à leur adresse.',
+    ],
+  },
   {
     version: '1.7.52', date: '2026-07-16',
     ajouts: [
@@ -6447,61 +6453,69 @@ function chooseClientTargets(c) {
 }
 // Après un +client : si un arrêt NOUVEAU a été ajouté à une tournée qui avait déjà des arrêts → proposer l'intercalation.
 function maybeIntercaler(res) { if (res && res.preExisting && res.placements && res.placements.length) modalIntercaler(currentTour, res.placements); }
-// REFONTE — adresse par CLIENT à un arrêt. Modale 1 = consultation de l'adresse UTILISÉE (nom d'écurie, type, privée/non, adresse complète, statut ⭐défaut/📌ponctuelle)
-// + reprendre une adresse connue / « ＋ Entrer une nouvelle adresse ». Modale 2 (superposée) = saisie d'une adresse → 📌 Ponctuelle (cet arrêt, tous ses chevaux, fiche inchangée)
-// OU ⭐ Par défaut (corrige la fiche des chevaux COCHÉS). Ne confond jamais : adresse client (c.addr) / cheval (h.adresses) / écurie (nom d'une adresse spécifique) / arrêt (cv.addrOverride).
+// REFONTE — adresse par CLIENT. Modale 1 = TOUS les arrêts du client sur cette tournée (adresse, type, écurie/privée, statut ⭐défaut/📌ponctuelle, noms des chevaux).
+// Modale 2 (par arrêt) = saisie d'une adresse + chevaux à déplacer → 📌 Ponctuelle (cette tournée) OU ⭐ Par défaut (corrige la fiche des chevaux COCHÉS).
+// Étape 3 = chevaux NON cochés → « 🔄 Reporter le RDV » (il quitte la tournée du jour → « RDV à prendre / Replacer ») ou garder à son adresse actuelle.
+// Ne confond jamais : adresse client (c.addr) / cheval (h.adresses) / écurie (nom d'une adresse spécifique) / arrêt (cv.addrOverride).
 function modalClientAddr(t, a, cl) {
-  const cObj = clients.find((x) => x.id === cl.clientId); if (!cObj) { alert('Fiche client introuvable.'); return; }
-  const arretN = norm(addrStr(a.addr));
+  const cid = cl.clientId; const cObj = clients.find((x) => x.id === cid); if (!cObj) { alert('Fiche client introuvable.'); return; }
   const ficheOf = (cv) => (cObj.chevaux || []).find((h) => (h.id != null && cv.id != null && h.id === cv.id) || norm(h.nom) === norm(cv.nom));
-  const cvs = () => (cl.chevaux || []).filter((cv) => !chevalCancelled(cv)); // chevaux du client À CET ARRÊT (reconcile les a déjà regroupés par adresse)
-  const commit = (closeSub) => { saveClients(); if (closeSub) closeSub(); o.close(); applyChevalAddrChangeToTour(); }; // ferme, sauve, reconcilie (l'arrêt migre) + propose le placement
-  const step2 = (addr0, nom0) => {
-    const target = toAddr(JSON.parse(JSON.stringify(addr0)));
+  const arretsOf = () => (t.arrets || []).map((ar) => ({ ar, clb: (ar.clients || []).find((x) => x.clientId === cid) })).filter((z) => z.clb && (z.clb.chevaux || []).some((cv) => !chevalCancelled(cv))); // TOUS les arrêts du client
+  const commit = (o2) => { saveClients(); persistCurrentTour(); if (o2) o2.close(); o.close(); applyChevalAddrChangeToTour(); }; // sauve, ferme, reconcilie (l'arrêt migre) + propose le placement
+  const step3 = (uncheckedCvs, o2) => {
+    const b2 = o2.q('#cadr2Body');
+    b2.innerHTML = `<p class="hint">Ces chevaux ne changent PAS d'adresse. Pour chacun : le <b>reporter</b> (il quitte la tournée du jour → « RDV à prendre / Replacer ») ou le <b>garder</b> à son adresse actuelle.</p>
+      <div>${uncheckedCvs.map((cv, i) => `<div class="list-item"><div class="li-main"><b>🐴 ${esc(cv.nom)}</b></div><div class="li-act"><label class="chk2"><input type="checkbox" data-repl="${i}"/> 🔄 Reporter le RDV</label></div></div>`).join('')}</div>
+      <div class="actions"><button class="btn primary block" id="cadrReplOk">Valider</button></div>`;
+    b2.querySelector('#cadrReplOk').addEventListener('click', () => {
+      Array.from(b2.querySelectorAll('[data-repl]:checked')).forEach((c) => { const cv = uncheckedCvs[+c.dataset.repl]; if (cv && !chevalCancelled(cv)) cv.cancel = { status: 'reporte', reason: 'client', note: '', at: new Date().toISOString(), replacedTourId: null, credited: false }; }); // reporté → sort de la tournée (RDV à prendre)
+      commit(o2);
+    });
+  };
+  const step2 = (ar, clb) => {
+    const cvsAt = () => (clb.chevaux || []).filter((cv) => !chevalCancelled(cv));
+    const target = emptyAddr();
     const o2 = openOverlay('<div class="modal-head"><b>📍 Adresse à appliquer</b><button class="x" data-x>✕</button></div><div id="cadr2Body"></div>');
     const b2 = o2.q('#cadr2Body');
-    b2.innerHTML = `<label>Nom de l'écurie (facultatif)<input type="text" id="cadrNom" value="${esc(nom0 || '')}" placeholder="ex. Écurie du Nord"/></label>
+    b2.innerHTML = `<label>Nom de l'écurie (facultatif)<input type="text" id="cadrNom" placeholder="ex. Écurie du Nord"/></label>
       <div id="cadrMount" style="margin:6px 0"></div>
       <p class="hint">📌 <b>Ponctuelle</b> = juste cette tournée (fiche inchangée). ⭐ <b>Par défaut</b> = corrige la fiche des chevaux cochés.</p>
-      <div class="li-sub" style="margin:6px 0 2px"><b>Chevaux concernés (pour « ⭐ Par défaut ») :</b></div>
-      <div id="cadrChevaux">${cvs().map((cv, i) => `<label class="chk2"><input type="checkbox" data-cvchk="${i}" checked/> 🐴 ${esc(cv.nom)}</label>`).join('') || '<p class="hint">Aucun cheval.</p>'}</div>
+      <div class="li-sub" style="margin:6px 0 2px"><b>Chevaux à déplacer à cette adresse :</b></div>
+      <div id="cadrChevaux">${cvsAt().map((cv, i) => `<label class="chk2"><input type="checkbox" data-cvchk="${i}" checked/> 🐴 ${esc(cv.nom)}</label>`).join('') || '<p class="hint">Aucun cheval.</p>'}</div>
       <div class="actions two"><button class="btn" id="cadrPonct">📌 Ponctuelle</button><button class="btn primary" id="cadrDef">⭐ Par défaut</button></div>`;
     mountAddress(b2.querySelector('#cadrMount'), target, (na) => { Object.assign(target, na); });
     o2.q('[data-x]').onclick = o2.close;
-    const ok = () => addrStr(target).trim() ? true : (alert('Entrez une adresse.'), false);
-    b2.querySelector('#cadrPonct').addEventListener('click', () => { if (!ok()) return; cvs().forEach((cv) => { cv.addrOverride = toAddr(target); }); commit(o2.close); }); // ponctuelle → tous les chevaux du client à cet arrêt
-    b2.querySelector('#cadrDef').addEventListener('click', () => {
-      if (!ok()) return;
-      const listD = cvs(); const nom = (b2.querySelector('#cadrNom').value || '').trim();
+    const apply = (mode) => {
+      if (!addrStr(target).trim()) { alert('Entrez une adresse.'); return; }
+      const listD = cvsAt(); const nom = (b2.querySelector('#cadrNom').value || '').trim();
       const checked = Array.from(b2.querySelectorAll('[data-cvchk]:checked')).map((c) => +c.dataset.cvchk);
-      if (!checked.length) { alert('Cochez au moins un cheval pour « ⭐ Par défaut ».'); return; }
-      checked.forEach((idx) => { const cv = listD[idx]; const f = ficheOf(cv); if (f) { setChevalDefaultAddr(f, target); if (nom) setAddrNomForAddr(f, target, nom); } if (cv) delete cv.addrOverride; }); // corrige la fiche + retire l'override
-      commit(o2.close);
-    });
+      if (!checked.length) { alert('Cochez au moins un cheval.'); return; }
+      checked.forEach((idx) => { const cv = listD[idx]; if (mode === 'def') { const f = ficheOf(cv); if (f) { setChevalDefaultAddr(f, target); if (nom) setAddrNomForAddr(f, target, nom); } if (cv) delete cv.addrOverride; } else if (cv) { cv.addrOverride = toAddr(target); } });
+      const unchecked = listD.filter((cv, idx) => checked.indexOf(idx) < 0);
+      if (unchecked.length) step3(unchecked, o2); else commit(o2);
+    };
+    b2.querySelector('#cadrPonct').addEventListener('click', () => apply('ponct'));
+    b2.querySelector('#cadrDef').addEventListener('click', () => apply('def'));
   };
-  const list0 = cvs();
-  const h0 = list0.length ? ficheOf(list0[0]) : null;
-  const isPonct = list0.some((cv) => cv.addrOverride && addrStr(cv.addrOverride).trim());
-  const src = h0 ? chevalAddrSrc(h0) : 'client';
-  const typeLbl = src === 'specifique' ? (h0 && h0.addrPrivee ? 'Écurie privée (nom = client)' : 'Écurie (adresse propre du cheval)') : (src === 'societe' ? 'Adresse de la société' : 'Adresse du client');
-  const ecurie = h0 ? chevalAddrNom(cObj, h0) : '';
-  const known = {}; list0.forEach((cv) => { const f = ficheOf(cv); ((f && f.adresses) || []).forEach((e) => { const k = addrKey(e.addr); if (k && k !== arretN && addrStr(e.addr).trim()) known[k] = { nom: e.nom || '', addr: e.addr }; }); });
-  if (addrStr(cObj.addr).trim() && addrKey(cObj.addr) !== arretN) known[addrKey(cObj.addr)] = { nom: 'Adresse du client', addr: cObj.addr };
-  const knownArr = Object.values(known);
-  const o = openOverlay(`<div class="modal-head"><b>📍 Adresse — ${esc(clientName(cl.clientId))}</b><button class="x" data-x>✕</button></div>
-    <div class="card" style="margin-bottom:8px">
-      <div class="li-main"><b>Adresse utilisée</b> ${isPonct ? '<span class="badge">📌 Ponctuelle</span>' : '<span class="badge">⭐ Par défaut</span>'}</div>
-      ${isPonct ? '' : `<div class="li-sub">${esc(typeLbl)}${ecurie ? ' — « ' + esc(ecurie) + ' »' : ''}</div>`}
-      <div style="margin-top:4px">${esc(addrStr(a.addr)) || '<i>adresse non renseignée</i>'}</div>
-      <div class="li-sub" style="margin-top:4px">${list0.length} cheval(aux) à cet arrêt : ${esc(list0.map((cv) => cv.nom).join(', ')) || '—'}</div>
-    </div>
-    ${isPonct ? '<p class="hint">📌 Adresse ponctuelle active pour cette tournée. <button type="button" class="btn small" data-revert>↩ Revenir à l\'adresse par défaut</button></p>' : ''}
-    ${knownArr.length ? '<div class="li-sub" style="margin:6px 0 2px"><b>Reprendre une adresse connue :</b></div><div id="cadrKnown"></div>' : ''}
-    <div class="actions"><button class="btn primary block" data-new>＋ Entrer une nouvelle adresse</button></div>`);
+  const o = openOverlay(`<div class="modal-head"><b>📍 Adresses — ${esc(clientName(cid))}</b><button class="x" data-x>✕</button></div><div id="cadrBody"></div>`);
   o.q('[data-x]').onclick = o.close;
-  { const rv = o.q('[data-revert]'); if (rv) rv.addEventListener('click', () => { cvs().forEach((cv) => delete cv.addrOverride); commit(null); }); }
-  { const kb = o.q('#cadrKnown'); if (kb) { kb.innerHTML = knownArr.map((e, i) => `<button type="button" class="btn small block" data-known="${i}" style="text-align:left;margin-bottom:4px">📍 <b>${esc(e.nom || 'Adresse')}</b> — ${esc(addrStr(e.addr))}</button>`).join(''); kb.querySelectorAll('[data-known]').forEach((b) => b.addEventListener('click', () => { const e = knownArr[+b.dataset.known]; step2(e.addr, e.nom); })); } }
-  o.q('[data-new]').addEventListener('click', () => step2(emptyAddr(), ''));
+  const groups = arretsOf();
+  o.q('#cadrBody').innerHTML = (groups.length ? groups.map((z, gi) => {
+    const cvs = (z.clb.chevaux || []).filter((cv) => !chevalCancelled(cv));
+    const h0 = cvs.length ? ficheOf(cvs[0]) : null;
+    const isPonct = cvs.some((cv) => cv.addrOverride && addrStr(cv.addrOverride).trim());
+    const src = h0 ? chevalAddrSrc(h0) : 'client';
+    const typeLbl = src === 'specifique' ? (h0 && h0.addrPrivee ? 'Écurie privée (nom = client)' : 'Écurie (adresse propre du cheval)') : (src === 'societe' ? 'Adresse de la société' : 'Adresse du client');
+    const ecurie = h0 ? chevalAddrNom(cObj, h0) : '';
+    return `<div class="card" style="margin-bottom:8px">
+      <div class="li-main"><b>Arrêt ${gi + 1}</b> ${isPonct ? '<span class="badge">📌 Ponctuelle</span>' : '<span class="badge">⭐ Par défaut</span>'}</div>
+      ${isPonct ? '' : `<div class="li-sub">${esc(typeLbl)}${ecurie ? ' — « ' + esc(ecurie) + ' »' : ''}</div>`}
+      <div style="margin-top:4px">${esc(addrStr(z.ar.addr)) || '<i>adresse non renseignée</i>'}</div>
+      <div class="li-sub" style="margin-top:4px">🐴 ${esc(cvs.map((cv) => cv.nom).join(', ')) || '—'}</div>
+      <div class="actions"><button class="btn small" data-mod="${gi}">✏️ Modifier / entrer une nouvelle adresse</button></div>
+    </div>`;
+  }).join('') : '<p class="hint">Aucun arrêt pour ce client.</p>');
+  o.q('#cadrBody').querySelectorAll('[data-mod]').forEach((b) => b.addEventListener('click', () => { const z = groups[+b.dataset.mod]; step2(z.ar, z.clb); }));
 }
 // Après un changement d'adresse par défaut d'un cheval : reconcilie la tournée en cours (l'arrêt migre) + propose le placement
 // (ordre/horaire via modalIntercaler) si un nouvel arrêt est apparu, sinon recalcule. Report/annulation restent accessibles par arrêt.
