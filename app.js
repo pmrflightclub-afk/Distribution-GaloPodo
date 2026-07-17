@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.82';
+const APP_VERSION = '1.7.83';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.83', date: '2026-07-17',
+    ajouts: [
+      'REPRISE — quand le navigateur (souvent Edge/Chrome sur téléphone) évince l\'app de la mémoire pendant qu\'elle est en arrière-plan, elle redémarrait sur l\'accueil. Désormais elle revient à la DERNIÈRE VUE (onglet ou tournée ouverte) où vous étiez. NB : aucune app web ne peut empêcher le navigateur de fermer un onglet en fond ; pour limiter cela, installez l\'app sur l\'écran d\'accueil (elle est bien moins souvent fermée qu\'un simple onglet) et désactivez la mise en veille des onglets d\'Edge.',
+      'ARRÊT (éditeur) — un trait fin sépare aussi « Sur place » de la ligne d\'adresse (comme au-dessus de « Clôture »).',
+    ],
+  },
   {
     version: '1.7.82', date: '2026-07-17',
     ajouts: [
@@ -5123,10 +5130,20 @@ function updateNavCompact() {
   document.querySelectorAll('.subtabs').forEach((sb) => check(sb, sb.querySelector('.subtabs-list'))); // les sous-onglets cachés ont clientWidth 0 → non compactés
   updateStickyOffsets();
 }
+// Restaure la dernière vue (onglet ou tournée ouverte) après un redémarrage à froid provoqué par l'éviction de l'app en arrière-plan (Edge/Chrome mobile récupèrent la mémoire des onglets/PWA en fond — aucun code ne peut l'empêcher). Garde-fou de fraîcheur : au-delà de 6 h, on repart sur l'accueil.
+function restoreLastView() {
+  try {
+    const v = LS.get('ftr.lastView', null);
+    if (!v || !v.at || (Date.now() - v.at) > 6 * 3600 * 1000) return;
+    if (v.t === 'editor' && v.id) { const t = allTours().find((x) => x.id === v.id); if (t) openTour(t); return; } // la tournée existe encore (même clôturée = ouverte en lecture seule) ; sinon on reste sur l'accueil
+    if (v.t === 'tab' && v.name && v.name !== 'accueil' && $('tab-' + v.name)) showTab(v.name);
+  } catch (e) {}
+}
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
   $('tab-' + name).classList.add('active'); window.scrollTo(0, 0);
+  try { LS.set('ftr.lastView', { t: 'tab', name, at: Date.now() }); } catch (e) {} // mémorise la vue → restaurée si Edge/le navigateur évince l'app en arrière-plan (retour au même endroit)
   const cur = document.querySelector('.tab[data-tab="' + name + '"]');
   if (cur && $('navCurrentLabel')) $('navCurrentLabel').textContent = cur.textContent;
   if ($('mainTabs')) $('mainTabs').classList.remove('open'); // referme le menu déroulant (mobile)
@@ -6674,6 +6691,8 @@ function openEditor() {
   $('edStatus').textContent = '';
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
   $('tab-editeur').classList.add('active'); window.scrollTo(0, 0);
+  try { if (currentTour && currentTour.id) LS.set('ftr.lastView', { t: 'editor', id: currentTour.id, at: Date.now() }); } catch (e) {} // mémorise la tournée ouverte → restaurée à la reprise après éviction en arrière-plan
+
   if (currentTour.result) renderMap(currentTour.result.rows.map((r) => ({ lat: r.lat, lon: r.lon, label: r.label })), homeXY(), currentTour.result.routeGeo, arrivalXY());
   else if (_mapLayer) { _mapLayer.remove(); _mapLayer = null; }
 }
@@ -7019,7 +7038,7 @@ function renderEditorArrets(locked) {
         const rdvInfo = cl.rdvDone ? 'fait ✓' : 'non défini';
         const arrAddr = addrStr(a.addr);
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts ac-hd-row"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-addr-line">📍 ${arrAddr ? esc(arrAddr) : '<i>adresse à définir</i>'}</div><div class="ac-sec"><div class="ac-sec-h">📍 Sur place</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-prets-slot" data-prets-cid="${cl.clientId}"></div></div><hr class="ac-div"/><div class="ac-sec"><div class="ac-sec-h">🔒 Clôture de l'arrêt du client</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-status ${payDoneC ? 'ok' : 'ko'}">💶 Paiement : ${esc(payInfo)}</div><div class="ac-status ${cl.rdvDone ? 'ok' : 'ko'}">📅 RDV : ${esc(rdvInfo)}</div></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts ac-hd-row"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-addr-line">📍 ${arrAddr ? esc(arrAddr) : '<i>adresse à définir</i>'}</div><hr class="ac-div"/><div class="ac-sec"><div class="ac-sec-h">📍 Sur place</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-prets-slot" data-prets-cid="${cl.clientId}"></div></div><hr class="ac-div"/><div class="ac-sec"><div class="ac-sec-h">🔒 Clôture de l'arrêt du client</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-status ${payDoneC ? 'ok' : 'ko'}">💶 Paiement : ${esc(payInfo)}</div><div class="ac-status ${cl.rdvDone ? 'ok' : 'ko'}">📅 RDV : ${esc(rdvInfo)}</div></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         // Tournée CLÔTURÉE : le bloc « actes » (et son badge) n'est pas rendu → on affiche ici un récap LECTURE SEULE des annulations / notes de crédit du client, avec le n° de NC.
         if (locked) {
@@ -14180,7 +14199,7 @@ window.addEventListener('DOMContentLoaded', () => {
   applyBadgeColors(); // couleurs personnalisées des badges
   // Synchro « à la fermeture » : quand l'app passe en arrière-plan ou se ferme, on envoie tout de suite au Drive ce qui attend.
   // (La synchro régulière à chaque frappe a été retirée — trop fréquente ; les données sont de toute façon enregistrées en local.)
-  document.addEventListener('visibilitychange', () => { if (document.hidden) driveSyncOnExit(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { driveSyncOnExit(); try { const v = LS.get('ftr.lastView', null); if (v) { v.at = Date.now(); LS.set('ftr.lastView', v); } } catch (e) {} } }); // au passage en arrière-plan : rafraîchit l'horodatage de la vue → restaurée si l'app est évincée puis reprise
   window.addEventListener('pagehide', driveSyncOnExit);
   const av = $('appVersion'); if (av) av.textContent = 'v' + APP_VERSION;
   const avTop = $('appVerTop'); if (avTop) avTop.textContent = 'v' + APP_VERSION;
@@ -14260,9 +14279,10 @@ window.addEventListener('DOMContentLoaded', () => {
     if (S.syncMode === 'drive' && S.googleAutoSync && S.googleClientId) { bootSyncSet('Synchronisation des données (Google Drive)…'); try { await googleSync(false, $('googleStatus'), false); renderHome(); } catch { /* ignore */ } }
     try { calCatchUp(); } catch (e) {} // L3-3c : rattrapage agenda — pousse les RDV à venir qui n'ont jamais atteint Google (ex. créés sans jeton)
     bootSyncFinish(); // données synchronisées (ou rien à synchroniser) → l'app est pleinement opérationnelle
+    try { restoreLastView(); } catch (e) {} // revient à la dernière vue (onglet/tournée) après une éviction en arrière-plan
     if (S.googleClientId) { try { agendaAutoSync(true); } catch { /* ignore */ } } // agenda : rafraîchissement en fond, non bloquant
     _bootSetupGate(); // APRÈS la synchro Drive : si le Drive contenait déjà la config validée, la fusion a mis setupDone=true → pas de re-demande
-  }).catch(() => { bootSyncFinish(); _bootSetupGate(); });
+  }).catch(() => { bootSyncFinish(); try { restoreLastView(); } catch (e) {} _bootSetupGate(); });
   if ($('btnAddAdresse')) $('btnAddAdresse').addEventListener('click', () => modalAdresse(null));
   if ($('edChangeHome')) $('edChangeHome').addEventListener('click', modalTourHome);
   if ($('edChangeArrivee')) $('edChangeArrivee').addEventListener('click', modalTourArrivee);
