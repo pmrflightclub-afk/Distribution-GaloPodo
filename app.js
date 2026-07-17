@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.79';
+const APP_VERSION = '1.7.80';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.80', date: '2026-07-17',
+    ajouts: [
+      'FICHE CLIENT — nouveau bouton « 📧 Récupérer mail » en haut de la fiche : il pré-remplit les champs VIDES de la fiche (client et cheval) à partir d\'un mail de contact reçu. Les champs déjà remplis ne sont jamais écrasés (cases non cochées par défaut) ; les champs repris sont surlignés en orange. Si la correspondance nom/prénom (ou email) n\'est pas sûre, l\'app affiche la liste des mails et vous choisissez celui de référence.',
+    ],
+  },
   {
     version: '1.7.79', date: '2026-07-17',
     ajouts: [
@@ -5459,6 +5465,7 @@ function renderClients() {
     list.appendChild(el);
   });
 }
+let _recuperMailHilite = null; // labels des champs client pré-remplis au dernier « Récupérer mail » → surlignage orange à la réouverture de la fiche
 function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
   const key = draftKey || ('client:' + (existing ? existing.id : 'new')); // clé de brouillon dédiée (ex. par mail) → pas d'écrasement par le brouillon générique ET les saisies sont conservées d'une réouverture à l'autre
   const draft = DRAFTS.get(key);
@@ -5486,7 +5493,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
   if (w.societeMemeAdresse === undefined) w.societeMemeAdresse = true;
   const saveDraft = () => DRAFTS.set(key, w); // mémorise la saisie en cours
   openModal(`
-    <div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} client</b><button class="x" id="mX">✕</button></div>
+    <div class="modal-head"><b>${existing ? 'Éditer' : 'Nouveau'} client</b>${(S.contactMails && S.contactMails.length) ? '<button class="btn small" id="cRecupMail" style="margin-left:10px">📧 Récupérer mail</button>' : ''}<button class="x" id="mX">✕</button></div>
     ${draft ? '<div class="draft-bar">✏️ Brouillon en cours restauré<button class="btn small" id="cDraftReset">Effacer le brouillon</button></div>' : ''}
     <div class="form-sec">
       <div class="form-sec-h">Contact &amp; société</div>
@@ -5621,7 +5628,28 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
   };
   renderCh();
   updateLegalState();
+  // Récupération mail : surligne en orange les champs client pré-remplis lors du dernier aller-retour.
+  if (_recuperMailHilite && _recuperMailHilite.length) {
+    const idByLabel = { 'Prénom': 'cPrenom', 'Nom': 'cNom', 'Email': 'cEmail', 'Téléphone': 'cTel', 'Société': 'cSociete', 'N° TVA': 'cTvaNum' };
+    let addrHit = false;
+    _recuperMailHilite.forEach((lb) => { const id = idByLabel[lb]; if (id && $(id)) $(id).classList.add('field-recovered'); if (lb === 'Adresse (rue)' || lb === 'Code postal' || lb === 'Localité') addrHit = true; });
+    if (addrHit && $('cAddr')) $('cAddr').classList.add('field-recovered');
+    _recuperMailHilite = null;
+  }
   $('mX').addEventListener('click', closeModal);
+  if ($('cRecupMail')) $('cRecupMail').addEventListener('click', () => {
+    saveDraft(); // fige la saisie en cours avant l'aller-retour de modale
+    const reopen = (applied) => { saveDraft(); _recuperMailHilite = applied || []; editClient(existing, onSaved, prefillNom, prefill, draftKey); };
+    const pick = (mm) => modalUpdateClientFields(mm, w, { onApply: reopen });
+    const mLabel = (mm) => { const nm = mailDisplayName(mm); return nm + (mm.subject ? ' — ' + mm.subject : ''); };
+    const cands = mailsForClient(w);
+    if (cands.length === 1) { pick(cands[0]); return; } // correspondance sûre (email / nom exact) → application directe
+    if (cands.length > 1) { modalActions('Choisir le mail de référence', cands.map((mm) => ({ label: mLabel(mm), onClick: () => pick(mm) }))); return; }
+    // Aucune correspondance sûre : l'utilisateur choisit le mail de référence dans la liste complète.
+    const all = (S.contactMails || []).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    if (!all.length) { alert('Aucun mail de contact reçu.'); return; }
+    modalActions('Aucune correspondance sûre — choisir le mail de référence', all.map((mm) => ({ label: mLabel(mm), onClick: () => pick(mm) })));
+  });
   if (draft && $('cDraftReset')) $('cDraftReset').addEventListener('click', () => { DRAFTS.clear(key); closeModal(); editClient(existing, onSaved, prefillNom, prefill, draftKey); }); // efface le brouillon MAIS repart de l'état pré-rempli (mail) et de la même clé
   $('cPrenom').addEventListener('input', (e) => { w.prenom = e.target.value; saveDraft(); });
   $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
@@ -10542,8 +10570,19 @@ function updateClientFromMail(m) {
   const list = (cand.length ? cand : clients).slice().sort((a, b) => fullName(a).localeCompare(fullName(b)));
   modalActions(cand.length ? 'Quel client mettre à jour ?' : 'Aucune correspondance — choisir le client', list.map((c) => ({ label: fullName(c) + (c.societe ? ' — ' + c.societe : ''), onClick: () => modalUpdateClientFields(m, c) })));
 }
-function modalUpdateClientFields(m, c) {
-  const f = m.fields || {}; const all = [];
+// Mails « contact » correspondant à une fiche client (reprise DEPUIS la fiche) : email OU nom exact (+ prénom compatible s'il est renseigné des deux côtés). Strict = pas de faux positif d'un mail sans rapport.
+function mailsForClient(c) {
+  if (!c) return [];
+  const em = norm(c.email || ''), nm = norm(c.nom || ''), pm = norm(c.prenom || '');
+  return (S.contactMails || []).filter((m) => {
+    if (em && norm(m.from || '') === em) return true;
+    const f = mailFieldsOf(m); const mn = norm(mailField(f, 'Nom')), mp = norm(mailField(f, 'Prénom'));
+    return nm && mn === nm && (!pm || !mp || pm === mp);
+  });
+}
+// opts.onApply(appliedLabels) : mode « fiche » — applique au FORMULAIRE en cours (objet c = brouillon w, non encore enregistré) puis laisse l'appelant rouvrir la fiche, sans lier/enregistrer le mail (la fiche sera enregistrée par l'utilisateur).
+function modalUpdateClientFields(m, c, opts) {
+  const f = mailFieldsOf(m); const all = [];
   const add = (label, cur, val, apply) => { if (val && norm(val) !== norm(cur || '')) all.push({ label, cur: cur || '', val, apply, on: !(cur && String(cur).trim()) }); };
   add('Prénom', c.prenom, mailField(f, 'Prénom'), (v) => c.prenom = v);
   add('Nom', c.nom, mailField(f, 'Nom'), (v) => c.nom = v);
@@ -10574,7 +10613,9 @@ function modalUpdateClientFields(m, c) {
   all.forEach((p, i) => { const row = document.createElement('label'); row.className = 'chk2'; row.style.display = 'block'; row.innerHTML = `<input type="checkbox" data-i="${i}" ${p.on ? 'checked' : ''}/> <b>${esc(p.label)}</b> <span class="li-sub">${p.cur ? esc(p.cur) + ' → ' : ''}${esc(p.val || '')}</span>`; box.appendChild(row); });
   $('mX').addEventListener('click', closeModal);
   $('upOk').addEventListener('click', () => {
-    box.querySelectorAll('[data-i]').forEach((cb) => { if (cb.checked) { const p = all[+cb.dataset.i]; p.apply(p.val); } });
+    const applied = [];
+    box.querySelectorAll('[data-i]').forEach((cb) => { if (cb.checked) { const p = all[+cb.dataset.i]; p.apply(p.val); applied.push(p.label); } });
+    if (opts && opts.onApply) { closeModal(); opts.onApply(applied); return; } // mode fiche : le formulaire est déjà muté, on rouvre la fiche (pas d'enregistrement ni de liaison mail ici)
     saveClients(); reconcileActiveTours(); m.status = 'client'; m.clientId = c.id; m.chevalNom = chNom; saveSettings();
     closeModal(); renderContactMail();
   });

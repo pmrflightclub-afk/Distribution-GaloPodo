@@ -564,6 +564,8 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .draft-bar .btn { flex: none; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0; padding-bottom: 12px; position: sticky; top: 0; background: var(--card); z-index: 4; } /* reste visible pendant le défilement (le ✕ reste accessible) — une seule barre de défilement, celle de la modale */
 .modal-head .x { border: 0; background: transparent; font-size: 1.2rem; color: var(--muted); cursor: pointer; }
+/* Champ pré-rempli par « Récupérer mail » : mis en évidence en orange jusqu'à la prochaine réouverture de la fiche. */
+.field-recovered, .field-recovered input, .field-recovered select { background: #fff3e0 !important; border-color: #fb8c00 !important; }
 
 /* Impression (fiches Compta → PDF) : on n'affiche QUE #printArea (display, pas visibility → pas de pages blanches) */
 #printArea { display: none; }
