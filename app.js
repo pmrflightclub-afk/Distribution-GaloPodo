@@ -11,7 +11,7 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.76';
+const APP_VERSION = '1.7.77';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
@@ -3480,7 +3480,7 @@ function deepMergeTourBody(to, from) {
       if (!tc.heure && fc.heure) tc.heure = fc.heure;
       (fc.chevaux || []).forEach((fcv) => {
         const tcv = (tc.chevaux || []).find((x) => (x.id != null && fcv.id != null && x.id === fcv.id) || (norm(fcv.nom) && norm(x.nom) === norm(fcv.nom)));
-        if (!tcv) { if (!chevalActive(fc.clientId, fcv)) return; (tc.chevaux = tc.chevaux || []).push(JSON.parse(JSON.stringify(fcv))); return; } // cheval présent seulement chez l'autre → AJOUTÉ seulement s'il est ACTIF dans la fiche (sinon = retrait légitime, ne pas ressusciter)
+        if (!tcv) { if (!chevalActive(fc.clientId, fcv)) return; const cliO = clients.find((x) => x.id === fc.clientId); const fiche = cliO && (cliO.chevaux || []).find((x) => (x.id != null && fcv.id != null && x.id === fcv.id) || (norm(fcv.nom) && norm(x.nom) === norm(fcv.nom))); const ovr = (fcv.addrOverride && addrStr(fcv.addrOverride).trim()) ? fcv.addrOverride : null; const raddr = ovr || (fiche ? chevalAddr(cliO, fiche) : null); if (raddr && addrStr(raddr).trim() && norm(addrStr(raddr)) !== norm(addrStr(ta.addr))) return; (tc.chevaux = tc.chevaux || []).push(JSON.parse(JSON.stringify(fcv))); return; } // cheval présent seulement chez l'autre → AJOUTÉ si ACTIF dans la fiche ET si son adresse résolue = celle de CET arrêt (Bug 7 b : jamais réinjecté sur un arrêt qui n'est pas le sien)
         if (tcv.consultMin == null && typeof fcv.consultMin === 'number') tcv.consultMin = fcv.consultMin; // consultation : compléter (les ACTES restent ceux du gagnant → pas de fusion ambiguë de facturation)
         if (!tcv.photo && fcv.photo) tcv.photo = fcv.photo;
         if (fcv.cancel && !tcv.cancel) tcv.cancel = JSON.parse(JSON.stringify(fcv.cancel)); // annulation/report faite sur l'autre appareil → conservée (reconcileTour la préserve à l'ouverture)
@@ -6199,14 +6199,15 @@ function reconcileTour(tour) {
       const actifs = activeChevaux(c);
       if (!actifs.length) { const arr = findOrCreate(c.addr, a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); } (cl.chevaux || []).forEach((cv) => { const hasWork = cv.parage || cv.visite || cv.fourbure || cv.npas || cv.infection || cv.photo || cv.cancel; if (hasWork && !ncl.chevaux.some((x) => (x.id != null && x.id === cv.id) || norm(x.nom) === norm(cv.nom))) ncl.chevaux.push(cv); }); return; } // client sans cheval actif → déplacement seul ; P1-5 : mais on CONSERVE les chevaux portant des actes/photos/annulations déjà saisis (plus de perte silencieuse quand un cheval passe inactif/liste noire pendant la préparation)
       if (!cl.chevaux.length) { // arrêt « déplacement seul » alors que le client a maintenant des chevaux actifs (ex. client créé à la récupération d'un item, chevaux ajoutés depuis) → on les rattache
-        actifs.forEach((h) => { const arr = findOrCreate(chevalAddr(c, h), a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); } if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '' }); });
+        actifs.forEach((h) => { const ra = chevalAddr(c, h); const arr = findOrCreate((ra && addrStr(ra).trim()) ? ra : a.addr, a.type); let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); } if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '' }); });
         return;
       }
       cl.chevaux.forEach((cv) => {
         const h = (c.chevaux || []).find((x) => (cv.id && x.id === cv.id) || norm(x.nom) === norm(cv.nom));
         if (!h) return; // cheval supprimé → retiré
         const ovr = (cv.addrOverride && addrStr(cv.addrOverride).trim()) ? toAddr(cv.addrOverride) : null; // adresse PONCTUELLE (cette tournée) prioritaire sur le défaut du cheval
-        const arr = findOrCreate(ovr || chevalAddr(c, h), a.type); // sinon adresse ACTUELLE du cheval → suit le changement d'adresse
+        const resolved = ovr || chevalAddr(c, h);
+        const arr = findOrCreate((resolved && addrStr(resolved).trim()) ? resolved : a.addr, a.type); // Bug 7 (c) : adresse résolue vide → on GARDE le cheval sur son arrêt courant (pas d'arrêt domicile/vide fantôme). Sinon adresse ACTUELLE du cheval.
         let ncl = arr.clients.find((x) => x.clientId === cl.clientId); if (!ncl) { ncl = { clientId: cl.clientId, chevaux: [], heure: cl.heure || '', ...(cl.heureStale ? { heureStale: true } : {}) }; arr.clients.push(ncl); }
         if (!ncl.chevaux.some((x) => (x.id && x.id === h.id) || norm(x.nom) === norm(h.nom))) ncl.chevaux.push({ id: h.id, nom: h.nom, fourbure: !!cv.fourbure, npas: !!cv.npas, infection: !!cv.infection, parage: !!cv.parage, heure: cv.heure || '', present: cv.present, visite: !!cv.visite, visiteArtId: cv.visiteArtId || null, cancel: cv.cancel || null, parageOffert: !!cv.parageOffert, visiteOffert: !!cv.visiteOffert, fourbureOffert: !!cv.fourbureOffert, npasOffert: !!cv.npasOffert, infectionOffert: !!cv.infectionOffert, photo: cv.photo || null, difficile: !!cv.difficile, difficileHT: cv.difficileHT, difficileOffert: !!cv.difficileOffert, consultMin: cv.consultMin, ...(cv.addrOverride ? { addrOverride: cv.addrOverride } : {}) });
       });
@@ -6633,7 +6634,7 @@ function chevalEditAddr(h) {
 const chevalAddrSrc = (h) => h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
 const chevalAddr = (c, h) => {
   const src = chevalAddrSrc(h);
-  if (src === 'specifique') { const ea = chevalActiveAddrEntry(h); if (ea && addrStr(ea.addr).trim()) return ea.addr; return addrStr(h.addr) ? h.addr : c.addr; }
+  if (src === 'specifique') { const ea = chevalActiveAddrEntry(h); if (ea && addrStr(ea.addr).trim()) return ea.addr; return addrStr(h.addr) ? h.addr : emptyAddr(); } // Bug 7 (a) : un cheval « spécifique » SANS adresse renvoie « non défini » (adresse vide) — il ne bascule PLUS sur le domicile du client (sinon arrêt domicile fantôme)
   if (src === 'societe') return societeAddrOf(c);
   return c.addr;
 };
