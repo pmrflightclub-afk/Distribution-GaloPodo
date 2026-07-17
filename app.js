@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.73';
+const APP_VERSION = '1.7.74';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.74', date: '2026-07-17',
+    ajouts: [
+      'ÉDITEUR — les boutons « Exporter cette tournée » et « Rejouer » ont été retirés de la page d\'une tournée (reliquats de la phase de test). L\'export global et la réinjection/le rejeu restent disponibles dans Réglages → Sauvegarde et Réglages → Synchro.',
+    ],
+  },
   {
     version: '1.7.73', date: '2026-07-17',
     ajouts: [
@@ -14148,8 +14154,6 @@ window.addEventListener('DOMContentLoaded', () => {
   if ($('edActes')) $('edActes').addEventListener('click', () => { if (currentTour) modalEditPrestations(currentTour); });
   if ($('edCancelBill')) $('edCancelBill').addEventListener('click', () => { if (currentTour) modalCancelBilling(currentTour); });
   $('edDelete').addEventListener('click', () => { if (confirm('Supprimer définitivement cette tournée ? (sa facture, ses stats, ses impayés et notes de crédit liés sont aussi retirés)')) { clearTimeout(_geoTimer); const id = currentTour.id; currentTour = null; deleteTourById(id); showTab('tournees'); } }); // M3 : deleteTourById = purge complète + sauvegarde de sécurité si clôturée
-  if ($('edExport')) $('edExport').addEventListener('click', () => { if (currentTour) exportTourFile(currentTour); });
-  if ($('edReplay')) $('edReplay').addEventListener('click', () => { if (currentTour) replayTour(currentTour); });
   $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(recapText(currentTour.result)); $('edStatus').className = 'status ok'; $('edStatus').textContent = 'Récap copié.'; } catch { $('edStatus').textContent = 'Copie impossible.'; } });
 
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
