@@ -209,12 +209,18 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 .li-act-badge { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 4px; }
 .btn.pret-on { border-color: var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--card)); }
 .rdv-patho .rdv-ch-opt { margin-left: -10px; } /* Maintenir/Arrêter collés au bord gauche malgré l'indentation de la section */
-.ac-ecurie { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
+.ac-ecurie { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-top: 4px; }
 .ac-ecurie .li-sub { flex: 1 1 auto; min-width: 0; }
 .ac-ecurie .btn { flex: none; }
-.ac-stbtns { flex: none; margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; } /* « Refuser ce lieu » / « Marquer inactif » empilés, alignés à droite */
+.ac-stbtns { display: flex; flex-direction: row; gap: 4px; } /* Refuser / Inactif côte à côte, SOUS « Définir par défaut » */
 .ac-hist { opacity: .7; }
 .ac-hist .li-sub { font-style: italic; }
+/* Sous-sections d'adresses (Autres actives / Inactives / Liste noire) — indentées sous le client */
+.ac-subsec { margin: 8px 0 0 10px; padding-left: 8px; border-left: 2px solid var(--line); }
+.ac-subsec-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); font-weight: 700; margin: 4px 0 2px; }
+.ac-default .li-sub { font-weight: 600; }
+/* Colonne d'actions d'une sous-adresse : « ⭐ Définir par défaut » AU-DESSUS de Refuser/Inactif */
+.ac-defcol { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .btn.pl-red { border-color: var(--danger); color: #fff; background: var(--danger); }
 .btn.pl-orange { border-color: var(--warn); color: #fff; background: var(--warn); }
 .btn.pl-green { border-color: var(--ok, #2e9e5b); color: #fff; background: var(--ok, #2e9e5b); }
@@ -364,6 +370,9 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .aw-item { padding: 10px; font-size: .82rem; border-bottom: 1px solid var(--line); cursor: pointer; }
 .aw-item:last-child { border-bottom: 0; }
 .aw-item:active { background: var(--bg); }
+.aw-status { font-size: .78rem; font-weight: 600; margin-top: 2px; }
+.aw-status.ok { color: var(--ok, #2e9e5b); }
+.aw-status.ko { color: var(--danger); }
 /* Carte */
 .map { height: 260px; border-radius: 10px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); position: relative; z-index: 0; }
 .leaflet-container { font: inherit; }

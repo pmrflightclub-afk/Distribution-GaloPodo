@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.77';
+const APP_VERSION = '1.7.78';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.78', date: '2026-07-17',
+    ajouts: [
+      'ADRESSES — correction : un cheval avec une adresse d\'écurie ne se retrouve plus par erreur AUSSI à l\'adresse domicile du client (fini l\'arrêt domicile fantôme, y compris après synchronisation entre appareils).',
+      'ADRESSES CHEVAUX — page réorganisée : l\'adresse PAR DÉFAUT (utilisée pour créer les arrêts) est affichée au niveau du client ; les autres adresses actives sont indentées avec « ⭐ Définir par défaut » (au-dessus de Refuser/Inactif) ; les adresses inactives et anciennes, et la liste noire, sont dans des sous-sections séparées (elles ne polluent plus les adresses actives).',
+      'ADRESSES — validation par géolocalisation : une adresse affiche « ✅ validée » ou « ⚠ non validée » ; en quittant le champ, l\'app tente de la géolocaliser. Seules les adresses géolocalisées (choisies dans les suggestions) sont fiables.',
+    ],
+  },
   {
     version: '1.7.76', date: '2026-07-17',
     ajouts: [
@@ -4620,9 +4628,15 @@ function mountAddress(container, addr, onChange) {
   container.innerHTML = `
     <div class="row"><label class="grow af" style="flex:3">Rue<input class="aw-rue" value="${esc(addr.rue)}" autocomplete="off"/></label><label style="flex:1">N°<input class="aw-num" value="${esc(addr.numero)}" autocomplete="off"/></label></div>
     <div class="row"><label class="af" style="flex:1">Code postal<input class="aw-cp" value="${esc(addr.cp)}" autocomplete="off"/></label><label class="grow af" style="flex:2">Localité<input class="aw-loc" value="${esc(addr.localite)}" autocomplete="off"/></label></div>
-    <label>Pays<select class="aw-pays">${opt('be', 'Belgique')}${opt('fr', 'France')}${opt('lu', 'Luxembourg')}</select></label>`;
-  const el = { rue: container.querySelector('.aw-rue'), numero: container.querySelector('.aw-num'), cp: container.querySelector('.aw-cp'), localite: container.querySelector('.aw-loc'), pays: container.querySelector('.aw-pays') };
-  const emit = () => { addr.rue = el.rue.value; addr.numero = el.numero.value; addr.cp = el.cp.value; addr.localite = el.localite.value; addr.pays = el.pays.value; onChange && onChange(addr); };
+    <label>Pays<select class="aw-pays">${opt('be', 'Belgique')}${opt('fr', 'France')}${opt('lu', 'Luxembourg')}</select></label>
+    <div class="aw-status"></div>`;
+  const el = { rue: container.querySelector('.aw-rue'), numero: container.querySelector('.aw-num'), cp: container.querySelector('.aw-cp'), localite: container.querySelector('.aw-loc'), pays: container.querySelector('.aw-pays'), status: container.querySelector('.aw-status') };
+  // Statut de VALIDATION : une adresse n'est valide que GÉOLOCALISÉE (lat/lon issus d'une suggestion ou du géocodage). Une adresse tapée en texte et introuvable n'est PAS validée.
+  const updateStatus = () => { if (!el.status) return; const hasTxt = addrStr(addr).trim(); if (!hasTxt) { el.status.textContent = ''; el.status.className = 'aw-status'; } else if (addr.lat != null && addr.lon != null) { el.status.textContent = '✅ Adresse validée (géolocalisée)'; el.status.className = 'aw-status ok'; } else { el.status.textContent = '⚠ Adresse non validée — choisissez une suggestion (seules les adresses géolocalisées sont acceptées)'; el.status.className = 'aw-status ko'; } };
+  let geoBusy = false;
+  const tryGeocode = async () => { if (geoBusy || !addrStr(addr).trim() || (addr.lat != null && addr.lon != null)) { updateStatus(); return; } geoBusy = true; if (el.status) { el.status.textContent = '⏳ Vérification de l\'adresse…'; el.status.className = 'aw-status'; } try { const g = await geocode(addr); addr.lat = g.lat; addr.lon = g.lon; onChange && onChange(addr); } catch (e) { addr.lat = null; addr.lon = null; } geoBusy = false; updateStatus(); };
+  container.addEventListener('focusout', () => setTimeout(() => { if (!container.contains(document.activeElement)) tryGeocode(); }, 200)); // à la sortie du widget → géocode automatiquement ; valide si trouvé, sinon reste « non validée »
+  const emit = () => { addr.rue = el.rue.value; addr.numero = el.numero.value; addr.cp = el.cp.value; addr.localite = el.localite.value; addr.pays = el.pays.value; onChange && onChange(addr); updateStatus(); };
   if (el.pays) el.pays.addEventListener('change', () => { addr.pays = el.pays.value; addr.lat = null; addr.lon = null; emit(); }); // changer le pays → nouvelle recherche possible
   // Choix d'une proposition (depuis n'importe quel champ) : remplit rue + N° + CP + localité (garde l'ancien si la proposition ne fournit pas le champ).
   const fill = (s) => {
@@ -4632,10 +4646,11 @@ function mountAddress(container, addr, onChange) {
     addr.localite = s.localite || addr.localite;
     addr.lat = s.lat; addr.lon = s.lon;
     el.rue.value = addr.rue; el.numero.value = addr.numero; el.cp.value = addr.cp; el.localite.value = addr.localite;
-    onChange && onChange(addr);
+    onChange && onChange(addr); updateStatus();
   };
   el.numero.addEventListener('input', () => { addr.lat = null; addr.lon = null; emit(); });
   attachAuto(el.rue, 'street', addr, fill, emit); attachAuto(el.cp, 'postcode', addr, fill, emit); attachAuto(el.localite, 'city', addr, fill, emit);
+  updateStatus();
   return addr;
 }
 
@@ -5723,25 +5738,25 @@ function renderChevAddresses() {
   shown.forEach((e) => {
     const c = e.client, st = clientState(c);
     const badge = st === 'noir' ? ' <span class="badge badge-noir">liste noire</span>' : st === 'inactif' ? ' <span class="badge">inactif</span>' : '';
-    const specInputs = [], addrList = [], groupList = []; let body = '';
-    e.addrs.forEach((grp) => {
-      const chNoms = grp.chevaux.map((x) => x.h.nom || 'cheval').join(', ');
-      const gi = addrList.length; addrList.push(grp.addr); groupList.push(grp); const stA = addrStatusOf(grp.addr);
-      const bdg = stA === 'noir' ? ' <span class="badge badge-noir">⛔ lieu refusé</span>' : stA === 'inactif' ? ' <span class="badge">💤 lieu inactif</span>' : '';
-      const allActive = grp.chevaux.length && grp.chevaux.every((x) => x.actif);
-      // Adresse par défaut (active) du/des cheval(aux) : badge si déjà par défaut, sinon bouton pour la définir (par cheval).
-      const defBtn = allActive ? '<span class="badge">⭐ par défaut</span>' : `<button class="btn small" data-def="${gi}">⭐ Définir par défaut</button>`;
-      if (grp.hist) { // ancienne adresse (déménagement) — conservée en mémoire, réactivable comme adresse par défaut
-        body += `<div class="ac-ecurie ac-hist"><div class="li-sub">🕘 ${esc(addrStr(grp.addr))} <span class="badge">ancienne adresse</span>${bdg} · 🐴 ${esc(chNoms)}</div><div class="ac-stbtns">${defBtn}</div>${stBtns(gi, grp.addr)}</div>`;
-        return;
-      }
-      body += `<div class="ac-ecurie"><div class="li-sub">${allActive ? '⭐' : '📍'} ${esc(addrStr(grp.addr))}${bdg} · 🐴 ${esc(chNoms)}</div><div class="ac-stbtns">${defBtn}</div>${stBtns(gi, grp.addr)}</div>`;
-      grp.chevaux.filter((x) => chevalAddrSrc(x.h) === 'specifique' && !x.h.addrPrivee).forEach((x) => { const idx = specInputs.length; specInputs.push({ h: x.h, addr: grp.addr }); body += `<label class="ac-nom"><span class="li-sub">🐴 ${esc(x.h.nom || 'cheval')} — nom de l'adresse</span><input type="text" data-nom="${idx}" value="${esc(addrNomForAddr(x.h, grp.addr))}" placeholder="ex. Écurie du Nord"/></label>`; });
-    });
+    const specInputs = [], addrList = [], groupList = [];
+    const reg = (grp) => { const i = addrList.length; addrList.push(grp.addr); groupList.push(grp); return i; };
+    const chNomsOf = (grp) => grp.chevaux.map((x) => x.h.nom || 'cheval').join(', ');
+    const nomInputs = (grp) => grp.chevaux.filter((x) => chevalAddrSrc(x.h) === 'specifique' && !x.h.addrPrivee).map((x) => { const idx = specInputs.length; specInputs.push({ h: x.h, addr: grp.addr }); return `<label class="ac-nom"><span class="li-sub">🐴 ${esc(x.h.nom || 'cheval')} — nom de l'adresse</span><input type="text" data-nom="${idx}" value="${esc(addrNomForAddr(x.h, grp.addr))}" placeholder="ex. Écurie du Nord"/></label>`; }).join('');
+    const isDefault = (grp) => grp.chevaux.length && grp.chevaux.some((x) => x.actif);
+    // Tri par STATUT DE LIEU : actives (dont défaut) · inactives (statut inactif OU ancienne adresse) · liste noire — les inactives/LN ne polluent plus l'indentation active.
+    const actives = [], inactives = [], noirs = [];
+    e.addrs.forEach((grp) => { const stA = addrStatusOf(grp.addr); if (stA === 'noir') noirs.push(grp); else if (stA === 'inactif' || grp.hist) inactives.push(grp); else actives.push(grp); });
+    const defaults = actives.filter(isDefault), otherActive = actives.filter((g) => !isDefault(g));
+    let body = '';
+    defaults.forEach((grp) => { reg(grp); body += `<div class="ac-ecurie ac-default"><div class="li-sub">⭐ ${esc(addrStr(grp.addr)) || '<i>adresse ?</i>'} <span class="badge">par défaut</span> · 🐴 ${esc(chNomsOf(grp))}</div></div>${nomInputs(grp)}`; }); // adresse PAR DÉFAUT au niveau de l'item (utilisée pour créer les arrêts)
+    if (!defaults.length) body += '<div class="li-sub" style="color:var(--danger)">⚠ Aucune adresse par défaut active — à définir.</div>';
+    if (otherActive.length) { body += '<div class="ac-subsec"><div class="ac-subsec-h">Autres adresses actives</div>'; otherActive.forEach((grp) => { const i = reg(grp); body += `<div class="ac-ecurie ac-indent"><div class="li-sub">📍 ${esc(addrStr(grp.addr))} · 🐴 ${esc(chNomsOf(grp))}</div><div class="ac-defcol"><button class="btn small" data-def="${i}">⭐ Définir par défaut</button>${stBtns(i, grp.addr)}</div></div>${nomInputs(grp)}`; }); body += '</div>'; }
+    if (inactives.length) { body += '<div class="ac-subsec"><div class="ac-subsec-h">💤 Inactives</div>'; inactives.forEach((grp) => { const i = reg(grp); body += `<div class="ac-ecurie ac-indent item-off"><div class="li-sub">🕘 ${esc(addrStr(grp.addr))}${grp.hist ? ' <span class="badge">ancienne</span>' : ''} · 🐴 ${esc(chNomsOf(grp))}</div><div class="ac-defcol"><button class="btn small" data-def="${i}">⭐ Définir par défaut</button>${stBtns(i, grp.addr)}</div></div>`; }); body += '</div>'; }
+    if (noirs.length) { body += '<div class="ac-subsec"><div class="ac-subsec-h">⛔ Liste noire</div>'; noirs.forEach((grp) => { const i = reg(grp); body += `<div class="ac-ecurie ac-indent item-off"><div class="li-sub">⛔ ${esc(addrStr(grp.addr))} · 🐴 ${esc(chNomsOf(grp))}</div><div class="ac-defcol">${stBtns(i, grp.addr)}</div></div>`; }); body += '</div>'; }
     const el = document.createElement('div'); el.className = 'list-item stack-act' + (st !== 'actif' ? ' item-off' : '');
     el.innerHTML = `<div class="li-main"><b>👤 ${esc(fullName(c))}${c.societe ? ' — ' + esc(c.societe) : ''}${badge}</b>${body}</div>`;
-    wireSt(el, addrList); // statut de LIEU (liste noire / inactif), séparé du statut client — actuelles ET anciennes adresses
-    el.querySelectorAll('[data-def]').forEach((b) => b.addEventListener('click', () => { const grp = groupList[+b.dataset.def]; if (!grp) return; grp.chevaux.forEach((x) => setChevalDefaultAddr(x.h, grp.addr)); saveClients(); reconcileActiveTours(); renderChevAddresses(); })); // définir par défaut (par cheval) → répercute sur les tournées en cours
+    wireSt(el, addrList);
+    el.querySelectorAll('[data-def]').forEach((b) => b.addEventListener('click', () => { const grp = groupList[+b.dataset.def]; if (!grp) return; grp.chevaux.forEach((x) => setChevalDefaultAddr(x.h, grp.addr)); saveClients(); reconcileActiveTours(); renderChevAddresses(); }));
     el.querySelectorAll('[data-nom]').forEach((inp) => { const it = specInputs[+inp.dataset.nom]; inp.addEventListener('input', (ev) => { setAddrNomForAddr(it.h, it.addr, ev.target.value); saveClients(); }); inp.addEventListener('change', () => renderChevAddresses()); });
     box.appendChild(el);
   });
