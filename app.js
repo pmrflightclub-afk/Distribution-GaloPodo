@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.67';
+const APP_VERSION = '1.7.68';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.68', date: '2026-07-17',
+    ajouts: [
+      'INTERNE (socle) — nouveau modèle de note de crédit : 1 NC par client et par date de tournée, avec un numéro et le détail par cheval/prestation, et la possibilité d\'y inclure le déplacement. Prépare la refonte de « Annuler une facturation ». Aucun changement visible pour l\'instant.',
+    ],
+  },
   {
     version: '1.7.67', date: '2026-07-17',
     ajouts: [
@@ -8534,13 +8540,13 @@ function comptaData(ym) {
   const ncTTC = ncMonth.filter((n) => !n.documentaire).reduce((s, n) => s + (n.montantTTC || 0), 0);
   const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
   // F2 : extourne des avoirs ventilée selon la COMPOSITION RÉELLE de CHAQUE cheval crédité (main d'œuvre = articles/actes, matériel), le DÉPLACEMENT restant acquis (jamais crédité). → provisions/sous-comptes PRÉCIS, plus un ratio mensuel approximatif.
-  let ncMO = 0, ncMat = 0, ncTVA = 0;
-  ncMonth.filter((n) => !n.documentaire).forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncTVA += b.tva; });
+  let ncMO = 0, ncMat = 0, ncDep = 0, ncTVA = 0;
+  ncMonth.filter((n) => !n.documentaire).forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncDep += b.depHT || 0; ncTVA += b.tva; }); // déplacement crédité (facture/virement) extourné aussi
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
     liquidePosts: Object.values(posts), liquideDetail: postDetail, liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
     factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
     notesCredit: ncMonth, notesCreditTotal, offertTTC: offertM, remiseTTC: remiseM,
-    baseMainOeuvreHT: Math.max(0, baseMO - ncMO), baseMaterielHT: Math.max(0, baseMat - ncMat), baseDeplacementHT: baseDep, tvaCollectee: Math.max(0, tvaCol - ncTVA) };
+    baseMainOeuvreHT: Math.max(0, baseMO - ncMO), baseMaterielHT: Math.max(0, baseMat - ncMat), baseDeplacementHT: Math.max(0, baseDep - ncDep), tvaCollectee: Math.max(0, tvaCol - ncTVA) };
 }
 // ================= F-b : moteur de provisions analytiques =================
 // Garde-fou : l'analytique ne lit QUE les mois « figés » = démarche liquide encodée (S.comptaStatus[ym].liquide === 'encode').
@@ -9350,6 +9356,8 @@ function renderComptaImpayes() {
   });
 }
 // Sous-onglet Compta « Notes de crédit » : à rembourser (virement) / remboursées ; PDF + marquage figé.
+// Description du contenu d'une NC : nouveau modèle = lignes (cheval — prestation) ; ancien = 1 cheval.
+function ncContentText(n) { if (n.lignes && n.lignes.length) return n.lignes.map((l) => (l.chevalNom ? l.chevalNom + ' — ' : '') + (l.label || '')).join(' · '); return n.chevalNom || ''; }
 function renderComptaNC() {
   const pend = $('ncPending'), done = $('ncDone'); if (!pend || !done) return;
   pend.innerHTML = ''; done.innerHTML = '';
@@ -9362,7 +9370,7 @@ function renderComptaNC() {
   const row = (n, isDone) => {
     const el = document.createElement('div'); el.className = 'list-item stack-act';
     const sent = n.sentAt ? ' · <span class="badge">📧 envoyé le ' + esc(fmtDateFr(n.sentAt)) + '</span>' : '';
-    el.innerHTML = `<div class="li-main"><b>Note de crédit · ${esc(n.clientNom)}</b> <b class="li-amount">${eur(n.montantTTC)}</b><span class="li-sub">🐴 ${esc(n.chevalNom)} · RDV du ${esc(fmtDateFr(n.tourDate))} · émise le ${esc(fmtDateFr(n.date))} · motif ${n.motif === 'pro' ? 'pro' : 'client'}${n.rembourse ? ' · remboursée le ' + esc(fmtDateFr(n.rembourseAt)) : ''}${sent}</span></div><div class="li-act li-act-col"><button class="btn small${n.sentAt ? ' done' : ' primary'}" data-mail>📧 Email${n.sentAt ? ' ✓' : ''}</button><button class="btn small" data-pdf>🖨 PDF</button>${isDone ? '' : ' <button class="btn small" data-rmb>✓ Remboursée</button>'}</div>`;
+    el.innerHTML = `<div class="li-main"><b>Note de crédit${n.numero ? ' #' + n.numero : ''} · ${esc(n.clientNom)}</b> <b class="li-amount">${eur(n.montantTTC)}</b><span class="li-sub">🐴 ${esc(ncContentText(n))} · RDV du ${esc(fmtDateFr(n.tourDate))} · émise le ${esc(fmtDateFr(n.date))} · motif ${n.motif === 'pro' ? 'pro' : 'client'}${n.rembourse ? ' · remboursée le ' + esc(fmtDateFr(n.rembourseAt)) : ''}${sent}</span></div><div class="li-act li-act-col"><button class="btn small${n.sentAt ? ' done' : ' primary'}" data-mail>📧 Email${n.sentAt ? ' ✓' : ''}</button><button class="btn small" data-pdf>🖨 PDF</button>${isDone ? '' : ' <button class="btn small" data-rmb>✓ Remboursée</button>'}</div>`;
     const cli = clients.find((x) => x.id === n.clientId);
     el.querySelector('[data-mail]').addEventListener('click', () => { if (!(cli && cli.email) && !confirm('Ce client n\'a pas d\'adresse email en fiche. Continuer quand même ?')) return; sendClientDoc(cli, ncPdfBlob(n), 'note-credit-' + norm(n.clientNom).replace(/\s+/g, '-') + '.pdf', 'note de crédit', () => { n.sentAt = todayStr(); saveSettings(); renderComptaNC(); }); });
     el.querySelector('[data-pdf]').addEventListener('click', () => creditNotePdf(n));
@@ -9374,13 +9382,14 @@ function renderComptaNC() {
 }
 // PDF d'une note de crédit (à imprimer/envoyer au client).
 function creditNotePdf(n) {
-  const r = rate(); const ht = n.montantTTC / (1 + r);
-  printHtml('Note de crédit — ' + n.clientNom, `<h1>Note de crédit</h1>
+  const r = rate();
+  const lignes = (n.lignes && n.lignes.length) ? n.lignes : [{ chevalNom: n.chevalNom, label: 'Avoir (annulation de prestation)', ht: n.montantTTC / (1 + r), tva: n.montantTTC - n.montantTTC / (1 + r), ttc: n.montantTTC }];
+  const rows = lignes.map((l) => { const ht = (l.moHT != null || l.matHT != null || l.depHT != null) ? ((l.moHT || 0) + (l.matHT || 0) + (l.depHT || 0)) : (l.ht != null ? l.ht : (l.ttc || 0) / (1 + r)); const tva = (l.tva != null) ? l.tva : ((l.ttc || 0) - ht); return `<tr><td>${esc((l.chevalNom ? '🐴 ' + l.chevalNom + ' — ' : '') + (l.label || ''))}</td><td>${eur(ht)}</td><td>${eur(tva)}</td><td>${eur(l.ttc || 0)}</td></tr>`; }).join('');
+  printHtml('Note de crédit — ' + n.clientNom, `<h1>Note de crédit${n.numero ? ' #' + n.numero : ''}</h1>
     <h2>${esc(n.clientNom)} — émise le ${esc(fmtDateFr(n.date))}</h2>
-    <p>Annulation du RDV du <b>${esc(fmtDateFr(n.tourDate))}</b> — cheval <b>${esc(n.chevalNom)}</b>.</p>
-    <table><thead><tr><th>Libellé</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead>
-    <tbody><tr><td>Avoir (annulation de prestation)</td><td>${eur(ht)}</td><td>${eur(n.montantTTC - ht)}</td><td>${eur(n.montantTTC)}</td></tr></tbody></table>
-    <h2 style="margin-top:12px">Montant à rembourser par virement : ${eur(n.montantTTC)} TTC</h2>`);
+    <p>Annulation de prestations — RDV du <b>${esc(fmtDateFr(n.tourDate))}</b>.</p>
+    <table><thead><tr><th>Prestation</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${rows}</tbody></table>
+    <h2 style="margin-top:12px">Montant de l'avoir : ${eur(n.montantTTC)} TTC${n.rembourse ? '' : ' — à rembourser par virement'}</h2>`);
 }
 // PDF (Blob) d'une facture d'impayé — ne contient QUE les données de ce client (confidentialité).
 function impayePdfBlob(c, im) {
@@ -9403,7 +9412,7 @@ function ncPdfBlob(n) {
     { text: 'Note de crédit (avoir)', size: 20, bold: true, gap: 30 },
     { text: n.clientNom, size: 13, bold: true, gap: 18 },
     { text: 'Emise le ' + fmtDateFr(n.date), size: 11, gap: 24 },
-    { text: 'Annulation du RDV du ' + fmtDateFr(n.tourDate) + ' - cheval ' + n.chevalNom, size: 12, gap: 26 },
+    { text: 'Annulation du RDV du ' + fmtDateFr(n.tourDate) + ' - ' + ncContentText(n), size: 12, gap: 26 },
     { text: 'Avoir HT : ' + eur(ht), gap: 16 },
     { text: 'TVA : ' + eur(n.montantTTC - ht), gap: 16 },
     { text: 'Montant a rembourser TTC : ' + eur(n.montantTTC), size: 14, bold: true },
@@ -9451,7 +9460,7 @@ function comptaSectionsHtml(ym) {
   const liqDem = archived && statusOfKind('liquide') === 'encode';
   const liquideStatus = archived ? `<label>Démarche comptable (caisse du mois)<select data-status="liquide" data-ym="${ym}"><option value="attente"${statusOfKind('liquide') === 'attente' ? ' selected' : ''}>En attente de démarche</option><option value="encode"${statusOfKind('liquide') === 'encode' ? ' selected' : ''}>Démarche effectuée (encodée)</option></select></label>` : '';
   const liquideSec = `<section class="card"><div class="card-head"><h3 style="margin:0">💶 Liquide (globalisé)</h3><span style="display:flex;gap:6px"><button class="btn small" data-detail="liquide" data-ym="${ym}">🔍 Détail</button><button class="btn small" data-print="liquide" data-ym="${ym}">🖨 PDF</button></span></div><p class="hint">${tot(d.liquideTotal)}</p><div${liqDem ? ' style="opacity:.45;pointer-events:none"' : ''}>${postTbl(d.liquidePosts)}</div>${liquideStatus}</section>`;
-  const ncTbl = d.notesCredit.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Cheval</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucune.</p>';
+  const ncTbl = d.notesCredit.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Cheval</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(ncContentText(n))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucune.</p>';
   const ncSec = `<section class="card"><div class="card-head"><h3 style="margin:0">↩ Notes de crédit (réduction du CA)</h3><button class="btn small" data-print="nc" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.notesCreditTotal)}</p>${ncTbl}</section>`;
   const orSec = ((d.offertTTC || 0) >= 0.005 || (d.remiseTTC || 0) >= 0.005) ? `<section class="card"><div class="card-head"><h3 style="margin:0">🎁 Offert / Remises du mois</h3></div><p class="hint">Offert : <b>${eur(d.offertTTC)}</b> TTC · Remises accordées : <b>${eur(d.remiseTTC)}</b> TTC. Valeur commerciale consentie — <b>info hors chiffre d'affaires</b> (déjà déduite des montants facturés).</p></section>` : '';
   return liquideSec
@@ -9510,7 +9519,7 @@ function comptaPrint(ym, k) {
   else if (k === 'virement') printHtml('Virements — ' + ml, detailPdf(d.virementClients, d.virementTotal, 'Virements bancaires — détail', ml + ' — par client et par cheval', 'Aucun virement ce mois.'));
   else if (k === 'facliq') printHtml('Factures pro liquide — ' + ml, detailPdf(d.factureLiqClients, d.factureLiqTotal, 'Factures pro payées en liquide', ml + ' — par client et par cheval', 'Aucune facture liquide ce mois.'));
   else if (k === 'facvir') printHtml('Factures pro virement — ' + ml, detailPdf(d.factureVirClients, d.factureVirTotal, 'Factures pro payées par virement', ml + ' — par client et par cheval', 'Aucune facture virement ce mois.'));
-  else if (k === 'nc') printHtml('Notes de crédit — ' + ml, `<h1>Notes de crédit (avoirs)</h1><h2>${ml} — réduction du chiffre d'affaires</h2>` + (d.notesCredit.length ? `<table><thead><tr><th>Client</th><th>Cheval</th><th>Émise le</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>${esc(fmtDateFr(n.date))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Total</td><td></td><td></td><td>${eur(d.notesCreditTotal.ttc)}</td></tr></tfoot></table>` : '<p>Aucune note de crédit ce mois.</p>'));
+  else if (k === 'nc') printHtml('Notes de crédit — ' + ml, `<h1>Notes de crédit (avoirs)</h1><h2>${ml} — réduction du chiffre d'affaires</h2>` + (d.notesCredit.length ? `<table><thead><tr><th>Client</th><th>Cheval</th><th>Émise le</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(ncContentText(n))}</td><td>${esc(fmtDateFr(n.date))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Total</td><td></td><td></td><td>${eur(d.notesCreditTotal.ttc)}</td></tr></tfoot></table>` : '<p>Aucune note de crédit ce mois.</p>'));
 }
 // PDF « complet » : toutes les sections (Liquide · Virements · Factures pro · Notes de crédit) sur la période sélectionnée (mois/trimestre/semestre/année), détail par mois + récap de plage.
 function comptaPrintFull(type, key) {
@@ -9521,7 +9530,7 @@ function comptaPrintFull(type, key) {
   const foot = (tt) => `<tfoot><tr><td>Total</td><td>${eur(tt.ht)}</td><td>${eur(tt.tva)}</td><td>${eur(tt.ttc)}</td></tr></tfoot>`;
   const postTbl = (arr) => arr.length ? `<table><thead><tr><th>Poste</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((x) => `<tr><td>${esc(x.libelle)}</td><td>${eur(x.ht)}</td><td>${eur(x.tva)}</td><td>${eur(x.ttc)}</td></tr>`).join('')}</tbody>${foot(sum(arr))}</table>` : '<p>Aucun.</p>';
   const cliTbl = (arr) => arr.length ? `<table><thead><tr><th>Client</th><th>HT</th><th>TVA</th><th>TTC</th></tr></thead><tbody>${arr.map((e) => `<tr><td>${esc(e.nom)}</td><td>${eur(e.ht)}</td><td>${eur(e.tva)}</td><td>${eur(e.ttc)}</td></tr>`).join('')}</tbody>${foot(sum(arr))}</table>` : '<p>Aucun.</p>';
-  const ncTbl = (arr) => arr.length ? `<table><thead><tr><th>Client</th><th>Cheval</th><th>Émise le</th><th>TTC</th></tr></thead><tbody>${arr.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(n.chevalNom)}</td><td>${esc(fmtDateFr(n.date))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table>` : '<p>Aucune.</p>';
+  const ncTbl = (arr) => arr.length ? `<table><thead><tr><th>Client</th><th>Cheval</th><th>Émise le</th><th>TTC</th></tr></thead><tbody>${arr.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(ncContentText(n))}</td><td>${esc(fmtDateFr(n.date))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table>` : '<p>Aucune.</p>';
   const gt = months.reduce((a, m) => { const d = comptaData(m); a.liq += d.liquideTotal.ttc; a.vir += d.virementTotal.ttc; a.fac += d.factureLiqTotal.ttc + d.factureVirTotal.ttc; a.nc += d.notesCreditTotal.ttc; return a; }, { liq: 0, vir: 0, fac: 0, nc: 0 });
   let body = `<h1>Déclaration comptable — ${esc(perLabel)}</h1><h2>Toutes les sections (TTC)</h2>
     <table><thead><tr><th>Récapitulatif de la plage</th><th>TTC</th></tr></thead><tbody>
@@ -12472,10 +12481,10 @@ function chevalCancelItems(tour, clientId, cvNom) {
 function cancelItemsSplit(items) { const s = { moHT: 0, matHT: 0, tva: 0, ttc: 0 }; (items || []).forEach((it) => { s.tva += it.tva || 0; s.ttc += it.ttc || 0; s.matHT += it.matHT || 0; s.moHT += (it.ht || 0) - (it.matHT || 0); }); return s; }
 // Extourne d'un avoir ventilée : depuis le découpage figé sur l'avoir (moHT/matHT/tva), sinon recalculé depuis la tournée+cheval, sinon repli (tout en main d'œuvre).
 function ncBreakdown(n) {
-  if (n && (n.moHT != null || n.matHT != null)) { const ttc = n.montantTTC || 0; return { moHT: n.moHT || 0, matHT: n.matHT || 0, tva: (n.tva != null ? n.tva : Math.max(0, ttc - (n.moHT || 0) - (n.matHT || 0))) }; }
+  if (n && (n.moHT != null || n.matHT != null || n.depHT != null)) { const ttc = n.montantTTC || 0; const moHT = n.moHT || 0, matHT = n.matHT || 0, depHT = n.depHT || 0; return { moHT, matHT, depHT, tva: (n.tva != null ? n.tva : Math.max(0, ttc - moHT - matHT - depHT)) }; }
   const t = allTours().find((x) => x.id === (n && n.tourId)); const sp = chevalInvoicedSplit(t, n && n.clientId, n && n.chevalNom);
-  if (sp.moHT || sp.matHT || sp.tva) return sp;
-  const r = rate(); const ttc = (n && n.montantTTC) || 0; const ht = ttc / (1 + r); return { moHT: ht, matHT: 0, tva: ttc - ht };
+  if (sp.moHT || sp.matHT || sp.tva) return { moHT: sp.moHT, matHT: sp.matHT, depHT: 0, tva: sp.tva };
+  const r = rate(); const ttc = (n && n.montantTTC) || 0; const ht = ttc / (1 + r); return { moHT: ht, matHT: 0, depHT: 0, tva: ttc - ht };
 }
 // Crée une note de crédit (RDV payé annulé) : montant = ce que le cheval a réellement été facturé (post-réduction). Retourne l'id.
 function createCreditNote(clientId, tour, cv, motif, note, opts) {
@@ -12486,6 +12495,19 @@ function createCreditNote(clientId, tour, cv, motif, note, opts) {
   S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: ttc, moHT: sp.moHT, matHT: sp.matHT, tva: sp.tva, motif: motif || 'client', note: note || '', date: todayStr(), rembourse: doc, rembourseAt: doc ? todayStr() : null, documentaire: doc, services: (opts && opts.services) ? opts.services.slice() : null });
   saveSettings();
   return id;
+}
+// Numéro de NC séquentiel (dérivé du max existant → robuste sans compteur dédié).
+function nextNcNumero() { return (S.notesCredit || []).reduce((m, n) => Math.max(m, n.numero || 0), 0) + 1; }
+// NC PAR (client, tournée/date) — modèle définitif (2026-07-17). Regroupe des lignes { chevalNom, key, label, moHT, matHT, depHT, tva, ttc }.
+//  numero séquentiel ; opts: { motif, note, cashRefunded }. La NC réduit le CA (aucune ne le fait « en double » : les cas NC laissent la tournée figée). Le déplacement peut faire partie des lignes (crédité au choix).
+function createClientCreditNote(clientId, tour, lines, opts) {
+  opts = opts || {}; lines = (lines || []).filter((l) => l && (l.ttc || 0) > 0.0001);
+  const id = uid(), numero = nextNcNumero();
+  const agg = lines.reduce((a, l) => ({ moHT: a.moHT + (l.moHT || 0), matHT: a.matHT + (l.matHT || 0), depHT: a.depHT + (l.depHT || 0), tva: a.tva + (l.tva || 0), ttc: a.ttc + (l.ttc || 0) }), { moHT: 0, matHT: 0, depHT: 0, tva: 0, ttc: 0 });
+  const cash = !!opts.cashRefunded; // facture liquide : le cash a été rendu → NC d'emblée « remboursée »
+  S.notesCredit.push({ id, numero, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, date: todayStr(), motif: opts.motif || 'client', note: opts.note || '', lignes: lines.slice(), montantTTC: agg.ttc, moHT: agg.moHT, matHT: agg.matHT, depHT: agg.depHT, tva: agg.tva, rembourse: cash, rembourseAt: cash ? todayStr() : null });
+  saveSettings();
+  return { id, numero };
 }
 // Annuler / reporter le RDV d'un cheval. opts : { cv, clientId, tour, paid, locked, onDone }.
 // RDV payé → une note de crédit (à rembourser par virement) est créée en plus. Période compta validée → bloqué.
