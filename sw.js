@@ -1,6 +1,6 @@
 /* Service worker — réseau d'abord pour l'app (voir les mises à jour tout de suite),
  * repli sur le cache hors-ligne. Les API cartographie ne sont jamais mises en cache. */
-const CACHE = 'galopodo-v1-7-78';
+const CACHE = 'galopodo-v1-7-79';
 const SHELL = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icons/icon.svg'];
 
 self.addEventListener('install', (e) => {

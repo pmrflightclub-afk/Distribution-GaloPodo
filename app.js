@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.78';
+const APP_VERSION = '1.7.79';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.79', date: '2026-07-17',
+    ajouts: [
+      'FIABILITÉ (synchro) — un arrêt, un cheval ou un article SUPPRIMÉ d\'une tournée ne « ressuscite » plus après une synchronisation entre appareils (il était ré-ajouté par la fusion). La suppression pose désormais un repère qui est respecté à la fusion — plus de retour de l\'arrêt supprimé, plus de tournée cassée « à compléter » ni de temps de retour perdu.',
+    ],
+  },
   {
     version: '1.7.78', date: '2026-07-17',
     ajouts: [
@@ -3435,6 +3441,7 @@ function mergeCollection(localArr, remoteArr, tomb) {
 // C'est la cause de la perte de données : sans ça, une version concurrente sans clôtures écrasait en bloc la tournée clôturée.
 function graftClosure(to, from) {
   if (!to || !from) return;
+  to.arrDel = mergeTomb(to.arrDel, from.arrDel); to.cvDel = mergeTomb(to.cvDel, from.cvDel); to.artDel = mergeTomb(to.artDel, from.artDel); // propage les tombstones du corps de tournée (arrêt/cheval/article supprimés) même vers une tournée clôturée
   if (from.startedAt && !to.startedAt) to.startedAt = from.startedAt;       // démarrage : garder le plus ancien non-nul
   if (from.endedAt && !to.endedAt) to.endedAt = from.endedAt;
   if (from.autoClosedAt && !to.autoClosedAt) to.autoClosedAt = from.autoClosedAt;
@@ -3466,11 +3473,14 @@ function graftClosure(to, from) {
 // champs de saisie vides du gagnant (heures, temps réels, consultation, réductions), on N'ÉCRASE JAMAIS une valeur non vide de `to` et on
 // NE RETIRE RIEN. Réservé aux tournées non clôturées : reconcileTour re-dérive l'appartenance depuis les fiches à l'ouverture (filet
 // anti-résurrection). Les tournées clôturées restent en dernier-gagne + greffe (graftClosure) — figées = finalisées.
+function tourCvKey(clientId, cv) { return clientId + '|' + (cv && cv.id != null ? 'id' + cv.id : 'nm' + norm(cv && cv.nom)); } // clé d'un cheval DANS une tournée (pour le tombstone de retrait d'un arrêt)
 function deepMergeTourBody(to, from) {
   if (!to || !from || to.closed || from.closed) return;
+  to.arrDel = mergeTomb(to.arrDel, from.arrDel); to.cvDel = mergeTomb(to.cvDel, from.cvDel); to.artDel = mergeTomb(to.artDel, from.artDel); // tombstones du CORPS de tournée (arrêt/cheval/article SUPPRIMÉS) : survivent à la fusion → plus de résurrection additive
+  const _fu = from.updatedAt || 0; const tombOk = (map, k) => !(map && map[k] && map[k] >= _fu); // ajout autorisé seulement si l'élément n'a PAS été supprimé après la dernière édition de la copie perdante
   if (from.reductions) { to.reductions = to.reductions || {}; Object.keys(from.reductions).forEach((cid) => { const v = to.reductions[cid]; if (v == null || v === '') to.reductions[cid] = from.reductions[cid]; }); }
   if (!(to.returnRealMin > 0) && from.returnRealMin > 0) to.returnRealMin = from.returnRealMin; // temps de retour réel : garder si le gagnant n'en a pas
-  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.id && !a.impaye && !to.articles.some((x) => x.id === a.id)) to.articles.push(JSON.parse(JSON.stringify(a))); }); } // article saisi sur l'autre appareil → conservé. Les articles d'IMPAYÉ sont EXCLUS (gérés par graftClosure, dédup par impayeId → pas de double-ligne d'une même créance).
+  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.id && !a.impaye && tombOk(to.artDel, a.id) && !to.articles.some((x) => x.id === a.id)) to.articles.push(JSON.parse(JSON.stringify(a))); }); } // article saisi sur l'autre appareil → conservé, SAUF s'il a été supprimé (tombstone artDel). Impayés EXCLUS (graftClosure).
   // Un cheval du perdant n'est réajouté QUE s'il est ACTIF dans la fiche (même autorité que reconcileTour) → un cheval devenu inactif/supprimé de la fiche (donc retiré des tournées) ne « ressuscite » plus avec ses actes.
   const chevalActive = (cid, cv) => { const c = clients.find((x) => x.id === cid); return !!(c && (typeof activeChevaux === 'function' ? activeChevaux(c) : (c.chevaux || [])).some((h) => (h.id != null && cv.id != null && h.id === cv.id) || (norm(cv.nom) && norm(h.nom) === norm(cv.nom)))); };
   const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } };
@@ -3478,7 +3488,7 @@ function deepMergeTourBody(to, from) {
   (from.arrets || []).forEach((fa) => {
     const k = key(fa); if (!k) return;
     let ta = toByKey[k];
-    if (!ta) { const clone = JSON.parse(JSON.stringify(fa)); (to.arrets = to.arrets || []).push(clone); toByKey[k] = ta = clone; return; } // arrêt présent seulement chez l'autre → AJOUTÉ (la map pointe sur le CLONE poussé, pas l'original)
+    if (!ta) { if (!tombOk(to.arrDel, k)) return; const clone = JSON.parse(JSON.stringify(fa)); (to.arrets = to.arrets || []).push(clone); toByKey[k] = ta = clone; return; } // arrêt présent seulement chez l'autre → AJOUTÉ, SAUF s'il a été SUPPRIMÉ (tombstone arrDel) → Bug 8 : plus de résurrection d'arrêt supprimé
     if (!(ta.realMin > 0) && fa.realMin > 0) ta.realMin = fa.realMin;                 // temps de route réel : compléter
     if (!ta.heure && fa.heure) ta.heure = fa.heure;
     const tcById = {}; (ta.clients || []).forEach((cl) => { tcById[cl.clientId] = cl; });
@@ -3488,7 +3498,7 @@ function deepMergeTourBody(to, from) {
       if (!tc.heure && fc.heure) tc.heure = fc.heure;
       (fc.chevaux || []).forEach((fcv) => {
         const tcv = (tc.chevaux || []).find((x) => (x.id != null && fcv.id != null && x.id === fcv.id) || (norm(fcv.nom) && norm(x.nom) === norm(fcv.nom)));
-        if (!tcv) { if (!chevalActive(fc.clientId, fcv)) return; const cliO = clients.find((x) => x.id === fc.clientId); const fiche = cliO && (cliO.chevaux || []).find((x) => (x.id != null && fcv.id != null && x.id === fcv.id) || (norm(fcv.nom) && norm(x.nom) === norm(fcv.nom))); const ovr = (fcv.addrOverride && addrStr(fcv.addrOverride).trim()) ? fcv.addrOverride : null; const raddr = ovr || (fiche ? chevalAddr(cliO, fiche) : null); if (raddr && addrStr(raddr).trim() && norm(addrStr(raddr)) !== norm(addrStr(ta.addr))) return; (tc.chevaux = tc.chevaux || []).push(JSON.parse(JSON.stringify(fcv))); return; } // cheval présent seulement chez l'autre → AJOUTÉ si ACTIF dans la fiche ET si son adresse résolue = celle de CET arrêt (Bug 7 b : jamais réinjecté sur un arrêt qui n'est pas le sien)
+        if (!tcv) { if (!tombOk(to.cvDel, tourCvKey(fc.clientId, fcv))) return; if (!chevalActive(fc.clientId, fcv)) return; const cliO = clients.find((x) => x.id === fc.clientId); const fiche = cliO && (cliO.chevaux || []).find((x) => (x.id != null && fcv.id != null && x.id === fcv.id) || (norm(fcv.nom) && norm(x.nom) === norm(fcv.nom))); const ovr = (fcv.addrOverride && addrStr(fcv.addrOverride).trim()) ? fcv.addrOverride : null; const raddr = ovr || (fiche ? chevalAddr(cliO, fiche) : null); if (raddr && addrStr(raddr).trim() && norm(addrStr(raddr)) !== norm(addrStr(ta.addr))) return; (tc.chevaux = tc.chevaux || []).push(JSON.parse(JSON.stringify(fcv))); return; } // cheval présent seulement chez l'autre → AJOUTÉ si ACTIF dans la fiche ET si son adresse résolue = celle de CET arrêt (Bug 7 b : jamais réinjecté sur un arrêt qui n'est pas le sien)
         if (tcv.consultMin == null && typeof fcv.consultMin === 'number') tcv.consultMin = fcv.consultMin; // consultation : compléter (les ACTES restent ceux du gagnant → pas de fusion ambiguë de facturation)
         if (!tcv.photo && fcv.photo) tcv.photo = fcv.photo;
         if (fcv.cancel && !tcv.cancel) tcv.cancel = JSON.parse(JSON.stringify(fcv.cancel)); // annulation/report faite sur l'autre appareil → conservée (reconcileTour la préserve à l'ouverture)
@@ -6000,6 +6010,8 @@ function deleteCancellationItems(c, keys) {
 function deleteCancellationWhole(c) {
   const t = c.tour; const a = (t.arrets || [])[c.arretIdx]; if (!a) return;
   const cl = (a.clients || []).find((x) => x.clientId === c.clientId); if (!cl) return;
+  const gone = (cl.chevaux || []).find((x) => norm(x.nom) === norm(c.cheval) && chevalCancelled(x));
+  if (gone) { t.cvDel = t.cvDel || {}; t.cvDel[tourCvKey(c.clientId, gone)] = Date.now(); } // tombstone → le cheval supprimé ne ressuscite plus à la synchro
   cl.chevaux = (cl.chevaux || []).filter((x) => !(norm(x.nom) === norm(c.cheval) && chevalCancelled(x)));
 }
 // Document d'archive (PDF via impression) des prestations qu'on s'apprête à supprimer.
@@ -6877,7 +6889,7 @@ function renderEditorArrets(locked) {
     if (!locked) {
       if (!currentTour.reductions) currentTour.reductions = {};
       el.querySelector('[data-type]').addEventListener('change', (e) => { a.type = e.target.value; recomputeMoney(); });
-      { const dl = el.querySelector('[data-del]'); if (dl) dl.addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; const oldA = currentTour.arrets.map((x) => norm(addrStr(x.addr))); currentTour.arrets.splice(i, 1); invalidateTourRoute(oldA, currentTour); persistCurrentTour(); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); if (tourHeureStale(currentTour)) modalRevoirHoraires(currentTour); }); } // retrait arrêt (absent si arrêt figé/clôturé) → segments/heures suivants périmés + maj Google ; « à revoir » → modale
+      { const dl = el.querySelector('[data-del]'); if (dl) dl.addEventListener('click', () => { if (!confirm('Retirer cet arrêt (client) de la tournée ?')) return; const oldA = currentTour.arrets.map((x) => norm(addrStr(x.addr))); const _da = currentTour.arrets[i]; if (_da) { const now = Date.now(); currentTour.arrDel = currentTour.arrDel || {}; currentTour.arrDel[norm(addrStr(_da.addr))] = now; currentTour.cvDel = currentTour.cvDel || {}; (_da.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { currentTour.cvDel[tourCvKey(cl.clientId, cv)] = now; })); } currentTour.arrets.splice(i, 1); invalidateTourRoute(oldA, currentTour); persistCurrentTour(); renderEditorArrets(locked); scheduleGeoRecalc(); scheduleCalPush(currentTour); if (tourHeureStale(currentTour)) modalRevoirHoraires(currentTour); }); } // Bug 8 : tombstone arrêt+chevaux → plus de résurrection à la synchro. Segments/heures suivants périmés + maj Google.
       // N° d'ordre saisi : déplace l'arrêt à la position demandée ; les autres se renumérotent tout seuls.
       const ord = el.querySelector('[data-order]');
       if (ord) ord.addEventListener('change', (e) => {
@@ -7113,7 +7125,7 @@ function renderEditorArrets(locked) {
           const oc = row.querySelector('[data-offert]'); if (oc) oc.addEventListener('change', (e) => { art.offert = e.target.checked; saveTournees(); recomputeMoney(); renderEditorArrets(locked); });
           const rc = row.querySelector('[data-remise]'); if (rc) rc.addEventListener('change', (e) => { art.remiseOff = !e.target.checked; saveTournees(); recomputeMoney(); });
           row.querySelector('[data-e]').addEventListener('click', () => modalTourArticle(art, { arret: a }));
-          row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; if (art.impaye && art.impayeId) uncollectImpaye(art.impayeId); currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); });
+          row.querySelector('[data-d]').addEventListener('click', () => { if (!confirm('Supprimer cet article ?')) return; if (art.impaye && art.impayeId) uncollectImpaye(art.impayeId); if (art.id) { currentTour.artDel = currentTour.artDel || {}; currentTour.artDel[art.id] = Date.now(); } currentTour.articles = (currentTour.articles || []).filter((x) => x.id !== art.id); saveTournees(); renderEditorArrets(locked); recomputeMoney(); }); // tombstone artDel → l'article supprimé ne ressuscite plus à la synchro
         }
         alist.appendChild(row);
       });
