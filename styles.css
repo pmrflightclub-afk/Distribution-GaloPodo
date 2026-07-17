@@ -466,10 +466,21 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .ac-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 7px 0; } /* un petit espace entre chaque ligne d'actions */
 .ac-acts > .btn, .ac-acts > .a-heure { flex: 0 1 auto; min-width: 0; height: 38px; min-height: 38px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; line-height: 1; } /* hauteur IDENTIQUE pour tous (heure incluse) → boutons alignés verticalement sur chaque ligne */
 .ac-acts > .a-heure .gp-sel-btn, .ac-acts > .a-heure input[type=time] { height: 100%; } /* la pastille heure remplit la hauteur → pas plus haute que les autres */
-/* Ligne « nom du client » : 🕘 Heure du RDV + 📍 Adresse — alignés verticalement (centrés) */
-.ac-hd-row { align-items: center; margin: 4px 0 8px; }
-.ac-hd-row > .a-heure { height: auto; min-height: 0; } /* pas de hauteur forcée : l'input time natif reste à sa hauteur naturelle, texte centré face au bouton Adresse (sinon « 08:00 » collé en haut → adresse paraît plus basse) */
-.ac-hd-row > .a-heure input[type=time] { height: auto; }
+/* Ligne « nom du client » : 🕘 Heure du RDV + 📍 Adresse — MÊME TAILLE (largeur égale + même hauteur) */
+.ac-hd-row { display: flex; gap: 6px; align-items: stretch; margin: 4px 0 2px; }
+.ac-hd-row > .a-heure, .ac-hd-row > [data-cadr] { flex: 1 1 0; min-width: 0; height: 38px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; }
+.ac-hd-row > .a-heure input[type=time] { width: 100%; text-align: center; border: 0; background: transparent; }
+.ac-hd-row > .prev-on, .ac-hd-row > .prev-done { flex: 0 0 auto; }
+/* Adresse utilisée pour cet arrêt (sous la ligne heure/adresse) */
+.ac-addr-line { font-size: .82rem; color: var(--muted); margin: 0 0 8px 2px; }
+.ac-addr-line i { color: var(--danger); font-style: normal; }
+/* Séparateur fin entre « Sur place » et « Clôture de l'arrêt » */
+.ac-div { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+.ac-prets-slot .a-prets { margin-top: 6px; }
+/* Lignes de statut Paiement / RDV : rouge = non défini, vert = fait/validé */
+.ac-status { font-size: .82rem; font-weight: 600; margin: 4px 0 0 2px; }
+.ac-status.ok { color: var(--ok, #2e9e5b); }
+.ac-status.ko { color: var(--danger); }
 /* Sous-sections « Sur place » (Prêt/Planche) et « Clôture de l'arrêt » (RDV/Paiement) */
 .ac-sec { margin: 9px 0 0; }
 .ac-sec-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); font-weight: 700; margin: 0 0 3px 2px; }

@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.74';
+const APP_VERSION = '1.7.75';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.75', date: '2026-07-17',
+    ajouts: [
+      'ARRÊT (éditeur) — l\'en-tête d\'un client est plus lisible : le champ heure de RDV a la même taille que le bouton Adresse, l\'adresse utilisée pour l\'arrêt s\'affiche juste en dessous, un trait fin sépare « Sur place » de « Clôture de l\'arrêt », les prêts en cours remontent dans « Sur place », et sous les boutons figurent deux lignes d\'état : Paiement et RDV — « non défini » en rouge tant que ce n\'est pas fait, l\'info en vert une fois validé.',
+    ],
+  },
   {
     version: '1.7.74', date: '2026-07-17',
     ajouts: [
@@ -6887,8 +6893,12 @@ function renderEditorArrets(locked) {
         const clH = cl.heure || '', payDoneC = clientPaiementDone(currentTour, cl.clientId), redVal = currentTour.reductions[cl.clientId] || '', pretOn = ((((clients.find((x) => x.id === cl.clientId) || {}).prets) || []).length > 0), plCls = plancheBtnClass(plancheStateForClient(currentTour, cl.clientId));
         const prevBtn = cl.aPrevenir === true ? ' <button class="btn small prev-on" data-cprevenir>🔔 Prévenir</button>' : (cl.aPrevenir === false ? ' <span class="btn small prev-done">✓ Prévenu</span>' : ''); // orange = heure changée à communiquer ; vert = client prévenu (inactif)
         const prevBadge = cl.aPrevenir === true ? ' <span class="badge prev-badge">🕘 heure modifiée</span>' : '';
+        const pp0 = (currentTour.payments || {})[cl.clientId] || {};
+        const payInfo = payDoneC ? ((pp0.method === 'virement' ? 'virement' : 'liquide') + (pp0.facture ? ' + facture' : '') + (m ? ' · ' + eur(m.totalTTC + payArrondi(m, pp0)) : '') + ' ✓') : 'non défini';
+        const rdvInfo = cl.rdvDone ? 'fait ✓' : 'non défini';
+        const arrAddr = addrStr(a.addr);
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts ac-hd-row"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-sec"><div class="ac-sec-h">📍 Sur place</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div></div><div class="ac-sec"><div class="ac-sec-h">🔒 Clôture de l'arrêt du client</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts ac-hd-row"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-addr-line">📍 ${arrAddr ? esc(arrAddr) : '<i>adresse à définir</i>'}</div><div class="ac-sec"><div class="ac-sec-h">📍 Sur place</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-prets-slot" data-prets-cid="${cl.clientId}"></div></div><hr class="ac-div"/><div class="ac-sec"><div class="ac-sec-h">🔒 Clôture de l'arrêt du client</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-status ${payDoneC ? 'ok' : 'ko'}">💶 Paiement : ${esc(payInfo)}</div><div class="ac-status ${cl.rdvDone ? 'ok' : 'ko'}">📅 RDV : ${esc(rdvInfo)}</div></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         // Tournée CLÔTURÉE : le bloc « actes » (et son badge) n'est pas rendu → on affiche ici un récap LECTURE SEULE des annulations / notes de crédit du client, avec le n° de NC.
         if (locked) {
@@ -6928,7 +6938,7 @@ function renderEditorArrets(locked) {
         if (prets.length) {
           const pretBox = document.createElement('div'); pretBox.className = 'a-prets';
           pretBox.innerHTML = '<div class="a-art-head"><span>🎁 Prêts en cours</span></div>' + prets.map((pr) => `<div class="list-item" data-pretid="${pr.id}"><div class="li-main"><b>🎁 ${esc(pr.text)}</b><span class="li-sub">prêté le ${esc(fmtDateFr(pr.date))}</span></div>${locked ? '' : '<div class="li-act"><button class="btn small" data-pret-keep>Maintenir</button> <button class="btn small danger" data-pret-back>Récupéré</button></div>'}</div>`).join('');
-          el.appendChild(pretBox);
+          const pslot = el.querySelector('.ac-prets-slot[data-prets-cid="' + cl.clientId + '"]'); (pslot || el).appendChild(pretBox); // Lot 1 : les prêts s'affichent DANS la section « Sur place » (sous les boutons)
           if (!locked) {
             pretBox.querySelectorAll('[data-pret-back]').forEach((b) => b.addEventListener('click', () => { const row = b.closest('[data-pretid]'); if (cObjP) { cObjP.prets = (cObjP.prets || []).filter((p) => p.id !== row.dataset.pretid); saveClients(); } renderEditorArrets(locked); }));
             pretBox.querySelectorAll('[data-pret-keep]').forEach((b) => b.addEventListener('click', () => { b.textContent = 'Maintenu ✓'; setTimeout(() => { b.textContent = 'Maintenir'; }, 1200); }));
