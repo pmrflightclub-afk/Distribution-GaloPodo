@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.70';
+const APP_VERSION = '1.7.71';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.71', date: '2026-07-17',
+    ajouts: [
+      'FINANCES (détail par cheval) — un cheval crédité par une note de crédit apparaît maintenant dans le détail (Finances & détail par cheval) au NET : ses prestations restent visibles, avec une ligne « − crédité (NC) », et le déplacement reste compté. Fini l\'exclusion complète du cheval.',
+    ],
+  },
   {
     version: '1.7.70', date: '2026-07-17',
     ajouts: [
@@ -8431,9 +8437,11 @@ function financeStats() {
       c.impaye += (pay && pay.partiel && pay.resteMode === 'virement') ? 0 : payImpaye(m, pay); // F3 : un reste à percevoir PAR VIREMENT n'est pas une créance non recouvrée (il rentre par virement) → ne pas amputer durablement le « reçu » du client
       c.rembourse += (pay && pay.rembourse) || 0; // #6 : remboursement annulation liquide (traçabilité — jamais additionné au CA/caisse)
       const orC = offRemOfClient(m); c.offert += orC.offert; c.remise += orC.remise; // L5 : offert/remise par client
-      (m.materiel || []).forEach((x) => { if (isCred(x.nom)) return; const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0, offert: 0, remise: 0 }; ch.mat += x.ttc; });
-      (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { if (isCred(n)) return; const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0, offert: 0, remise: 0 }; ch.dep += per; }); });
-      (m.articles || []).forEach((a) => { const share = artPerCheval(a); const oT = artOffertTTC(a), rT = artRemiseTTC(a); a.chevaux.forEach((n) => { if (isCred(n)) return; const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0, offert: 0, remise: 0 }; ch.art += share(n); const rt = artShareRatio(a, n); ch.offert += oT * rt; ch.remise += rT * rt; }); }); // L5 : offert/remise par cheval (part)
+      // Détail PAR CHEVAL : on inclut TOUS les chevaux (même crédités) en brut ; le montant crédité (NC) est déduit ensuite (ch.credited). Déplacement gardé.
+      (m.materiel || []).forEach((x) => { const ch = c.chevaux[x.nom] = c.chevaux[x.nom] || { nom: x.nom, dep: 0, mat: 0, art: 0, offert: 0, remise: 0, credited: 0 }; ch.mat += x.ttc; });
+      (m.deplacement || []).forEach((l) => { const per = l.chevaux.length ? l.partTTC / l.chevaux.length : 0; l.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0, offert: 0, remise: 0, credited: 0 }; ch.dep += per; }); });
+      (m.articles || []).forEach((a) => { const share = artPerCheval(a); const oT = artOffertTTC(a), rT = artRemiseTTC(a); a.chevaux.forEach((n) => { const ch = c.chevaux[n] = c.chevaux[n] || { nom: n, dep: 0, mat: 0, art: 0, offert: 0, remise: 0, credited: 0 }; ch.art += share(n); const rt = artShareRatio(a, n); ch.offert += oT * rt; ch.remise += rT * rt; }); }); // L5 : offert/remise par cheval (part)
+      (t.arrets || []).forEach((a2) => (a2.clients || []).forEach((cl2) => { if (cl2.clientId !== m.clientId) return; (cl2.chevaux || []).forEach((cv2) => { if (!chevalCredited(cv2)) return; const ch = c.chevaux[cv2.nom]; if (!ch) return; ch.credited = (ch.credited || 0) + (cv2.cancel.items || []).filter((it) => it.key !== '__dep').reduce((s, it) => s + (it.ttc || 0), 0); }); })); // montant crédité (NC, hors déplacement) par cheval
     });
   });
   return Object.values(cmap).map((c) => ({ ...c, total: c.dep + c.mat + c.art + (c.arrondi || 0), recu: c.dep + c.mat + c.art + (c.arrondi || 0) - (c.impaye || 0), chevaux: Object.values(c.chevaux) })).sort((a, b) => b.total - a.total);
@@ -8451,7 +8459,7 @@ function renderFinance() {
     if ((c.remise || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--muted)"><span>Remises accordées (hors CA)</span><span>−${eur(c.remise)}</span></div>`;
     if ((c.impaye || 0) >= 0.005) { h += `<div class="inv-line" style="color:var(--warn)"><span>Montant impayé (créance)</span><span>−${eur(c.impaye)}</span></div>`; h += `<div class="inv-line"><span>Montant réellement reçu</span><span>${eur(c.recu)}</span></div>`; }
     if ((c.rembourse || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--muted)"><span>Remboursé (annulation liquide, hors CA)</span><span>−${eur(c.rembourse)}</span></div>`; // #6 : info traçabilité (n'entre pas dans le total/CA)
-    c.chevaux.forEach((cv) => { const orv = ((cv.offert || 0) >= 0.005 ? ' · 🎁 ' + eur(cv.offert) : '') + ((cv.remise || 0) >= 0.005 ? ' · −' + eur(cv.remise) + ' remise' : ''); h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)} · A ${eur(cv.art)} M ${eur(cv.mat)} D ${eur(cv.dep)}${orv}</span><span>${eur(cv.art + cv.mat + cv.dep)}</span></div>`; });
+    c.chevaux.forEach((cv) => { const orv = ((cv.offert || 0) >= 0.005 ? ' · 🎁 ' + eur(cv.offert) : '') + ((cv.remise || 0) >= 0.005 ? ' · −' + eur(cv.remise) + ' remise' : '') + ((cv.credited || 0) >= 0.005 ? ' · −' + eur(cv.credited) + ' NC' : ''); const net = cv.art + cv.mat + cv.dep - (cv.credited || 0); h += `<div class="fin-cheval"><span>🐴 ${esc(cv.nom)} · A ${eur(cv.art)} M ${eur(cv.mat)} D ${eur(cv.dep)}${orv}</span><span>${eur(net)}</span></div>`; });
     el.innerHTML = h; box.appendChild(el);
   });
 }
@@ -9661,16 +9669,15 @@ function renderComptaDecl() {
 // Analyse financière PAR CHEVAL avec le DÉTAIL par date (chaque ligne facturée) pour Articles / Matériel / Déplacement.
 function chevalFinanceDetail() {
   const map = {}; // clé = clientId|chevalNom
-  const get = (cid, nom, cnom) => { const k = cid + '|' + nom; return map[k] || (map[k] = { clientId: cid, nom, client: cnom, art: [], mat: [], dep: [], total: 0, offert: 0, remise: 0 }); };
+  const get = (cid, nom, cnom) => { const k = cid + '|' + nom; return map[k] || (map[k] = { clientId: cid, nom, client: cnom, art: [], mat: [], dep: [], total: 0, offert: 0, remise: 0, credited: 0 }); };
   allTours().forEach((t) => {
     if (!t.result || !t.result.parClient) return; const date = t.date;
-    const cred = creditedKeySet(t); // chevaux payés-annulés (NC) → hors analyse cheval
     t.result.parClient.forEach((m) => {
-      const isCred = (n) => cred.has(m.clientId + '|' + norm(n));
-      (m.articles || []).forEach((a) => { const share = artPerCheval(a); const oT = artOffertTTC(a), rT = artRemiseTTC(a); (a.chevaux || []).forEach((n) => { if (isCred(n)) return; const per = share(n); const g = get(m.clientId, n, m.nom); g.art.push({ date, libelle: a.libelle + (a.qtesByNom && a.qtesByNom[n] > 1 ? ' ×' + a.qtesByNom[n] : '') + (a.offert ? ' (offert)' : '') + (a.remisePct ? ' (−' + a.remisePct + '%)' : ''), ttc: per }); g.total += per; const rt = artShareRatio(a, n); g.offert += oT * rt; g.remise += rT * rt; }); }); // L5 : offert/remise par cheval
-      (m.materiel || []).forEach((x) => { if (isCred(x.nom)) return; const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : '', x.infection ? 'Infection' : ''].filter(Boolean).join('+'); const g = get(m.clientId, x.nom, m.nom); g.mat.push({ date, libelle: 'Matériel' + (tags ? ' (' + tags + ')' : ''), ttc: x.ttc }); g.total += x.ttc; });
-      (m.deplacement || []).forEach((l) => { const per = (l.chevaux && l.chevaux.length) ? l.partTTC / l.chevaux.length : 0; (l.chevaux || []).forEach((n) => { if (isCred(n)) return; const g = get(m.clientId, n, m.nom); g.dep.push({ date, libelle: (l.adresse || 'Déplacement') + ' ' + (TYPES[l.type] || ''), ttc: per }); g.total += per; }); });
+      (m.articles || []).forEach((a) => { const share = artPerCheval(a); const oT = artOffertTTC(a), rT = artRemiseTTC(a); (a.chevaux || []).forEach((n) => { const per = share(n); const g = get(m.clientId, n, m.nom); g.art.push({ date, libelle: a.libelle + (a.qtesByNom && a.qtesByNom[n] > 1 ? ' ×' + a.qtesByNom[n] : '') + (a.offert ? ' (offert)' : '') + (a.remisePct ? ' (−' + a.remisePct + '%)' : ''), ttc: per }); g.total += per; const rt = artShareRatio(a, n); g.offert += oT * rt; g.remise += rT * rt; }); }); // L5 : offert/remise par cheval
+      (m.materiel || []).forEach((x) => { const tags = [x.fourbure ? 'Fourbure' : '', x.npas ? 'NPAS' : '', x.infection ? 'Infection' : ''].filter(Boolean).join('+'); const g = get(m.clientId, x.nom, m.nom); g.mat.push({ date, libelle: 'Matériel' + (tags ? ' (' + tags + ')' : ''), ttc: x.ttc }); g.total += x.ttc; });
+      (m.deplacement || []).forEach((l) => { const per = (l.chevaux && l.chevaux.length) ? l.partTTC / l.chevaux.length : 0; (l.chevaux || []).forEach((n) => { const g = get(m.clientId, n, m.nom); g.dep.push({ date, libelle: (l.adresse || 'Déplacement') + ' ' + (TYPES[l.type] || ''), ttc: per }); g.total += per; }); });
     });
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (!chevalCredited(cv)) return; const g = map[cl.clientId + '|' + cv.nom]; if (!g) return; const amt = (cv.cancel.items || []).filter((it) => it.key !== '__dep').reduce((s, it) => s + (it.ttc || 0), 0); g.credited += amt; g.total -= amt; }))); // crédité (NC, hors déplacement) → déduit du total du cheval
   });
   return Object.values(map).sort((a, b) => b.total - a.total);
 }
@@ -9704,6 +9711,7 @@ function renderFinanceCheval() {
       h += `<div class="inv-line"><span><b>${titre}</b></span><span><b>${eur(sum)}</b></span></div>`;
       lignes.slice().sort(byDate).forEach((l) => { h += `<div class="fin-detail"><span>${esc(fmtDateFr(l.date))} · ${esc(l.libelle)}</span><span>${eur(l.ttc)}</span></div>`; });
     });
+    if ((cv.credited || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--warn)"><span>Crédité (note de crédit)</span><span>−${eur(cv.credited)}</span></div>`;
     if ((cv.offert || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--muted)"><span>🎁 Offert (valeur, hors CA)</span><span>${eur(cv.offert)}</span></div>`;
     if ((cv.remise || 0) >= 0.005) h += `<div class="inv-line" style="color:var(--muted)"><span>Remises accordées (hors CA)</span><span>−${eur(cv.remise)}</span></div>`;
     el.innerHTML = h; box.appendChild(el);
