@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.75';
+const APP_VERSION = '1.7.76';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.76', date: '2026-07-17',
+    ajouts: [
+      'AGENDA (récupérer un événement) — l\'app ne devine plus un client à votre place. Elle liste TOUS les clients connus qui correspondent (les correspondances sur le seul prénom sont marquées « à vérifier ») ET les formulaires reçus correspondants, et VOUS choisissez lequel ajouter — ou « + Nouveau client ». Fini le pré-remplissage d\'un mauvais client (ex. « Julie Poletto » pour « Julie Thielens »).',
+    ],
+  },
   {
     version: '1.7.75', date: '2026-07-17',
     ajouts: [
@@ -3818,21 +3824,18 @@ async function deleteTourCalendar(tourId) {
   for (const k of keys) { const res = await safeDeleteEvent(token, S.calPushed[k]); if (res !== 'skip') delete S.calPushed[k]; } // supprime seulement les évts de l'app ; garde en file ce qui est incertain
   saveSettings();
 }
-// Croise un événement (titre + lieu + description) avec la base clients : nom, prénom, société ET noms de chevaux.
-// Renvoie TOUS les clients connus qui correspondent (pour proposer la liaison).
-function matchClientsForEvent(ev) {
-  const hay = norm([ev && ev.title, ev && ev.location, ev && ev.desc].filter(Boolean).join(' '));
-  if (!hay) return [];
-  const out = [];
-  clients.forEach((c) => {
-    const keys = [fullName(c), c.nom, c.prenom, c.societe].filter(Boolean).map(norm);
-    (c.chevaux || []).forEach((h) => { if (h.nom) keys.push(norm(h.nom)); });
-    if (keys.some((k) => k && k.length >= 2 && hay.includes(k))) out.push(c);
-  });
-  return out;
+// Croise un événement (titre + lieu + description) avec la base clients. Score : FORT (2) = nom complet / nom de famille / société / cheval ; FAIBLE (1) = prénom seul (risque de faux positif « Julie » ⊂ « Julie Poletto »). L'utilisateur choisit toujours dans la liste.
+function eventHay(ev) { return norm([ev && ev.title, ev && ev.location, ev && ev.desc].filter(Boolean).join(' ')); }
+function clientMatchScore(ev, c) {
+  const hay = eventHay(ev); if (!hay) return 0;
+  const strong = [fullName(c), c.nom, c.societe].filter(Boolean).map(norm); (c.chevaux || []).forEach((h) => { if (h.nom) strong.push(norm(h.nom)); });
+  if (strong.some((k) => k && k.length >= 3 && hay.includes(k))) return 2; // fort
+  const p = norm(c.prenom); if (p && p.length >= 2 && hay.includes(p)) return 1; // faible : prénom seul
+  return 0;
 }
-// Meilleure proposition unique (pour l'étiquette de l'item).
-function matchClientForEvent(title) { return matchClientsForEvent({ title })[0] || null; }
+function matchClientsForEvent(ev) { return clients.map((c) => ({ c, s: clientMatchScore(ev, c) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x) => x.c); } // triés FORT d'abord
+// Étiquette de l'item : proposition seulement si match FORT (jamais sur un simple prénom).
+function matchClientForEvent(title) { return clients.find((x) => clientMatchScore({ title }, x) >= 2) || null; }
 // D3 (mode fichier) : télécharge l'instantané dans un fichier .json.
 function downloadSnapshot() {
   const data = JSON.stringify(exportSnapshot(), null, 2);
@@ -5336,15 +5339,17 @@ function recuperateEvent(ev, preClient) {
   // Nouveau contact avec formulaire reçu (et aucun client connu) : on crée d'ABORD la fiche pré-remplie, PUIS on REVIENT ici
   // (le mail est désormais « traité » → plus de boucle) avec le nouveau client proposé, pour CHOISIR/confirmer la tournée.
   const mailMatches = matchContactMailForEvent(ev);
-  if (!preClient && mailMatches.length && !matches.length) { createClientFromMail(mailMatches[0], 'normal', (saved) => { if (saved) recuperateEvent(ev, saved); }); return; }
   let h = `<div class="modal-head"><b>Récupérer l'événement → tournée</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">« ${esc(ev.title)} »${ev.day ? ' · ' + esc(fmtDateFr(ev.day)) : ''}${ev.location ? ' · 📍 ' + esc(ev.location) : ''}<br>Le client sera ajouté à la tournée du ${esc(ev.day ? fmtDateFr(ev.day) : 'jour')} (créée si elle n'existe pas encore).</p>`;
-  h += matches.length ? '<h2 style="font-size:.9rem">Client proposé</h2><div id="recMatches"></div>' : '<p class="hint">Aucun client connu ne correspond à cet événement.</p>';
+    <p class="hint">« ${esc(ev.title)} »${ev.day ? ' · ' + esc(fmtDateFr(ev.day)) : ''}${ev.location ? ' · 📍 ' + esc(ev.location) : ''}<br><b>Choisissez</b> le client à ajouter à la tournée du ${esc(ev.day ? fmtDateFr(ev.day) : 'jour')} — ou créez la fiche.</p>`;
+  if (matches.length) h += '<h2 style="font-size:.9rem">Clients connus</h2><div id="recMatches"></div>';
+  if (mailMatches.length) h += '<h2 style="font-size:.9rem">Formulaires reçus (créer la fiche)</h2><div id="recMails"></div>';
+  if (!matches.length && !mailMatches.length) h += '<p class="hint">Aucun client connu ni formulaire ne correspond avec certitude à cet événement.</p>';
   h += '<div class="actions"><button class="btn primary block" id="recNew">+ Créer un nouveau client (nom pré-rempli)</button></div>';
   openModal(h);
   if ($('mX')) $('mX').addEventListener('click', closeModal);
-  if (matches.length && $('recMatches')) matches.forEach((c) => { const b = document.createElement('button'); b.className = 'btn block'; b.style.marginBottom = '6px'; b.textContent = '📅 Créer le RDV → ' + fullName(c) + (c.societe ? ' — ' + c.societe : ''); b.addEventListener('click', () => attach(c)); $('recMatches').appendChild(b); });
-  if ($('recNew')) $('recNew').addEventListener('click', () => editClient(null, (nc) => recuperateEvent(ev, nc), ev.title)); // création manuelle → revient aussi choisir la tournée
+  if (matches.length && $('recMatches')) matches.forEach((c) => { const weak = clientMatchScore(ev, c) < 2; const b = document.createElement('button'); b.className = 'btn block'; b.style.marginBottom = '6px'; b.innerHTML = '📅 Créer le RDV → <b>' + esc(fullName(c)) + '</b>' + (c.societe ? ' — ' + esc(c.societe) : '') + (weak ? ' <span class="li-sub">(prénom identique — à vérifier)</span>' : ''); b.addEventListener('click', () => attach(c)); $('recMatches').appendChild(b); });
+  if (mailMatches.length && $('recMails')) mailMatches.forEach((m) => { const f = (typeof mailFieldsOf === 'function') ? mailFieldsOf(m) : (m.fields || {}); const nm = [mailField(f, 'prénom', 'prenom'), mailField(f, 'nom')].filter(Boolean).join(' ') || m.from || '(formulaire)'; const b = document.createElement('button'); b.className = 'btn block'; b.style.marginBottom = '6px'; b.innerHTML = '📝 Créer la fiche → <b>' + esc(nm) + '</b> <span class="li-sub">— ' + esc(m.from || '') + '</span>'; b.addEventListener('click', () => createClientFromMail(m, 'normal', (saved) => { if (saved) recuperateEvent(ev, saved); })); $('recMails').appendChild(b); });
+  if ($('recNew')) $('recNew').addEventListener('click', () => editClient(null, (nc) => recuperateEvent(ev, nc), ev.title)); // création manuelle → nom pré-rempli depuis le titre de l'événement
 }
 function agendaItemRow(ev) {
   const match = matchClientForEvent(ev.title);
