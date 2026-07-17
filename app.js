@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.66';
+const APP_VERSION = '1.7.67';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.67', date: '2026-07-17',
+    ajouts: [
+      'ANNULER / REPORTER (bouton ⊘) — recentré sur le LIQUIDE. Client payé en liquide (sans facture) → « Annuler » (par prestation, remboursement). Client non payé → « Reporter » uniquement. Client en facture / virement → ⊘ n\'annule ni ne reporte : message renvoyant vers « retirer l\'arrêt avant clôture » ou « Annuler une facturation » après clôture. Le ⊘ ne crée plus jamais de note de crédit.',
+    ],
+  },
   {
     version: '1.7.66', date: '2026-07-16',
     ajouts: [
@@ -12509,6 +12515,16 @@ function modalCancelRdv(nom, opts) {
     $('mX').addEventListener('click', closeModal); $('cxClose').addEventListener('click', closeModal);
     return;
   }
+  { const _pp = (opts.tour.payments || {})[opts.clientId] || {}; // FACTURE liquide / VIREMENT / facture virement : jamais annulé ni reporté ici — un événement = une facture.
+    if (_pp.method === 'virement' || (_pp.method === 'liquide' && _pp.facture)) {
+      openModal(`<div class="modal-head"><b>Annulation — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+        <p class="hint">Ce client paie par <b>${_pp.method === 'virement' ? 'virement' : 'facture'}</b>. On n'annule pas et on ne reporte pas un RDV facturé/virement ici.</p>
+        <p class="hint">→ <b>Avant clôture</b> : retirez simplement l'arrêt / le cheval de la tournée.<br>→ <b>Après clôture</b> : bouton <b>« 🚫 Annuler une facturation »</b> (note de crédit), puis créez un nouveau RDV si besoin.</p>
+        <div class="actions"><button class="btn block" id="cxClose">Fermer</button></div>`);
+      $('mX').addEventListener('click', closeModal); $('cxClose').addEventListener('click', closeModal);
+      return;
+    }
+  }
   if (chevalCancelled(cv)) {
     const lbl = cv.cancel.status === 'reporte' ? 'reporté' : 'annulé';
     // RÈGLE : une annulation/un report est DÉFINITIF — pas de rétablissement (l'utilisateur recrée une facture si besoin en ajoutant le cheval à une tournée).
@@ -12550,86 +12566,77 @@ function modalCancelRdv(nom, opts) {
     $('cxOk2').addEventListener('click', () => {
       if (comptaLocked(opts.tour, opts.clientId)) { alert('🔒 La période comptable de cette tournée a été déclarée : l\'annulation n\'est plus possible.'); closeModal(); return; }
       const sel = sel2(); if (!sel.length) { alert('Cochez au moins une prestation à annuler.'); return; }
-      const cSplit = cancelItemsSplit(sel);
       const newServices = sel.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key);
       const newArtIds = sel.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4));
       cv.cancel.services = (cv.cancel.services || []).concat(newServices); // COMPLÈTE l'annulation partielle existante
       cv.cancel.articles = (cv.cancel.articles || []).concat(newArtIds);
       cv.cancel.items = (cv.cancel.items || []).concat(sel.map((it) => ({ key: it.key, label: it.label, ttc: it.ttc, ht: it.ht, tva: it.tva, matHT: it.matHT || 0 })));
-      const pp = (opts.tour.payments || {})[opts.clientId] || {}, pm = pp.method;
-      if (pm === 'liquide' && pp.facture && clientPaiementDone(opts.tour, opts.clientId)) createCreditNote(opts.clientId, opts.tour, cv, cv.cancel.reason, cv.cancel.note, { documentaire: true, cancelSplit: cSplit, cancelTTC: cSplit.ttc, services: newServices }); // avoir documentaire pour les NOUVELLES prestations
-      closeModal();
-      if (pm === 'liquide' && clientPaiementDone(opts.tour, opts.clientId)) { recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour(); modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'Prestations annulées.'); }
+      closeModal(); // liquide sans facture uniquement (facture/virement bloqués en amont) → pas de NC, remboursement du delta
+      if (clientPaiementDone(opts.tour, opts.clientId)) { recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour(); modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'Prestations annulées.'); }
       else opts.onDone();
     });
     return;
   }
-  let status = 'annule', reason = 'client';
-  const items = chevalCancelItems(opts.tour, opts.clientId, nom); // prestations annulables (montants figés) — annulation PAR SERVICE (déplacement jamais listé, matériel couplé au parage)
-  const checked = new Set(); // défaut : RIEN coché — l'utilisateur coche les prestations à annuler (bouton « Tout » = cheval entier)
-  openModal(`<div class="modal-head"><b>Annuler / reporter — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Le RDV de ce cheval est retiré de la facture et des stats. Les autres clients et le calcul de la tournée ne changent pas.</p>
-    <label>Type</label><div class="seg" id="cxStatus"><button type="button" class="seg-btn on" data-st="annule">Annulé</button><button type="button" class="seg-btn" data-st="reporte">Reporté</button></div>
+  // LIQUIDE sans facture (ou mode non défini). Règle : PAYÉ → Annuler (par prestation) ; NON PAYÉ → Reporter uniquement.
+  const paid = clientPaiementDone(opts.tour, opts.clientId);
+  if (paid) {
+    // ===== ANNULER (liquide payé) — par prestation, remboursement du cash correspondant, déplacement gardé =====
+    const items = chevalCancelItems(opts.tour, opts.clientId, nom);
+    const checked = new Set(); let reason = 'client';
+    openModal(`<div class="modal-head"><b>Annuler le RDV — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Paiement liquide validé. Cochez les prestations à annuler : elles sont retirées de la facture, le <b>déplacement reste facturé</b>, et le <b>liquide correspondant est remboursé</b> (à l'euro inférieur). Trajet/km/temps/stats inchangés.</p>
+      <label>Motif</label><div class="seg" id="cxReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
+      <label>Note (facultatif)<input type="text" id="cxNote" placeholder="ex. absent, cheval malade…" /></label>
+      <div id="cxSvc" style="margin:6px 0"></div>
+      <div class="actions"><button class="btn primary block" id="cxOk">Confirmer l'annulation</button></div>`);
+    $('mX').addEventListener('click', closeModal);
+    const svcSel = () => items.filter((it) => checked.has(it.key));
+    const updateRecap = () => { const r = $('cxRecap'); if (!r) return; const sp = cancelItemsSplit(svcSel()); r.innerHTML = `Annulé : <b>${eur(sp.ttc)}</b> TTC (HT ${eur(sp.moHT + sp.matHT)} · TVA ${eur(sp.tva)}) — <b>déplacement conservé</b>${sp.ttc <= 0.005 ? ' · <span style="color:var(--danger)">rien de coché</span>' : ''}`; };
+    const renderSvc = () => {
+      const box = $('cxSvc'); if (!box) return;
+      if (!items.length) { box.innerHTML = '<p class="hint">Aucune prestation facturable (seul le déplacement, conservé). « Annuler » retire ce cheval de la tournée.</p>'; return; }
+      const rows = items.map((it, i) => `<label class="ch-opt"><input type="checkbox" data-svc="${i}"${checked.has(it.key) ? ' checked' : ''}/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label>`).join('');
+      box.innerHTML = `<label>Prestations à annuler <button type="button" class="btn small" id="cxAll">Tout</button> <button type="button" class="btn small" id="cxNone">Rien</button></label><div class="ch-opts">${rows}</div><p class="hint" id="cxRecap"></p>`;
+      box.querySelectorAll('[data-svc]').forEach((inp) => inp.addEventListener('change', () => { const it = items[+inp.dataset.svc]; if (inp.checked) checked.add(it.key); else checked.delete(it.key); updateRecap(); }));
+      $('cxAll').onclick = () => { items.forEach((it) => checked.add(it.key)); renderSvc(); };
+      $('cxNone').onclick = () => { checked.clear(); renderSvc(); };
+      updateRecap();
+    };
+    renderSvc();
+    document.querySelectorAll('#cxReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
+    $('cxOk').addEventListener('click', () => {
+      if (comptaLocked(opts.tour, opts.clientId)) { alert('🔒 La période comptable de cette tournée a été déclarée : l\'annulation n\'est plus possible.'); closeModal(); return; }
+      const note = $('cxNote').value.trim();
+      if (items.length && !svcSel().length) { alert('Cochez au moins une prestation à annuler.'); return; }
+      const sel = svcSel();
+      const partial = items.length > 0 && sel.length < items.length; // partiel = au moins une prestation gardée
+      cv.cancel = { status: 'annule', reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
+      if (partial) { cv.cancel.services = sel.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key); cv.cancel.articles = sel.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4)); }
+      cv.cancel.items = sel.map((it) => ({ key: it.key, label: it.label, ttc: it.ttc, ht: it.ht, tva: it.tva, matHT: it.matHT || 0 }));
+      closeModal();
+      recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour();
+      modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'RDV annulé.'); // liquide sans facture → remboursement, pas de NC
+    });
+    return;
+  }
+  // ===== REPORTER (non payé) — le cheval part dans « Rendez-vous à prendre » =====
+  let reason = 'client';
+  openModal(`<div class="modal-head"><b>Reporter le RDV — ${esc(nom)}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Aucun paiement validé : le RDV peut être <b>reporté</b> (le cheval part dans « Rendez-vous à prendre »). L'annulation n'est possible qu'<b>après validation du paiement</b> (liquide).</p>
     <label>Motif</label><div class="seg" id="cxReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
     <label>Note (facultatif)<input type="text" id="cxNote" placeholder="ex. absent, cheval malade…" /></label>
-    <div id="cxSvc" style="margin:6px 0"></div>
-    <div id="cxReportBox" style="display:none"><label>Montant TTC à facturer à la prochaine visite (facultatif)<input type="number" id="cxMontant" step="0.01" min="0" inputmode="decimal"/></label><p class="hint">Mémorisé et ajouté automatiquement à la prochaine tournée de ce client.</p></div>
-    <p class="hint" id="cxNote2"></p>
-    <div class="actions"><button class="btn primary block" id="cxOk">Confirmer</button></div>`);
+    <label>Montant TTC à facturer à la prochaine visite (facultatif)<input type="number" id="cxMontant" step="0.01" min="0" inputmode="decimal"/></label><p class="hint">Mémorisé et ajouté automatiquement à la prochaine tournée de ce client.</p>
+    <div class="actions"><button class="btn primary block" id="cxOk">Reporter le RDV</button></div>`);
   $('mX').addEventListener('click', closeModal);
-  const svcSel = () => items.filter((it) => checked.has(it.key)); // prestations cochées (à annuler)
-  const updateRecap = () => { const r = $('cxRecap'); if (!r) return; const sp = cancelItemsSplit(svcSel()); r.innerHTML = `Annulé : <b>${eur(sp.ttc)}</b> TTC (HT ${eur(sp.moHT + sp.matHT)} · TVA ${eur(sp.tva)}) — <b>déplacement conservé</b>${sp.ttc <= 0.005 ? ' · <span style="color:var(--danger)">rien de coché</span>' : ''}`; };
-  const renderSvc = () => {
-    const box = $('cxSvc'); if (!box) return;
-    if (status !== 'annule') { box.style.display = 'none'; return; }
-    box.style.display = '';
-    if (!items.length) { box.innerHTML = '<p class="hint">Aucune prestation facturable pour ce cheval (seul le déplacement, toujours conservé). « Annuler » retire simplement ce cheval de la tournée.</p>'; return; }
-    const rows = items.map((it, i) => `<label class="ch-opt"><input type="checkbox" data-svc="${i}"${checked.has(it.key) ? ' checked' : ''}/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label>`).join('');
-    box.innerHTML = `<label>Prestations à annuler <button type="button" class="btn small" id="cxAll">Tout</button> <button type="button" class="btn small" id="cxNone">Rien</button></label><div class="ch-opts">${rows}</div><p class="hint" id="cxRecap"></p>`;
-    box.querySelectorAll('[data-svc]').forEach((inp) => inp.addEventListener('change', () => { const it = items[+inp.dataset.svc]; if (inp.checked) checked.add(it.key); else checked.delete(it.key); updateRecap(); }));
-    $('cxAll').onclick = () => { items.forEach((it) => checked.add(it.key)); renderSvc(); };
-    $('cxNone').onclick = () => { checked.clear(); renderSvc(); };
-    updateRecap();
-  };
-  const refreshMode = () => {
-    const rep = status === 'reporte';
-    if ($('cxReportBox')) $('cxReportBox').style.display = rep ? '' : 'none';
-    renderSvc();
-    if ($('cxNote2')) { const issue = clientPaiementIssue(opts.tour, opts.clientId);
-      $('cxNote2').innerHTML = rep ? (clientPaiementDone(opts.tour, opts.clientId) ? '⛔ <b>Report impossible</b> : ce RDV est déjà payé (prestation effectuée). Choisissez « Annulé » si nécessaire.' : '↩ Report : aucun paiement à valider ; le RDV part dans « Rendez-vous à prendre ».')
-        : (issue ? '⚠ <b>Annulation</b> : le paiement du client doit d\'abord être validé (' + esc(issue) + ').'
-          : (() => { const pp = (opts.tour.payments || {})[opts.clientId] || {}; if (pp.method === 'virement') return '✔ Paiement validé → une <b>note de crédit</b> (à rembourser par virement) sera créée.'; if (pp.method === 'liquide' && pp.facture) return '✔ Paiement validé → un <b>avoir</b> (facture) sera émis et le <b>liquide remboursé</b> (déplacement gardé).'; return '✔ Paiement validé → le <b>liquide sera remboursé</b> (déplacement gardé, à l\'euro inférieur).'; })()); }
-  };
-  document.querySelectorAll('#cxStatus .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxStatus .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); status = b.dataset.st; refreshMode(); }));
   document.querySelectorAll('#cxReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cxReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
-  refreshMode();
   $('cxOk').addEventListener('click', () => {
-    if (comptaLocked(opts.tour, opts.clientId)) { alert('🔒 La période comptable de cette tournée a été déclarée entre-temps : l\'annulation/report n\'est plus possible (règle immuable).'); closeModal(); return; } // P2-1 : re-vérifie le verrou au COMMIT (déclaration faite depuis l\'ouverture de la modale, ou par un autre appareil)
+    if (comptaLocked(opts.tour, opts.clientId)) { alert('🔒 Période comptable déclarée : report impossible.'); closeModal(); return; }
+    if (clientPaiementDone(opts.tour, opts.clientId)) { alert('⛔ Ce RDV est maintenant payé : il ne peut plus être reporté (rouvrez pour l\'annuler).'); closeModal(); return; }
     const note = $('cxNote').value.trim();
-    if (status === 'reporte' && clientPaiementDone(opts.tour, opts.clientId)) { alert('⛔ Ce RDV est déjà payé (paiement validé) : la prestation est considérée comme effectuée, il ne peut pas être reporté (liquide, virement ou facture). Utilisez « Annulé » si vous devez émettre une note de crédit.'); return; }
-    if (status === 'annule') { // ANNULATION : paiement du client OBLIGATOIRE d'abord
-      const issue = clientPaiementIssue(opts.tour, opts.clientId);
-      if (issue) { if (confirm('Avant d\'annuler ce client, son paiement doit être validé (' + issue + '). Ouvrir le paiement maintenant ?') && opts.arret) { closeModal(); modalPayment(opts.tour, opts.arret, () => modalCancelRdv(nom, opts)); } return; }
-      if (items.length && !svcSel().length) { alert('Cochez au moins une prestation à annuler (ou choisissez « Reporté »).'); return; }
-    }
-    const sel = svcSel();
-    const partial = items.length > 0 && sel.length < items.length; // annulation PARTIELLE = au moins une prestation gardée (tout coché = cheval entier, chemin historique)
-    const services = sel.filter((it) => it.key.indexOf('art:') !== 0).map((it) => it.key);
-    const artIds = sel.filter((it) => it.key.indexOf('art:') === 0).map((it) => it.key.slice(4));
-    const cSplit = cancelItemsSplit(sel);
-    cv.cancel = { status, reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
-    if (status === 'annule' && partial) { cv.cancel.services = services; cv.cancel.articles = artIds; } // PARTIEL → masque prestation par prestation ; TOTAL → pas de .services (= cheval entier, identique à avant)
-    if (status === 'annule') cv.cancel.items = sel.map((it) => ({ key: it.key, label: it.label, ttc: it.ttc, ht: it.ht, tva: it.tva, matHT: it.matHT || 0 })); // fige les montants annulés (les prestations disparaissent du calcul → seule trace fiable pour la liste/PDF)
-    const pp = (opts.tour.payments || {})[opts.clientId] || {}, pm = pp.method; // M1 : le traitement dépend de la MÉTHODE de paiement
-    if (status === 'annule' && clientPaiementDone(opts.tour, opts.clientId)) {
-      const ncOpts = partial ? { cancelSplit: cSplit, cancelTTC: cSplit.ttc, services } : null; // NC ventilée sur les seules prestations annulées (partiel)
-      if (pm === 'virement') { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note, ncOpts || undefined); cv.cancel.credited = true; } // VIREMENT → NC qui neutralise le CA (cheval reste facturé, services non masqués)
-      else if (pm === 'liquide' && pp.facture) { cv.cancel.creditNoteId = createCreditNote(opts.clientId, opts.tour, cv, reason, note, Object.assign({ documentaire: true }, ncOpts || {})); } // FACTURE LIQUIDE → avoir DOCUMENTAIRE (modèle B) : credited reste false → prestations retirées + remboursement caisse ci-dessous
-    }
-    if (status === 'reporte') { const mt = Math.max(0, parseFloat(($('cxMontant') || {}).value) || 0); if (mt > 0.005) { const c = clients.find((x) => x.id === opts.clientId); if (c) { if (!Array.isArray(c.impayes)) c.impayes = []; c.impayes.push({ id: uid(), sourceTourId: opts.tour.id, date: opts.tour.date, ttc: mt, collected: false, collectedTourId: null, reporte: true }); saveClients(); } } } // montant à facturer à la prochaine visite (réinjecté auto)
-    closeModal();
-    if (status === 'annule' && pm === 'liquide' && clientPaiementDone(opts.tour, opts.clientId)) { recomputeTourLocal(opts.tour); currentTour = opts.tour; persistCurrentTour(); modalCancelRefund(opts.tour, liquideRefundList(opts.tour, [opts.clientId]), 'RDV annulé.'); } // M1 : annulation LIQUIDE payée → remboursement (déplacement + prestations gardées, arrondi à l'euro inférieur)
-    else opts.onDone();
+    cv.cancel = { status: 'reporte', reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
+    const mt = Math.max(0, parseFloat(($('cxMontant') || {}).value) || 0);
+    if (mt > 0.005) { const c = clients.find((x) => x.id === opts.clientId); if (c) { if (!Array.isArray(c.impayes)) c.impayes = []; c.impayes.push({ id: uid(), sourceTourId: opts.tour.id, date: opts.tour.date, ttc: mt, collected: false, collectedTourId: null, reporte: true }); saveClients(); } }
+    closeModal(); opts.onDone();
   });
 }
 // Corriger les prestations d'une tournée CLÔTURÉE : réactive un cheval « présent » mais sans acte coché (ancien modèle « présent »
