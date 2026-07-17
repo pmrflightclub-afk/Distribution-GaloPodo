@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.81';
+const APP_VERSION = '1.7.82';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.82', date: '2026-07-17',
+    ajouts: [
+      'FIABILITÉ (arrêt fantôme) — un arrêt « domicile » d\'un client sans cheval à cette adresse (ses chevaux sont à l\'écurie) ne se ré-ajoute plus tout seul après une synchronisation. Cause : quand l\'app supprimait cet arrêt, elle le faisait sans le mémoriser, donc la synchronisation le réinjectait depuis l\'autre appareil — et le temps de route de retour sautait à chaque fois. Désormais la suppression pose un marqueur qui est respecté à la fusion : l\'arrêt fantôme disparaît définitivement (sur tous les appareils).',
+      'NETTOYAGE — le bouton « 🔄 Recalculer toutes les tournées » (Réglages → Sauvegarde) nettoie maintenant les arrêts fantômes des tournées en cours et pose ces marqueurs. Pour supprimer un arrêt fantôme existant : ouvrez la tournée concernée (ou cliquez « Recalculer toutes les tournées »), enregistrez, puis synchronisez.',
+    ],
+  },
   {
     version: '1.7.81', date: '2026-07-17',
     ajouts: [
@@ -6326,6 +6333,8 @@ function reconcileTour(tour) {
   oldArrets.forEach((a) => (a.clients || []).forEach((cl) => { const k = ckey(cl.clientId, a.addr); oldClMap[k] = cl; if (cl.heure && (!oldHeure[k] || cl.heure < oldHeure[k])) oldHeure[k] = cl.heure; }));
   newArrets.forEach((na) => { (na.clients || []).forEach((ncl) => { const k = ckey(ncl.clientId, na.addr); const oc = oldClMap[k]; if (oc) { if (typeof oc.validatedAt === 'number') ncl.validatedAt = oc.validatedAt; if (oc.rdvDone) ncl.rdvDone = true; } if (oldHeure[k] && (!ncl.heure || oldHeure[k] < ncl.heure)) ncl.heure = oldHeure[k]; }); syncArretValidated(na); });
   tour.arrets = newArrets.filter((a) => a.clients.length);
+  // FIABILITÉ (arrêt fantôme) : un arrêt présent AVANT mais que la reconciliation vient de SUPPRIMER (plus aucun cheval ni déplacement ne s'y rattache — typiquement l'adresse DOMICILE d'un client dont les chevaux sont en réalité à l'écurie) reçoit un tombstone → la fusion entre appareils ne le RÉ-INJECTE plus. Sans ça, l'arrêt supprimé « en silence » revenait à chaque synchro (réinjecté depuis la copie Drive) et faisait sauter le temps de retour. Tombstone résolu par DATE → un arrêt légitimement re-créé plus tard (plus récent) survit.
+  { const newKeys = new Set((tour.arrets || []).map((a) => norm(addrStr(a.addr)))); const now = Date.now(); (oldArrets || []).forEach((a) => { const k = norm(addrStr(a.addr)); if (k && !newKeys.has(k)) { tour.arrDel = tour.arrDel || {}; tour.arrDel[k] = now; changed = true; } }); }
   if (JSON.stringify(tour.arrets) !== beforeArrets) changed = true;
   if (beforeAddr !== addrSig(tour.arrets)) { tour.result = null; invalidateTourRoute(oldArrets.map((a) => norm(addrStr(a.addr))), tour); } // adresses modifiées → recalcul géométrie + segments/heures périmés
   // Articles : resync par id (renommage / suppression de cheval)
@@ -7584,6 +7593,7 @@ function recalcAllTours() {
   //    et on répare les arrondis caisse devenus aberrants. Pour recalculer une facture, ouvrez la tournée (recalcul complet à l'ouverture).
   let n = 0;
   allTours().forEach((t) => {
+    if (statusOf(t) !== 'cloturee') reconcileTour(t); // NETTOYAGE des arrêts fantômes (arrêt sans cheval — ex. domicile d'un client dont les chevaux sont à l'écurie) + pose des tombstones arrDel → ils ne reviennent plus à la synchro. N'affecte pas les tournées clôturées (figées).
     if (sanitizeTourStats(t)) n++;
     // Arrondi caisse aberrant (|arrondi| > 10 € : un vrai arrondi caisse est de l'ordre de l'euro) → on retire le montant rectifié.
     if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; if (p && p.method === 'liquide' && m && Math.abs(payRectifie(m, p) - (m.totalTTC || 0)) > 3 && !comptaLocked(t, cid)) { p.rectifie = null; p.montantPaye = null; } }); // L8 : purge l'arrondi caisse aberrant (>3 €) — M2 : jamais sur un mois DÉCLARÉ (pièce figée)
