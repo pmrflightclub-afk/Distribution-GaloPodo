@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.72';
+const APP_VERSION = '1.7.73';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.73', date: '2026-07-17',
+    ajouts: [
+      'NOTES DE CRÉDIT — les numéros sont désormais préfixés par appareil (ex. « NC #AB3-1 ») pour garantir qu\'ils restent uniques même en travaillant hors-ligne sur plusieurs appareils.',
+      'TOURNÉE CLÔTURÉE — l\'éditeur affiche maintenant un récapitulatif des annulations / notes de crédit par client (n° de NC + prestations concernées), directement sur la tournée.',
+      'Nettoyage interne (retrait d\'anciennes fonctions inutilisées).',
+    ],
+  },
   {
     version: '1.7.72', date: '2026-07-17',
     ajouts: [
@@ -6876,6 +6884,20 @@ function renderEditorArrets(locked) {
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
         actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts ac-hd-row"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-sec"><div class="ac-sec-h">📍 Sur place</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div></div><div class="ac-sec"><div class="ac-sec-h">🔒 Clôture de l'arrêt du client</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
+        // Tournée CLÔTURÉE : le bloc « actes » (et son badge) n'est pas rendu → on affiche ici un récap LECTURE SEULE des annulations / notes de crédit du client, avec le n° de NC.
+        if (locked) {
+          const canc = (cl.chevaux || []).filter((cv) => chevalCancelled(cv));
+          if (canc.length) {
+            const rbox = document.createElement('div'); rbox.className = 'a-prets';
+            rbox.innerHTML = '<div class="a-art-head"><span>🚫 Annulations / notes de crédit</span></div>' + canc.map((cv) => {
+              const st = cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé';
+              const nc = cv.cancel.creditNoteNum ? ' · <b>NC #' + esc(String(cv.cancel.creditNoteNum)) + '</b>' : (cv.cancel.credited ? ' · <b>NC</b>' : '');
+              const its = (cv.cancel.items || []).map((it) => esc(it.label) + ' — ' + eur(it.ttc)).join(' · ');
+              return `<div class="list-item"><div class="li-main"><b>🐴 ${esc(cv.nom)}</b><span class="li-sub">${st}${nc}${its ? ' · ' + its : ''}</span></div></div>`;
+            }).join('');
+            el.appendChild(rbox);
+          }
+        }
         if (!locked) {
           { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; if (cl.heureAncienne != null && newH === cl.heureAncienne) { delete cl.aPrevenir; delete cl.heureAncienne; } else if (oldH && newH && oldH !== newH) { if (!cl.aPrevenir) cl.heureAncienne = oldH; cl.aPrevenir = true; } persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
           if (!futureTour) actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (closeClientAt(currentTour, a, cl)) persistCurrentTour(); refreshEverywhere(); }, cl.clientId)); // L4 : paiement complet du CLIENT → clôture ce client (cl.validatedAt) ; l'arrêt est clôturé quand tous ses clients le sont
@@ -12463,23 +12485,6 @@ function comptaLocked(tour, clientId) {
 }
 // M2 : une tournée est « verrouillée compta » si l'un de ses clients l'est (démarche validée ou mois liquide encodé). Sert à figer définitivement une pièce déclarée.
 function tourComptaLocked(t) { return !!t && (t.arrets || []).some((a) => (a.clients || []).some((cl) => comptaLocked(t, cl.clientId))); }
-// Montant RÉELLEMENT facturé (post-réduction, tarif figé) d'un cheval : lu dans le résultat figé de la tournée
-// (part du cheval dans les lignes d'articles + son matériel), hors déplacement. Repli tarif plein si résultat absent.
-function chevalInvoicedTTC(tour, clientId, cv) {
-  const R = tour && tour.result;
-  const m = R && R.parClient && R.parClient.find((x) => x.clientId === clientId);
-  if (!m) return chevalWouldBeTTC(cv, clientId);
-  const nn = norm(cv.nom); let ttc = 0;
-  (m.articles || []).forEach((a) => {
-    if (a.impaye) return;
-    const names = (a.chevaux || []).map(norm); const idx = names.indexOf(nn);
-    if (idx < 0) return;
-    const share = a.qtesByNom ? ((a.qtesByNom[a.chevaux[idx]] || 1) / (a.qte || 1)) : (1 / ((a.chevaux || []).length || 1));
-    ttc += (a.ttc || 0) * share; // a.ttc est déjà net de réduction (parage/visite remisés)
-  });
-  (m.materiel || []).forEach((mt) => { if (norm(mt.nom) === nn) ttc += (mt.ttc || 0); });
-  return ttc;
-}
 // F2 : découpage HT/TVA RÉEL d'un cheval facturé — main d'œuvre (articles/actes : parage, visite, patho, difficile/lourd) VS matériel.
 // Le DÉPLACEMENT est EXCLU (jamais crédité — le pro s'est déplacé). Sert à ventiler l'extourne d'un avoir précisément par poste/sous-compte (provisions justes).
 function chevalInvoicedSplit(tour, clientId, chevalNom) {
@@ -12519,18 +12524,9 @@ function ncBreakdown(n) {
   if (sp.moHT || sp.matHT || sp.tva) return { moHT: sp.moHT, matHT: sp.matHT, depHT: 0, tva: sp.tva };
   const r = rate(); const ttc = (n && n.montantTTC) || 0; const ht = ttc / (1 + r); return { moHT: ht, matHT: 0, depHT: 0, tva: ttc - ht };
 }
-// Crée une note de crédit (RDV payé annulé) : montant = ce que le cheval a réellement été facturé (post-réduction). Retourne l'id.
-function createCreditNote(clientId, tour, cv, motif, note, opts) {
-  const id = uid();
-  const doc = !!(opts && opts.documentaire); // modèle B : facture payée en LIQUIDE annulée → l'avoir est une PIÈCE documentaire. Le CA est déjà neutralisé par le retrait des actes et le cash rendu via la caisse → cette NC ne doit PAS re-réduire le CA, et elle est d'emblée « remboursée » (le liquide a été rendu à l'annulation).
-  const sp = (opts && opts.cancelSplit) ? opts.cancelSplit : chevalInvoicedSplit(tour, clientId, cv.nom); // F2 : fige le découpage main d'œuvre/matériel (déplacement exclu). Annulation PARTIELLE (par service) → opts.cancelSplit = ventilation des seules prestations annulées.
-  const ttc = (opts && opts.cancelTTC != null) ? opts.cancelTTC : chevalInvoicedTTC(tour, clientId, cv); // TTC des prestations annulées (partiel) ou du cheval entier
-  S.notesCredit.push({ id, clientId, clientNom: clientName(clientId), tourId: tour.id, tourDate: tour.date, chevalNom: cv.nom, montantTTC: ttc, moHT: sp.moHT, matHT: sp.matHT, tva: sp.tva, motif: motif || 'client', note: note || '', date: todayStr(), rembourse: doc, rembourseAt: doc ? todayStr() : null, documentaire: doc, services: (opts && opts.services) ? opts.services.slice() : null });
-  saveSettings();
-  return id;
-}
-// Numéro de NC séquentiel (dérivé du max existant → robuste sans compteur dédié).
-function nextNcNumero() { return (S.notesCredit || []).reduce((m, n) => Math.max(m, n.numero || 0), 0) + 1; }
+// Numéro de NC = préfixe APPAREIL (2-3 car. stables, device-local) + séquence propre à cet appareil → jamais de doublon même hors-ligne sur 2 appareils.
+function ncDevicePfx() { const d = (S.deviceId || '').replace(/[^a-z0-9]/gi, ''); return ((d.slice(-3) || 'x0') + '').toUpperCase(); }
+function nextNcNumero() { const pfx = ncDevicePfx(); const seq = (S.notesCredit || []).reduce((m, n) => { const s = String(n.numero == null ? '' : n.numero); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; return Math.max(m, v); } return m; }, 0) + 1; return pfx + '-' + seq; }
 // NC PAR (client, tournée/date) — modèle définitif (2026-07-17). Regroupe des lignes { chevalNom, key, label, moHT, matHT, depHT, tva, ttc }.
 //  numero séquentiel ; opts: { motif, note, cashRefunded }. La NC réduit le CA (aucune ne le fait « en double » : les cas NC laissent la tournée figée). Le déplacement peut faire partie des lignes (crédité au choix).
 function createClientCreditNote(clientId, tour, lines, opts) {
