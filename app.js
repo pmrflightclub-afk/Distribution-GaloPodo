@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.68';
+const APP_VERSION = '1.7.69';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.69', date: '2026-07-17',
+    ajouts: [
+      '« ANNULER UNE FACTURATION » (tournée clôturée) refondu — désormais réservé aux clients en FACTURE LIQUIDE et VIREMENT. On coche PRESTATION par prestation (et, au choix, le DÉPLACEMENT), y compris sur un cheval déjà partiellement annulé (ses prestations restantes réapparaissent). Chaque client donne UNE note de crédit numérotée (détail par cheval/prestation) qui réduit le CA ; la tournée reste FIGÉE (aucun élément retiré de la répartition) et les stats km/temps/route sont gardées. Facture liquide → remboursement liquide égal au montant de la note de crédit.',
+    ],
+  },
   {
     version: '1.7.68', date: '2026-07-17',
     ajouts: [
@@ -12724,31 +12730,41 @@ function cashClientsNeedingArrondi(t) {
 // Annuler une facturation sur une tournée CLÔTURÉE (figée) : choisir tournée entière / arrêt / client / cheval.
 // Retire SEULEMENT la part de facture (géométrie, km, temps, route, autres clients : inchangés → recalcul LOCAL qui réutilise la géométrie figée) et met à jour les stats (tournée + globales).
 // Règles note de crédit : virement + facture → NC obligatoire ; liquide, liquide+facture, virement sans facture → suppression de la répartition SANS NC.
+function findCvInTour(t, clientId, nom) { let found = null; (t.arrets || []).some((a) => (a.clients || []).some((cl) => { if (cl.clientId !== clientId) return false; const f = (cl.chevaux || []).find((x) => norm(x.nom) === norm(nom)); if (f) { found = f; return true; } return false; })); return found; }
+// « Annuler une facturation » (tournée CLÔTURÉE) — FACTURE LIQUIDE + VIREMENT uniquement. Par PRESTATION. La tournée reste FIGÉE ; une NOTE DE CRÉDIT (1 par client) réduit le CA. Déplacement retirable via la NC (stats gardées). Facture liquide → remboursement cash = montant NC.
 function modalCancelBilling(t) {
+  const r = rate();
+  const remainingItems = (cv, clientId) => { const all = chevalCancelItems(t, clientId, cv.nom); const done = new Set(); if (cv.cancel) { (cv.cancel.services || []).forEach((k) => done.add(k)); (cv.cancel.articles || []).forEach((id) => done.add('art:' + id)); } return all.filter((it) => !done.has(it.key)); }; // prestations ENCORE facturées (non déjà créditées)
+  const clientDepLine = (clientId) => { const R = t.result, m = R && R.parClient && R.parClient.find((x) => x.clientId === clientId); if (!m) return null; const depHT = (m.deplacement || []).reduce((s, l) => s + (l.partHT || 0), 0); if (depHT <= 0.005) return null; return { key: '__dep', label: 'Déplacement (km)', moHT: 0, matHT: 0, depHT, tva: depHT * r, ttc: depHT * (1 + r) }; };
   const groups = [];
   (t.arrets || []).forEach((a, ai) => {
     const clientsG = [];
     (a.clients || []).forEach((cl) => {
-      const chs = (cl.chevaux || []).filter((cv) => chevalFait(cv)); // annulables = acte fait, pas déjà annulé
-      if (!chs.length) return;
       const p = (t.payments || {})[cl.clientId] || {};
-      clientsG.push({ clientId: cl.clientId, nom: clientName(cl.clientId), chevaux: chs, method: p.method || null, fac: !!p.facture, nc: p.method === 'virement', locked: comptaLocked(t, cl.clientId) }); // virement → NC obligatoire (avec OU sans facture)
+      if (!(p.method === 'virement' || (p.method === 'liquide' && p.facture))) return; // facture liquide / virement / facture virement UNIQUEMENT
+      const chevaux = (cl.chevaux || []).map((cv) => ({ cv, items: remainingItems(cv, cl.clientId) })).filter((x) => x.items.length);
+      const dep = p.depCredited ? null : clientDepLine(cl.clientId);
+      if (!chevaux.length && !dep) return;
+      clientsG.push({ clientId: cl.clientId, nom: clientName(cl.clientId), method: p.method, fac: !!p.facture, chevaux, dep, locked: comptaLocked(t, cl.clientId) });
     });
     if (clientsG.length) groups.push({ ai, label: labelFor(a) || ('Arrêt ' + (ai + 1)), clients: clientsG });
   });
-  if (!groups.length) { alert('Aucune facturation annulable sur cette tournée (déjà annulée, ou rien de facturé).'); return; }
+  if (!groups.length) { alert('Aucune facturation (facture liquide / virement) annulable sur cette tournée.'); return; }
   let reason = 'client';
   let html = `<div class="modal-head"><b>🚫 Annuler une facturation — ${esc(fmtDateFr(t.date))}</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Cochez ce que vous voulez retirer de la facture : la tournée entière, un arrêt, un client ou un cheval. Le trajet, les kilomètres, le temps et les autres clients ne changent pas — seule la part facturée est retirée, et les statistiques sont mises à jour.</p>
-    <label class="chk2"><input type="checkbox" id="cbAll"/> <b>Toute la tournée</b></label>
+    <p class="hint">Facture liquide & virement uniquement. Cochez les <b>prestations</b> (et éventuellement le <b>déplacement</b>) à retirer : une <b>note de crédit par client</b> réduit le CA. Le trajet/km/temps et les stats ne changent pas — la tournée reste <b>figée</b>.</p>
     <div id="cbTree" style="margin:6px 0 4px 0">`;
   groups.forEach((g) => {
-    html += `<div class="cb-arret" style="margin:8px 0 2px 0"><label class="chk2"><input type="checkbox" data-arret="${g.ai}"/> <b>${esc(g.label)}</b></label>`;
+    html += `<div class="cb-arret" style="margin:8px 0 2px 0"><b>${esc(g.label)}</b>`;
     g.clients.forEach((c) => {
-      const key = g.ai + ':' + c.clientId;
-      const tag = c.locked ? ' <span class="li-sub">🔒 période comptable verrouillée</span>' : (c.nc ? ' <span class="li-sub">→ note de crédit (virement)</span>' : (c.method === 'liquide' ? (c.fac ? ' <span class="li-sub">→ avoir (facture) + remboursement liquide</span>' : ' <span class="li-sub">→ suppression liquide, pas de NC</span>') : ' <span class="li-sub">non payé → suppression</span>'));
-      html += `<div style="padding-left:14px"><label class="chk2"><input type="checkbox" data-client="${key}"${c.locked ? ' disabled' : ''}/> <b>${esc(c.nom)}</b>${tag}</label>`;
-      c.chevaux.forEach((cv) => { html += `<div style="padding-left:16px"><label class="chk2"><input type="checkbox" data-cv="${key}:${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}"${c.locked ? ' disabled' : ''}/> 🐴 ${esc(cv.nom)}</label></div>`; });
+      const tag = c.locked ? ' <span class="li-sub">🔒 période verrouillée</span>' : (c.method === 'virement' ? ' <span class="li-sub">→ NC (virement)</span>' : ' <span class="li-sub">→ NC + remboursement liquide</span>');
+      html += `<div style="padding-left:12px;margin-top:3px"><label class="chk2"><input type="checkbox" data-client="${c.clientId}"${c.locked ? ' disabled' : ''}/> <b>${esc(c.nom)}</b>${tag}</label>`;
+      c.chevaux.forEach((x) => {
+        html += `<div style="padding-left:16px"><div class="li-sub">🐴 ${esc(x.cv.nom)}${chevalCancelled(x.cv) ? ' <span class="badge badge-cancel">déjà partiellement annulé</span>' : ''}</div>`;
+        x.items.forEach((it) => { html += `<div style="padding-left:12px"><label class="chk2"><input type="checkbox" class="cb-item" data-cid="${c.clientId}" data-nom="${esc(x.cv.nom)}" data-key="${esc(it.key)}" data-mo="${it.moHT || 0}" data-mat="${it.matHT || 0}" data-dep="0" data-tva="${it.tva || 0}" data-ttc="${it.ttc || 0}" data-label="${esc(it.label)}"${c.locked ? ' disabled' : ''}/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label></div>`; });
+        html += `</div>`;
+      });
+      if (c.dep) html += `<div style="padding-left:16px"><label class="chk2"><input type="checkbox" class="cb-item" data-cid="${c.clientId}" data-nom="" data-key="__dep" data-mo="0" data-mat="0" data-dep="${c.dep.depHT}" data-tva="${c.dep.tva}" data-ttc="${c.dep.ttc}" data-label="Déplacement (km)"${c.locked ? ' disabled' : ''}/> 🚗 Déplacement (km) — retirer via la NC (stats gardées) <span class="li-sub">${eur(c.dep.ttc)}</span></label></div>`;
       html += `</div>`;
     });
     html += `</div>`;
@@ -12756,43 +12772,46 @@ function modalCancelBilling(t) {
   html += `</div>
     <label>Motif</label><div class="seg" id="cbReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
     <label>Note (facultatif)<input type="text" id="cbNote" placeholder="ex. erreur de facturation, geste commercial…"/></label>
-    <div class="actions"><button class="btn danger block" id="cbOk">Annuler les facturations cochées</button></div>`;
+    <p class="hint" id="cbRecap"></p>
+    <div class="actions"><button class="btn danger block" id="cbOk" disabled>Émettre les notes de crédit</button></div>`;
   openModal(html);
   $('mX').addEventListener('click', closeModal);
   const box = $('cbTree');
-  $('cbAll').addEventListener('change', (e) => box.querySelectorAll('input[type=checkbox]:not(:disabled)').forEach((c) => (c.checked = e.target.checked)));
-  box.querySelectorAll('[data-arret]').forEach((ac) => ac.addEventListener('change', (e) => box.querySelectorAll(`[data-client^="${ac.dataset.arret}:"]:not(:disabled),[data-cv^="${ac.dataset.arret}:"]:not(:disabled)`).forEach((c) => (c.checked = e.target.checked))));
-  box.querySelectorAll('[data-client]').forEach((cc) => cc.addEventListener('change', (e) => box.querySelectorAll(`[data-cv^="${cc.dataset.client}:"]:not(:disabled)`).forEach((c) => (c.checked = e.target.checked))));
+  function recap() { const ch = Array.from(box.querySelectorAll('.cb-item:checked')); const ttc = ch.reduce((s, c) => s + (parseFloat(c.dataset.ttc) || 0), 0); if ($('cbRecap')) $('cbRecap').innerHTML = ch.length ? `${ch.length} ligne(s) — <b>${eur(ttc)}</b> TTC d'avoir` : ''; if ($('cbOk')) $('cbOk').disabled = !ch.length; }
+  box.querySelectorAll('[data-client]').forEach((cc) => cc.addEventListener('change', (e) => { box.querySelectorAll('.cb-item[data-cid="' + cc.dataset.client + '"]:not(:disabled)').forEach((c) => (c.checked = e.target.checked)); recap(); }));
+  box.querySelectorAll('.cb-item').forEach((c) => c.addEventListener('change', recap));
   document.querySelectorAll('#cbReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cbReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
   $('cbOk').addEventListener('click', () => {
     const note = $('cbNote').value.trim();
-    const checked = Array.from(box.querySelectorAll('[data-cv]:checked'));
-    if (!checked.length) { alert('Cochez au moins un cheval, client ou arrêt à annuler.'); return; }
-    let nNC = 0, nDel = 0;
-    checked.forEach((cb) => {
-      const parts = cb.dataset.cv.split(':'); const ai = +parts[0], clientId = parts[1], chId = parts[2];
-      const a = t.arrets[ai]; if (!a) return;
-      if (comptaLocked(t, clientId)) return; // P2-1 : re-vérifie le verrou au COMMIT (pas seulement l'état DOM `disabled` figé au rendu)
-      const cl = (a.clients || []).find((x) => x.clientId === clientId); if (!cl) return;
-      const cv = (cl.chevaux || []).find((x) => (chId && x.id != null && String(x.id) === chId) || norm(x.nom) === norm(cb.dataset.nom));
-      if (!cv || chevalCancelled(cv)) return;
-      const p = (t.payments || {})[clientId] || {};
-      cv.cancel = { status: 'annule', reason, note, at: new Date().toISOString(), replacedTourId: null, credited: false };
-      if (p.method === 'virement') { cv.cancel.creditNoteId = createCreditNote(clientId, t, cv, reason, note); cv.cancel.credited = true; nNC++; } // VIREMENT → NC qui neutralise le CA (NC lit le montant dans le résultat ENCORE figé, avant recalcul)
-      else if (p.method === 'liquide' && p.facture) { cv.cancel.creditNoteId = createCreditNote(clientId, t, cv, reason, note, { documentaire: true }); nNC++; } // modèle B : FACTURE LIQUIDE → avoir documentaire (pièce) ; actes retirés + remboursement liquide (ci-dessous)
-      else nDel++;
+    const checked = Array.from(box.querySelectorAll('.cb-item:checked'));
+    if (!checked.length) return;
+    const byClient = {}; checked.forEach((c) => { const cid = c.dataset.cid; if (comptaLocked(t, cid)) return; (byClient[cid] = byClient[cid] || []).push(c); });
+    let nNC = 0, refundTotal = 0;
+    Object.keys(byClient).forEach((cid) => {
+      const lines = [], chevalKeys = {}; let depChecked = false;
+      byClient[cid].forEach((c) => {
+        const key = c.dataset.key, nom = c.dataset.nom;
+        lines.push({ chevalNom: nom || null, key, label: c.dataset.label, moHT: parseFloat(c.dataset.mo) || 0, matHT: parseFloat(c.dataset.mat) || 0, depHT: parseFloat(c.dataset.dep) || 0, tva: parseFloat(c.dataset.tva) || 0, ttc: parseFloat(c.dataset.ttc) || 0 });
+        if (key === '__dep') depChecked = true;
+        else { (chevalKeys[nom] = chevalKeys[nom] || { services: [], articles: [] }); if (key.indexOf('art:') === 0) chevalKeys[nom].articles.push(key.slice(4)); else chevalKeys[nom].services.push(key); }
+      });
+      const p = (t.payments || {})[cid] || {}; const isFacLiq = p.method === 'liquide' && p.facture;
+      const nc = createClientCreditNote(cid, t, lines, { motif: reason, note, cashRefunded: isFacLiq }); nNC++;
+      Object.keys(chevalKeys).forEach((nom) => { // marquage : cheval crédité + services NC'd + n° NC ; tournée figée (credited → reste facturé)
+        const cv = findCvInTour(t, cid, nom); if (!cv) return; const add = chevalKeys[nom];
+        if (chevalCancelled(cv)) { cv.cancel.services = (cv.cancel.services || []).concat(add.services); cv.cancel.articles = (cv.cancel.articles || []).concat(add.articles); }
+        else cv.cancel = { status: 'annule', reason, note, at: new Date().toISOString(), replacedTourId: null, credited: true, services: add.services, articles: add.articles };
+        cv.cancel.credited = true; cv.cancel.creditNoteId = nc.id; cv.cancel.creditNoteNum = nc.numero;
+        const its = lines.filter((l) => l.chevalNom === nom).map((l) => ({ key: l.key, label: l.label, ttc: l.ttc, ht: (l.moHT || 0) + (l.matHT || 0) + (l.depHT || 0), tva: l.tva, matHT: l.matHT || 0 }));
+        cv.cancel.items = (cv.cancel.items || []).concat(its);
+      });
+      if (depChecked) { p.depCredited = true; p.depCreditNoteNum = nc.numero; }
+      if (isFacLiq) { const amt = lines.reduce((s, l) => s + (l.ttc || 0), 0); p.rembourse = (p.rembourse || 0) + amt; const gross = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : amt); p.rectifie = Math.max(0, Math.round(gross - amt)); p.montantPaye = null; refundTotal += amt; } // facture liquide : remboursement cash = montant NC ; caisse réduite d'autant
+      t.payments[cid] = p;
     });
-    recomputeTourLocal(t); // recalcul argent uniquement : réutilise la géométrie figée → km/temps/route/autres clients identiques
-    currentTour = t; persistCurrentTour(); // conserve t.closed (reste figée)
-    // M1 : clients LIQUIDE annulés → remboursement unifié (on garde le déplacement arrondi à l'euro inférieur, on rembourse la différence).
-    // Virement = note de crédit (déjà émise ci-dessus) ; liquide (avec ou sans facture) = remboursement, jamais de NC.
-    const affected = Array.from(new Set(checked.map((cb) => cb.dataset.cv.split(':')[1])));
-    persistCurrentTour();
-    closeModal();
-    const msg = `Annulation effectuée : ${nDel} facturation(s) retirée(s)${nNC ? `, ${nNC} note(s) de crédit créée(s)` : ''}.`;
-    const refundList = liquideRefundList(t, affected);
-    if (refundList.length) modalCancelRefund(t, refundList, msg);
-    else { refreshEverywhere(); openEditor(); alert(msg + ' Stats mises à jour.'); }
+    currentTour = t; persistCurrentTour(); // tournée FIGÉE : chevaux crédités restent facturés → PAS de recalcul de la répartition (la NC réduit le CA)
+    closeModal(); refreshEverywhere(); openEditor();
+    alert(`✅ ${nNC} note(s) de crédit émise(s)${refundTotal > 0.005 ? ` · remboursement liquide : ${eur(refundTotal)}` : ''}. La tournée reste figée ; le CA est réduit par les notes de crédit.`);
   });
 }
 // Après une annulation partielle, saisie du montant liquide arrondi réellement encaissé (reste) pour les clients liquide SANS facture.
