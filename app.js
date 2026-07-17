@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.69';
+const APP_VERSION = '1.7.70';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.70', date: '2026-07-17',
+    ajouts: [
+      'NOTES DE CRÉDIT — le numéro de la NC apparaît maintenant sur le cheval (dans l\'éditeur de tournée : « 🚫 annulé · NC #… ») et dans la section « Annulations ». Les prestations créditées par une note de crédit y sont en lecture seule (pièce comptable, non supprimables).',
+      'FINANCES — un cheval crédité PARTIELLEMENT ne retire des ventes que le montant réellement crédité (plus le cheval entier).',
+    ],
+  },
   {
     version: '1.7.69', date: '2026-07-17',
     ajouts: [
@@ -5910,7 +5917,7 @@ function cancelEntries() {
     if (Array.isArray(cv.cancel.items) && cv.cancel.items.length) items = cv.cancel.items.map((it) => ({ key: it.key || null, label: it.label, ht: it.ht || 0, tva: it.tva || 0, ttc: it.ttc || 0 }));
     else items = chevalWouldBeLines(cv, cl.clientId).map((l) => ({ key: null, label: l.libelle, ttc: l.ttc, ht: l.ttc / (1 + r), tva: l.ttc - l.ttc / (1 + r) })); // ancien modèle / reporté (pas de clé → suppression du cheval entier)
     const ttc = items.reduce((s, i) => s + i.ttc, 0), ht = items.reduce((s, i) => s + i.ht, 0), tva = items.reduce((s, i) => s + i.tva, 0);
-    out.push({ tour: t, tourId: t.id, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', date: t.date, replaced: !!cv.cancel.replacedTourId, credited: chevalCredited(cv), locked: comptaLocked(t, cl.clientId), partial: chevalCancelSet(cv) instanceof Set, items, ht, tva, ttc });
+    out.push({ tour: t, tourId: t.id, arretIdx: ai, clientId: cl.clientId, clientNom: clientName(cl.clientId), cheval: cv.nom, cv, status: cv.cancel.status, reason: cv.cancel.reason, note: cv.cancel.note || '', date: t.date, replaced: !!cv.cancel.replacedTourId, credited: chevalCredited(cv), creditNoteNum: cv.cancel.creditNoteNum || null, locked: comptaLocked(t, cl.clientId), partial: chevalCancelSet(cv) instanceof Set, items, ht, tva, ttc });
   }))));
   return out.sort((x, y) => (y.date || '').localeCompare(x.date || ''));
 }
@@ -5976,10 +5983,12 @@ function renderAnnulations() {
       grp.list.forEach((c) => {
         const stLbl = c.status === 'reporte' ? '↩ reporté' : (c.partial ? '🚫 annulé (partiel)' : '🚫 annulé');
         const keyed = c.items.length > 0 && c.items.every((it) => it.key); // annulation par service → 1 case PAR PRESTATION ; sinon (ancien modèle / reporté) 1 case cheval entier
-        const detail = keyed
-          ? c.items.map((it) => `<label class="chk2" style="padding-left:20px"><input type="checkbox" class="an-del" data-k="${esc(entKey(c))}" data-key="${esc(it.key)}"/> ${esc(it.label)} — ${eur(it.ttc)}</label>`).join('')
-          : `<label class="chk2" style="padding-left:20px"><input type="checkbox" class="an-del" data-k="${esc(entKey(c))}" data-whole="1"/> ${c.items.map((it) => esc(it.label) + ' — ' + eur(it.ttc)).join(' · ') || '(annulation)'}</label>`;
-        h += `<div class="list-item"><div class="li-main"><b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b><span class="li-sub">${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · replacé' : ''}${c.credited ? ' · payé (NC)' : ''}</span>${detail}<span class="li-sub" style="padding-left:20px">Total : <b>${eur(c.ttc)}</b> TTC · HT ${eur(c.ht)} · TVA ${eur(c.tva)}</span></div></div>`;
+        let detail;
+        if (c.credited) detail = `<div class="li-sub" style="padding-left:20px">${c.items.map((it) => esc(it.label) + ' — ' + eur(it.ttc)).join('<br>') || '(annulation)'}</div>`; // crédité (NC) = pièce comptable → non supprimable ici (lecture seule)
+        else if (keyed) detail = c.items.map((it) => `<label class="chk2" style="padding-left:20px"><input type="checkbox" class="an-del" data-k="${esc(entKey(c))}" data-key="${esc(it.key)}"/> ${esc(it.label)} — ${eur(it.ttc)}</label>`).join('');
+        else detail = `<label class="chk2" style="padding-left:20px"><input type="checkbox" class="an-del" data-k="${esc(entKey(c))}" data-whole="1"/> ${c.items.map((it) => esc(it.label) + ' — ' + eur(it.ttc)).join(' · ') || '(annulation)'}</label>`;
+        const credLbl = c.credited ? (' · <b>crédité (NC' + (c.creditNoteNum ? ' #' + c.creditNoteNum : '') + ')</b>') : '';
+        h += `<div class="list-item"><div class="li-main"><b>🐴 ${esc(c.cheval)} <span class="li-sub">— ${esc(c.clientNom)}</span></b><span class="li-sub">${stLbl} · motif ${c.reason === 'pro' ? 'pro' : 'client'}${c.note ? ' · ' + esc(c.note) : ''}${c.replaced ? ' · replacé' : ''}${credLbl}</span>${detail}<span class="li-sub" style="padding-left:20px">Total : <b>${eur(c.ttc)}</b> TTC · HT ${eur(c.ht)} · TVA ${eur(c.tva)}</span></div></div>`;
       });
       h += `<p class="hint" style="text-align:right">Sous-total tournée : <b>${eur(st)}</b> TTC · HT ${eur(sh)} · TVA ${eur(sv)}</p>`;
       card.innerHTML = h; container.appendChild(card);
@@ -6907,7 +6916,7 @@ function renderEditorArrets(locked) {
           const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite));
           const fiche = cObj ? (cObj.chevaux || []).find((x) => norm(x.nom) === norm(ph.nom)) : null;
           const isLourd = !!(fiche && fiche.lourd);
-          const tag = cancelled ? ` <span class="badge badge-cancel">${cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé'}</span>` : '';
+          const tag = cancelled ? ` <span class="badge badge-cancel">${cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé'}${cv.cancel.creditNoteNum ? ' · NC #' + cv.cancel.creditNoteNum : (cv.cancel.credited ? ' · NC' : '')}</span>` : '';
           const ovrTag = (cv && cv.addrOverride && addrStr(cv.addrOverride).trim()) ? ' <span class="badge" title="Adresse ponctuelle pour cette tournée">📌 ponctuelle</span>' : '';
           const photoOn = !!(cv && cv.photo && (cv.photo.stades || []).length);
           const chips = [];
@@ -8413,11 +8422,9 @@ function financeStats() {
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
       const art = (m.articles || []).reduce((s, a) => s + ((a.impaye && !a.reporte) ? 0 : a.ttc), 0); // remise déjà appliquée ligne par ligne ; P1-3/F1 : exclut la ligne « Impayé du … » d'un PARTIEL (déjà compté au mois d'origine) mais garde un REPORTÉ (CA neuf)
-      // L8 : chevaux payés-annulés (note de crédit) → on retire leur MATÉRIEL et ARTICLES des ventes (remboursés par la NC),
-      // mais le DÉPLACEMENT reste ACQUIS (la NC ne rembourse jamais le déplacement — le pro s'est déplacé), cohérent avec la Compta et la règle d'annulation.
-      const matCred = (m.materiel || []).reduce((s, x) => s + (isCred(x.nom) ? x.ttc : 0), 0);
-      const artCred = (m.articles || []).reduce((s, a) => { const share = artPerCheval(a); return s + (a.chevaux || []).filter(isCred).reduce((ss, n) => ss + share(n), 0); }, 0);
-      c.dep += dep; c.mat += mat - matCred; c.art += art - artCred;
+      // Chevaux crédités (note de crédit) → on retire des VENTES le montant RÉELLEMENT crédité (mat+art de la NC), pas le cheval entier (un crédit peut être PARTIEL depuis le modèle NC par prestation). Le DÉPLACEMENT reste acquis dans les stats (gardé même s'il est crédité côté CA — le pro s'est déplacé).
+      let credTTC = 0; (t.arrets || []).forEach((a2) => (a2.clients || []).forEach((cl2) => { if (cl2.clientId !== m.clientId) return; (cl2.chevaux || []).forEach((cv2) => { if (chevalCredited(cv2)) credTTC += (cv2.cancel.items || []).filter((it) => it.key !== '__dep').reduce((s, it) => s + (it.ttc || 0), 0); }); }));
+      c.dep += dep; c.mat += mat; c.art += art - credTTC;
       // Arrondi caisse (liquide) : le total facturé = total rectifié. Impayé (partiel) suivi à part (créance, ne change pas le CA).
       const pay = (t.payments || {})[m.clientId];
       c.arrondi += payArrondi(m, pay);
