@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.80';
+const APP_VERSION = '1.7.81';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.81', date: '2026-07-17',
+    ajouts: [
+      'FIABILITÉ (argent & compta) — aucune donnée enregistrée ne se perd ni ne « ressuscite » plus après une synchronisation entre appareils : le VERROUILLAGE des mois (et son déverrouillage), les cases « paiement reçu » / « démarche faite » (cocher ET décocher), le statut d\'un lieu (noir/inactif ET sa réactivation), les libellés de tuiles et l\'ordre des statistiques se propagent correctement — sur conflit, la modification la plus RÉCENTE gagne (fini le « l\'appareil Drive écrase »).',
+      'FIABILITÉ (verrou d\'un mois) — corrige une perte réelle : encoder un 2ᵉ sous-statut (ex. « virement » après « liquide ») sur un mois n\'écrase plus l\'autre sous-statut à la synchronisation.',
+      'FIABILITÉ (impayés) — une créance supprimée (parce que sa tournée d\'origine a été supprimée) ne réapparaît plus après synchronisation, et n\'est donc plus re-facturée par erreur.',
+      'FIABILITÉ (encaissements) — un paiement remis à « à classer » (correction d\'une erreur de saisie) ne réapparaît plus après synchronisation (il regonflait la caisse) : la dernière saisie par client fait foi.',
+    ],
+  },
   {
     version: '1.7.80', date: '2026-07-17',
     ajouts: [
@@ -3270,7 +3279,24 @@ const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'so
 // P1-9 : réglages PROPRES à l'appareil — SOURCE UNIQUE partagée par mergeSettings ET applyRemoteReplace (fin de la classe de bug « deux listes device-local divergentes » : calPush/calDureeMin manquaient côté applyRemoteReplace → bascule silencieuse du push agenda à l'adoption/restauration).
 const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile', 'deviceName', 'deviceId'];
 // 100 % : champs de réglages EXCLUS de l'horodatage PAR CHAMP (ils sont déjà résolus autrement — maps unies, collections par enregistrement, thème/planche/setup à horodatage dédié, device-local). Tout le RESTE (tarifs de calcul, seuils, carburant, suppléments, véhicule…) est fusionné champ par champ selon sa propre date de modif.
-const PERFIELD_EXCLUDE = new Set(['updatedAt', '_fieldTs', 'changelogRead', 'changelogHideBelow', 'agendaImported', 'agendaInactive', 'agendaPrive', 'agendaPriveVus', 'agendaTrajetVus', 'calPushed', 'calPendingDelete', 'home', 'odoReleves', 'lieuxRefs', 'plancheHistory', 'addrStatus', 'comptaRecu', 'comptaDemarche', 'comptaStatus', 'tileLabels', 'badgeColors', 'accentColor', 'topbarColor', 'appBg', 'navBarColor', 'themeUpdatedAt', 'planche', 'plancheUpdatedAt', 'setupDone', 'setupLocked', 'pays', 'tvaRegime', 'formeJuridique', 'tvaRate', 'fiscalParams', 'mailKeywords', 'statOrder', 'analyticOrder', 'analyticAlloc'].concat(SETTINGS_COLLECTIONS).concat(DEVICE_LOCAL_KEYS));
+const PERFIELD_EXCLUDE = new Set(['updatedAt', '_fieldTs', '_mapTs', 'changelogRead', 'changelogHideBelow', 'agendaImported', 'agendaInactive', 'agendaPrive', 'agendaPriveVus', 'agendaTrajetVus', 'calPushed', 'calPendingDelete', 'home', 'odoReleves', 'lieuxRefs', 'plancheHistory', 'addrStatus', 'comptaRecu', 'comptaDemarche', 'comptaStatus', 'tileLabels', 'badgeColors', 'accentColor', 'topbarColor', 'appBg', 'navBarColor', 'themeUpdatedAt', 'planche', 'plancheUpdatedAt', 'setupDone', 'setupLocked', 'pays', 'tvaRegime', 'formeJuridique', 'tvaRate', 'fiscalParams', 'mailKeywords', 'analyticAlloc'].concat(SETTINGS_COLLECTIONS).concat(DEVICE_LOCAL_KEYS));
+// FIABILITÉ FUSION — maps compta/adresses/affichage résolues par HORODATAGE PAR CLÉ (set ET suppression). Un « dé-set » (déverrouiller un mois, décocher un paiement reçu/démarche, réactiver un lieu, réinitialiser un libellé) mémorise SA date par clé → il se propage entre appareils, et sur conflit la valeur la PLUS RÉCENTE gagne (fini le « Drive gagne en bloc » et la perte de sous-statut par Object.assign superficiel). `statOrder`/`analyticOrder` sortent de l'exclusion → résolus par l'horodatage PAR CHAMP (l'ordre le plus récent, retraits inclus, se propage).
+const STAMPED_MAPS = ['comptaRecu', 'comptaDemarche', 'addrStatus', 'tileLabels']; // maps plates {clé:valeur}. comptaStatus est traité à part (imbriqué).
+// comptaStatus est imbriqué {ym:{sousStatut:val}} → aplati en clés « ym|sousStatut » pour horodater/fusionner au niveau du SOUS-STATUT (sinon encoder un 2ᵉ sous-statut écrase l'autre à la fusion).
+function flattenComptaStatus(cs) { const o = {}; Object.keys(cs || {}).forEach((ym) => { const v = cs[ym]; if (v && typeof v === 'object') Object.keys(v).forEach((s) => { o[ym + '|' + s] = v[s]; }); }); return o; }
+function unflattenComptaStatus(flat) { const o = {}; Object.keys(flat || {}).forEach((k) => { const i = k.indexOf('|'); if (i < 0) return; const ym = k.slice(0, i), s = k.slice(i + 1); (o[ym] = o[ym] || {})[s] = flat[k]; }); return o; }
+// Fusion d'une map horodatée par clé : pour chaque clé, la source à la date la PLUS RÉCENTE gagne — présence OU absence (une suppression datée l'emporte sur un set plus ancien). À égalité (ex. données d'avant l'horodatage, ts=0), on préfère une valeur présente puis la source distante → comportement d'avant, sûr pour l'existant. Renvoie {value, ts} (la date est conservée même pour une clé supprimée = tombstone).
+function mergeStampedMap(lMap, rMap, lTs, rTs) {
+  lMap = lMap || {}; rMap = rMap || {}; lTs = lTs || {}; rTs = rTs || {};
+  const val = {}, ts = {};
+  new Set([].concat(Object.keys(lMap), Object.keys(rMap), Object.keys(lTs), Object.keys(rTs))).forEach((k) => {
+    const lt = lTs[k] || 0, rt = rTs[k] || 0; let useLocal;
+    if (lt > rt) useLocal = true; else if (rt > lt) useLocal = false; else useLocal = (k in lMap) && !(k in rMap); // égalité → préférer présent, défaut distant
+    const m = useLocal ? lMap : rMap; if (k in m) val[k] = m[k];
+    const t = Math.max(lt, rt); if (t) ts[k] = t;
+  });
+  return { value: val, ts };
+}
 let _lastPlancheHash = null; // L1-1e : empreinte de la config planche pour n'horodater `plancheUpdatedAt` que lorsqu'elle change réellement.
 function saveSettings() {
   S.updatedAt = Date.now();
@@ -3278,6 +3304,13 @@ function saveSettings() {
   SETTINGS_COLLECTIONS.forEach((k) => { if (Array.isArray(S[k])) syncStamp('set:' + k, S[k]); }); // horodatage + tombstones par enregistrement (survit à la fusion multi-appareils)
   // 100 % : horodatage PAR CHAMP des paramètres de config → chaque champ modifié mémorise SA date → la fusion prend, champ par champ, la valeur la plus récente (deux réglages différents changés sur deux appareils ne s'écrasent plus).
   try { const prev = LS.get('ftr.settings', {}) || {}; S._fieldTs = S._fieldTs || {}; const now = S.updatedAt; Object.keys(S).forEach((k) => { if (k === '_fieldTs' || PERFIELD_EXCLUDE.has(k) || typeof S[k] === 'function') return; try { if (JSON.stringify(S[k]) !== JSON.stringify(prev[k])) S._fieldTs[k] = now; } catch (e) {} }); } catch (e) {}
+  // FIABILITÉ : horodatage PAR CLÉ des maps compta/adresses/affichage — on compare à l'état précédent et on estampille toute clé AJOUTÉE, MODIFIÉE ou SUPPRIMÉE (y compris par le GC recalcAllTours/purgeTourData). Centralisé ici → aucun site de mutation à modifier, aucune suppression oubliée.
+  try {
+    const prev = LS.get('ftr.settings', {}) || {}; S._mapTs = S._mapTs || {}; const now = S.updatedAt;
+    const stampDiff = (name, cur, old) => { const mt = S._mapTs[name] = S._mapTs[name] || {}; cur = cur || {}; old = old || {}; new Set([].concat(Object.keys(cur), Object.keys(old))).forEach((k) => { const inA = k in cur, inB = k in old; if (inA !== inB || JSON.stringify(cur[k]) !== JSON.stringify(old[k])) mt[k] = now; }); };
+    STAMPED_MAPS.forEach((name) => stampDiff(name, S[name], prev[name]));
+    stampDiff('comptaStatus', flattenComptaStatus(S.comptaStatus), flattenComptaStatus(prev.comptaStatus));
+  } catch (e) {}
   LS.set('ftr.settings', S); refreshEverywhere(); recomputeMoney(); markSyncDirty(); bgSaveFlash();
 }
 // Sauvegarde d'une personnalisation de couleur (thème / badges) : horodatage DÉDIÉ pour que la fusion Drive garde la
@@ -3455,7 +3488,21 @@ function graftClosure(to, from) {
   // P0-2 : greffer l'ÉTAT FINANCIER manquant. La greffe de clôture protégeait les jalons mais PAS les paiements : une tournée
   // pouvait devenir « clôturée » avec un encaissement perdu (le gagnant LWW n'avait pas les payments). On ne fait que COMPLÉTER
   // (jamais écraser un paiement présent sur `to`) → aucune régression d'une édition légitime du gagnant.
-  if (from.payments) { to.payments = to.payments || {}; Object.keys(from.payments).forEach((cid) => { const fp = from.payments[cid]; if (!fp) return; if (fp.method && !(to.payments[cid] && to.payments[cid].method)) { to.payments[cid] = fp; return; } const tp = to.payments[cid]; if (tp) { if (fp.depCredited && !tp.depCredited) { tp.depCredited = true; if (fp.depCreditNoteNum) tp.depCreditNoteNum = fp.depCreditNoteNum; } if ((fp.rembourse || 0) > (tp.rembourse || 0)) tp.rembourse = fp.rembourse; } }); } // gap-fill : déplacement crédité (anti double-crédit) + remboursement le plus élevé (traçabilité)
+  if (from.payments) {
+    to.payments = to.payments || {};
+    // Cumuls monotones (traçabilité) toujours foldés dans les deux sens : crédit du déplacement (anti double-crédit) + remboursement le plus élevé.
+    const foldMono = (dst, src) => { if (src.depCredited && !dst.depCredited) { dst.depCredited = true; if (src.depCreditNoteNum) dst.depCreditNoteNum = src.depCreditNoteNum; } if ((src.rembourse || 0) > (dst.rembourse || 0)) dst.rembourse = src.rembourse; };
+    Object.keys(from.payments).forEach((cid) => {
+      const fp = from.payments[cid]; if (!fp) return; const tp = to.payments[cid];
+      if (!tp) { to.payments[cid] = fp; return; }
+      const ft = fp._ts || 0, tt = tp._ts || 0;
+      // FIABILITÉ : la MÉTHODE/le montant du paiement le plus RÉCEMMENT saisi gagne (un « déclassement » — remise à « à classer » — n'est plus écrasé par l'ancien encaissement de l'autre appareil, qui regonflait la caisse). Legacy sans _ts (égalité) → gap-fill d'avant : compléter si `to` n'a pas de méthode.
+      if (ft > tt) { foldMono(fp, tp); to.payments[cid] = fp; }
+      else if (tt > ft) { foldMono(tp, fp); }
+      else if (fp.method && !tp.method) { foldMono(fp, tp); to.payments[cid] = fp; }
+      else foldMono(tp, fp);
+    });
+  }
   // Articles d'IMPAYÉ (créances) présents seulement côté `from` → récupérés (sinon la créance disparaît de la facture après fusion).
   if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.impaye && a.impayeId && !to.articles.some((x) => x.impaye && x.impayeId === a.impayeId)) to.articles.push(a); }); }
   const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } }; // apparie les arrêts par adresse (robuste au réordonnancement)
@@ -3548,10 +3595,11 @@ function mergeOneClient(a, b) {
   // P0-3 : IMPAYÉS (créances) fusionnés par id — sinon `impayes` suivait le client gagnant en bloc (LWW) et une créance saisie sur
   // l'autre appareil était perdue, puis effacée AUSSI de la facture par le GC (recalcAllTours). Conflit sur le même id → on garde la
   // version « perçue » (collected) pour ne jamais re-facturer une créance déjà réglée.
+  base.impayeDel = mergeTomb(b.impayeDel, a.impayeDel); // tombstones d'IMPAYÉS supprimés (créance dont la tournée source a disparu) → survit à la fusion, plus de résurrection ni de re-facturation
   if (Array.isArray(a.impayes) || Array.isArray(b.impayes)) {
     const byId = {}; const put = (im) => { if (!im || !im.id) return; const cur = byId[im.id]; if (!cur) { byId[im.id] = im; return; } if (im.collected && !cur.collected) byId[im.id] = im; };
     (b.impayes || []).forEach(put); (a.impayes || []).forEach(put);
-    base.impayes = Object.values(byId);
+    base.impayes = Object.values(byId).filter((im) => !(base.impayeDel && base.impayeDel[im.id])); // une créance tombstonée ne réapparaît pas (id unique par création → ne bloque jamais une nouvelle créance)
   }
   return base;
 }
@@ -3596,13 +3644,17 @@ function mergeSettings(localS, remoteS) {
   // #7c : plancheHistory dédoublonné par CLÉ DE CONTENU (l'id est aléatoire par appareil → unionById créait des doublons). Même clé que addPlancheHistory ; à conflit, la plus récente (createdAt) gagne.
   { const byK = {}, kk = (y) => (y.clientId || '') + '|' + norm(y.client || '') + '|' + norm(y.cheval || '') + '|' + (y.date || '') + '|' + norm(y.stade || ''); ((localS && localS.plancheHistory) || []).concat((remoteS && remoteS.plancheHistory) || []).forEach((x) => { const k = kk(x); if (!byK[k] || (x.createdAt || 0) >= (byK[k].createdAt || 0)) byK[k] = x; }); merged.plancheHistory = Object.values(byK); }
   // #7a : plancheDone est désormais géré par SETTINGS_COLLECTIONS (fusion par id + tombstones) dans mergeSnapshots → plus d'union manuelle ici (une planche « refaite »/retirée ne ressuscite plus).
-  merged.addrStatus = Object.assign({}, (localS && localS.addrStatus) || {}, (remoteS && remoteS.addrStatus) || {}); // statut de lieu (noir/inactif) : union — un lieu refusé sur un appareil le reste
-  // Suivi comptable : paiements reçus, démarches faites, périodes verrouillées → UNION (sinon un mois clôturé/encodé rouvrirait, un paiement disparaîtrait, après une synchro). Même protection que l'import « Données seules ».
-  merged.comptaRecu = Object.assign({}, (localS && localS.comptaRecu) || {}, (remoteS && remoteS.comptaRecu) || {});
-  merged.comptaDemarche = Object.assign({}, (localS && localS.comptaDemarche) || {}, (remoteS && remoteS.comptaDemarche) || {});
-  merged.comptaStatus = Object.assign({}, (localS && localS.comptaStatus) || {}, (remoteS && remoteS.comptaStatus) || {});
-  // Personnalisations d'affichage (maps accumulatives → union par clé, pas de perte croisée entre appareils).
-  merged.tileLabels = Object.assign({}, (localS && localS.tileLabels) || {}, (remoteS && remoteS.tileLabels) || {});
+  // FIABILITÉ — Suivi comptable (paiements reçus, démarches, VERROUS de mois) + statut de lieu + libellés de tuiles : fusion par HORODATAGE PAR CLÉ (mergeStampedMap). Un dé-verrouillage / décochage / réactivation / réinitialisation se propage, et sur conflit le plus récent gagne. comptaStatus est aplati par sous-statut (fin de la perte du 2ᵉ sous-statut par Object.assign superficiel).
+  {
+    const lRoot = (localS && localS._mapTs) || {}, rRoot = (remoteS && remoteS._mapTs) || {}; merged._mapTs = {};
+    const doMap = (name, lM, rM) => { const r = mergeStampedMap(lM, rM, lRoot[name], rRoot[name]); merged._mapTs[name] = r.ts; return r.value; };
+    merged.addrStatus = doMap('addrStatus', localS && localS.addrStatus, remoteS && remoteS.addrStatus);
+    merged.comptaRecu = doMap('comptaRecu', localS && localS.comptaRecu, remoteS && remoteS.comptaRecu);
+    merged.comptaDemarche = doMap('comptaDemarche', localS && localS.comptaDemarche, remoteS && remoteS.comptaDemarche);
+    merged.tileLabels = doMap('tileLabels', localS && localS.tileLabels, remoteS && remoteS.tileLabels);
+    const cs = mergeStampedMap(flattenComptaStatus(localS && localS.comptaStatus), flattenComptaStatus(remoteS && remoteS.comptaStatus), lRoot.comptaStatus, rRoot.comptaStatus);
+    merged.comptaStatus = unflattenComptaStatus(cs.value); merged._mapTs.comptaStatus = cs.ts;
+  }
   // Couleurs de thème (scalaires) & badges : suivent l'appareil dont la personnalisation est la PLUS récente (themeUpdatedAt),
   // INDÉPENDAMMENT du « gagnant » global — sinon une couleur changée sur un appareil est écrasée dès que l'autre enregistre
   // autre chose de plus récent. Les badges gardent l'UNION (jamais de perte d'une clé posée sur un seul appareil), mais en
@@ -3617,8 +3669,7 @@ function mergeSettings(localS, remoteS) {
   // Petites listes de config sans identifiant : union dédoublonnée (mots-clés mail, ordre des tuiles) → pas de perte croisée.
   const unionStr = (a, b) => { const seen = new Set(), out = []; [].concat(a || [], b || []).forEach((s) => { const k = norm(s); if (s != null && s !== '' && !seen.has(k)) { seen.add(k); out.push(s); } }); return out; };
   merged.mailKeywords = unionStr(localS && localS.mailKeywords, remoteS && remoteS.mailKeywords);
-  merged.statOrder = unionStr(localS && localS.statOrder, remoteS && remoteS.statOrder);
-  merged.analyticOrder = unionStr(localS && localS.analyticOrder, remoteS && remoteS.analyticOrder);
+  // statOrder / analyticOrder : NE PLUS unir (l'union rendait le réordonnancement et le RETRAIT d'une tuile non propageables). Résolus par l'horodatage PAR CHAMP (bloc _fieldTs plus bas) → l'ordre le plus récent gagne, retraits inclus.
   // L1-1e : Config planche fusionnée EN PROFONDEUR (plus de « base gagne en bloc » qui perdait les couleurs/transparences/modèles de marqueurs).
   // La personnalisation suit la source la plus récente (plancheUpdatedAt) ; à égalité, le LOCAL est préservé ; les STADES fusionnent en union.
   {
@@ -4095,7 +4146,7 @@ function reinjectTour(rt, snap) {
   (isArch ? archive : tournees).push(merged);
   // Bucket B : réinjecter AUSSI les dépendances comptables liées à cette tournée (recâblage) — sinon facture réinjectée sans sa créance / sa note de crédit.
   if (snap) {
-    (Array.isArray(snap.clients) ? snap.clients : []).forEach((sc) => { const c = clients.find((x) => x.id === sc.id); if (!c) return; if (!Array.isArray(c.impayes)) c.impayes = []; (sc.impayes || []).forEach((im) => { if ((im.sourceTourId === rt.id || im.collectedTourId === rt.id) && !c.impayes.some((x) => x.id === im.id)) c.impayes.push(JSON.parse(JSON.stringify(im))); }); }); // créances nées de / perçues par cette tournée
+    (Array.isArray(snap.clients) ? snap.clients : []).forEach((sc) => { const c = clients.find((x) => x.id === sc.id); if (!c) return; if (!Array.isArray(c.impayes)) c.impayes = []; (sc.impayes || []).forEach((im) => { if ((im.sourceTourId === rt.id || im.collectedTourId === rt.id) && !c.impayes.some((x) => x.id === im.id)) { if (c.impayeDel) delete c.impayeDel[im.id]; c.impayes.push(JSON.parse(JSON.stringify(im))); } }); }); // créances nées de / perçues par cette tournée (réinjection explicite → on lève le tombstone pour ne pas re-supprimer à la fusion)
     const snapNC = (snap.settings && Array.isArray(snap.settings.notesCredit)) ? snap.settings.notesCredit : [];
     if (!Array.isArray(S.notesCredit)) S.notesCredit = [];
     snapNC.forEach((n) => { if (n.tourId === rt.id && !S.notesCredit.some((x) => x.id === n.id)) { const nn = JSON.parse(JSON.stringify(n)); delete nn.tourDeleted; S.notesCredit.push(nn); } }); // note de crédit recâblée (le cv.cancel.creditNoteId de la tournée pointe de nouveau vers elle)
@@ -7514,6 +7565,7 @@ function recalcAllTours() {
   // 1) Impayés dont la tournée SOURCE n'existe plus → retirés ; impayé perçu par une tournée disparue → redevient « à percevoir ».
   clients.forEach((c) => {
     if (!Array.isArray(c.impayes)) return;
+    c.impayes.forEach((im) => { if (im.sourceTourId && !tourIds.has(im.sourceTourId)) { c.impayeDel = c.impayeDel || {}; c.impayeDel[im.id] = Date.now(); } }); // tombstone → la créance orpheline ne ressuscite pas à la fusion
     c.impayes = c.impayes.filter((im) => !im.sourceTourId || tourIds.has(im.sourceTourId));
     c.impayes.forEach((im) => { if (im.collectedTourId && !tourIds.has(im.collectedTourId)) { im.collected = false; im.collectedTourId = null; } });
   });
@@ -8598,6 +8650,7 @@ function setComptaPayment(tourId, clientId, method) {
   else if (method === 'virement') t.payments[clientId] = { method: 'virement', facture: false, rectifie: (prev.rectifie != null ? prev.rectifie : null), partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // F3 : garder rectifie (ignoré en virement, mais retrouvé si on repasse en liquide → l'arrondi caisse n'est plus perdu)
   else if (method === 'facvir') t.payments[clientId] = { method: 'virement', facture: true, rectifie: (prev.rectifie != null ? prev.rectifie : null), partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // facture pro payée par virement
   else t.payments[clientId] = { method: null, facture: false, rectifie: null, partiel: false, impaye: null, resteMode: null, rembourse: prev.rembourse || 0 }; // « à classer » (tournée à venir)
+  t.payments[clientId]._ts = Date.now(); // FIABILITÉ : date de saisie du paiement → la fusion garde le plus récent par client (déclassement inclus)
   // #5 : rembourse (traçabilité annulation liquide) conservé dans TOUTES les branches — une bascule de mode en Compta ne l'efface plus.
   // P1-1 : la remise LIQUIDE (S.reducLiquide) est couplée à la MÉTHODE dans computeResultMoney → sans recalcul, `m.totalTTC` reste figé
   // à l'ancienne remise et le CA/TVA du client sont faux de ±20 % après un reclassement. On recalcule — SAUF période déclarée (immuable).
@@ -12923,7 +12976,7 @@ function modalCancelBilling(t) {
       });
       if (depChecked) { p.depCredited = true; p.depCreditNoteNum = nc.numero; }
       if (isFacLiq) { const amt = lines.reduce((s, l) => s + (l.ttc || 0), 0); p.rembourse = (p.rembourse || 0) + amt; refundTotal += amt; } // facture liquide : remboursement cash TRACÉ (p.rembourse, hors CA/caisse) ; rectifie INCHANGÉ → la tournée reste figée (full) et la NC réduit le CA UNE SEULE fois (comme le virement)
-      t.payments[cid] = p;
+      p._ts = Date.now(); t.payments[cid] = p; // FIABILITÉ : date de saisie du paiement (fusion par le plus récent)
     });
     if (!nNC) { submitted = false; alert('Aucune facturation annulée (période comptable verrouillée entre-temps).'); return; }
     currentTour = t; persistCurrentTour(); // tournée FIGÉE : chevaux crédités restent facturés → PAS de recalcul de la répartition (la NC réduit le CA)
@@ -13113,7 +13166,7 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
         if (partiel) { const iv = block.querySelector('[data-impaye]').value; impaye = iv !== '' ? Math.max(0, Math.round(parseNum(iv))) : 0; resteMode = block.querySelector('[data-restemode]').value; }
       }
       const prevP = t.payments[cid] || {}; // M1 : préserver le remboursé (traçabilité annulation) et le rattachement de période caisse à la ré-saisie du paiement
-      t.payments[cid] = { method, facture, rectifie, partiel, impaye, resteMode, rembourse: prevP.rembourse || 0, comptaPeriod: prevP.comptaPeriod || null };
+      t.payments[cid] = { method, facture, rectifie, partiel, impaye, resteMode, rembourse: prevP.rembourse || 0, comptaPeriod: prevP.comptaPeriod || null, _ts: Date.now() }; // FIABILITÉ : date de saisie (fusion par le plus récent)
       // Impayé « reporté » (prochaine visite) rattaché au client ; « virement » dérivé en Compta (pas d'impayé client).
       const imp = (partiel && impaye != null) ? impaye : 0;
       setClientImpaye(t, cid, resteMode === 'report' ? imp : 0);
@@ -13130,6 +13183,7 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
 function setClientImpaye(t, cid, resteTTC) {
   const c = clients.find((x) => x.id === cid); if (!c) return;
   if (!Array.isArray(c.impayes)) c.impayes = [];
+  c.impayes.forEach((im) => { if (im.sourceTourId === t.id && !im.collected) { c.impayeDel = c.impayeDel || {}; c.impayeDel[im.id] = Date.now(); } }); // l'ancien reste (id unique) est tombstoné → pas de résurrection ; le nouveau ci-dessous a un id neuf
   c.impayes = c.impayes.filter((im) => !(im.sourceTourId === t.id && !im.collected)); // recrée l'impayé non perçu de cette tournée
   if (resteTTC > 0.005) c.impayes.push({ id: uid(), sourceTourId: t.id, date: t.date, ttc: resteTTC, collected: false, collectedTourId: null });
 }
@@ -13143,7 +13197,7 @@ function purgeTourData(id) {
   const removed = new Set(); // ids d'impayés supprimés → retirer aussi les articles d'impayé qui les référencent dans d'AUTRES tournées
   clients.forEach((c) => {
     if (!Array.isArray(c.impayes)) return;
-    c.impayes.forEach((im) => { if (im.sourceTourId === id) removed.add(im.id); });
+    c.impayes.forEach((im) => { if (im.sourceTourId === id) { removed.add(im.id); c.impayeDel = c.impayeDel || {}; c.impayeDel[im.id] = Date.now(); } }); // tombstone → pas de résurrection à la fusion
     c.impayes = c.impayes.filter((im) => im.sourceTourId !== id);                    // créance NÉE de cette tournée → disparaît avec elle
     c.impayes.forEach((im) => { if (im.collectedTourId === id) { im.collected = false; im.collectedTourId = null; } }); // impayé PERÇU par cette tournée → redevient « à percevoir »
   });
