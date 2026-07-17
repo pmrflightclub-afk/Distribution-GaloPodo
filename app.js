@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.71';
+const APP_VERSION = '1.7.72';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.72', date: '2026-07-17',
+    ajouts: [
+      'CORRECTIONS COMPTA (audit) — la facture liquide annulée ne réduit plus le chiffre d\'affaires deux fois (la note de crédit le réduit UNE seule fois, le remboursement est tracé hors CA). La note de crédit affiche à nouveau correctement la main d\'œuvre (HT/TVA/TTC équilibrés). L\'extourne des provisions est rattachée au mois de la tournée créditée.',
+      'FIABILITÉ — anti double-clic sur « Émettre les notes de crédit » (plus de NC/remboursement en double) ; les annulations & notes de crédit faites en parallèle sur un autre appareil sont désormais conservées à la synchro ; le déplacement crédité ne peut plus l\'être deux fois ; un cheval couvert par plusieurs NC les conserve toutes (#…, #…).',
+    ],
+  },
   {
     version: '1.7.71', date: '2026-07-17',
     ajouts: [
@@ -3401,7 +3408,7 @@ function graftClosure(to, from) {
   // P0-2 : greffer l'ÉTAT FINANCIER manquant. La greffe de clôture protégeait les jalons mais PAS les paiements : une tournée
   // pouvait devenir « clôturée » avec un encaissement perdu (le gagnant LWW n'avait pas les payments). On ne fait que COMPLÉTER
   // (jamais écraser un paiement présent sur `to`) → aucune régression d'une édition légitime du gagnant.
-  if (from.payments) { to.payments = to.payments || {}; Object.keys(from.payments).forEach((cid) => { const fp = from.payments[cid]; if (fp && fp.method && !(to.payments[cid] && to.payments[cid].method)) to.payments[cid] = fp; }); }
+  if (from.payments) { to.payments = to.payments || {}; Object.keys(from.payments).forEach((cid) => { const fp = from.payments[cid]; if (!fp) return; if (fp.method && !(to.payments[cid] && to.payments[cid].method)) { to.payments[cid] = fp; return; } const tp = to.payments[cid]; if (tp) { if (fp.depCredited && !tp.depCredited) { tp.depCredited = true; if (fp.depCreditNoteNum) tp.depCreditNoteNum = fp.depCreditNoteNum; } if ((fp.rembourse || 0) > (tp.rembourse || 0)) tp.rembourse = fp.rembourse; } }); } // gap-fill : déplacement crédité (anti double-crédit) + remboursement le plus élevé (traçabilité)
   // Articles d'IMPAYÉ (créances) présents seulement côté `from` → récupérés (sinon la créance disparaît de la facture après fusion).
   if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.impaye && a.impayeId && !to.articles.some((x) => x.impaye && x.impayeId === a.impayeId)) to.articles.push(a); }); }
   const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } }; // apparie les arrêts par adresse (robuste au réordonnancement)
@@ -3414,6 +3421,8 @@ function graftClosure(to, from) {
       const fc = (fa.clients || []).find((x) => x.clientId === cl.clientId); if (!fc) return;
       if (typeof cl.validatedAt !== 'number' && typeof fc.validatedAt === 'number') cl.validatedAt = fc.validatedAt;
       if (!cl.rdvDone && fc.rdvDone) cl.rdvDone = true;
+      // Gap-fill des ANNULATIONS / NOTES DE CRÉDIT par cheval : le gagnant LWW pouvait ne pas porter l'annulation faite en parallèle sur l'autre appareil → sinon NC orpheline / cheval non marqué crédité.
+      (cl.chevaux || []).forEach((cv) => { const fcv = (fc.chevaux || []).find((x) => (x.id != null && cv.id != null && x.id === cv.id) || (norm(cv.nom) && norm(x.nom) === norm(cv.nom))); if (fcv && fcv.cancel && !cv.cancel) cv.cancel = JSON.parse(JSON.stringify(fcv.cancel)); });
     });
     if (typeof syncArretValidated === 'function') syncArretValidated(a);
   });
@@ -3448,6 +3457,7 @@ function deepMergeTourBody(to, from) {
         if (!tcv) { if (!chevalActive(fc.clientId, fcv)) return; (tc.chevaux = tc.chevaux || []).push(JSON.parse(JSON.stringify(fcv))); return; } // cheval présent seulement chez l'autre → AJOUTÉ seulement s'il est ACTIF dans la fiche (sinon = retrait légitime, ne pas ressusciter)
         if (tcv.consultMin == null && typeof fcv.consultMin === 'number') tcv.consultMin = fcv.consultMin; // consultation : compléter (les ACTES restent ceux du gagnant → pas de fusion ambiguë de facturation)
         if (!tcv.photo && fcv.photo) tcv.photo = fcv.photo;
+        if (fcv.cancel && !tcv.cancel) tcv.cancel = JSON.parse(JSON.stringify(fcv.cancel)); // annulation/report faite sur l'autre appareil → conservée (reconcileTour la préserve à l'ouverture)
       });
     });
   });
@@ -8244,13 +8254,14 @@ function renderStatsAnnul() {
   // Section dédiée : RDV payés puis annulés (facture figée + note de crédit), retirés des analyses de vente.
   if (credited.length) {
     const ncOf = (c) => (S.notesCredit || []).find((n) => n.id === (c.cv.cancel && c.cv.cancel.creditNoteId)) || null;
-    const rows = credited.map((c) => ({ c, nc: ncOf(c) }));
-    const tot = rows.reduce((s, r) => s + (r.nc ? r.nc.montantTTC : 0), 0);
-    const nRemb = rows.filter((r) => r.nc && r.nc.rembourse).length;
+    const credAmt = (c) => ((c.cv.cancel && c.cv.cancel.items) || []).filter((it) => it.key !== '__dep').reduce((s, it) => s + (it.ttc || 0), 0); // montant crédité de CE cheval (hors déplacement) — une NC peut couvrir plusieurs chevaux
+    const rows = credited.map((c) => ({ c, nc: ncOf(c), amt: credAmt(c) }));
+    const ncIds = {}; rows.forEach((r) => { if (r.nc) ncIds[r.nc.id] = r.nc; }); // NC DISTINCTES (dédup par id)
+    const tot = Object.values(ncIds).reduce((s, n) => s + (n.montantTTC || 0), 0), nNc = Object.keys(ncIds).length, nRemb = Object.values(ncIds).filter((n) => n.rembourse).length;
     html += '<h3 class="rsub">↩ Factures payées annulées (note de crédit)</h3>';
-    html += `<p class="hint">Ces RDV avaient été payés : la facture encaissée reste figée et une note de crédit (<b>${eur(tot)}</b> TTC, ${nRemb}/${rows.length} remboursée${nRemb > 1 ? 's' : ''}) neutralise le chiffre d'affaires. Ils sont retirés des analyses de vente ; le détail des remboursements est en Compta → Notes de crédit.</p>`;
-    const byC = {}; rows.forEach((r) => { const k = r.c.clientId; (byC[k] = byC[k] || { nom: r.c.clientNom, ttc: 0, items: [] }); byC[k].ttc += r.nc ? r.nc.montantTTC : 0; byC[k].items.push(r); });
-    Object.values(byC).sort((a, b) => b.ttc - a.ttc).forEach((cl) => { html += `<div class="inv-client"><div class="inv-head"><span>${esc(cl.nom)}</span><span class="inv-amt">−${eur(cl.ttc)}</span></div>` + cl.items.map((r) => `<div class="fin-cheval"><span>🐴 ${esc(r.c.cheval)} · ${esc(fmtDateFr(r.c.date))} · ${r.nc && r.nc.rembourse ? '✔ remboursée' : 'à rembourser'}</span><span>−${eur(r.nc ? r.nc.montantTTC : 0)}</span></div>`).join('') + '</div>'; });
+    html += `<p class="hint">Ces RDV avaient été payés : la facture encaissée reste figée et ${nNc} note(s) de crédit (<b>${eur(tot)}</b> TTC, ${nRemb}/${nNc} remboursée${nRemb > 1 ? 's' : ''}) neutralise(nt) le chiffre d'affaires. Ils sont retirés des analyses de vente ; le détail est en Compta → Notes de crédit.</p>`;
+    const byC = {}; rows.forEach((r) => { const k = r.c.clientId; (byC[k] = byC[k] || { nom: r.c.clientNom, ttc: 0, items: [] }); byC[k].ttc += r.amt; byC[k].items.push(r); });
+    Object.values(byC).sort((a, b) => b.ttc - a.ttc).forEach((cl) => { html += `<div class="inv-client"><div class="inv-head"><span>${esc(cl.nom)}</span><span class="inv-amt">−${eur(cl.ttc)}</span></div>` + cl.items.map((r) => `<div class="fin-cheval"><span>🐴 ${esc(r.c.cheval)} · ${esc(fmtDateFr(r.c.date))}${r.nc && r.nc.numero ? ' · NC #' + r.nc.numero : ''} · ${r.nc && r.nc.rembourse ? '✔ remboursée' : 'à rembourser'}</span><span>−${eur(r.amt)}</span></div>`).join('') + '</div>'; });
   }
   body.innerHTML = html;
 }
@@ -8560,9 +8571,10 @@ function comptaData(ym) {
   // Modèle B : les avoirs DOCUMENTAIRES (facture payée en liquide) ne réduisent PAS le CA — les actes sont déjà retirés de la facture et le liquide remboursé via la caisse. On les liste (pièces) mais on les exclut de l'extourne comptable.
   const ncTTC = ncMonth.filter((n) => !n.documentaire).reduce((s, n) => s + (n.montantTTC || 0), 0);
   const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
-  // F2 : extourne des avoirs ventilée selon la COMPOSITION RÉELLE de CHAQUE cheval crédité (main d'œuvre = articles/actes, matériel), le DÉPLACEMENT restant acquis (jamais crédité). → provisions/sous-comptes PRÉCIS, plus un ratio mensuel approximatif.
+  // Extourne des BASES analytiques (provisions) ventilée par poste (main d'œuvre / matériel / déplacement crédité) selon la composition réelle des NC — ATTRIBUÉE AU MOIS DE LA TOURNÉE créditée (là où le CA a été accru), pas au mois d'émission de la NC → sinon la base du mois de tournée n'est pas réduite et celle du mois d'émission est clampée à 0 (sur-provisionnement).
+  const ncTourMonth = (S.notesCredit || []).filter((n) => !n.documentaire && ((n.tourDate || '').slice(0, 7) === ym));
   let ncMO = 0, ncMat = 0, ncDep = 0, ncTVA = 0;
-  ncMonth.filter((n) => !n.documentaire).forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncDep += b.depHT || 0; ncTVA += b.tva; }); // déplacement crédité (facture/virement) extourné aussi
+  ncTourMonth.forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncDep += b.depHT || 0; ncTVA += b.tva; });
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
     liquidePosts: Object.values(posts), liquideDetail: postDetail, liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
     factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
@@ -12745,7 +12757,7 @@ function cashClientsNeedingArrondi(t) {
 // Annuler une facturation sur une tournée CLÔTURÉE (figée) : choisir tournée entière / arrêt / client / cheval.
 // Retire SEULEMENT la part de facture (géométrie, km, temps, route, autres clients : inchangés → recalcul LOCAL qui réutilise la géométrie figée) et met à jour les stats (tournée + globales).
 // Règles note de crédit : virement + facture → NC obligatoire ; liquide, liquide+facture, virement sans facture → suppression de la répartition SANS NC.
-function findCvInTour(t, clientId, nom) { let found = null; (t.arrets || []).some((a) => (a.clients || []).some((cl) => { if (cl.clientId !== clientId) return false; const f = (cl.chevaux || []).find((x) => norm(x.nom) === norm(nom)); if (f) { found = f; return true; } return false; })); return found; }
+function findCvInTour(t, clientId, nom, chid) { let found = null; (t.arrets || []).some((a) => (a.clients || []).some((cl) => { if (cl.clientId !== clientId) return false; const f = (cl.chevaux || []).find((x) => (chid && x.id != null && String(x.id) === String(chid)) || norm(x.nom) === norm(nom)); if (f) { found = f; return true; } return false; })); return found; }
 // « Annuler une facturation » (tournée CLÔTURÉE) — FACTURE LIQUIDE + VIREMENT uniquement. Par PRESTATION. La tournée reste FIGÉE ; une NOTE DE CRÉDIT (1 par client) réduit le CA. Déplacement retirable via la NC (stats gardées). Facture liquide → remboursement cash = montant NC.
 function modalCancelBilling(t) {
   const r = rate();
@@ -12776,7 +12788,7 @@ function modalCancelBilling(t) {
       html += `<div style="padding-left:12px;margin-top:3px"><label class="chk2"><input type="checkbox" data-client="${c.clientId}"${c.locked ? ' disabled' : ''}/> <b>${esc(c.nom)}</b>${tag}</label>`;
       c.chevaux.forEach((x) => {
         html += `<div style="padding-left:16px"><div class="li-sub">🐴 ${esc(x.cv.nom)}${chevalCancelled(x.cv) ? ' <span class="badge badge-cancel">déjà partiellement annulé</span>' : ''}</div>`;
-        x.items.forEach((it) => { html += `<div style="padding-left:12px"><label class="chk2"><input type="checkbox" class="cb-item" data-cid="${c.clientId}" data-nom="${esc(x.cv.nom)}" data-key="${esc(it.key)}" data-mo="${it.moHT || 0}" data-mat="${it.matHT || 0}" data-dep="0" data-tva="${it.tva || 0}" data-ttc="${it.ttc || 0}" data-label="${esc(it.label)}"${c.locked ? ' disabled' : ''}/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label></div>`; });
+        x.items.forEach((it) => { html += `<div style="padding-left:12px"><label class="chk2"><input type="checkbox" class="cb-item" data-cid="${c.clientId}" data-chid="${x.cv.id != null ? x.cv.id : ''}" data-nom="${esc(x.cv.nom)}" data-key="${esc(it.key)}" data-mo="${(it.ht || 0) - (it.matHT || 0)}" data-mat="${it.matHT || 0}" data-dep="0" data-tva="${it.tva || 0}" data-ttc="${it.ttc || 0}" data-label="${esc(it.label)}"${c.locked ? ' disabled' : ''}/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label></div>`; });
         html += `</div>`;
       });
       if (c.dep) html += `<div style="padding-left:16px"><label class="chk2"><input type="checkbox" class="cb-item" data-cid="${c.clientId}" data-nom="" data-key="__dep" data-mo="0" data-mat="0" data-dep="${c.dep.depHT}" data-tva="${c.dep.tva}" data-ttc="${c.dep.ttc}" data-label="Déplacement (km)"${c.locked ? ' disabled' : ''}/> 🚗 Déplacement (km) — retirer via la NC (stats gardées) <span class="li-sub">${eur(c.dep.ttc)}</span></label></div>`;
@@ -12796,34 +12808,38 @@ function modalCancelBilling(t) {
   box.querySelectorAll('[data-client]').forEach((cc) => cc.addEventListener('change', (e) => { box.querySelectorAll('.cb-item[data-cid="' + cc.dataset.client + '"]:not(:disabled)').forEach((c) => (c.checked = e.target.checked)); recap(); }));
   box.querySelectorAll('.cb-item').forEach((c) => c.addEventListener('change', recap));
   document.querySelectorAll('#cbReason .seg-btn').forEach((b) => b.addEventListener('click', () => { document.querySelectorAll('#cbReason .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); reason = b.dataset.rs; }));
+  let submitted = false;
   $('cbOk').addEventListener('click', () => {
+    if (submitted) return; submitted = true; // anti double-tap : sinon 2ᵉ clic → NC + remboursement en DOUBLE
     const note = $('cbNote').value.trim();
     const checked = Array.from(box.querySelectorAll('.cb-item:checked'));
-    if (!checked.length) return;
+    if (!checked.length) { submitted = false; return; }
     const byClient = {}; checked.forEach((c) => { const cid = c.dataset.cid; if (comptaLocked(t, cid)) return; (byClient[cid] = byClient[cid] || []).push(c); });
     let nNC = 0, refundTotal = 0;
     Object.keys(byClient).forEach((cid) => {
       const lines = [], chevalKeys = {}; let depChecked = false;
       byClient[cid].forEach((c) => {
-        const key = c.dataset.key, nom = c.dataset.nom;
+        const key = c.dataset.key, nom = c.dataset.nom, chid = c.dataset.chid || '';
         lines.push({ chevalNom: nom || null, key, label: c.dataset.label, moHT: parseFloat(c.dataset.mo) || 0, matHT: parseFloat(c.dataset.mat) || 0, depHT: parseFloat(c.dataset.dep) || 0, tva: parseFloat(c.dataset.tva) || 0, ttc: parseFloat(c.dataset.ttc) || 0 });
         if (key === '__dep') depChecked = true;
-        else { (chevalKeys[nom] = chevalKeys[nom] || { services: [], articles: [] }); if (key.indexOf('art:') === 0) chevalKeys[nom].articles.push(key.slice(4)); else chevalKeys[nom].services.push(key); }
+        else { const gk = chid || nom; (chevalKeys[gk] = chevalKeys[gk] || { chid, nom, services: [], articles: [] }); if (key.indexOf('art:') === 0) chevalKeys[gk].articles.push(key.slice(4)); else chevalKeys[gk].services.push(key); } // clé par ID cheval (multi-arrêts d'un même client)
       });
       const p = (t.payments || {})[cid] || {}; const isFacLiq = p.method === 'liquide' && p.facture;
       const nc = createClientCreditNote(cid, t, lines, { motif: reason, note, cashRefunded: isFacLiq }); nNC++;
-      Object.keys(chevalKeys).forEach((nom) => { // marquage : cheval crédité + services NC'd + n° NC ; tournée figée (credited → reste facturé)
-        const cv = findCvInTour(t, cid, nom); if (!cv) return; const add = chevalKeys[nom];
+      Object.keys(chevalKeys).forEach((gk) => { // marquage : cheval crédité + services NC'd + n° NC ; tournée figée (credited → reste facturé)
+        const add = chevalKeys[gk]; const cv = findCvInTour(t, cid, add.nom, add.chid); if (!cv) return;
         if (chevalCancelled(cv)) { cv.cancel.services = (cv.cancel.services || []).concat(add.services); cv.cancel.articles = (cv.cancel.articles || []).concat(add.articles); }
         else cv.cancel = { status: 'annule', reason, note, at: new Date().toISOString(), replacedTourId: null, credited: true, services: add.services, articles: add.articles };
-        cv.cancel.credited = true; cv.cancel.creditNoteId = nc.id; cv.cancel.creditNoteNum = nc.numero;
-        const its = lines.filter((l) => l.chevalNom === nom).map((l) => ({ key: l.key, label: l.label, ttc: l.ttc, ht: (l.moHT || 0) + (l.matHT || 0) + (l.depHT || 0), tva: l.tva, matHT: l.matHT || 0 }));
+        cv.cancel.credited = true;
+        cv.cancel.creditNoteNums = (cv.cancel.creditNoteNums || []).concat(nc.numero); cv.cancel.creditNoteId = cv.cancel.creditNoteId || nc.id; cv.cancel.creditNoteNum = cv.cancel.creditNoteNums.join(', '); // conserve TOUS les n° de NC du cheval
+        const its = lines.filter((l) => l.chevalNom === add.nom).map((l) => ({ key: l.key, label: l.label, ttc: l.ttc, ht: (l.moHT || 0) + (l.matHT || 0) + (l.depHT || 0), tva: l.tva, matHT: l.matHT || 0 }));
         cv.cancel.items = (cv.cancel.items || []).concat(its);
       });
       if (depChecked) { p.depCredited = true; p.depCreditNoteNum = nc.numero; }
-      if (isFacLiq) { const amt = lines.reduce((s, l) => s + (l.ttc || 0), 0); p.rembourse = (p.rembourse || 0) + amt; const gross = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : amt); p.rectifie = Math.max(0, Math.round(gross - amt)); p.montantPaye = null; refundTotal += amt; } // facture liquide : remboursement cash = montant NC ; caisse réduite d'autant
+      if (isFacLiq) { const amt = lines.reduce((s, l) => s + (l.ttc || 0), 0); p.rembourse = (p.rembourse || 0) + amt; refundTotal += amt; } // facture liquide : remboursement cash TRACÉ (p.rembourse, hors CA/caisse) ; rectifie INCHANGÉ → la tournée reste figée (full) et la NC réduit le CA UNE SEULE fois (comme le virement)
       t.payments[cid] = p;
     });
+    if (!nNC) { submitted = false; alert('Aucune facturation annulée (période comptable verrouillée entre-temps).'); return; }
     currentTour = t; persistCurrentTour(); // tournée FIGÉE : chevaux crédités restent facturés → PAS de recalcul de la répartition (la NC réduit le CA)
     closeModal(); refreshEverywhere(); openEditor();
     alert(`✅ ${nNC} note(s) de crédit émise(s)${refundTotal > 0.005 ? ` · remboursement liquide : ${eur(refundTotal)}` : ''}. La tournée reste figée ; le CA est réduit par les notes de crédit.`);
