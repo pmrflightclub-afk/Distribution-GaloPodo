@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.88';
+const APP_VERSION = '1.7.89';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.89', date: '2026-07-18',
+    ajouts: [
+      'SAISIE (mobile) — quand vous faites défiler la page alors qu\'un champ texte est actif, le clavier se ferme tout seul. Corrige le « premier appui perdu » sur un bouton situé plus bas (ex. « + Ajouter » dans les arrêts) : l\'appui n\'est plus absorbé par la fermeture du clavier (la page ne saute plus en haut), le bouton répond du premier coup.',
+      'HEURES DE RDV — changer l\'heure d\'un client/arrêt propose désormais de réordonner les arrêts par heure quand l\'ordre ne suit plus les horaires.',
+    ],
+  },
   {
     version: '1.7.88', date: '2026-07-18',
     ajouts: [
@@ -4909,6 +4916,14 @@ document.addEventListener('focusout', (e) => {
   if (el.value === '') { el.value = el.dataset.memval; if (el.dataset.memtouched) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } } // rien (ou vidé) → restaure la mémoire, re-commit si nécessaire
   delete el.dataset.memval; delete el.dataset.memhint; delete el.dataset.memmode; delete el.dataset.memtouched;
 });
+// Mobile : dès que l'utilisateur FAIT DÉFILER (glisse le doigt) alors qu'un champ texte est actif, on ferme le clavier (blur).
+// Sinon le 1ᵉʳ appui sur un bouton plus bas (ex. « + Ajouter » dans les arrêts) est « absorbé » par la fermeture du clavier
+// (l'appui referme le clavier au lieu d'activer le bouton, et la page saute en haut) → il fallait appuyer deux fois. Ne ferme pas si on défile DANS le champ.
+document.addEventListener('touchmove', (e) => {
+  const a = document.activeElement; if (!a) return;
+  const isText = a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && /^(text|search|tel|email|url|number|password|)$/.test(a.type || ''));
+  if (isText && !a.contains(e.target)) a.blur();
+}, { passive: true });
 
 // ===== Menu déroulant « maison » (Item 3) : le picker natif des <select> ne se ferme pas au clic-dehors sur mobile.
 // On GARDE le <select> natif (masqué, .gp-native) comme SOURCE DE VÉRITÉ : sa .value, ses handlers `change`/`.onchange`,
@@ -6513,6 +6528,19 @@ function sortTourByHeure(t) {
   invalidateTourRoute(oldOrder, t); // ordre changé → segments/heures de trajet à recalculer
   return true;
 }
+// Vrai si les heures de RDV ne sont plus croissantes le long des arrêts (un arrêt a une heure ANTÉRIEURE à un arrêt précédent) → propose de réordonner.
+function tourOrderIncoherent(t) {
+  const A = (t && t.arrets) || []; let prev = null;
+  for (let i = 0; i < A.length; i++) { const m = hmToMin(arretHeure(A[i])); if (m == null) continue; if (prev != null && m < prev) return true; prev = m; }
+  return false;
+}
+// À appeler après un changement d'heure : si l'ordre ne suit plus les heures, propose de réordonner par heure. Renvoie true si un réordonnancement a eu lieu.
+function maybeProposeReorder(t) {
+  if (!t || !tourOrderIncoherent(t)) return false;
+  if (!confirm('⇅ L\'ordre des arrêts ne suit plus les heures de RDV. Réordonner les arrêts par heure ?')) return false;
+  const did = sortTourByHeure(t); if (did) { persistTourEdit(t); scheduleCalPush(t); if (t === currentTour) scheduleGeoRecalc(); else recomputeTourGeo(t); }
+  return did;
+}
 // ===== Ajustement des horaires (décalage en cascade des RDV) =====
 function hmToMin(h) { const m = /^(\d{1,2}):(\d{2})$/.exec(h || ''); return m ? +m[1] * 60 + +m[2] : null; }
 function minToHm(x) { x = Math.max(0, Math.min(1439, Math.round(x))); return gpPad2(Math.floor(x / 60)) + ':' + gpPad2(x % 60); } // borné [00:00, 23:59]
@@ -7163,7 +7191,7 @@ function renderEditorArrets(locked) {
           }
         }
         if (!locked) {
-          { const hi = actBar.querySelector('[data-clheure]'); if (hi) { hi._gpTaken = takenRdvSlots(currentTour, cl.clientId); hi._gpOnConflict = (val, d) => openRdvReassign(currentTour, val, d, () => setClientHeureInTour(currentTour, cl.clientId, val)); } if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; if (cl.heureAncienne != null && newH === cl.heureAncienne) { delete cl.aPrevenir; delete cl.heureAncienne; } else if (oldH && newH && oldH !== newH) { if (!cl.aPrevenir) cl.heureAncienne = oldH; cl.aPrevenir = true; } persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
+          { const hi = actBar.querySelector('[data-clheure]'); if (hi) { hi._gpTaken = takenRdvSlots(currentTour, cl.clientId); hi._gpOnConflict = (val, d) => openRdvReassign(currentTour, val, d, () => setClientHeureInTour(currentTour, cl.clientId, val)); } if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; if (cl.heureAncienne != null && newH === cl.heureAncienne) { delete cl.aPrevenir; delete cl.heureAncienne; } else if (oldH && newH && oldH !== newH) { if (!cl.aPrevenir) cl.heureAncienne = oldH; cl.aPrevenir = true; } persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (maybeProposeReorder(currentTour)) { renderEditorArrets(); if (tourHeureStale(currentTour)) modalRevoirHoraires(currentTour); return; } if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'ordre ne suit plus les heures → propose de réordonner ; sinon si RDV suivants → propose le décalage en cascade
           if (!futureTour) actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (closeClientAt(currentTour, a, cl)) { persistCurrentTour(); scheduleCalPush(currentTour); } refreshEverywhere(); }, cl.clientId)); // L4 : paiement complet du CLIENT → clôture ce client (cl.validatedAt) ; l'arrêt est clôturé quand tous ses clients le sont
           if (!futureTour) actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
@@ -12744,7 +12772,7 @@ function modalHeureRdv(t, a, cid) {
     // Ré-encoder une heure ici lève aussi le « à revoir » du client (cl.heureStale) : on reporte sur cl.heure et on efface le flag.
     (a.clients || []).forEach((cl) => { if (cid && cl.clientId !== cid) return; const cvH = (cl.chevaux || []).map((cv) => cv.heure).filter(Boolean).sort()[0]; if (cvH) { cl.heure = cvH; delete cl.heureStale; } });
     const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
-    scheduleCalPush(t); closeModal(); renderHomeTrajet();
+    scheduleCalPush(t); closeModal(); maybeProposeReorder(t); renderHomeTrajet();
   });
 }
 // Encodage du temps de trajet RÉEL d'un arrêt (relevé sur Waze) — repris dans SMS / récap / ticket / stats.
