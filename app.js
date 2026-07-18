@@ -11,10 +11,20 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.90';
+const APP_VERSION = '1.7.91';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.91', date: '2026-07-19',
+    ajouts: [
+      'AGIR (Trajet du jour) — le bouton « 🐴 Actes / articles » ouvre désormais une modale EN PLACE : cocher Parage/Visite (+ pathologies) par cheval de ce client, et une section « 📝 Articles » (ajout/retrait). Plus besoin d\'ouvrir l\'éditeur.',
+      'AGIR — après avoir validé une sous-fenêtre (Actes, Paiement, RDV, Route, Heure, Prêt, Carte), on revient à la modale « Agir » (au lieu de l\'accueil).',
+      'PAIEMENT SANS ACTE — valider « Payer & clôturer » alors qu\'un cheval n\'a pas d\'acte ouvre la modale Actes PAR-DESSUS le paiement (par cheval, uniquement ce client) ; en validant, on revient au paiement. Fini le retour à l\'accueil.',
+      'CARTE CLIENT — nouveau bouton (dans Agir ET dans le paiement) : une section par arrêt du client avec « 🗺️ Carte arrêt » (trajet/heure/chevaux) et « 🧾 Carte facture » (facture globale du client).',
+      'PAIEMENT — les boutons « 📅 RDV » et « 🗺️ Carte client » sont sur une ligne sous l\'en-tête ; ils reviennent au paiement du bon client après validation.',
+    ],
+  },
   {
     version: '1.7.90', date: '2026-07-19',
     ajouts: [
@@ -12594,6 +12604,100 @@ function renderBlockingArrets() {
     list.appendChild(el);
   });
 }
+// ===== Modale « Actes » réutilisable : cocher Parage / Visite (+ pathologies) par cheval, pour UN client à UN arrêt.
+// opts.sub = superposée (sous-modale, ex. depuis le paiement, retour au paiement à la validation) ; sinon modale principale (depuis Agir) avec section « Articles » et retour à Agir.
+// opts = { sub?, onDone?, withArticles? }.
+function openActesModal(t, a, cl, opts) {
+  opts = opts || {};
+  const cid = cl.clientId; const cObj = clients.find((x) => x.id === cid);
+  const arretAddrN = norm(addrStr(a.addr));
+  let pool = cObj ? activeChevaux(cObj).filter((h) => norm(addrStr(chevalAddr(cObj, h))) === arretAddrN) : [];
+  if (!pool.length) pool = (cl.chevaux || []).map((cv) => ({ id: cv.id, nom: cv.nom }));
+  const cvOf = (ph) => (cl.chevaux || []).find((x) => (x.id != null && ph.id != null && x.id === ph.id) || norm(x.nom) === norm(ph.nom));
+  const ensureCv = (ph) => { let cv = cvOf(ph); if (!cv) { cv = { id: ph.id, nom: ph.nom, fourbure: false, npas: false, infection: false, parage: false, heure: '', present: true }; cl.chevaux.push(cv); } return cv; };
+  const pathoCols = []; if (S.fourbureHT > 0) pathoCols.push({ key: 'fourbure', label: 'Fourbure' }); if (S.npasHT > 0) pathoCols.push({ key: 'npas', label: 'NPAS' }); if (S.infectionHT > 0) pathoCols.push({ key: 'infection', label: 'Infection' });
+  const visArts = (S.articlesCatalogue || []).filter((x) => x.visite);
+  const openFn = opts.sub ? openSubModal : openModal;
+  const closeFn = opts.sub ? closeSubModal : closeModal;
+  const rootId = opts.sub ? 'modalBox2' : 'modalBox';
+  const persistTour = () => { if (t === currentTour) recomputeMoney(); else { recomputeTourLocal(t); persistTourEdit(t); } }; // recompute + save (recomputeMoney no-op si géométrie périmée : l'acte reste posé, la clôture n'en dépend pas)
+  const refreshBehind = () => { if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHomeTrajet(); if (currentTour && currentTour.id === t.id && $('tab-editeur') && $('tab-editeur').classList.contains('active')) renderEditorArrets(); };
+  // Articles libres du client (hors impayé) présents à cet arrêt.
+  const clientArtIds = () => new Set((cl.chevaux || []).map((c) => c.id || c.nom));
+  const clientArts = () => (t.articles || []).filter((ar) => ar.clientId === cid && !ar.impaye && ((ar.chevalIds || []).some((id) => clientArtIds().has(id)) || (ar.chevalNoms || []).some((n) => clientArtIds().has(n)) || !((ar.chevalIds || []).length + (ar.chevalNoms || []).length)));
+  const render = () => {
+    const rowsHtml = pool.map((ph, pi) => {
+      const cv = cvOf(ph); const cancelled = chevalCancelled(cv); const acte = !cancelled && !!(cv && (cv.parage || cv.visite));
+      if (cancelled) return `<div class="ch-row ch-cancel"><b>🐴 ${esc(ph.nom)}</b> <span class="badge badge-cancel">🚫 annulé</span></div>`;
+      const ck = (attr, checked, label, disabled) => `<label class="ch-opt${disabled ? ' ch-opt-off' : ''}"><input type="checkbox" ${attr} data-pi="${pi}" ${checked ? 'checked' : ''}${disabled ? ' disabled' : ''}/> ${label}</label>`;
+      let o = ck('data-key="parage"', cv && cv.parage, 'Parage', false);
+      o += ck('data-vis', cv && cv.visite, 'Visite', !visArts.length);
+      pathoCols.forEach((c) => { o += ck('data-key="' + c.key + '"', cv && cv[c.key], c.label, !acte); });
+      let visSel = '';
+      if (cv && cv.visite && visArts.length > 1) visSel = `<label class="li-sub">Prestation visite <select data-visart="${pi}">${visArts.map((x) => `<option value="${x.id}"${cv.visiteArtId === x.id ? ' selected' : ''}>${esc(x.libelle)} (${eur(x.prixHT)})</option>`).join('')}</select></label>`;
+      return `<div class="ch-row"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${acte ? '' : ' <span class="badge badge-noacte">⚠ à cocher</span>'}</div><div class="ch-opts">${o}</div>${visSel}</div>`;
+    }).join('');
+    let artHtml = '';
+    if (opts.withArticles && !opts.sub) {
+      const arts = clientArts();
+      artHtml = `<hr class="ac-div"/><div class="ac-sec-h">📝 Articles</div><div id="acArtList">${arts.length ? arts.map((ar) => `<div class="list-item"><div class="li-main"><b>${esc(ar.libelle) || 'Article'}</b><span class="li-sub">${eur(ar.prixHT)} HT</span></div><div class="li-act"><button class="btn small" data-artdel="${ar.id}">✕</button></div></div>`).join('') : '<p class="hint">Aucun article libre.</p>'}</div>
+        <div class="row" style="gap:6px"><input type="text" id="acArtLib" placeholder="Intitulé" style="flex:2"/><input type="number" id="acArtPrix" step="0.01" min="0" placeholder="Prix HT" style="flex:1"/><button class="btn small" id="acArtAdd">＋ Ajouter</button></div>`;
+    }
+    openFn(`<div class="modal-head"><b>🐴 Actes — ${esc(clientName(cid))}</b><button class="x" id="acX">✕</button></div>
+      <p class="hint">Cochez <b>Parage</b> ou <b>Visite</b> pour chaque cheval de ce client à cet arrêt (obligatoire pour clôturer).</p>
+      <div class="ch-list">${rowsHtml || '<p class="hint">Aucun cheval à cet arrêt.</p>'}</div>
+      ${artHtml}
+      <div class="actions${opts.sub ? '' : ' two'}">${opts.sub ? '' : '<button class="btn" id="acBack">← Retour</button>'}<button class="btn primary" id="acOk">Valider</button></div>`);
+    const root = document.getElementById(rootId);
+    root.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => { const cv = ensureCv(pool[+inp.dataset.pi]); const key = inp.dataset.key; cv[key] = e.target.checked; if (key === 'parage' && !e.target.checked && !cv.visite) { cv.fourbure = cv.npas = cv.infection = false; cv.difficile = false; } persistTour(); render(); refreshBehind(); }));
+    root.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => { const cv = ensureCv(pool[+inp.dataset.pi]); cv.visite = e.target.checked; if (!cv.visite) { cv.visiteArtId = null; if (!cv.parage) { cv.fourbure = cv.npas = cv.infection = false; cv.difficile = false; } } else if (visArts.length === 1) cv.visiteArtId = visArts[0].id; persistTour(); render(); refreshBehind(); }));
+    root.querySelectorAll('[data-visart]').forEach((sel) => sel.addEventListener('change', (e) => { const cv = ensureCv(pool[+sel.dataset.visart]); cv.visiteArtId = e.target.value || null; persistTour(); refreshBehind(); }));
+    root.querySelectorAll('[data-artdel]').forEach((b) => b.addEventListener('click', () => { t.articles = (t.articles || []).filter((ar) => ar.id !== b.dataset.artdel); persistTour(); render(); refreshBehind(); }));
+    if (root.querySelector('#acArtAdd')) root.querySelector('#acArtAdd').addEventListener('click', () => { const lib = (root.querySelector('#acArtLib').value || '').trim(); const prix = Math.max(0, parseNum(root.querySelector('#acArtPrix').value)); if (!lib || !(prix > 0)) { alert('Renseignez un intitulé et un prix HT.'); return; } const ids = (cl.chevaux || []).map((c) => c.id).filter(Boolean); const noms = (cl.chevaux || []).map((c) => c.nom).filter(Boolean); (t.articles = t.articles || []).push({ id: uid(), clientId: cid, chevalIds: ids, chevalNoms: noms, libelle: lib, prixHT: prix, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std }); persistTour(); render(); refreshBehind(); });
+    root.querySelector('#acX').addEventListener('click', () => { closeFn(); if (opts.onDone) opts.onDone(); });
+    if (root.querySelector('#acBack')) root.querySelector('#acBack').addEventListener('click', () => { closeFn(); if (opts.onDone) opts.onDone(); });
+    root.querySelector('#acOk').addEventListener('click', () => { closeFn(); if (opts.onDone) opts.onDone(); });
+  };
+  render();
+}
+// ===== Carte client (B5) : une section PAR ARRÊT du client (le dernier porte le paiement), avec « Carte arrêt » (trajet/heure/chevaux de cet arrêt) et « Carte facture » (facture AGRÉGÉE du client, identique quel que soit l'arrêt).
+function modalCarteClient(t, cid, onBack) {
+  const arr = clientArrets(t, cid);
+  const mins = (typeof legMinutesFor === 'function') ? legMinutesFor(t) : [];
+  const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null;
+  const close = () => { closeModal(); if (onBack) onBack(); };
+  const showList = () => {
+    const secs = arr.map((x, k) => {
+      const hh = x.cl.heure || arretHeure(x.a); const isLast = k === arr.length - 1;
+      return `<div class="card" style="margin-bottom:8px"><div class="li-main"><b>${x.i + 1}. ${esc(labelFor(x.a)) || 'arrêt'}${isLast ? ' <span class="badge">💶 paiement</span>' : ''}</b><span class="li-sub">📍 ${esc(addrStr(x.a.addr))}${hh ? ' · 🕘 ' + esc(hh) : ''}</span></div><div class="actions two" style="margin-top:6px"><button class="btn" data-carr="${k}">🗺️ Carte arrêt</button><button class="btn" data-cfac="${k}">🧾 Carte facture</button></div></div>`;
+    }).join('');
+    openModal(`<div class="modal-head"><b>🗺️ Carte client — ${esc(clientName(cid))}</b><button class="x" id="ccX">✕</button></div>
+      ${arr.length > 1 ? '<p class="hint">Ce client a ' + arr.length + ' arrêts — le dernier porte le paiement (facture globale).</p>' : ''}${secs || '<p class="hint">Aucun arrêt.</p>'}`);
+    $('ccX').addEventListener('click', close);
+    document.querySelectorAll('[data-carr]').forEach((b) => b.addEventListener('click', () => showArret(+b.dataset.carr)));
+    document.querySelectorAll('[data-cfac]').forEach((b) => b.addEventListener('click', () => showFacture()));
+  };
+  const showArret = (k) => {
+    const x = arr[k]; const est = mins[x.i] != null ? Math.round(mins[x.i]) : null; const real = (typeof x.a.realMin === 'number') ? x.a.realMin : null;
+    const hh = x.cl.heure || arretHeure(x.a);
+    const chevaux = (x.cl.chevaux || []).filter((c) => !chevalCancelled(c)).map((cv) => '🐴 ' + esc(cv.nom) + (cv.parage ? ' · Parage' : '') + (cv.visite ? ' · Visite' : '')).join('<br>') || '<i>aucun cheval</i>';
+    openModal(`<div class="modal-head"><b>🗺️ Arrêt ${x.i + 1} — ${esc(clientName(cid))}</b><button class="x" id="ccX">✕</button></div>
+      <div class="card"><div class="li-main"><b>${esc(labelFor(x.a))}</b><span class="li-sub">📍 ${esc(addrStr(x.a.addr))}</span></div>
+      <p class="hint">🕘 Heure : ${hh ? esc(hh) : '—'}<br>🕒 Trajet : ${est != null ? durMin(est) + ' est.' : '—'}${real > 0 ? ' · ' + durMin(real) + ' réel' : (real === 0 ? ' · à recalculer' : '')}</p>
+      <div class="li-sub">${chevaux}</div></div>
+      <div class="actions"><button class="btn primary block" id="ccBack">← Retour</button></div>`);
+    $('ccX').addEventListener('click', close); $('ccBack').addEventListener('click', showList);
+  };
+  const showFacture = () => {
+    const txt = m ? invoiceTextForClient(m, (t.payments || {})[cid]) : '(Facture indisponible — ouvrez la tournée et laissez-la se calculer.)';
+    openModal(`<div class="modal-head"><b>🧾 Facture — ${esc(clientName(cid))}</b><button class="x" id="ccX">✕</button></div>
+      <pre class="carte-fac">${esc(txt)}</pre>
+      <div class="actions two"><button class="btn" id="ccBack">← Retour</button><button class="btn primary" id="ccCopy">Copier</button></div>`);
+    $('ccX').addEventListener('click', close); $('ccBack').addEventListener('click', showList);
+    $('ccCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(txt); $('ccCopy').textContent = 'Copié ✔'; } catch { alert(txt); } });
+  };
+  showList();
+}
 // L4 — menu « Agir » CIBLÉ SUR UN CLIENT (SMS/Ticket/RDV/Prêt/Email/Paiement du client), pour que deux clients au même arrêt soient indépendants.
 function dayJClientAgir(t, a, cl, ctx) {
   const cid = cl.clientId; const c = clients.find((x) => x.id === cid) || {};
@@ -12606,18 +12710,20 @@ function dayJClientAgir(t, a, cl, ctx) {
     txt += '\n\n————— DÉTAIL CLIENT —————\n' + (m ? invoiceTextForClient(m, (t.payments || {})[cid]) : '(Détail indisponible — ouvrez la tournée et laissez-la se calculer.)');
     try { await navigator.clipboard.writeText(txt); btn.textContent = 'Ticket copié ✔'; setTimeout(() => { btn.textContent = 'Ticket'; }, 1500); } catch { alert(txt); }
   };
+  const reopenAgir = () => { renderHomeTrajet(); modalActions('Actions — ' + clientName(cid), dayJClientAgir(t, a, cl, ctx)); }; // retour à la modale Agir après une sous-modale (B2)
   return [
-    { label: '🕘 Heure RDV', done: !!clientRdvHeure(t, cid), keepOpen: true, onClick: () => modalHeureRdv(t, a, cid) },
-    { label: '✏️ Actes / articles', onClick: () => openEditorAtClient(t, cid, (t.arrets || []).indexOf(a)) }, // accès direct par client à l'édition prestations/articles (depuis le Trajet du jour) — #8d : cible l'arrêt exact (client à plusieurs adresses)
+    { label: '🕘 Heure RDV', done: !!clientRdvHeure(t, cid), onClick: () => modalHeureRdv(t, a, cid, reopenAgir) },
+    { label: '🐴 Actes / articles', onClick: () => openActesModal(t, a, cl, { withArticles: true, onDone: reopenAgir }) }, // actes (parage/visite) + articles EN PLACE, retour à Agir
+    { label: '🗺️ Carte client', onClick: () => modalCarteClient(t, cid, reopenAgir) },
     { label: navLabel(), onClick: () => openNav(a.addr) },
-    { label: 'Route (temps réel)', done: ctx.rDone, orange: ctx.rStale, onClick: () => modalRouteTime(t, a, ctx.est, renderHomeTrajet) },
+    { label: 'Route (temps réel)', done: ctx.rDone, orange: ctx.rStale, onClick: () => modalRouteTime(t, a, ctx.est, reopenAgir) },
     { label: 'SMS', keepOpen: true, onClick: () => modalSmsChoice(c, smsDataFor(c, { cheval: chNames, trajet: ctx.trajet, adresse: ctx.adresse })) },
     { label: 'Ticket', keepOpen: true, onClick: ticket },
-    { label: '＋ Prêt', orange: (c.prets || []).length > 0, onClick: () => modalPret(cid, t) },
+    { label: '＋ Prêt', orange: (c.prets || []).length > 0, onClick: () => modalPret(cid, t, reopenAgir) },
     (isClientLastArret(t, cid, a)
-      ? { label: '💶 Paiement', done: clientPaiementDone(t, cid), disabled: clientPaiementDone(t, cid), onClick: () => modalPayment(t, a, renderHomeTrajet, () => { if (!closeClientAt(t, a, cl)) { const miss = clientActeMissingArrets(t, cid); if (miss.length) alert('🐴 Actes manquants — cochez au moins un cheval à : ' + miss.map((x) => (x.i + 1) + '. ' + (labelFor(x.a) || 'arrêt')).join(', ') + '.'); } persist(); scheduleCalPush(t); }, cid) } // dernier arrêt du client → paiement (facture globale) ; clôture TOUS ses arrêts
-      : { label: '🔒 Clôturer (en attente)', done: clientValidated(cl), disabled: clientValidated(cl), onClick: () => { if (!clientActeOK(a, cl)) { alert('🐴 Cochez au moins un cheval (Parage ou Visite) — ouvrez la tournée.'); return; } if (closeClientPending(t, a, cl)) { persist(); scheduleCalPush(t); } renderHomeTrajet(); } }), // arrêt intermédiaire → clôture en attente (paiement au dernier arrêt)
-    { label: '📅 RDV', done: !!cl.rdvDone, disabled: !!cl.rdvDone, onClick: () => modalRDV(t, a, cid, renderHomeTrajet) },
+      ? { label: '💶 Paiement', done: clientPaiementDone(t, cid), disabled: clientPaiementDone(t, cid), onClick: () => modalPayment(t, a, reopenAgir, () => { closeClientAt(t, a, cl); persist(); scheduleCalPush(t); }, cid) } // dernier arrêt du client → paiement (facture globale) ; clôture TOUS ses arrêts (garde actes dans modalPayment)
+      : { label: '🔒 Clôturer (en attente)', done: clientValidated(cl), disabled: clientValidated(cl), onClick: () => { const finish = () => { if (closeClientPending(t, a, cl)) { persist(); scheduleCalPush(t); } reopenAgir(); }; if (!clientActeOK(a, cl)) { openActesModal(t, a, cl, { onDone: finish }); return; } finish(); } }), // arrêt intermédiaire → clôture en attente (paiement au dernier arrêt) ; actes manquants → modale Actes en place
+    { label: '📅 RDV', done: !!cl.rdvDone, disabled: !!cl.rdvDone, onClick: () => modalRDV(t, a, cid, reopenAgir) },
     { label: '📧 Email au client', keepOpen: true, onClick: () => modalEmailClient(c) },
   ];
 }
@@ -12792,7 +12898,7 @@ function openRdvReassign(t, chosen, displaced, applyChosen) {
   };
 }
 // Heure de RDV par cheval (depuis « Agir ») : saisie individuelle de l'heure de chaque cheval de l'arrêt.
-function modalHeureRdv(t, a, cid) {
+function modalHeureRdv(t, a, cid, onDone) {
   const chs = []; (a.clients || []).forEach((cl) => { if (cid && cl.clientId !== cid) return; (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) chs.push({ cv, cid: cl.clientId, cl }); }); }); // L5 : ciblé sur UN client si cid fourni (deux clients au même arrêt = heures indépendantes)
   openModal(`<div class="modal-head"><b>🕘 Heure de RDV${cid ? ' — ' + esc(clientName(cid)) : ' par cheval'}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Saisissez l'heure de rendez-vous de chaque cheval${cid ? ' de ce client' : ' de cet arrêt'}.</p>
@@ -12804,13 +12910,13 @@ function modalHeureRdv(t, a, cid) {
   if (!chs.length) box.innerHTML = '<p class="hint">Aucun cheval à cet arrêt.</p>';
   // Conflits d'heures : la roue affiche en rouge les créneaux déjà pris par d'autres clients de la tournée ; en choisir un ouvre la réattribution (uniquement quand un client précis est ciblé).
   if (cid) box.querySelectorAll('[data-h]').forEach((inp) => { inp._gpTaken = takenRdvSlots(t, cid); inp._gpOnConflict = (val, d) => openRdvReassign(t, val, d, () => setClientHeureInTour(t, cid, val)); });
-  $('mX').addEventListener('click', closeModal);
+  $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
   $('hrOk').addEventListener('click', () => {
     box.querySelectorAll('[data-h]').forEach((inp) => { chs[+inp.dataset.h].cv.heure = inp.value || ''; });
     // Ré-encoder une heure ici lève aussi le « à revoir » du client (cl.heureStale) : on reporte sur cl.heure et on efface le flag.
     (a.clients || []).forEach((cl) => { if (cid && cl.clientId !== cid) return; const cvH = (cl.chevaux || []).map((cv) => cv.heure).filter(Boolean).sort()[0]; if (cvH) { cl.heure = cvH; delete cl.heureStale; } });
     const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } }
-    scheduleCalPush(t); closeModal(); maybeProposeReorder(t); renderHomeTrajet();
+    scheduleCalPush(t); closeModal(); maybeProposeReorder(t); if (onDone) onDone(); else renderHomeTrajet();
   });
 }
 // Encodage du temps de trajet RÉEL d'un arrêt (relevé sur Waze) — repris dans SMS / récap / ticket / stats.
@@ -12851,15 +12957,15 @@ function modalReturnTime(t, estMin, after) {
   $('rtClear').addEventListener('click', () => { delete t.returnRealMin; persist(); closeModal(); (after || renderHomeTrajet)(); });
 }
 // Prêt d'un objet à un client (mémoire par client, rappelée aux tournées suivantes jusqu'à récupération).
-function modalPret(clientId, tour) {
+function modalPret(clientId, tour, onDone) {
   const c = clients.find((x) => x.id === clientId); if (!c) return;
   openModal(`<div class="modal-head"><b>🎁 Prêt à ${esc(fullName(c))}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Notez l'objet prêté au client. Il sera rappelé à ses prochaines tournées, sous les articles de l'arrêt (hors facture), jusqu'à ce que vous le marquiez « Récupéré ».</p>
     <label>Objet prêté<input type="text" id="pretText" placeholder="ex. cloche, chaussure de marche, tapis…" /></label>
     <div class="actions"><button class="btn primary block" id="pretOk">Enregistrer le prêt</button></div>`);
-  $('mX').addEventListener('click', closeModal);
+  $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
   const inp = $('pretText'); if (inp) inp.focus();
-  $('pretOk').addEventListener('click', () => { const txt = $('pretText').value.trim(); if (!txt) { closeModal(); return; } if (!Array.isArray(c.prets)) c.prets = []; c.prets.push({ id: uid(), text: txt, date: (tour && tour.date) || todayStr(), sourceTourId: tour ? tour.id : null }); saveClients(); closeModal(); renderEditorArrets(); });
+  $('pretOk').addEventListener('click', () => { const txt = $('pretText').value.trim(); if (!txt) { closeModal(); if (onDone) onDone(); return; } if (!Array.isArray(c.prets)) c.prets = []; c.prets.push({ id: uid(), text: txt, date: (tour && tour.date) || todayStr(), sourceTourId: tour ? tour.id : null }); saveClients(); closeModal(); if (onDone) onDone(); else renderEditorArrets(); });
 }
 // Choix de la prestation « Visite » d'un cheval (modale) → onPick(id | undefined si annulé).
 function modalVisitePick(nom, currentId, visArts, onPick) {
@@ -13333,7 +13439,8 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
     const ttc = invTTC(cid);
     const rectVal = p.rectifie != null ? p.rectifie : (p.montantPaye != null && !p.partiel ? p.montantPaye : '');
     html += `<div class="pay-block" data-cid="${cid}">
-      <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture <span data-facture>${eur(ttc)}</span> TTC</span> <button type="button" class="btn small" data-rdv="${cid}">📅 RDV</button></h3>
+      <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture <span data-facture>${eur(ttc)}</span> TTC</span></h3>
+      <div class="pay-actrow"><button type="button" class="btn small" data-rdv="${cid}">📅 RDV</button> <button type="button" class="btn small" data-carte="${cid}">🗺️ Carte client</button></div>
       <div class="seg pay-method">
         <button type="button" class="seg-btn${p.method === 'virement' ? ' on' : ''}" data-m="virement">Virement</button>
         <button type="button" class="seg-btn${p.method === 'liquide' ? ' on' : ''}" data-m="liquide">Liquide</button>
@@ -13426,8 +13533,12 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
     persist(); saveClients();
   };
   // Bouton « RDV » (programmer le suivi) : sauvegarde d'abord le paiement en cours, puis ouvre la planification ; retour au paiement à la fermeture.
-  document.querySelectorAll('[data-rdv]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalRDV(t, arret, b.dataset.rdv, () => modalPayment(t, arret, after, onCommit)); }));
-  $('payOk').addEventListener('click', () => { if ($('payOk').disabled) return; commitPayments(); if (onCommit) onCommit(); scheduleDrivePush(); closeModal(); if (after) after(); }); // payOk désactivé si incomplet → pas de validation possible. Paiement = JALON → synchro Drive rapide.
+  const reopenPay = (c2) => modalPayment(t, arret, after, onCommit, c2); // rouvre le paiement DU BON client (corrige la perte de onlyClientId au retour RDV)
+  document.querySelectorAll('[data-rdv]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalRDV(t, arret, b.dataset.rdv, () => reopenPay(b.dataset.rdv)); }));
+  document.querySelectorAll('[data-carte]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalCarteClient(t, b.dataset.carte, () => reopenPay(b.dataset.carte)); })); // B8 : carte client depuis le paiement, retour au paiement
+  $('payOk').addEventListener('click', () => { if ($('payOk').disabled) return; commitPayments(); // B4 : clôture d'un client SANS acte → modale Actes superposée, puis on relance la clôture (pas de retour à l'accueil)
+    if (onCommit && onlyClientId) { const miss = clientActeMissingArrets(t, onlyClientId); if (miss.length) { openActesModal(t, miss[0].a, miss[0].cl, { sub: true, onDone: () => { const still = clientActeMissingArrets(t, onlyClientId); if (still.length) { alert('🐴 Actes encore manquants à : ' + still.map((x) => (x.i + 1) + '. ' + (labelFor(x.a) || 'arrêt')).join(', ') + '.'); return; } if (onCommit) onCommit(); scheduleDrivePush(); closeModal(); if (after) after(); } }); return; } }
+    if (onCommit) onCommit(); scheduleDrivePush(); closeModal(); if (after) after(); }); // payOk désactivé si incomplet → pas de validation possible. Paiement = JALON → synchro Drive rapide.
 }
 // Reste « reporté » (liquide, à percevoir à la prochaine visite) rattaché au client.
 function setClientImpaye(t, cid, resteTTC) {
