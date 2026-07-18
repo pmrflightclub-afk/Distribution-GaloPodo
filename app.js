@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.89';
+const APP_VERSION = '1.7.90';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.90', date: '2026-07-19',
+    ajouts: [
+      'CLIENT À PLUSIEURS ARRÊTS — nouvelle règle : le DERNIER arrêt du client porte le paiement (facture globale de tous ses arrêts) ; les arrêts précédents se clôturent en « 🔒 Clôturer (en attente) » (actes requis, sans paiement). Payer au dernier arrêt clôture tous ses arrêts d\'un coup, et bloque si des actes manquent ailleurs. Un client à un seul arrêt = inchangé.',
+      'AGENDA GOOGLE — une heure de RDV modifiée dans « 📊 Compléter » corrige aussi l\'évènement Google (client non clôturé).',
+      'HEURES DE RDV (molette) — quand le créneau centré est déjà pris, une légende sous la roue affiche « ⚠ HH:MM déjà pris — Nom » (nom du client).',
+    ],
+  },
   {
     version: '1.7.89', date: '2026-07-18',
     ajouts: [
@@ -5030,7 +5038,16 @@ function gpRollIndex(roll) { const ih = gpRollItemH(roll), n = roll.querySelecto
 let _gpTimeTaken = null, _gpConflictHostInp = null;
 function gpTimeTakenHours() { const s = new Set(); if (_gpTimeTaken) Object.keys(_gpTimeTaken).forEach((k) => { const h = +String(k).split(':')[0]; if (!isNaN(h)) s.add(h); }); return s; }
 function gpTimeMarkMinutes(bd, H) { const rm = bd.querySelector('[data-col="m"]'); if (!rm) return; rm.querySelectorAll('.gp-roll-opt').forEach((o) => { const key = gpPad2(H) + ':' + gpPad2(+o.dataset.v); o.classList.toggle('taken', !!(_gpTimeTaken && _gpTimeTaken[key])); }); }
-function gpTimeApplyTaken(bd, curH) { const rh = bd.querySelector('[data-col="h"]'); if (rh) { const hrs = gpTimeTakenHours(); rh.querySelectorAll('.gp-roll-opt').forEach((o) => o.classList.toggle('taken', hrs.has(+o.dataset.v))); } gpTimeMarkMinutes(bd, curH); }
+function gpTimeApplyTaken(bd, curH) { const rh = bd.querySelector('[data-col="h"]'); if (rh) { const hrs = gpTimeTakenHours(); rh.querySelectorAll('.gp-roll-opt').forEach((o) => o.classList.toggle('taken', hrs.has(+o.dataset.v))); } gpTimeMarkMinutes(bd, curH); gpTimeUpdateCaption(bd); }
+// Légende sous la roue : si le créneau centré (HH:MM) est déjà pris par un RDV de la tournée, affiche « ⚠ HH:MM déjà pris — Nom » (nom de famille seul, court). Placée hors des options → n'affecte pas le calage de la molette.
+function gpTimeUpdateCaption(bd) {
+  const cap = bd.querySelector('.gp-roll-cap'); if (!cap) return;
+  if (!_gpTimeTaken) { cap.textContent = ''; cap.className = 'gp-roll-cap'; return; }
+  const rh = bd.querySelector('[data-col="h"]'), rm = bd.querySelector('[data-col="m"]'); if (!rh || !rm) return;
+  const key = gpPad2(gpRollIndex(rh)) + ':' + gpPad2(gpRollIndex(rm)); const ent = _gpTimeTaken[key];
+  if (ent) { const c = ent.clientId ? clients.find((x) => x.id === ent.clientId) : null; const nm = c ? (c.nom || fullName(c)) : (ent.name || ''); cap.textContent = '⚠ ' + key + ' déjà pris' + (nm ? ' — ' + nm : ''); cap.className = 'gp-roll-cap taken'; }
+  else { cap.textContent = ''; cap.className = 'gp-roll-cap'; }
+}
 // Sélecteur d'heure = MODALE centrée (dialog) avec deux roues h · min glissables. Elle se superpose à toute fenêtre déjà
 // ouverte (élément appendu au body, z-index élevé) → ni ancrage sous le champ, ni fermeture au scroll : on règle les deux
 // roues tranquillement puis « Valider ». Le champ natif (masqué) reste la source de vérité, mis à jour seulement à Valider.
@@ -5054,6 +5071,7 @@ function gpTimeModalEl() {
   const bd = document.createElement('div'); bd.className = 'gp-tm-backdrop'; bd.style.display = 'none';
   bd.innerHTML = `<div class="gp-tm-dialog" role="dialog" aria-modal="true"><div class="gp-tm-title">Choisir l'heure</div>`
     + `<div class="gp-roll-wrap"><div class="gp-roll" data-col="h"></div><span class="gp-roll-colon">:</span><div class="gp-roll" data-col="m"></div><div class="gp-roll-band"></div></div>`
+    + `<div class="gp-roll-cap"></div>`
     + `<div class="gp-tm-actions"><button type="button" class="btn" data-tm="clear">Effacer</button><button type="button" class="btn" data-tm="cancel">Annuler</button><button type="button" class="btn primary" data-tm="ok">Valider</button></div></div>`;
   document.body.appendChild(bd);
   bd.addEventListener('click', (e) => { if (e.target === bd) gpTimeModalClose(); }); // clic sur le fond = annuler
@@ -5061,7 +5079,7 @@ function gpTimeModalEl() {
   bd.querySelector('[data-tm="ok"]').addEventListener('click', () => gpTimeModalCommit(false));
   bd.querySelector('[data-tm="clear"]').addEventListener('click', () => gpTimeModalCommit(true));
   bd.querySelectorAll('.gp-roll').forEach((roll) => {
-    roll.addEventListener('scroll', () => { if (roll._raf) cancelAnimationFrame(roll._raf); roll._raf = requestAnimationFrame(() => { const idx = gpRollIndex(roll); roll.querySelectorAll('.gp-roll-opt').forEach((o, i) => o.classList.toggle('sel', i === idx)); if (roll.dataset.col === 'h' && _gpTimeTaken) gpTimeMarkMinutes(bd, idx); }); }); // l'heure centrée change → recalcule les minutes prises (rouge)
+    roll.addEventListener('scroll', () => { if (roll._raf) cancelAnimationFrame(roll._raf); roll._raf = requestAnimationFrame(() => { const idx = gpRollIndex(roll); roll.querySelectorAll('.gp-roll-opt').forEach((o, i) => o.classList.toggle('sel', i === idx)); if (roll.dataset.col === 'h' && _gpTimeTaken) gpTimeMarkMinutes(bd, idx); gpTimeUpdateCaption(bd); }); }); // l'heure centrée change → recalcule les minutes prises (rouge) + légende du créneau
     roll.addEventListener('click', (e) => { const o = e.target.closest('.gp-roll-opt'); if (o) gpRollCenter(roll, +o.dataset.v, true); }); // tap sur un chiffre → il vient au centre
   });
   _gpTimeModal = bd; return bd;
@@ -6767,9 +6785,18 @@ function arretActeOK(a) { return (a.clients || []).every((cl) => clientActeOK(a,
 function clientValidated(cl) { return !!cl && typeof cl.validatedAt === 'number'; }
 // `a.validatedAt` (compat éditeur/stats/fusion = « arrêt entièrement clôturé ») dérivé : posé quand TOUS les clients sont clôturés, retiré sinon.
 function syncArretValidated(a) { const cls = (a.clients || []); if (cls.length && cls.every(clientValidated)) a.validatedAt = Math.max.apply(null, cls.map((cl) => cl.validatedAt)); else delete a.validatedAt; }
-// Clôture un client (paiement complet requis) : pose cl.validatedAt puis recale a.validatedAt. Renvoie true si la clôture a été faite.
-function closeClientAt(t, a, cl) { if (cl && clientActeOK(a, cl) && clientPaiementDone(t, cl.clientId) && !clientValidated(cl)) { cl.validatedAt = Date.now(); syncArretValidated(a); return true; } return false; } // clôture = acte enregistré ET paiement complet : « clôturé » et « débloque l'arrêt suivant » (arretFinalise) sont désormais le MÊME critère
-function clientFinalise(t, a, cl) { return clientActeOK(a, cl) && clientValidated(cl) && clientPaiementDone(t, cl.clientId); }
+// ---------- Règle multi-arrêts d'un même client : le DERNIER arrêt (ordre tournée) porte le PAIEMENT + la facture globale ; les arrêts précédents se clôturent « EN ATTENTE du paiement » (actes requis, pas de paiement). Un client à 1 arrêt = inchangé. ----------
+function clientArrets(t, cid) { const out = []; (t.arrets || []).forEach((a, i) => { const cl = (a.clients || []).find((x) => x.clientId === cid); if (cl) out.push({ a, cl, i }); }); return out; } // tous les arrêts d'un client (ordre tournée)
+function isClientLastArret(t, cid, a) { const arr = clientArrets(t, cid); return !arr.length || arr[arr.length - 1].a === a; } // arrêt porteur du paiement (dernier ; 1 arrêt → toujours vrai)
+function clientActeMissingArrets(t, cid) { return clientArrets(t, cid).filter((x) => !clientActeOK(x.a, x.cl)); } // arrêts du client sans acte fait → bloquent le paiement final
+// Clôture « en attente » d'un arrêt intermédiaire (actes requis, PAS de paiement). Renvoie true si posée.
+function closeClientPending(t, a, cl) { if (cl && clientActeOK(a, cl) && !clientValidated(cl)) { cl.validatedAt = Date.now(); syncArretValidated(a); return true; } return false; }
+// Clôture DÉFINITIVE de TOUS les arrêts d'un client (au dernier arrêt, paiement fait) : exige acte PARTOUT et paiement complet. Renvoie true si ≥1 clôture posée.
+function closeClientFully(t, cid) { if (!clientPaiementDone(t, cid) || clientActeMissingArrets(t, cid).length) return false; let any = false; clientArrets(t, cid).forEach((x) => { if (!clientValidated(x.cl)) { x.cl.validatedAt = Date.now(); any = true; } syncArretValidated(x.a); }); return any; }
+// Clôture un client À cet arrêt : dernier arrêt → clôture globale (paiement) ; arrêt intermédiaire → clôture en attente (actes seuls). Renvoie true si une clôture a été faite.
+function closeClientAt(t, a, cl) { if (!cl) return false; return isClientLastArret(t, cl.clientId, a) ? closeClientFully(t, cl.clientId) : closeClientPending(t, a, cl); }
+// Un client est « finalisé » à cet arrêt = acte fait + clôturé ; le paiement n'est requis qu'au DERNIER arrêt du client (les intermédiaires débloquent la suite sans paiement).
+function clientFinalise(t, a, cl) { return clientActeOK(a, cl) && clientValidated(cl) && (isClientLastArret(t, cl.clientId, a) ? clientPaiementDone(t, cl.clientId) : true); }
 // Un arrêt est « finalisé » quand CHACUN de ses clients l'est (acte fait + clôturé + payé).
 function arretFinalise(t, a) { const cls = (a.clients || []); return cls.length > 0 && cls.every((cl) => clientFinalise(t, a, cl)); }
 // Ce qui empêche de finaliser/figer une tournée : arrêt sans cheval coché, non clôturé, ou paiement incomplet (dans l'ordre).
@@ -12206,6 +12233,7 @@ function modalRecoverStats(t, opts) {
     body.querySelectorAll('[data-consult]').forEach((inp) => { const [i, j, k] = inp.dataset.consult.split('.').map(Number); const cv = t.arrets[i] && t.arrets[i].clients[j] && t.arrets[i].clients[j].chevaux[k]; if (!cv) return; const v = numOrNull(inp.value); if (v == null) delete cv.consultMin; else cv.consultMin = v; });
     const rr = numOrNull($('recReturn').value); if (rr == null) delete t.returnRealMin; else t.returnRealMin = rr;
     persistTourAnywhere(t); // stats uniquement (persistTourAnywhere ne recalcule jamais la facture d'une tournée figée)
+    scheduleCalPush(t); // une heure de RDV modifiée ici doit aussi corriger l'évènement Google Agenda (client non clôturé)
     if (currentTour && currentTour.id === t.id) { currentTour = JSON.parse(JSON.stringify(t)); }
     if (opts && opts.onNext) opts.onNext(); else { closeModal(); renderHome(); }
   });
@@ -12586,7 +12614,9 @@ function dayJClientAgir(t, a, cl, ctx) {
     { label: 'SMS', keepOpen: true, onClick: () => modalSmsChoice(c, smsDataFor(c, { cheval: chNames, trajet: ctx.trajet, adresse: ctx.adresse })) },
     { label: 'Ticket', keepOpen: true, onClick: ticket },
     { label: '＋ Prêt', orange: (c.prets || []).length > 0, onClick: () => modalPret(cid, t) },
-    { label: '💶 Paiement', done: clientPaiementDone(t, cid), disabled: clientPaiementDone(t, cid), onClick: () => modalPayment(t, a, renderHomeTrajet, () => { if (!clientActeOK(a, cl)) { alert('🐴 Cochez au moins un cheval (Parage ou Visite) pour clôturer ce client — le paiement est enregistré, la clôture attend.'); persist(); return; } closeClientAt(t, a, cl); persist(); scheduleCalPush(t); }, cid) }, // paiement figé une fois validé (✓ vert conservé) ; corrections via l'ouverture de la tournée
+    (isClientLastArret(t, cid, a)
+      ? { label: '💶 Paiement', done: clientPaiementDone(t, cid), disabled: clientPaiementDone(t, cid), onClick: () => modalPayment(t, a, renderHomeTrajet, () => { if (!closeClientAt(t, a, cl)) { const miss = clientActeMissingArrets(t, cid); if (miss.length) alert('🐴 Actes manquants — cochez au moins un cheval à : ' + miss.map((x) => (x.i + 1) + '. ' + (labelFor(x.a) || 'arrêt')).join(', ') + '.'); } persist(); scheduleCalPush(t); }, cid) } // dernier arrêt du client → paiement (facture globale) ; clôture TOUS ses arrêts
+      : { label: '🔒 Clôturer (en attente)', done: clientValidated(cl), disabled: clientValidated(cl), onClick: () => { if (!clientActeOK(a, cl)) { alert('🐴 Cochez au moins un cheval (Parage ou Visite) — ouvrez la tournée.'); return; } if (closeClientPending(t, a, cl)) { persist(); scheduleCalPush(t); } renderHomeTrajet(); } }), // arrêt intermédiaire → clôture en attente (paiement au dernier arrêt)
     { label: '📅 RDV', done: !!cl.rdvDone, disabled: !!cl.rdvDone, onClick: () => modalRDV(t, a, cid, renderHomeTrajet) },
     { label: '📧 Email au client', keepOpen: true, onClick: () => modalEmailClient(c) },
   ];
@@ -12640,24 +12670,32 @@ function renderHomeTrajet() {
       const ctx = { est, real, rDone, rStale, trajet, adresse };
       const cls = a.clients || []; const multi = cls.length > 1;
       const allValid = cls.length > 0 && cls.every(clientValidated);
+      const allPaid = cls.length > 0 && cls.every((cl) => clientPaiementDone(t, cl.clientId));
       const acteOK = arretActeOK(a);
       let arState = 'à faire', arCls = '';
-      if (t.startedAt) { if (allValid) { arState = '✅ clôturé'; arCls = 'ok'; } else if (seqLocked) { arState = '⏳ en attente'; arCls = 'wait'; } else if (!acteOK) { arState = '⚠ cocher un cheval'; arCls = 'warn'; } else { arState = '➡ à finaliser'; arCls = 'now'; } }
+      if (t.startedAt) { if (allValid && allPaid) { arState = '✅ clôturé'; arCls = 'ok'; } else if (allValid) { arState = '🔒 clôturé · attente paiement'; arCls = 'wait'; } else if (seqLocked) { arState = '⏳ en attente'; arCls = 'wait'; } else if (!acteOK) { arState = '⚠ cocher un cheval'; arCls = 'warn'; } else { arState = '➡ à finaliser'; arCls = 'now'; } }
       const persistTour2 = () => { const idx = tournees.findIndex((x) => x.id === t.id); if (idx >= 0) tournees[idx] = t; saveTournees(); };
       // Bouton « Payer & clôturer » PAR CLIENT + son câblage (deux clients au même arrêt = clôtures indépendantes).
       const clientClot = (row, cl) => {
         const cid = cl.clientId, validated = clientValidated(cl), cAOK = clientActeOK(a, cl);
+        const isLast = isClientLastArret(t, cid, a); // dernier arrêt du client = paiement ; les autres = clôture « en attente »
+        if (!isLast) {
+          const dis = !t.startedAt || seqLocked || validated || !cAOK;
+          const title = !t.startedAt ? 'Démarrez d\'abord la tournée' : (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : (!cAOK ? 'Cochez au moins un cheval (Parage ou Visite) — ouvrez la tournée' : (validated ? 'Arrêt clôturé — le paiement se fait au dernier arrêt du client' : 'Clôturer cet arrêt (le paiement se fait au dernier arrêt du client)')));
+          const btn = `<button class="btn small${dis ? (validated ? ' done' : '') : ' primary'}" data-cvalid${dis ? ' disabled' : ''} title="${title}">${validated ? '🔒 en attente ' + hm(cl.validatedAt) : '🔒 Clôturer (en attente)'}</button>`;
+          return { btn, wire: () => { const vb = row.querySelector('[data-cvalid]'); if (vb && !dis) vb.addEventListener('click', () => { if (closeClientPending(t, a, cl)) { persistTour2(); scheduleCalPush(t); } renderHomeTrajet(); }); } };
+        }
         const dis = !t.startedAt || seqLocked || validated || !cAOK;
-        const title = !t.startedAt ? 'Démarrez d\'abord la tournée' : (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : (!cAOK ? 'Cochez au moins un cheval (Parage ou Visite) — ouvrez la tournée' : (validated ? 'Client clôturé (corrections via la tournée ou la Compta)' : 'Encaisser le paiement puis clôturer ce client')));
+        const title = !t.startedAt ? 'Démarrez d\'abord la tournée' : (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : (!cAOK ? 'Cochez au moins un cheval (Parage ou Visite) — ouvrez la tournée' : (validated ? 'Client clôturé (corrections via la tournée ou la Compta)' : 'Encaisser le paiement (facture globale du client) puis clôturer')));
         const btn = `<button class="btn small${dis ? (validated ? ' done' : '') : ' primary'}" data-cvalid${dis ? ' disabled' : ''} title="${title}">${validated ? '✓ clôturé ' + hm(cl.validatedAt) : '💶 Payer & clôturer'}</button>`;
-        return { btn, wire: () => { const vb = row.querySelector('[data-cvalid]'); if (vb && !dis) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { closeClientAt(t, a, cl); persistTour2(); scheduleCalPush(t); }, cid)); } };
+        return { btn, wire: () => { const vb = row.querySelector('[data-cvalid]'); if (vb && !dis) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { if (!closeClientAt(t, a, cl)) { const miss = clientActeMissingArrets(t, cid); if (miss.length) alert('🐴 Actes manquants — cochez au moins un cheval à : ' + miss.map((x) => (x.i + 1) + '. ' + (labelFor(x.a) || 'arrêt')).join(', ') + '. Ouvrez la tournée pour cocher.'); } persistTour2(); scheduleCalPush(t); }, cid)); } };
       };
       const wireAgir = (row, cl) => { const b = row.querySelector('[data-cagir]'); if (b && !seqLocked && !clientValidated(cl)) b.addEventListener('click', () => modalActions('Actions — ' + clientName(cl.clientId), dayJClientAgir(t, a, cl, ctx))); };
       if (!multi) {
         const cl = cls[0] || {};
         const el = document.createElement('div'); el.className = 'list-item';
         if (arCls === 'now') el.classList.add('arret-now'); if (isAddrNoir(a.addr)) el.classList.add('arret-noir');
-        const cc = clientClot(el, cl); const validLbl = clientValidated(cl) ? ' · ✅ ' + hm(cl.validatedAt) : '';
+        const cc = clientClot(el, cl); const validLbl = clientValidated(cl) ? (clientPaiementDone(t, cl.clientId) ? ' · ✅ ' + hm(cl.validatedAt) : ' · 🔒 en attente ' + hm(cl.validatedAt)) : '';
         el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b> <span class="ar-state ${arCls}">${arState}</span>${isAddrNoir(a.addr) ? ' <span class="badge badge-noir">⛔ liste noire</span>' : ''}${isAddrInactif(a.addr) ? ' <span class="badge">💤 lieu inactif</span>' : ''}<span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
           <div class="li-act"><button class="btn small" data-cagir${(seqLocked || clientValidated(cl)) ? ' disabled title="' + (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : 'Arrêt clôturé — corrections via l\'ouverture de la tournée') + '"' : ''}>⚡ Agir</button> ${cc.btn}</div>`;
         wireAgir(el, cl); cc.wire(); box.appendChild(el);
@@ -12674,7 +12712,7 @@ function renderHomeTrajet() {
           const chn = (cl.chevaux || []).filter(chevalPresent).map((c) => c.nom).filter(Boolean).join(', ');
           const row = document.createElement('div'); row.className = 'list-item li-client-sub';
           const cc = clientClot(row, cl);
-          row.innerHTML = `<div class="li-main"><b>${clH ? '🕘 ' + esc(clH) + ' · ' : ''}👤 ${esc(clientName(cid))}</b>${validated ? ' <span class="ar-state ok">✅ ' + hm(cl.validatedAt) + '</span>' : ''}${chn ? '<span class="li-sub">🐴 ' + esc(chn) + '</span>' : ''}</div>
+          row.innerHTML = `<div class="li-main"><b>${clH ? '🕘 ' + esc(clH) + ' · ' : ''}👤 ${esc(clientName(cid))}</b>${validated ? ' <span class="ar-state ' + (clientPaiementDone(t, cid) ? 'ok">✅ ' : 'wait">🔒 attente ') + hm(cl.validatedAt) + '</span>' : ''}${chn ? '<span class="li-sub">🐴 ' + esc(chn) + '</span>' : ''}</div>
             <div class="li-act"><button class="btn small" data-cagir${(seqLocked || validated) ? ' disabled title="' + (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : 'Client clôturé — corrections via l\'ouverture de la tournée') + '"' : ''}>⚡ Agir</button> ${cc.btn}</div>`;
           wireAgir(row, cl); cc.wire(); box.appendChild(row);
         });

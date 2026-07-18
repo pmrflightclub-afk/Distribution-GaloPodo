@@ -115,6 +115,8 @@ input.gp-native { width: 1px !important; height: 1px !important; padding: 0 !imp
 .gp-roll-opt { height: 40px; line-height: 40px; min-width: 46px; text-align: center; scroll-snap-align: center; font-size: 18px; color: var(--muted); cursor: pointer; user-select: none; }
 .gp-roll-opt.sel { color: var(--ink); font-weight: 800; font-size: 21px; }
 .gp-roll-opt.taken { color: #c0392b; } /* créneau de RDV déjà pris dans la tournée */
+.gp-roll-cap { min-height: 1.1em; text-align: center; font-size: .8rem; font-weight: 700; margin-top: 6px; color: transparent; }
+.gp-roll-cap.taken { color: #c0392b; }
 .gp-roll-opt.sel.taken { color: #c0392b; }
 .gp-roll-colon { font-size: 21px; font-weight: 800; color: var(--ink); }
 .gp-roll-band { position: absolute; left: 0; right: 0; top: 80px; height: 40px; pointer-events: none; border-radius: 8px; border-top: 1px solid var(--accent); border-bottom: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
