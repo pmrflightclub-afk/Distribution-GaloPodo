@@ -11,10 +11,44 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.83';
+const APP_VERSION = '1.7.88';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.88', date: '2026-07-18',
+    ajouts: [
+      'HEURES DE RDV — la molette des heures affiche désormais en ROUGE les créneaux déjà pris par un autre RDV de la tournée (heure d\'un client, modale « Heure RDV », et « Programmer le RDV »).',
+      'HEURES DE RDV — si vous choisissez un créneau déjà pris, une fenêtre s\'ouvre pour donner une NOUVELLE heure au client qui l\'occupait ; l\'heure choisie revient au RDV en cours et les arrêts se re-classent par heure automatiquement.',
+    ],
+  },
+  {
+    version: '1.7.87', date: '2026-07-18',
+    ajouts: [
+      'DATES (fiche cheval & partout) — le mini-calendrier n\'a plus de flèches d\'année. Touchez le libellé « mois AAAA » en haut du calendrier : une MOLETTE d\'années s\'ouvre (comme la roue des heures) pour choisir l\'année d\'un geste — fini les 20 clics pour un cheval de 20 ans. Les flèches de mois sont agrandies.',
+    ],
+  },
+  {
+    version: '1.7.86', date: '2026-07-18',
+    ajouts: [
+      'ORDRE DES ARRÊTS — nouveau bouton « ⇅ Trier par heure » (dans l\'éditeur de tournée ET dans le Trajet du jour) : réordonne les arrêts selon l\'heure de RDV. Les arrêts déjà clôturés restent en tête, ceux sans heure passent à la fin. Les temps de trajet concernés se re-marquent « à recalculer ».',
+    ],
+  },
+  {
+    version: '1.7.85', date: '2026-07-18',
+    ajouts: [
+      'AGENDA GOOGLE — dès qu\'un arrêt est clôturé (visite faite), son rendez-vous « du jour » est retiré de votre Agenda Google. Seuls les RDV FUTURS restent : plus de doublon qui traîne chaque mois. On ne touche JAMAIS les événements que vous avez créés vous-même (seuls ceux posés par GaloPodo sont gérés).',
+      'AFFICHAGE — correctif de garde contre l\'anomalie « deux heures superposées » dans le champ heure de RDV d\'un client (l\'heure du champ natif pouvait s\'afficher par-dessus la façade pendant un rafraîchissement).',
+    ],
+  },
+  {
+    version: '1.7.84', date: '2026-07-18',
+    ajouts: [
+      'TRAJET DU JOUR (correctif majeur) — l\'arrêt suivant se débloque enfin dès que le précédent est réellement finalisé. Un arrêt ne peut plus paraître « clôturé » sans qu\'un cheval soit coché (Parage ou Visite) : « clôturé » et « débloque le suivant » sont désormais la même condition. Une clôture ancienne posée sans cheval coché se corrige toute seule au chargement (aucune perte : le paiement est conservé) et affiche « ⚠ cocher un cheval ».',
+      'TRAJET DU JOUR — le bouton « ⚡ Agir » d\'un arrêt se désactive une fois l\'arrêt clôturé (corrections via l\'ouverture de la tournée).',
+      'TRAJET DU JOUR (Agir) — les boutons « 💶 Paiement » et « 📅 RDV » se figent une fois validés (✓ vert conservé) : plus de re-saisie accidentelle. Payer sans cheval coché enregistre le paiement mais laisse la clôture en attente avec un rappel.',
+    ],
+  },
   {
     version: '1.7.83', date: '2026-07-17',
     ajouts: [
@@ -3883,7 +3917,9 @@ async function pushTourToCalendar(t, opts) {
   const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Brussels'; } catch { return 'Europe/Brussels'; } })();
   const times = (heure) => { const [Y, M, D] = (t.date || '').split('-').map(Number); const [h, mi] = heure.split(':').map(Number); const s = new Date(Y, (M || 1) - 1, D || 1, h || 0, mi || 0, 0); const e = new Date(s.getTime() + (S.calDureeMin || 60) * 60000); return { start: { dateTime: s.toISOString(), timeZone: tz }, end: { dateTime: e.toISOString(), timeZone: tz } }; };
   const req = (method, path, body) => fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events' + path, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-  const wanted = tourBillableClients(t).map((cid) => ({ cid, heure: clientRdvHeure(t, cid) })).filter((x) => x.heure);
+  // Un client CLÔTURÉ (visite du jour faite) sort des « voulus » → son évènement du jour est retiré ci-dessous (via safeDeleteEvent, garde app-only) : pas de doublon mensuel. Les RDV FUTURS (autres tournées, non clôturées) restent.
+  const clientClosed = (cid) => { const ents = []; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId === cid) ents.push(cl); })); return ents.length > 0 && ents.every(clientValidated); };
+  const wanted = tourBillableClients(t).map((cid) => ({ cid, heure: clientRdvHeure(t, cid) })).filter((x) => x.heure && !clientClosed(x.cid));
   const wantedIds = new Set(wanted.map((x) => x.cid));
   let nOk = 0, nDel = 0;
   for (const w of wanted) {
@@ -4974,6 +5010,12 @@ function gpTimeCol(n, cur) { let s = ''; for (let i = 0; i < n; i++) s += `<div 
 function gpRollItemH(roll) { const o = roll.querySelector('.gp-roll-opt'); return (o && o.offsetHeight) || 40; }
 function gpRollCenter(roll, idx, smooth) { const ih = gpRollItemH(roll); try { roll.scrollTo({ top: idx * ih, behavior: smooth ? 'smooth' : 'auto' }); } catch { roll.scrollTop = idx * ih; } }
 function gpRollIndex(roll) { const ih = gpRollItemH(roll), n = roll.querySelectorAll('.gp-roll-opt').length; return Math.max(0, Math.min(n - 1, Math.round(roll.scrollTop / ih))); }
+// Conflits d'heures de RDV : la roue peut marquer en ROUGE les créneaux déjà pris par d'autres RDV de la tournée.
+// `_gpTimeTaken` = map { 'HH:MM' -> {clientId, name} } fournie via inp._gpTaken / inp._gpTakenFn() à l'ouverture de la roue.
+let _gpTimeTaken = null, _gpConflictHostInp = null;
+function gpTimeTakenHours() { const s = new Set(); if (_gpTimeTaken) Object.keys(_gpTimeTaken).forEach((k) => { const h = +String(k).split(':')[0]; if (!isNaN(h)) s.add(h); }); return s; }
+function gpTimeMarkMinutes(bd, H) { const rm = bd.querySelector('[data-col="m"]'); if (!rm) return; rm.querySelectorAll('.gp-roll-opt').forEach((o) => { const key = gpPad2(H) + ':' + gpPad2(+o.dataset.v); o.classList.toggle('taken', !!(_gpTimeTaken && _gpTimeTaken[key])); }); }
+function gpTimeApplyTaken(bd, curH) { const rh = bd.querySelector('[data-col="h"]'); if (rh) { const hrs = gpTimeTakenHours(); rh.querySelectorAll('.gp-roll-opt').forEach((o) => o.classList.toggle('taken', hrs.has(+o.dataset.v))); } gpTimeMarkMinutes(bd, curH); }
 // Sélecteur d'heure = MODALE centrée (dialog) avec deux roues h · min glissables. Elle se superpose à toute fenêtre déjà
 // ouverte (élément appendu au body, z-index élevé) → ni ancrage sous le champ, ni fermeture au scroll : on règle les deux
 // roues tranquillement puis « Valider ». Le champ natif (masqué) reste la source de vérité, mis à jour seulement à Valider.
@@ -4982,7 +5024,12 @@ function gpTimeModalClose() { if (_gpTimeModal) _gpTimeModal.style.display = 'no
 function gpTimeModalCommit(clear) {
   if (_gpTimeInp) {
     if (clear) _gpTimeInp.value = '';
-    else { const hi = gpRollIndex(_gpTimeModal.querySelector('[data-col="h"]')), mi = gpRollIndex(_gpTimeModal.querySelector('[data-col="m"]')); _gpTimeInp.value = gpPad2(hi) + ':' + gpPad2(mi); }
+    else {
+      const hi = gpRollIndex(_gpTimeModal.querySelector('[data-col="h"]')), mi = gpRollIndex(_gpTimeModal.querySelector('[data-col="m"]')); const val = gpPad2(hi) + ':' + gpPad2(mi);
+      const taken = _gpTimeTaken; const inp = _gpTimeInp; // conflit : l'heure choisie est déjà prise par un autre RDV → on ne commit PAS ici, on ouvre la réattribution
+      if (taken && taken[val] && inp._gpOnConflict) { _gpConflictHostInp = inp; gpTimeModalClose(); inp._gpOnConflict(val, taken[val]); return; }
+      _gpTimeInp.value = val;
+    }
     _gpTimeInp.dispatchEvent(new Event('input', { bubbles: true })); _gpTimeInp.dispatchEvent(new Event('change', { bubbles: true }));
   }
   gpTimeModalClose();
@@ -4999,7 +5046,7 @@ function gpTimeModalEl() {
   bd.querySelector('[data-tm="ok"]').addEventListener('click', () => gpTimeModalCommit(false));
   bd.querySelector('[data-tm="clear"]').addEventListener('click', () => gpTimeModalCommit(true));
   bd.querySelectorAll('.gp-roll').forEach((roll) => {
-    roll.addEventListener('scroll', () => { if (roll._raf) cancelAnimationFrame(roll._raf); roll._raf = requestAnimationFrame(() => { const idx = gpRollIndex(roll); roll.querySelectorAll('.gp-roll-opt').forEach((o, i) => o.classList.toggle('sel', i === idx)); }); });
+    roll.addEventListener('scroll', () => { if (roll._raf) cancelAnimationFrame(roll._raf); roll._raf = requestAnimationFrame(() => { const idx = gpRollIndex(roll); roll.querySelectorAll('.gp-roll-opt').forEach((o, i) => o.classList.toggle('sel', i === idx)); if (roll.dataset.col === 'h' && _gpTimeTaken) gpTimeMarkMinutes(bd, idx); }); }); // l'heure centrée change → recalcule les minutes prises (rouge)
     roll.addEventListener('click', (e) => { const o = e.target.closest('.gp-roll-opt'); if (o) gpRollCenter(roll, +o.dataset.v, true); }); // tap sur un chiffre → il vient au centre
   });
   _gpTimeModal = bd; return bd;
@@ -5009,6 +5056,8 @@ function gpTimeModalOpen(inp) {
   const p = gpTimeParse(inp.value), h0 = p.h == null ? 8 : p.h, m0 = p.mn == null ? 0 : p.mn; // heure vide → défaut 08:00 (modifiable), appliqué seulement si « Valider »
   const rollH = bd.querySelector('[data-col="h"]'), rollM = bd.querySelector('[data-col="m"]');
   rollH.innerHTML = gpTimeCol(24, h0); rollM.innerHTML = gpTimeCol(60, m0);
+  _gpTimeTaken = (typeof inp._gpTakenFn === 'function') ? inp._gpTakenFn() : (inp._gpTaken || null); // créneaux déjà pris (rouge) pour CE champ de RDV
+  gpTimeApplyTaken(bd, h0);
   bd.style.display = 'flex';
   requestAnimationFrame(() => { gpRollCenter(rollH, h0, false); gpRollCenter(rollM, m0, false); });
 }
@@ -5052,11 +5101,50 @@ function gpDateBuildPop(w) {
     if ((min && gpDateCmp(cur, min) < 0) || (max && gpDateCmp(cur, max) > 0)) cls += ' disabled';
     cells += `<div class="${cls}" data-d="${d}">${d}</div>`;
   }
-  pop.innerHTML = `<div class="gp-cal-hd"><button type="button" class="gp-cal-nav" data-nav="-12" title="Année précédente">«</button><button type="button" class="gp-cal-nav" data-nav="-1" title="Mois précédent">‹</button><div class="gp-cal-title">${GP_MONTHS[m - 1]} ${y}</div><button type="button" class="gp-cal-nav" data-nav="1" title="Mois suivant">›</button><button type="button" class="gp-cal-nav" data-nav="12" title="Année suivante">»</button></div>`
+  pop.innerHTML = `<div class="gp-cal-hd"><button type="button" class="gp-cal-nav" data-nav="-1" title="Mois précédent">‹</button><button type="button" class="gp-cal-title" data-yr title="Choisir l'année (molette)">${GP_MONTHS[m - 1]} ${y}</button><button type="button" class="gp-cal-nav" data-nav="1" title="Mois suivant">›</button></div>`
     + `<div class="gp-cal-wd">${GP_WD.map((d) => `<span>${d}</span>`).join('')}</div><div class="gp-cal-grid">${cells}</div>`;
 }
 function gpDateOpen(w) { const inp = w._gpInp; if (!inp || inp.disabled) return; if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); const p = gpDateParse(inp.value); w._gpYM = p ? { y: p.y, m: p.mo } : null; gpDateBuildPop(w); w.classList.add('open'); _gpSelOpen = w; gpAfterOpen(w); }
 function gpDateNav(w, delta) { if (!w._gpYM) return; let y = w._gpYM.y, m = w._gpYM.m + delta; if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; } w._gpYM = { y, m }; gpDateBuildPop(w); gpPlacePop(w); } // repositionne (la hauteur du calendrier varie selon le nb de semaines)
+// Molette d'année (réutilise le mécanisme de la roue des heures) — mono-colonne, superposée (z-index 4000).
+let _gpWheel1 = null, _gpWheel1Cb = null, _gpWheel1CancelCb = null, _gpWheel1Vals = null;
+function gpWheel1Commit(ok) { const cb = ok ? _gpWheel1Cb : _gpWheel1CancelCb; let val = null; if (ok && _gpWheel1 && _gpWheel1Vals) val = _gpWheel1Vals[gpRollIndex(_gpWheel1.querySelector('[data-col="w1"]'))]; if (_gpWheel1) _gpWheel1.style.display = 'none'; _gpWheel1Cb = _gpWheel1CancelCb = _gpWheel1Vals = null; if (cb) cb(val); }
+function gpWheel1El() {
+  if (_gpWheel1) return _gpWheel1;
+  const bd = document.createElement('div'); bd.className = 'gp-tm-backdrop'; bd.style.display = 'none';
+  bd.innerHTML = `<div class="gp-tm-dialog" role="dialog" aria-modal="true"><div class="gp-tm-title" data-w1title>Choisir</div>`
+    + `<div class="gp-roll-wrap"><div class="gp-roll" data-col="w1"></div><div class="gp-roll-band"></div></div>`
+    + `<div class="gp-tm-actions"><button type="button" class="btn" data-w1="cancel">Annuler</button><button type="button" class="btn primary" data-w1="ok">Valider</button></div></div>`;
+  document.body.appendChild(bd);
+  bd.addEventListener('click', (e) => { if (e.target === bd) gpWheel1Commit(false); }); // clic sur le fond = annuler
+  bd.querySelector('[data-w1="cancel"]').addEventListener('click', () => gpWheel1Commit(false));
+  bd.querySelector('[data-w1="ok"]').addEventListener('click', () => gpWheel1Commit(true));
+  const roll = bd.querySelector('[data-col="w1"]');
+  roll.addEventListener('scroll', () => { if (roll._raf) cancelAnimationFrame(roll._raf); roll._raf = requestAnimationFrame(() => { const idx = gpRollIndex(roll); roll.querySelectorAll('.gp-roll-opt').forEach((o, i) => o.classList.toggle('sel', i === idx)); }); });
+  roll.addEventListener('click', (e) => { const o = e.target.closest('.gp-roll-opt'); if (o) gpRollCenter(roll, +o.dataset.v, true); });
+  _gpWheel1 = bd; return bd;
+}
+function gpWheel1Open(title, values, curIdx, cb, cancelCb) {
+  const bd = gpWheel1El(); _gpWheel1Cb = cb; _gpWheel1CancelCb = cancelCb || null; _gpWheel1Vals = values;
+  bd.querySelector('[data-w1title]').textContent = title;
+  const roll = bd.querySelector('[data-col="w1"]');
+  roll.innerHTML = values.map((v, i) => `<div class="gp-roll-opt${i === curIdx ? ' sel' : ''}" data-v="${i}">${v}</div>`).join('');
+  bd.style.display = 'flex';
+  requestAnimationFrame(() => gpRollCenter(roll, Math.max(0, curIdx), false));
+}
+// Ouvre la molette des années pour le calendrier `w`. Le calendrier (popover) est fermé le temps de la molette puis rouvert au mois inchangé sur l'année choisie.
+function gpDateOpenYearWheel(w) {
+  if (!w._gpYM) return;
+  const ym = { y: w._gpYM.y, m: w._gpYM.m };
+  const inp = w._gpInp, min = gpDateParse(inp && inp.min), max = gpDateParse(inp && inp.max);
+  const nowY = new Date().getFullYear();
+  let y0 = min ? min.y : nowY - 50, y1 = max ? max.y : nowY + 5; if (y1 < y0) y1 = y0;
+  const years = []; for (let y = y0; y <= y1; y++) years.push(y);
+  const curIdx = Math.max(0, years.indexOf(ym.y));
+  gpSelClose(); // ferme le calendrier pendant le choix (évite les fermetures parasites au scroll/clic-dehors)
+  const reopen = (yy) => { w._gpYM = { y: yy, m: ym.m }; requestAnimationFrame(() => { if (_gpSelOpen && _gpSelOpen !== w) gpSelClose(); w.classList.add('open'); _gpSelOpen = w; gpDateBuildPop(w); gpAfterOpen(w); }); };
+  gpWheel1Open('Choisir l\'année', years, curIdx, (yy) => reopen(yy != null ? yy : ym.y), () => reopen(ym.y)); // Valider = année choisie ; Annuler = rouvre au même mois/année
+}
 function gpDatePick(w, d) {
   const inp = w._gpInp; inp.value = `${w._gpYM.y}-${gpPad2(w._gpYM.m)}-${gpPad2(d)}`; gpDateSync(inp);
   gpSelClose(); // ferme avant dispatch (un handler `change` peut re-rendre le conteneur)
@@ -5077,6 +5165,7 @@ function enhanceDate(inp) {
   pop.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation(); // preventDefault annule l'action par défaut du <label> parent (qui refermerait le calendrier via un clic synthétique sur le bouton)
     const nav = e.target.closest('.gp-cal-nav'); if (nav) { gpDateNav(w, +nav.dataset.nav); return; }
+    const yr = e.target.closest('[data-yr]'); if (yr) { gpDateOpenYearWheel(w); return; } // titre « mois AAAA » → molette des années (fini les 20 clics pour reculer)
     const cell = e.target.closest('.gp-cal-d'); if (cell && !cell.classList.contains('empty') && !cell.classList.contains('disabled')) gpDatePick(w, +cell.dataset.d);
   });
   inp.addEventListener('change', () => gpDateSync(inp));
@@ -6313,6 +6402,8 @@ function openEditorAtClient(t, cid, ai) {
 
 // Synchronise une tournée non clôturée avec les données client actuelles (chevaux ajoutés/supprimés/renommés
 // ET changements d'adresse client/cheval → l'arrêt suit la nouvelle adresse). Les clôturées restent figées.
+// AUTO-GUÉRISON du bug de séquençage : une clôture client (cl.validatedAt) posée SANS acte enregistré (ancienne faille de closeClientAt, qui ne vérifiait que le paiement) est incohérente — l'arrêt paraissait « ✅ clôturé » mais ne finalisait pas (arretFinalise exige clientActeOK), donc l'arrêt suivant restait verrouillé. On retire cette clôture invalide : AUCUNE perte (le paiement dans t.payments est intact), seul l'horodatage de clôture est recalculé et l'app affiche « ⚠ cocher un cheval ». Renvoie true si une clôture a été retirée.
+function healValidatedActe(t) { let ch = false; ((t && t.arrets) || []).forEach((a) => { let hch = false; (a.clients || []).forEach((cl) => { if (typeof cl.validatedAt === 'number' && !clientActeOK(a, cl)) { delete cl.validatedAt; hch = true; ch = true; } }); if (hch) syncArretValidated(a); }); return ch; }
 function reconcileTour(tour) {
   if (statusOf(tour) === 'cloturee') return false;
   let changed = false;
@@ -6350,6 +6441,7 @@ function reconcileTour(tour) {
   oldArrets.forEach((a) => (a.clients || []).forEach((cl) => { const k = ckey(cl.clientId, a.addr); oldClMap[k] = cl; if (cl.heure && (!oldHeure[k] || cl.heure < oldHeure[k])) oldHeure[k] = cl.heure; }));
   newArrets.forEach((na) => { (na.clients || []).forEach((ncl) => { const k = ckey(ncl.clientId, na.addr); const oc = oldClMap[k]; if (oc) { if (typeof oc.validatedAt === 'number') ncl.validatedAt = oc.validatedAt; if (oc.rdvDone) ncl.rdvDone = true; } if (oldHeure[k] && (!ncl.heure || oldHeure[k] < ncl.heure)) ncl.heure = oldHeure[k]; }); syncArretValidated(na); });
   tour.arrets = newArrets.filter((a) => a.clients.length);
+  if (healValidatedActe(tour)) changed = true; // AUTO-GUÉRISON du bug de séquençage (voir healValidatedActe)
   // FIABILITÉ (arrêt fantôme) : un arrêt présent AVANT mais que la reconciliation vient de SUPPRIMER (plus aucun cheval ni déplacement ne s'y rattache — typiquement l'adresse DOMICILE d'un client dont les chevaux sont en réalité à l'écurie) reçoit un tombstone → la fusion entre appareils ne le RÉ-INJECTE plus. Sans ça, l'arrêt supprimé « en silence » revenait à chaque synchro (réinjecté depuis la copie Drive) et faisait sauter le temps de retour. Tombstone résolu par DATE → un arrêt légitimement re-créé plus tard (plus récent) survit.
   { const newKeys = new Set((tour.arrets || []).map((a) => norm(addrStr(a.addr)))); const now = Date.now(); (oldArrets || []).forEach((a) => { const k = norm(addrStr(a.addr)); if (k && !newKeys.has(k)) { tour.arrDel = tour.arrDel || {}; tour.arrDel[k] = now; changed = true; } }); }
   if (JSON.stringify(tour.arrets) !== beforeArrets) changed = true;
@@ -6406,6 +6498,21 @@ function invalidateTourRoute(oldAddrs, t) {
   return ch;
 }
 const tourHeureStale = (t) => !!t && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.heureStale));
+// Réordonne les arrêts par heure de RDV croissante (bouton « ⇅ Trier par heure »). Les arrêts CLÔTURÉS le jour J (a.validatedAt) restent figés en tête dans leur ordre courant ; les arrêts SANS heure gardent leur position relative (tri stable) et passent après les arrêts avec heure. Renvoie true si l'ordre a changé.
+function sortTourByHeure(t) {
+  const A = (t.arrets || []); if (A.length < 2) return false;
+  const oldOrder = A.map((a) => norm(addrStr(a.addr)));
+  const pos = new Map(A.map((a, i) => [a, i]));
+  const frozen = A.filter((a) => typeof a.validatedAt === 'number');
+  const movable = A.filter((a) => typeof a.validatedAt !== 'number');
+  const withH = movable.filter((a) => hmToMin(arretHeure(a)) != null).sort((x, y) => { const d = hmToMin(arretHeure(x)) - hmToMin(arretHeure(y)); return d !== 0 ? d : pos.get(x) - pos.get(y); });
+  const noH = movable.filter((a) => hmToMin(arretHeure(a)) == null);
+  const next = frozen.concat(withH, noH);
+  if (next.every((a, i) => a === A[i])) return false; // déjà classé
+  t.arrets = next;
+  invalidateTourRoute(oldOrder, t); // ordre changé → segments/heures de trajet à recalculer
+  return true;
+}
 // ===== Ajustement des horaires (décalage en cascade des RDV) =====
 function hmToMin(h) { const m = /^(\d{1,2}):(\d{2})$/.exec(h || ''); return m ? +m[1] * 60 + +m[2] : null; }
 function minToHm(x) { x = Math.max(0, Math.min(1439, Math.round(x))); return gpPad2(Math.floor(x / 60)) + ':' + gpPad2(x % 60); } // borné [00:00, 23:59]
@@ -6633,7 +6740,7 @@ function clientValidated(cl) { return !!cl && typeof cl.validatedAt === 'number'
 // `a.validatedAt` (compat éditeur/stats/fusion = « arrêt entièrement clôturé ») dérivé : posé quand TOUS les clients sont clôturés, retiré sinon.
 function syncArretValidated(a) { const cls = (a.clients || []); if (cls.length && cls.every(clientValidated)) a.validatedAt = Math.max.apply(null, cls.map((cl) => cl.validatedAt)); else delete a.validatedAt; }
 // Clôture un client (paiement complet requis) : pose cl.validatedAt puis recale a.validatedAt. Renvoie true si la clôture a été faite.
-function closeClientAt(t, a, cl) { if (cl && clientPaiementDone(t, cl.clientId) && !clientValidated(cl)) { cl.validatedAt = Date.now(); syncArretValidated(a); return true; } return false; }
+function closeClientAt(t, a, cl) { if (cl && clientActeOK(a, cl) && clientPaiementDone(t, cl.clientId) && !clientValidated(cl)) { cl.validatedAt = Date.now(); syncArretValidated(a); return true; } return false; } // clôture = acte enregistré ET paiement complet : « clôturé » et « débloque l'arrêt suivant » (arretFinalise) sont désormais le MÊME critère
 function clientFinalise(t, a, cl) { return clientActeOK(a, cl) && clientValidated(cl) && clientPaiementDone(t, cl.clientId); }
 // Un arrêt est « finalisé » quand CHACUN de ses clients l'est (acte fait + clôturé + payé).
 function arretFinalise(t, a) { const cls = (a.clients || []); return cls.length > 0 && cls.every((cl) => clientFinalise(t, a, cl)); }
@@ -6963,6 +7070,7 @@ function renderEditorArrets(locked) {
   $('edArretsEmpty').style.display = currentTour.arrets.length ? 'none' : 'block';
   const N = currentTour.arrets.length;
   const segMins = segMinutesFor(currentTour); // temps de trajet estimé du tronçon (arrêt précédent → courant), pas cumulé
+  if (!locked && N >= 2) { const tb = document.createElement('div'); tb.className = 'a-sort-bar'; tb.innerHTML = '<button class="btn small" data-sorth title="Réordonner les arrêts selon l\'heure de RDV">⇅ Trier par heure</button>'; tb.querySelector('[data-sorth]').addEventListener('click', () => { if (sortTourByHeure(currentTour)) { persistCurrentTour(); scheduleGeoRecalc(); scheduleCalPush(currentTour); renderEditorArrets(locked); if (tourHeureStale(currentTour)) modalRevoirHoraires(currentTour); } else { alert('Les arrêts sont déjà classés par heure de RDV.'); } }); box.appendChild(tb); }
   currentTour.arrets.forEach((a, i) => {
     const nb = arretNbClients(a);
     const single = a.clients.length === 1 ? a.clients[0] : null; // réduction dans l'en-tête si 1 seul client
@@ -7055,8 +7163,8 @@ function renderEditorArrets(locked) {
           }
         }
         if (!locked) {
-          { const hi = actBar.querySelector('[data-clheure]'); if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; if (cl.heureAncienne != null && newH === cl.heureAncienne) { delete cl.aPrevenir; delete cl.heureAncienne; } else if (oldH && newH && oldH !== newH) { if (!cl.aPrevenir) cl.heureAncienne = oldH; cl.aPrevenir = true; } persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
-          if (!futureTour) actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (closeClientAt(currentTour, a, cl)) persistCurrentTour(); refreshEverywhere(); }, cl.clientId)); // L4 : paiement complet du CLIENT → clôture ce client (cl.validatedAt) ; l'arrêt est clôturé quand tous ses clients le sont
+          { const hi = actBar.querySelector('[data-clheure]'); if (hi) { hi._gpTaken = takenRdvSlots(currentTour, cl.clientId); hi._gpOnConflict = (val, d) => openRdvReassign(currentTour, val, d, () => setClientHeureInTour(currentTour, cl.clientId, val)); } if (hi) hi.addEventListener('change', (e) => { const oldH = cl.heure, newH = e.target.value || ''; cl.heure = newH; delete cl.heureStale; if (cl.heureAncienne != null && newH === cl.heureAncienne) { delete cl.aPrevenir; delete cl.heureAncienne; } else if (oldH && newH && oldH !== newH) { if (!cl.aPrevenir) cl.heureAncienne = oldH; cl.aPrevenir = true; } persistCurrentTour(); scheduleCalPush(currentTour); const lab = hi.closest('.a-heure'); if (lab) { lab.classList.remove('stale'); lab.classList.toggle('done', !!cl.heure); lab.title = 'Heure de RDV de ce client (agenda)'; } refreshEverywhere(); if (currentTour.arrets[0] === a && cl === a.clients[0] && $('edHome')) { const de = estimatedDepartureHM(currentTour); const cur = $('edHome').textContent.replace(/ · 🚕 départ estimé .*/, ''); $('edHome').textContent = cur + (de ? ' · 🚕 départ estimé ' + de : ''); } const om = hmToMin(oldH), nm = hmToMin(newH); if (om != null && nm != null && nm !== om && followingClients(currentTour, i, om, cl).length) modalAdjustHoraires(currentTour, { arretIdx: i, cl, oldMin: om, newMin: nm, deltaMin: nm - om }); }); } // ré-encodage → l'heure n'est plus « à revoir » ; si l'heure change ET qu'il y a des RDV suivants → propose le décalage en cascade
+          if (!futureTour) actBar.querySelector('[data-cpay]').addEventListener('click', () => modalPayment(currentTour, a, () => renderEditorArrets(), () => { if (closeClientAt(currentTour, a, cl)) { persistCurrentTour(); scheduleCalPush(currentTour); } refreshEverywhere(); }, cl.clientId)); // L4 : paiement complet du CLIENT → clôture ce client (cl.validatedAt) ; l'arrêt est clôturé quand tous ses clients le sont
           if (!futureTour) actBar.querySelector('[data-crdv]').addEventListener('click', () => modalRDV(currentTour, a, cl.clientId, () => renderEditorArrets()));
           actBar.querySelector('[data-cpret]').addEventListener('click', () => modalPret(cl.clientId, currentTour));
           actBar.querySelector('[data-cplanche]').addEventListener('click', () => modalArretPlanche(currentTour, a, cl.clientId));
@@ -12420,7 +12528,7 @@ function renderBlockingArrets() {
     if (started) el.querySelector('[data-fin]').addEventListener('click', () => {
       const a = (t.arrets || [])[firstOpenArret(t)]; if (!a) { renderHome(); return; }
       if (!arretActeOK(a)) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); return; } // aucun cheval coché → ouvrir la tournée pour cocher Parage/Visite
-      modalPayment(t, a, renderHome, () => { (a.clients || []).forEach((cl) => closeClientAt(t, a, cl)); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } }); // L4 : clôture chaque client payé de l'arrêt (a.validatedAt dérivé)
+      modalPayment(t, a, renderHome, () => { (a.clients || []).forEach((cl) => closeClientAt(t, a, cl)); const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } scheduleCalPush(t); }); // L4 : clôture chaque client payé de l'arrêt (a.validatedAt dérivé)
     });
     else {
       el.querySelector('[data-recover]').addEventListener('click', () => recoverTour(t));
@@ -12450,8 +12558,8 @@ function dayJClientAgir(t, a, cl, ctx) {
     { label: 'SMS', keepOpen: true, onClick: () => modalSmsChoice(c, smsDataFor(c, { cheval: chNames, trajet: ctx.trajet, adresse: ctx.adresse })) },
     { label: 'Ticket', keepOpen: true, onClick: ticket },
     { label: '＋ Prêt', orange: (c.prets || []).length > 0, onClick: () => modalPret(cid, t) },
-    { label: '💶 Paiement', done: clientPaiementDone(t, cid), onClick: () => modalPayment(t, a, renderHomeTrajet, () => { closeClientAt(t, a, cl); persist(); }, cid) },
-    { label: '📅 RDV', done: !!cl.rdvDone, onClick: () => modalRDV(t, a, cid, renderHomeTrajet) },
+    { label: '💶 Paiement', done: clientPaiementDone(t, cid), disabled: clientPaiementDone(t, cid), onClick: () => modalPayment(t, a, renderHomeTrajet, () => { if (!clientActeOK(a, cl)) { alert('🐴 Cochez au moins un cheval (Parage ou Visite) pour clôturer ce client — le paiement est enregistré, la clôture attend.'); persist(); return; } closeClientAt(t, a, cl); persist(); scheduleCalPush(t); }, cid) }, // paiement figé une fois validé (✓ vert conservé) ; corrections via l'ouverture de la tournée
+    { label: '📅 RDV', done: !!cl.rdvDone, disabled: !!cl.rdvDone, onClick: () => modalRDV(t, a, cid, renderHomeTrajet) },
     { label: '📧 Email au client', keepOpen: true, onClick: () => modalEmailClient(c) },
   ];
 }
@@ -12476,6 +12584,7 @@ function renderHomeTrajet() {
   }
   $('homeTrajetEmpty').style.display = (todays.length || priv.length) ? 'none' : 'block';
   todays.forEach((t) => {
+    if (statusOf(t) !== 'cloturee' && healValidatedActe(t)) { const idx = tournees.findIndex((x) => x.id === t.id); if (idx >= 0) tournees[idx] = t; saveTournees(); } // auto-guérison au chargement du Trajet du jour (débloque une tournée déjà « en cours » sans ouvrir l'éditeur)
     // 1ʳᵉ ligne : la tournée du jour elle-même (cliquable → ouvre l'éditeur).
     box.appendChild(tourListItem(t, false));
     const persistTour = () => { const idx = tournees.findIndex((x) => x.id === t.id); if (idx >= 0) tournees[idx] = t; saveTournees(); };
@@ -12487,6 +12596,7 @@ function renderHomeTrajet() {
     else ctrl.innerHTML = `<span class="tt-info">✅ ${hm(t.startedAt)} → ${hm(t.endedAt)} · ${durHm(t.endedAt - t.startedAt)}</span>`;
     box.appendChild(ctrl);
     const sb = ctrl.querySelector('[data-start]'); if (sb) sb.addEventListener('click', () => { t.startedAt = Date.now(); persistTour(); renderHomeTrajet(); });
+    if ((t.arrets || []).length >= 2 && !t.endedAt) { const stb = document.createElement('div'); stb.className = 'a-sort-bar'; stb.innerHTML = '<button class="btn small" data-sorth title="Réordonner les arrêts selon l\'heure de RDV">⇅ Trier par heure</button>'; stb.querySelector('[data-sorth]').addEventListener('click', () => { if (sortTourByHeure(t)) { persistTour(); scheduleCalPush(t); if (t === currentTour) scheduleGeoRecalc(); else recomputeTourGeo(t); renderHomeTrajet(); } else { alert('Les arrêts sont déjà classés par heure de RDV.'); } }); box.appendChild(stb); }
     const mins = legMinutesFor(t);
     const firstOpen = firstOpenArret(t); // ordre imposé : on n'agit sur un arrêt que si tous les précédents sont finalisés
     (t.arrets || []).forEach((a, i) => {
@@ -12512,16 +12622,16 @@ function renderHomeTrajet() {
         const dis = !t.startedAt || seqLocked || validated || !cAOK;
         const title = !t.startedAt ? 'Démarrez d\'abord la tournée' : (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : (!cAOK ? 'Cochez au moins un cheval (Parage ou Visite) — ouvrez la tournée' : (validated ? 'Client clôturé (corrections via la tournée ou la Compta)' : 'Encaisser le paiement puis clôturer ce client')));
         const btn = `<button class="btn small${dis ? (validated ? ' done' : '') : ' primary'}" data-cvalid${dis ? ' disabled' : ''} title="${title}">${validated ? '✓ clôturé ' + hm(cl.validatedAt) : '💶 Payer & clôturer'}</button>`;
-        return { btn, wire: () => { const vb = row.querySelector('[data-cvalid]'); if (vb && !dis) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { closeClientAt(t, a, cl); persistTour2(); }, cid)); } };
+        return { btn, wire: () => { const vb = row.querySelector('[data-cvalid]'); if (vb && !dis) vb.addEventListener('click', () => modalPayment(t, a, renderHomeTrajet, () => { closeClientAt(t, a, cl); persistTour2(); scheduleCalPush(t); }, cid)); } };
       };
-      const wireAgir = (row, cl) => { const b = row.querySelector('[data-cagir]'); if (b && !seqLocked) b.addEventListener('click', () => modalActions('Actions — ' + clientName(cl.clientId), dayJClientAgir(t, a, cl, ctx))); };
+      const wireAgir = (row, cl) => { const b = row.querySelector('[data-cagir]'); if (b && !seqLocked && !clientValidated(cl)) b.addEventListener('click', () => modalActions('Actions — ' + clientName(cl.clientId), dayJClientAgir(t, a, cl, ctx))); };
       if (!multi) {
         const cl = cls[0] || {};
         const el = document.createElement('div'); el.className = 'list-item';
         if (arCls === 'now') el.classList.add('arret-now'); if (isAddrNoir(a.addr)) el.classList.add('arret-noir');
         const cc = clientClot(el, cl); const validLbl = clientValidated(cl) ? ' · ✅ ' + hm(cl.validatedAt) : '';
         el.innerHTML = `<div class="li-main"><b>${hhArr ? '🕘 ' + esc(hhArr) + ' · ' : ''}${i + 1}. ${esc(labelFor(a)) || '<i>client ?</i>'}</b> <span class="ar-state ${arCls}">${arState}</span>${isAddrNoir(a.addr) ? ' <span class="badge badge-noir">⛔ liste noire</span>' : ''}${isAddrInactif(a.addr) ? ' <span class="badge">💤 lieu inactif</span>' : ''}<span class="li-sub">📍 ${esc(adresse) || '<i>adresse ?</i>'}${chNames ? ' · 🐴 ' + esc(chNames) : ''} · 🕒 ${trajetLbl}${validLbl}</span></div>
-          <div class="li-act"><button class="btn small" data-cagir${seqLocked ? ' disabled title="Finalisez d\'abord l\'arrêt précédent"' : ''}>⚡ Agir</button> ${cc.btn}</div>`;
+          <div class="li-act"><button class="btn small" data-cagir${(seqLocked || clientValidated(cl)) ? ' disabled title="' + (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : 'Arrêt clôturé — corrections via l\'ouverture de la tournée') + '"' : ''}>⚡ Agir</button> ${cc.btn}</div>`;
         wireAgir(el, cl); cc.wire(); box.appendChild(el);
       } else {
         // Arrêt partagé : en-tête (adresse / itinéraire / heure d'arrivée) PUIS une ligne d'actions par client (Agir + Payer & clôturer indépendants).
@@ -12537,7 +12647,7 @@ function renderHomeTrajet() {
           const row = document.createElement('div'); row.className = 'list-item li-client-sub';
           const cc = clientClot(row, cl);
           row.innerHTML = `<div class="li-main"><b>${clH ? '🕘 ' + esc(clH) + ' · ' : ''}👤 ${esc(clientName(cid))}</b>${validated ? ' <span class="ar-state ok">✅ ' + hm(cl.validatedAt) + '</span>' : ''}${chn ? '<span class="li-sub">🐴 ' + esc(chn) + '</span>' : ''}</div>
-            <div class="li-act"><button class="btn small" data-cagir${seqLocked ? ' disabled' : ''}>⚡ Agir</button> ${cc.btn}</div>`;
+            <div class="li-act"><button class="btn small" data-cagir${(seqLocked || validated) ? ' disabled title="' + (seqLocked ? 'Finalisez d\'abord l\'arrêt précédent' : 'Client clôturé — corrections via l\'ouverture de la tournée') + '"' : ''}>⚡ Agir</button> ${cc.btn}</div>`;
           wireAgir(row, cl); cc.wire(); box.appendChild(row);
         });
       }
@@ -12572,6 +12682,49 @@ function modalActions(title, actions) {
   $('mX').addEventListener('click', closeModal);
   actions.forEach((a, idx) => { const b = document.querySelector(`[data-ai="${idx}"]`); if (b && !a.disabled) b.addEventListener('click', () => { if (a.keepOpen) a.onClick(b); else { closeModal(); a.onClick(b); } }); });
 }
+// ===== Conflits d'heures de RDV (créneaux déjà pris affichés en rouge dans la roue + réattribution) =====
+function normHM(x) { const m = hmToMin(x); return m == null ? null : minToHm(m); } // 'H:MM'/'HH:MM' → 'HH:MM' normalisé (clé de créneau), ou null
+// Créneaux d'heure déjà pris dans la tournée (hors client exclu) : { 'HH:MM' -> { clientId, name } }.
+function takenRdvSlots(t, excludeCid) {
+  const map = {};
+  ((t && t.arrets) || []).forEach((a) => (a.clients || []).forEach((cl) => {
+    if (excludeCid && cl.clientId === excludeCid) return;
+    const h = normHM(cl.heure) || normHM((cl.chevaux || []).map((cv) => cv.heure).filter(Boolean).sort()[0]);
+    if (h && !map[h]) map[h] = { clientId: cl.clientId, name: clientName(cl.clientId) };
+  }));
+  return map;
+}
+// Applique une heure de RDV à un client dans TOUTES ses fiches d'arrêt de la tournée (cl.heure + cv.heure ; mémorise l'ancienne → « à prévenir »).
+function setClientHeureInTour(t, cid, hh) {
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => {
+    if (cl.clientId !== cid) return;
+    const old = cl.heure; if (old && old !== hh) { if (!cl.aPrevenir) cl.heureAncienne = old; cl.aPrevenir = true; }
+    cl.heure = hh; delete cl.heureStale; (cl.chevaux || []).forEach((cv) => cv.heure = hh);
+  }));
+}
+// Modale superposée (sub-modal) : l'heure `chosen` (déjà prise par `displaced`) est libérée pour le RDV courant.
+// `applyChosen()` (fourni par la modale hôte) affecte l'heure libérée au client courant (ou met à jour l'état de la modale « Programmer le RDV »).
+function openRdvReassign(t, chosen, displaced, applyChosen) {
+  const hostInp = _gpConflictHostInp; _gpConflictHostInp = null;
+  const tk = takenRdvSlots(t, displaced.clientId); tk[chosen] = tk[chosen] || { name: 'ce RDV' }; // `chosen` revient au RDV courant → interdit au déplacé de le reprendre
+  openSubModal(`<div class="modal-head"><b>🕘 Heure déjà prise</b><button class="x" id="raX">✕</button></div>
+    <p class="hint">L'heure <b>${esc(chosen)}</b> est déjà attribuée à <b>${esc(displaced.name)}</b> — elle passe au RDV en cours. Donnez une <b>nouvelle heure</b> à ${esc(displaced.name)} :</p>
+    <label>Nouvelle heure — ${esc(displaced.name)}<input type="time" id="raHeure" value=""/></label>
+    <div class="actions two"><button class="btn" id="raCancel">Annuler</button><button class="btn primary" id="raOk">Valider</button></div>`);
+  const inp = document.getElementById('raHeure'); inp._gpTaken = tk; enhanceTime(inp); // la roue montre les créneaux pris en rouge (validation bloquée si l'heure choisie est elle-même prise)
+  document.getElementById('raX').onclick = closeSubModal;
+  document.getElementById('raCancel').onclick = closeSubModal;
+  document.getElementById('raOk').onclick = () => {
+    const nv = normHM(inp.value);
+    if (!nv) { alert('Donnez une nouvelle heure pour ' + displaced.name + '.'); return; }
+    if (nv === chosen || tk[nv]) { alert('Cette heure est déjà prise. Choisissez-en une autre.'); return; }
+    setClientHeureInTour(t, displaced.clientId, nv); // le déplacé prend la nouvelle heure
+    if (applyChosen) applyChosen();                  // le RDV courant prend l'heure libérée
+    sortTourByHeure(t); persistTourEdit(t); scheduleCalPush(t);
+    closeSubModal(); if (hostInp) { hostInp.value = chosen; gpTimeSync(hostInp); } // reflète l'heure choisie dans le champ hôte
+    refreshEverywhere();
+  };
+}
 // Heure de RDV par cheval (depuis « Agir ») : saisie individuelle de l'heure de chaque cheval de l'arrêt.
 function modalHeureRdv(t, a, cid) {
   const chs = []; (a.clients || []).forEach((cl) => { if (cid && cl.clientId !== cid) return; (cl.chevaux || []).forEach((cv) => { if (!chevalCancelled(cv)) chs.push({ cv, cid: cl.clientId, cl }); }); }); // L5 : ciblé sur UN client si cid fourni (deux clients au même arrêt = heures indépendantes)
@@ -12583,6 +12736,8 @@ function modalHeureRdv(t, a, cid) {
   // P1-8 : pré-remplir depuis l'heure RDV du CLIENT (cl.heure = source de vérité, tenue à jour par les décalages) et non depuis cv.heure (legacy, périmé après un décalage) → n'efface plus un décalage à l'enregistrement.
   chs.forEach((it, idx) => { const row = document.createElement('label'); const val = (it.cl && it.cl.heure) ? it.cl.heure : (it.cv.heure || ''); row.innerHTML = `🐴 ${esc(it.cv.nom)} <span class="li-sub">— ${esc(clientName(it.cid))}</span><input type="time" data-h="${idx}" value="${val}"/>`; box.appendChild(row); });
   if (!chs.length) box.innerHTML = '<p class="hint">Aucun cheval à cet arrêt.</p>';
+  // Conflits d'heures : la roue affiche en rouge les créneaux déjà pris par d'autres clients de la tournée ; en choisir un ouvre la réattribution (uniquement quand un client précis est ciblé).
+  if (cid) box.querySelectorAll('[data-h]').forEach((inp) => { inp._gpTaken = takenRdvSlots(t, cid); inp._gpOnConflict = (val, d) => openRdvReassign(t, val, d, () => setClientHeureInTour(t, cid, val)); });
   $('mX').addEventListener('click', closeModal);
   $('hrOk').addEventListener('click', () => {
     box.querySelectorAll('[data-h]').forEach((inp) => { chs[+inp.dataset.h].cv.heure = inp.value || ''; });
@@ -13352,7 +13507,9 @@ function modalRDV(t, arret, cid, onDone) {
     $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
     const cp = $('rdvCommonPrev'); if (cp) cp.innerHTML = previewHtml(common.date);
     $('rdvCommon').addEventListener('change', (e) => { common.date = e.target.value; render(); });
-    { const ch = $('rdvCommonHeure'); if (ch) ch.addEventListener('change', (e) => { common.heure = e.target.value; }); }
+    // Tournée déjà existante à une date donnée (cible du RDV programmé) → source des créneaux déjà pris (rouge) et de la réattribution.
+    const targetTourFor = (d) => tournees.find((x) => x.date === d && statusOf(x) !== 'cloturee') || null;
+    { const ch = $('rdvCommonHeure'); if (ch) { ch._gpTakenFn = () => { const tt = targetTourFor(common.date); return tt ? takenRdvSlots(tt) : null; }; ch._gpOnConflict = (val, d) => { const tt = targetTourFor(common.date); if (tt) openRdvReassign(tt, val, d, () => { common.heure = val; }); }; ch.addEventListener('change', (e) => { common.heure = e.target.value; }); } }
     const box = $('rdvChevaux');
     entries.forEach((en) => {
       const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.curType !== 'patho' && en.ignore ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
@@ -13384,8 +13541,8 @@ function modalRDV(t, arret, cid, onDone) {
       wrap.querySelectorAll('[data-psstat]').forEach((r) => r.addEventListener('change', (e) => { en.pathoStatus = e.target.value; render(); }));
       const pdt = wrap.querySelector('[data-psdate]'), pprev = wrap.querySelector('[data-psprev]');
       if (pdt) { if (pprev) pprev.innerHTML = previewHtml(pdt.value); pdt.addEventListener('change', (e) => { en.pathoDate = e.target.value; render(); }); }
-      const hhI = wrap.querySelector('[data-heure]'); if (hhI) hhI.addEventListener('change', (e) => { en.heure = e.target.value; });
-      const pshI = wrap.querySelector('[data-psheure]'); if (pshI) pshI.addEventListener('change', (e) => { en.pathoHeure = e.target.value; });
+      const hhI = wrap.querySelector('[data-heure]'); if (hhI) { hhI._gpTakenFn = () => { const tt = targetTourFor(en.date); return tt ? takenRdvSlots(tt) : null; }; hhI._gpOnConflict = (val, d) => { const tt = targetTourFor(en.date); if (tt) openRdvReassign(tt, val, d, () => { en.heure = val; }); }; hhI.addEventListener('change', (e) => { en.heure = e.target.value; }); }
+      const pshI = wrap.querySelector('[data-psheure]'); if (pshI) { pshI._gpTakenFn = () => { const tt = targetTourFor(en.pathoDate); return tt ? takenRdvSlots(tt) : null; }; pshI._gpOnConflict = (val, d) => { const tt = targetTourFor(en.pathoDate); if (tt) openRdvReassign(tt, val, d, () => { en.pathoHeure = val; }); }; pshI.addEventListener('change', (e) => { en.pathoHeure = e.target.value; }); }
       box.appendChild(wrap);
     });
     $('rdvOk').addEventListener('click', () => {
