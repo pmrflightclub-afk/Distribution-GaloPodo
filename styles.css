@@ -615,6 +615,17 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .pay-actrow { display: flex; gap: 6px; margin: 0 0 8px; }
 .ac-inline { margin: 4px 0 2px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font-size: .85rem; }
 .ac-inline .ch-opt { display: inline-flex; margin-right: 8px; }
+.cc-seg { display: flex; gap: 4px; margin-bottom: 10px; }
+.cc-seg .seg-btn { flex: 1; font-size: .8rem; padding: 8px 4px; }
+.cc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin: 6px 0; }
+.cc-grid > div { display: flex; flex-direction: column; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.cc-k { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
+.cc-v { font-size: .95rem; font-weight: 700; color: var(--ink); }
+.cc-status { font-size: .85rem; margin: 3px 0; padding: 3px 0; }
+.cc-status.ok { color: var(--ok, #2e9e5b); }
+.cc-status.ko { color: var(--warn); }
+.cc-recap { padding: 4px 2px; }
+.cc-recap-h { font-weight: 800; font-size: 1.05rem; color: var(--ink); margin-bottom: 2px; }
 .a-nav-b { flex: 1 1 100%; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .a-nav-b > .btn { flex: 0 1 auto; min-width: 0; }
 .a-heure { display: inline-flex; align-items: center; gap: 3px; font-size: .82rem; border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }

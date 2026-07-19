@@ -11,10 +11,19 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.93';
+const APP_VERSION = '1.7.94';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.94', date: '2026-07-19',
+    ajouts: [
+      'MODALE ACTES — un recalcul en erreur ne peut plus bloquer l\'enregistrement d\'un acte (robustesse). L\'acte est TOUJOURS enregistré.',
+      'PAIEMENT — nouveaux boutons sur la ligne du haut : « 🐴 Actes / articles » (1er, s\'ouvre par-dessus le paiement), « 🗺️ Carte client », « 📅 Fixer RDV » (renommé). « RDV » est aussi renommé « Fixer RDV » dans « Agir ».',
+      'CARTE CLIENT — refonte : 3 onglets dans la même fenêtre. « 🗺️ Carte arrêt » (par défaut) reprend TOUTE la section arrêt du client en lecture seule (tarif, temps route est/réel, heure, montant total, adresse, prêt en cours, statuts paiement & RDV, réduction %, actes & articles). « 🧾 Carte facture » = la répartition complète mise en page. « 📋 Récap tournée » = récap anonymisé mis en page (à montrer au client).',
+      'AGIR — nouveau bouton « 📋 Récap tournée » (entre SMS et Ticket) : copie le récap anonymisé pour l\'envoyer manuellement. Dans le SMS, le bouton devient « 📋 Copier et envoi manuel ».',
+    ],
+  },
   {
     version: '1.7.93', date: '2026-07-19',
     ajouts: [
@@ -12110,7 +12119,7 @@ function modalSmsChoice(c, data, onDone) {
     <label>Formule du message</label>
     <div class="seg" id="smsSeg"><button type="button" class="seg-btn${politesse ? ' on' : ''}" data-p="1">Politesse (Mr/Mme + nom)</button><button type="button" class="seg-btn${politesse ? '' : ' on'}" data-p="0">Standard (prénom)</button></div>
     <p class="hint" id="smsPrev"></p>
-    <div class="actions"><button class="btn primary block" id="smsGo">📋 Copier &amp; envoyer</button></div>`);
+    <div class="actions"><button class="btn primary block" id="smsGo">📋 Copier et envoi manuel</button></div>`);
   const prev = $('smsPrev'); const refresh = () => { if (prev) prev.innerHTML = '<b>Aperçu :</b> ' + esc(build()); };
   refresh();
   $('mX').addEventListener('click', done);
@@ -12635,7 +12644,7 @@ function openActesModal(t, a, cl, opts) {
   const openFn = opts.sub ? openSubModal : openModal;
   const closeFn = opts.sub ? closeSubModal : closeModal;
   const rootId = opts.sub ? 'modalBox2' : 'modalBox';
-  const persistTour = () => { if (t === currentTour) recomputeMoney(); else { recomputeTourLocal(t); persistTourEdit(t); } }; // recompute + save (recomputeMoney no-op si géométrie périmée : l'acte reste posé, la clôture n'en dépend pas)
+  const persistTour = () => { try { if (t === currentTour) { recomputeMoney(); return; } recomputeTourLocal(t); } catch (e) { /* recalcul non bloquant : l'acte reste TOUJOURS enregistré (la clôture n'en dépend pas) */ } persistTourEdit(t); }; // recompute + save robuste
   const refreshBehind = () => { if ($('tab-accueil') && $('tab-accueil').classList.contains('active')) renderHomeTrajet(); if (currentTour && currentTour.id === t.id && $('tab-editeur') && $('tab-editeur').classList.contains('active')) renderEditorArrets(); };
   // Articles libres du client (hors impayé) présents à cet arrêt.
   const clientArtIds = () => new Set((cl.chevaux || []).map((c) => c.id || c.nom));
@@ -12659,7 +12668,7 @@ function openActesModal(t, a, cl, opts) {
       return `<div class="ch-row"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${acte ? '' : ' <span class="badge badge-noacte">⚠ à cocher</span>'}</div><div class="ch-opts">${o}</div>${visSel}${extra}</div>`;
     }).join('');
     let artHtml = '';
-    if (opts.withArticles && !opts.sub) {
+    if (opts.withArticles) { // articles = ajout/retrait EN LIGNE (pas de fenêtre) → OK aussi en sous-modale (depuis le paiement)
       const arts = clientArts();
       const rates = (PAYS_TVA[S.pays] || PAYS_TVA.be).rates, stdTva = (PAYS_TVA[S.pays] || PAYS_TVA.be).std;
       const tvaOpts = rates.map((r) => `<option value="${r}"${r === stdTva ? ' selected' : ''}>${r}%</option>`).join('');
@@ -12694,42 +12703,73 @@ function openActesModal(t, a, cl, opts) {
   render();
 }
 // ===== Carte client (B5) : une section PAR ARRÊT du client (le dernier porte le paiement), avec « Carte arrêt » (trajet/heure/chevaux de cet arrêt) et « Carte facture » (facture AGRÉGÉE du client, identique quel que soit l'arrêt).
+// Récap de tournée ANONYMISÉ, en HTML mis en page (pour montrer à un client) — mêmes données que recapText.
+function tourRecapHtml(t) {
+  const R = t && t.result; if (!R) return '<p class="hint">Récap indisponible — la tournée doit être calculée.</p>';
+  const stdRate = rate(), htDep = R.htDeplacement || 0;
+  const withReal = (t.arrets || []).filter((a) => a.realMin > 0); const realTot = withReal.reduce((s, a) => s + a.realMin, 0);
+  const kmByClient = {}; (R.rows || []).forEach((r) => { const kmc = (r.kmAttribue || 0) / Math.max(1, r.nbClients); (r.clients || []).forEach((cl) => { kmByClient[cl.clientId] = (kmByClient[cl.clientId] || 0) + kmc; }); });
+  let resteTot = 0; (R.parClient || []).forEach((mm) => { const pp = partialPay(mm, (t.payments || {})[mm.clientId]); if (pp) resteTot += pp.reste; });
+  const clientRows = (R.parClient || []).map((mm, i) => `<div class="inv-line"><span>Client ${i + 1}</span><span>${km(kmByClient[mm.clientId] || 0)}</span></div>`).join('');
+  return `<div class="cc-recap"><div class="cc-recap-h">🚕 Récap de tournée</div><div class="li-sub">${esc(fmtDateFr(t.date))}</div>
+    <div class="cc-grid" style="margin-top:8px">
+      <div><span class="cc-k">Distance</span><span class="cc-v">${km(R.totalKm)}</span></div>
+      <div><span class="cc-k">Durée estimée</span><span class="cc-v">${durMin(R.totalMin)}</span></div>
+      ${withReal.length ? `<div><span class="cc-k">Trajet réel</span><span class="cc-v">${realTot} min (${withReal.length}/${t.arrets.length})</span></div>` : ''}
+      <div><span class="cc-k">Carburant</span><span class="cc-v">${eur(S.prixPleinL)}/L</span></div>
+    </div>
+    <div class="ac-sec-h" style="margin-top:10px">Frais de déplacement</div>
+    <div class="inv-line"><span>HT</span><span>${eur(htDep)}</span></div>
+    <div class="inv-line"><span>TVA</span><span>${eur(htDep * stdRate)}</span></div>
+    <div class="inv-line inv-total"><span>TTC</span><span>${eur(htDep * (1 + stdRate))}</span></div>
+    <div class="ac-sec-h" style="margin-top:10px">Km par client (anonymisé)</div>${clientRows || '<div class="li-sub">—</div>'}
+    ${resteTot > 0.005 ? `<div class="inv-line" style="color:var(--warn);margin-top:8px"><span>Reste à percevoir</span><span>${eur(resteTot)} TTC</span></div>` : ''}
+  </div>`;
+}
+// Carte client : 3 vues bascule (dans la MÊME modale) — Carte arrêt (toute la section arrêt du client, lecture seule), Carte facture (répartition visuelle), Récap tournée (anonymisé mis en page).
 function modalCarteClient(t, cid, onBack) {
   const arr = clientArrets(t, cid);
   const mins = (typeof legMinutesFor === 'function') ? legMinutesFor(t) : [];
+  const client = clients.find((x) => x.id === cid) || {};
   const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null;
+  const payment = (t.payments || {})[cid];
+  let view = 'arret';
   const close = () => { closeModal(); if (onBack) onBack(); };
-  const showList = () => {
-    const secs = arr.map((x, k) => {
-      const hh = x.cl.heure || arretHeure(x.a); const isLast = k === arr.length - 1;
-      return `<div class="card" style="margin-bottom:8px"><div class="li-main"><b>${x.i + 1}. ${esc(labelFor(x.a)) || 'arrêt'}${isLast ? ' <span class="badge">💶 paiement</span>' : ''}</b><span class="li-sub">📍 ${esc(addrStr(x.a.addr))}${hh ? ' · 🕘 ' + esc(hh) : ''}</span></div><div class="actions two" style="margin-top:6px"><button class="btn" data-carr="${k}">🗺️ Carte arrêt</button><button class="btn" data-cfac="${k}">🧾 Carte facture</button></div></div>`;
-    }).join('');
+  const carteArret = () => arr.map((x, k) => {
+    const est = mins[x.i] != null ? Math.round(mins[x.i]) : null; const real = (typeof x.a.realMin === 'number') ? x.a.realMin : null;
+    const hh = x.cl.heure || arretHeure(x.a); const red = (t.reductions || {})[cid];
+    const payDone = clientPaiementDone(t, cid);
+    const payInfo = payDone ? ((payment && payment.method === 'virement' ? 'virement' : 'liquide') + (payment && payment.facture ? ' + facture' : '') + (m ? ' · ' + eur(m.totalTTC + payArrondi(m, payment)) : '') + ' ✓') : 'non défini';
+    const rdvInfo = x.cl.rdvDone ? 'fait ✓' : 'non défini';
+    const prets = (client.prets || []);
+    const chevaux = (x.cl.chevaux || []).filter((c) => !chevalCancelled(c)).map((cv) => { const actes = []; if (cv.parage) actes.push('Parage'); if (cv.visite) actes.push('Visite'); ['fourbure', 'npas', 'infection'].forEach((kk) => { if (cv[kk]) actes.push(kk[0].toUpperCase() + kk.slice(1)); }); if (cv.difficile) actes.push('Difficile'); if (cv.photo && (cv.photo.stades || []).length) actes.push('📷 ' + (cv.photo.stades || []).join('/')); return `<div class="li-sub">🐴 <b>${esc(cv.nom)}</b>${actes.length ? ' — ' + esc(actes.join(', ')) : ' <span class="badge badge-noacte">aucun acte</span>'}</div>`; }).join('');
+    const arts = (t.articles || []).filter((ar) => ar.clientId === cid && !ar.impaye).map((ar) => `<div class="li-sub">📝 ${esc(ar.libelle)} — ${eur(ar.prixHT)} HT</div>`).join('');
+    return `<div class="card" style="margin-bottom:8px"><div class="li-main"><b>Arrêt ${x.i + 1} — ${esc(labelFor(x.a))}</b>${k === arr.length - 1 && arr.length > 1 ? ' <span class="badge">💶 paiement</span>' : ''}</div>
+      <div class="cc-grid">
+        <div><span class="cc-k">Tarif appliqué</span><span class="cc-v">${TYPES[x.a.type] || 'Tournée'}</span></div>
+        <div><span class="cc-k">Temps route</span><span class="cc-v">${est != null ? durMin(est) + ' est.' : '—'}${real > 0 ? ' · ' + durMin(real) + ' réel' : (real === 0 ? ' · à recalculer' : '')}</span></div>
+        <div><span class="cc-k">Heure RDV</span><span class="cc-v">${hh ? esc(hh) : '—'}</span></div>
+        <div><span class="cc-k">Montant total</span><span class="cc-v">${m ? eur(m.totalTTC + payArrondi(m, payment)) + ' TTC' : '—'}</span></div>
+        <div><span class="cc-k">Réduction articles</span><span class="cc-v">${red ? red + ' %' : '—'}</span></div>
+      </div>
+      <div class="li-sub">📍 ${esc(addrStr(x.a.addr)) || 'adresse à définir'}</div>
+      ${prets.length ? '<div class="li-sub">🎁 Prêt en cours : ' + prets.map((p) => esc(p.text)).join(', ') + '</div>' : ''}
+      <div class="cc-status ${payDone ? 'ok' : 'ko'}">💶 Paiement : ${esc(payInfo)}</div>
+      <div class="cc-status ${x.cl.rdvDone ? 'ok' : 'ko'}">📅 RDV : ${esc(rdvInfo)}</div>
+      <hr class="ac-div"/><div class="ac-sec-h">🐴 Actes</div>${chevaux || '<div class="li-sub">—</div>'}
+      ${arts ? '<div class="ac-sec-h" style="margin-top:6px">📝 Articles</div>' + arts : ''}
+    </div>`;
+  }).join('') || '<p class="hint">Aucun arrêt.</p>';
+  const carteFacture = () => m ? `<div class="inv-client">${clientInvoiceHtml(m, payment)}</div>` : '<p class="hint">Facture indisponible — la tournée doit être calculée.</p>';
+  const bodyOf = () => view === 'arret' ? carteArret() : (view === 'facture' ? carteFacture() : tourRecapHtml(t));
+  const render = () => {
     openModal(`<div class="modal-head"><b>🗺️ Carte client — ${esc(clientName(cid))}</b><button class="x" id="ccX">✕</button></div>
-      ${arr.length > 1 ? '<p class="hint">Ce client a ' + arr.length + ' arrêts — le dernier porte le paiement (facture globale).</p>' : ''}${secs || '<p class="hint">Aucun arrêt.</p>'}`);
+      <div class="seg cc-seg"><button type="button" class="seg-btn${view === 'arret' ? ' on' : ''}" data-cv="arret">🗺️ Carte arrêt</button><button type="button" class="seg-btn${view === 'facture' ? ' on' : ''}" data-cv="facture">🧾 Carte facture</button><button type="button" class="seg-btn${view === 'recap' ? ' on' : ''}" data-cv="recap">📋 Récap tournée</button></div>
+      <div id="ccBody">${bodyOf()}</div>`);
     $('ccX').addEventListener('click', close);
-    document.querySelectorAll('[data-carr]').forEach((b) => b.addEventListener('click', () => showArret(+b.dataset.carr)));
-    document.querySelectorAll('[data-cfac]').forEach((b) => b.addEventListener('click', () => showFacture()));
+    document.querySelectorAll('.cc-seg [data-cv]').forEach((b) => b.addEventListener('click', () => { view = b.dataset.cv; render(); }));
   };
-  const showArret = (k) => {
-    const x = arr[k]; const est = mins[x.i] != null ? Math.round(mins[x.i]) : null; const real = (typeof x.a.realMin === 'number') ? x.a.realMin : null;
-    const hh = x.cl.heure || arretHeure(x.a);
-    const chevaux = (x.cl.chevaux || []).filter((c) => !chevalCancelled(c)).map((cv) => '🐴 ' + esc(cv.nom) + (cv.parage ? ' · Parage' : '') + (cv.visite ? ' · Visite' : '')).join('<br>') || '<i>aucun cheval</i>';
-    openModal(`<div class="modal-head"><b>🗺️ Arrêt ${x.i + 1} — ${esc(clientName(cid))}</b><button class="x" id="ccX">✕</button></div>
-      <div class="card"><div class="li-main"><b>${esc(labelFor(x.a))}</b><span class="li-sub">📍 ${esc(addrStr(x.a.addr))}</span></div>
-      <p class="hint">🕘 Heure : ${hh ? esc(hh) : '—'}<br>🕒 Trajet : ${est != null ? durMin(est) + ' est.' : '—'}${real > 0 ? ' · ' + durMin(real) + ' réel' : (real === 0 ? ' · à recalculer' : '')}</p>
-      <div class="li-sub">${chevaux}</div></div>
-      <div class="actions"><button class="btn primary block" id="ccBack">← Retour</button></div>`);
-    $('ccX').addEventListener('click', close); $('ccBack').addEventListener('click', showList);
-  };
-  const showFacture = () => {
-    const txt = m ? invoiceTextForClient(m, (t.payments || {})[cid]) : '(Facture indisponible — ouvrez la tournée et laissez-la se calculer.)';
-    openModal(`<div class="modal-head"><b>🧾 Facture — ${esc(clientName(cid))}</b><button class="x" id="ccX">✕</button></div>
-      <pre class="carte-fac">${esc(txt)}</pre>
-      <div class="actions two"><button class="btn" id="ccBack">← Retour</button><button class="btn primary" id="ccCopy">Copier</button></div>`);
-    $('ccX').addEventListener('click', close); $('ccBack').addEventListener('click', showList);
-    $('ccCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(txt); $('ccCopy').textContent = 'Copié ✔'; } catch { alert(txt); } });
-  };
-  showList();
+  render();
 }
 // L4 — menu « Agir » CIBLÉ SUR UN CLIENT (SMS/Ticket/RDV/Prêt/Email/Paiement du client), pour que deux clients au même arrêt soient indépendants.
 function dayJClientAgir(t, a, cl, ctx) {
@@ -12751,12 +12791,13 @@ function dayJClientAgir(t, a, cl, ctx) {
     { label: navLabel(), onClick: () => openNav(a.addr) },
     { label: 'Route (temps réel)', done: ctx.rDone, orange: ctx.rStale, onClick: () => modalRouteTime(t, a, ctx.est, reopenAgir) },
     { label: 'SMS', onClick: () => modalSmsChoice(c, smsDataFor(c, { cheval: chNames, trajet: ctx.trajet, adresse: ctx.adresse }), reopenAgir) },
+    { label: '📋 Récap tournée', keepOpen: true, onClick: (btn) => { const txt = t.result ? recapText(t.result, t) : '(Récap indisponible — la tournée doit être calculée.)'; (async () => { try { await navigator.clipboard.writeText(txt); btn.textContent = 'Récap copié ✔'; setTimeout(() => { btn.textContent = '📋 Récap tournée'; }, 1500); } catch { alert(txt); } })(); } }, // récap anonymisé de la tournée à envoyer manuellement
     { label: 'Ticket', keepOpen: true, onClick: ticket },
     { label: '＋ Prêt', orange: (c.prets || []).length > 0, onClick: () => modalPret(cid, t, reopenAgir) },
     (isClientLastArret(t, cid, a)
       ? { label: '💶 Paiement', done: clientPaiementDone(t, cid), disabled: clientPaiementDone(t, cid), onClick: () => modalPayment(t, a, reopenAgir, () => { closeClientAt(t, a, cl); persist(); scheduleCalPush(t); }, cid) } // dernier arrêt du client → paiement (facture globale) ; clôture TOUS ses arrêts (garde actes dans modalPayment)
       : { label: '🔒 Clôturer (en attente)', done: clientValidated(cl), disabled: clientValidated(cl), onClick: () => { const finish = () => { if (closeClientPending(t, a, cl)) { persist(); scheduleCalPush(t); } reopenAgir(); }; if (!clientActeOK(a, cl)) { openActesModal(t, a, cl, { onDone: finish }); return; } finish(); } }), // arrêt intermédiaire → clôture en attente (paiement au dernier arrêt) ; actes manquants → modale Actes en place
-    { label: '📅 RDV', done: !!cl.rdvDone, disabled: !!cl.rdvDone, onClick: () => modalRDV(t, a, cid, reopenAgir) },
+    { label: '📅 Fixer RDV', done: !!cl.rdvDone, disabled: !!cl.rdvDone, onClick: () => modalRDV(t, a, cid, reopenAgir) },
     { label: '📧 Email au client', onClick: () => modalEmailClient(c, reopenAgir) },
   ];
 }
@@ -13473,7 +13514,7 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
     const rectVal = p.rectifie != null ? p.rectifie : (p.montantPaye != null && !p.partiel ? p.montantPaye : '');
     html += `<div class="pay-block" data-cid="${cid}">
       <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture <span data-facture>${eur(ttc)}</span> TTC</span></h3>
-      <div class="pay-actrow"><button type="button" class="btn small" data-rdv="${cid}">📅 RDV</button> <button type="button" class="btn small" data-carte="${cid}">🗺️ Carte client</button></div>
+      <div class="pay-actrow"><button type="button" class="btn small" data-pactes="${cid}">🐴 Actes / articles</button> <button type="button" class="btn small" data-carte="${cid}">🗺️ Carte client</button> <button type="button" class="btn small" data-rdv="${cid}">📅 Fixer RDV</button></div>
       <div class="seg pay-method">
         <button type="button" class="seg-btn${p.method === 'virement' ? ' on' : ''}" data-m="virement">Virement</button>
         <button type="button" class="seg-btn${p.method === 'liquide' ? ' on' : ''}" data-m="liquide">Liquide</button>
@@ -13567,6 +13608,7 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
   };
   // Bouton « RDV » (programmer le suivi) : sauvegarde d'abord le paiement en cours, puis ouvre la planification ; retour au paiement à la fermeture.
   const reopenPay = (c2) => modalPayment(t, arret, after, onCommit, c2); // rouvre le paiement DU BON client (corrige la perte de onlyClientId au retour RDV)
+  document.querySelectorAll('[data-pactes]').forEach((b) => b.addEventListener('click', () => { commitPayments(); const clx = (arret.clients || []).find((x) => x.clientId === b.dataset.pactes); if (clx) openActesModal(t, arret, clx, { sub: true, withArticles: true, onDone: () => reopenPay(b.dataset.pactes) }); })); // actes/articles superposés au paiement
   document.querySelectorAll('[data-rdv]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalRDV(t, arret, b.dataset.rdv, () => reopenPay(b.dataset.rdv)); }));
   document.querySelectorAll('[data-carte]').forEach((b) => b.addEventListener('click', () => { commitPayments(); modalCarteClient(t, b.dataset.carte, () => reopenPay(b.dataset.carte)); })); // B8 : carte client depuis le paiement, retour au paiement
   $('payOk').addEventListener('click', () => { if ($('payOk').disabled) return; commitPayments(); // B4 : clôture d'un client SANS acte → modale Actes superposée, puis on relance la clôture (pas de retour à l'accueil)
