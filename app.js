@@ -3031,6 +3031,7 @@ if (typeof S.infectionHT !== 'number') S.infectionHT = 0;
 S.changelogRead = Array.isArray(S.changelogRead) ? S.changelogRead : [];
 S.changelogHideBelow = typeof S.changelogHideBelow === 'string' ? S.changelogHideBelow : '';
 if (!S.comptaStatus || typeof S.comptaStatus !== 'object') S.comptaStatus = {}; // { 'YYYY-MM': { liquide, virement, facture } }
+if (!S.declarations || typeof S.declarations !== 'object') S.declarations = {}; // Lot 03a — { 'YYYY-MM': { type: {id, frozenAt} } } registre d'IDENTITÉ des déclarations, en miroir du verrou comptaStatus (n'en change pas le comportement)
 if (!S.comptaRecu || typeof S.comptaRecu !== 'object') S.comptaRecu = {};       // { 'tourId:clientId': true } — paiement reçu (virement/facture)
 if (!S.comptaDemarche || typeof S.comptaDemarche !== 'object') S.comptaDemarche = {}; // { 'tourId:clientId': true } — démarche comptable effectuée (mois archivé)
 if (!Array.isArray(S.notesCredit)) S.notesCredit = []; // notes de crédit : { id, clientId, clientNom, tourId, tourDate, chevalNom, montantTTC, motif, note, date, rembourse, rembourseAt }
@@ -10269,7 +10270,7 @@ function renderComptaAvenir() {
   });
 }
 function comptaWire(container, rerender) {
-  container.querySelectorAll('[data-status]').forEach((el) => el.addEventListener('change', (e) => { const ym = el.dataset.ym; S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][el.dataset.status] = e.target.value; saveSettings(); rerender(); }));
+  container.querySelectorAll('[data-status]').forEach((el) => el.addEventListener('change', (e) => { const ym = el.dataset.ym; S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][el.dataset.status] = e.target.value; syncDeclaration(ym, el.dataset.status, e.target.value); saveSettings(); rerender(); })); // Lot 03a — objet déclaration (id) en miroir du verrou
   container.querySelectorAll('[data-dem]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaDemarche = S.comptaDemarche || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaDemarche[k] = true; else delete S.comptaDemarche[k]; saveSettings(); rerender(); }));
   container.querySelectorAll('[data-mode]').forEach((el) => el.addEventListener('change', () => { setComptaPayment(el.dataset.tour, el.dataset.cid, el.value); rerender(); }));
   container.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaRecu[k] = true; else delete S.comptaRecu[k]; saveSettings(); rerender(); }));
@@ -13486,6 +13487,19 @@ function nextFactureNumero() {
   return pfx + '-' + (max + 1);
 }
 function factureOf(t, clientId) { return (t && t.factureIds && t.factureIds[clientId]) || null; }
+// ---------- Lot 03a — REGISTRE DES DÉCLARATIONS (identité, en MIROIR du verrou comptaStatus — n'en change PAS le comportement) ----------
+function syncDeclaration(ym, type, val) {
+  if (!S.declarations || typeof S.declarations !== 'object') S.declarations = {};
+  if (val === 'encode') { S.declarations[ym] = S.declarations[ym] || {}; if (!S.declarations[ym][type]) S.declarations[ym][type] = { id: uid(), frozenAt: Date.now() }; }
+  else if (S.declarations[ym]) { delete S.declarations[ym][type]; if (!Object.keys(S.declarations[ym]).length) delete S.declarations[ym]; } // dé-verrou → l'objet déclaration disparaît (reste cohérent avec comptaStatus)
+}
+function declarationOf(ym, type) { return (S.declarations && S.declarations[ym] && S.declarations[ym][type]) || null; }
+// Backfill idempotent : chaque section de mois déjà « encodée » (verrou existant) reçoit un objet déclaration (id + frozenAt) si absent.
+function ensureDeclarationsFromStatus() {
+  let changed = false; const cs = S.comptaStatus || {};
+  Object.keys(cs).forEach((ym) => { const st = cs[ym] || {}; Object.keys(st).forEach((type) => { if (st[type] === 'encode') { S.declarations = S.declarations || {}; S.declarations[ym] = S.declarations[ym] || {}; if (!S.declarations[ym][type]) { S.declarations[ym][type] = { id: uid(), frozenAt: Date.now() }; changed = true; } } }); });
+  return changed;
+}
 // Attribue une identité facture (id + numéro + frozenAt) à chaque client des tournées CLÔTURÉES (pièce émise à la clôture).
 // IDEMPOTENT (ignore un client déjà numéroté → jamais renumérotée). Ordre RÉTROACTIF chronologique (date puis id) → séquence cohérente.
 // N'AFFECTE AUCUN MONTANT ni t.result : champ purement additif `t.factureIds`.
@@ -15056,6 +15070,7 @@ window.addEventListener('DOMContentLoaded', () => {
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
   migrateCreditedCancellations(); // 1.1.57 : marque « credited » les chevaux annulés portant une note de crédit (évite la double réduction du CA)
   if (ensureFacturesForClosedTours()) { LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive); try { rebuildSyncHashes(); } catch (e) {} } // Lot 02 — identité facture rétroactive (après auto-clôture/archivage), persistée sans churn
+  if (ensureDeclarationsFromStatus()) { LS.set('ftr.settings', S); } // Lot 03a — objets déclaration (id) pour les mois déjà encodés, sans churn de synchro
   bindSettings(); refreshEverywhere(); renderHome();
   setTimeout(() => { plDraftMaybeRestore(); }, 900); // propose de reprendre une planche non terminée (après mise en arrière-plan / rechargement)
   if ($('homeSetupBtn')) $('homeSetupBtn').addEventListener('click', modalSetup);
@@ -15140,7 +15155,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('edAddArret').addEventListener('click', pickClientForArret);
   $('edMapBtn').addEventListener('click', showMapOnly);
   $('edReloc').addEventListener('click', forceRelocate);
-  $('edDate').addEventListener('change', (e) => { currentTour.date = e.target.value; });
+  $('edDate').addEventListener('change', (e) => { if (!currentTour) return; currentTour.date = e.target.value; saveTournees(); }); // Lot 03c — persiste le changement de date (auparavant NON enregistre, contrairement a edNom)
   $('edCalc').addEventListener('click', calcTour);
   if ($('edRecover')) $('edRecover').addEventListener('click', () => { if (currentTour) modalRecoverStats(currentTour); });
   // (« Recalculer cette tournée » retiré en 1.1.99 : le recalcul complet — fallback calcTour quand la géométrie figée est périmée — est désormais AUTOMATIQUE dans « Corriger les prestations ».)
