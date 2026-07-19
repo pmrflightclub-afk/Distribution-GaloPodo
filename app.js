@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.94';
+const APP_VERSION = '1.7.95';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.95', date: '2026-07-19',
+    ajouts: [
+      'STATUT DE TOURNÉE (fenêtre « à compléter ») — enrichie et éditable SUR PLACE, sans ouvrir la tournée : le bouton « 🔄 Recalculer l\'itinéraire » passe « ✅ À jour » (vert) une fois recalculé, et repasse en « Recalculer » au prochain changement.',
+      'STATUT — le TEMPS DE ROUTE se saisit maintenant directement dans cette fenêtre : un champ par arrêt manquant, plus un champ pour le TEMPS DE RETOUR. L\'HEURE DE RDV manquante se saisit aussi sur place (par client).',
+      'STATUT — nouvelle section « 🐴 Actes à définir » : liste les chevaux sans acte (par arrêt/client) avec un bouton qui ouvre la modale Actes par-dessus. Seules les sections avec un manque s\'affichent (inchangé).',
+    ],
+  },
   {
     version: '1.7.94', date: '2026-07-19',
     ajouts: [
@@ -6725,21 +6733,40 @@ function modalIntercaler(t, placements, onDone) {
 // Modale récapitulative « à compléter » : centralise ce qui manque pour une tournée, SANS l'ouvrir ni défiler.
 // Deux blocs SÉPARÉS et distincts : ① Préparation (itinéraire/adresses/heures/chevaux) · ② Clôture (jour J : paiement).
 function modalTourStatus(t) {
+  let justRecalced = false;
+  const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } else saveTournees(); } };
+  const refreshLists = () => { if (typeof renderTours === 'function') renderTours(); if ($('tab-accueil') && $('tab-accueil').classList.contains('active') && typeof renderHome === 'function') renderHome(); };
   const render = () => {
     const st = statusOf(t), jourJ = st === 'active';
     const geoMissing = (t.arrets || []).some((a) => !(a.addr && a.addr.lat != null && a.addr.lon != null));
-    const noItin = !t.result || !t.result.rows || t.result.rows.length !== (t.arrets || []).length || geoMissing; // itinéraire absent OU périmé (n'englobe plus tous les arrêts) OU adresse non localisée
-
+    const noItin = !t.result || !t.result.rows || t.result.rows.length !== (t.arrets || []).length || geoMissing;
+    const stale = tourRouteStale(t);
     let prep = '';
-    if (noItin || tourRouteStale(t)) prep += `<div class="ts-line ts-warn"><span>🗺 Itinéraire ${noItin ? 'non calculé' : 'à recalculer'}${geoMissing ? ' · adresse à localiser' : ''}</span><button class="btn small primary" id="tsCalc">🔄 Calculer maintenant</button></div>`;
+    // ① Itinéraire — bouton d'état : « Recalculer » si périmé, ✅ vert si à jour (repasse en Recalculer au prochain changement).
+    if (noItin || stale) prep += `<div class="ts-line ts-warn"><span>🗺 Itinéraire ${noItin ? 'non calculé' : 'à recalculer'}${geoMissing ? ' · adresse à localiser' : ''}</span><button class="btn small primary" id="tsCalc">🔄 Recalculer l'itinéraire</button></div>`;
+    else prep += `<div class="ts-line ts-ok"><span>🗺 Itinéraire à jour</span><button class="btn small done" disabled>✅ ${justRecalced ? 'Recalculé' : 'À jour'}</button></div>`;
+    // Heures « à revoir » (ordre changé)
     if (tourHeureStale(t)) prep += `<div class="ts-line ts-warn"><span>🕘 Des heures de RDV sont « à revoir » (l'ordre a changé)</span><button class="btn small" data-tsopen>Ouvrir</button></div>`;
-    tourReadyIssues(t).filter((x) => !/itinéraire|localisée/i.test(x)).forEach((x) => { prep += `<div class="ts-line ts-warn"><span>⚠ ${esc(x)}</span><button class="btn small" data-tsopen>Ouvrir</button></div>`; });
-    if (!prep) prep = `<div class="ts-line ts-ok">✅ Préparation complète (itinéraire, adresses, heures, chevaux).</div>`;
+    // Présence + heure de RDV manquante, par client
+    const byClient = {};
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { const e = byClient[cl.clientId] = byClient[cl.clientId] || { present: false, has: false }; (cl.chevaux || []).forEach((cv) => { e.has = true; if (!chevalCancelled(cv)) e.present = true; }); }));
+    Object.keys(byClient).forEach((cid) => { const e = byClient[cid]; if (e.has && !e.present) prep += `<div class="ts-line ts-warn"><span>⚠ ${esc(clientName(cid))} : aucun cheval présent</span><button class="btn small" data-tsopen>Ouvrir</button></div>`; });
+    const heureMiss = Object.keys(byClient).filter((cid) => byClient[cid].present && !clientRdvHeure(t, cid));
+    if (heureMiss.length) { prep += `<div class="ts-sub-h">🕘 Heure de RDV à renseigner</div>`; heureMiss.forEach((cid) => { prep += `<div class="ts-line ts-warn"><span>${esc(clientName(cid))}</span><input type="time" data-tsheure="${cid}" value=""/></div>`; }); }
+    // Temps de route par arrêt (champ en ligne)
+    let routeRows = ''; (t.arrets || []).forEach((a, i) => { if (!(a.realMin > 0)) routeRows += `<div class="ts-line ts-warn"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}${a.realMin === 0 ? ' · à recalculer' : ''}</span><input type="number" min="0" step="1" inputmode="numeric" data-tsroute="${i}" placeholder="min"/></div>`; });
+    if (routeRows) prep += `<div class="ts-sub-h">🕒 Temps de route à renseigner (min)</div>` + routeRows;
+    // Temps de retour (champ en ligne)
+    if (!(t.returnRealMin > 0)) prep += `<div class="ts-sub-h">🏁 Temps de retour (route)</div><div class="ts-line ts-warn"><span>Retour → départ</span><input type="number" min="0" step="1" inputmode="numeric" data-tsret placeholder="min"/></div>`;
+    // Actes manquants par cheval → bouton qui ouvre la modale Actes
+    let acteRows = ''; (t.arrets || []).forEach((a, i) => (a.clients || []).forEach((cl) => { const miss = (cl.chevaux || []).filter((cv) => !chevalCancelled(cv) && !chevalBilled(cv) && !(cv.photo && photoHasBillableStades(cv.photo))); if (miss.length) acteRows += `<div class="ts-line ts-warn"><span>${esc(clientName(cl.clientId))} · arrêt ${i + 1} : ${esc(miss.map((cv) => cv.nom).join(', '))}</span><button class="btn small" data-tsactes="${i}|${cl.clientId}">🐴 Actes</button></div>`; }));
+    if (acteRows) prep += `<div class="ts-sub-h">🐴 Actes à définir (cheval sans acte)</div>` + acteRows;
+    if (!prep) prep = `<div class="ts-line ts-ok">✅ Préparation complète.</div>`;
     let clo;
     if (!jourJ) clo = `<div class="ts-line ts-muted">💤 Le paiement & la clôture se font le jour de la tournée.</div>`;
     else { const blk = tourFinalizeBlock(t); clo = blk.length ? blk.map((x) => `<div class="ts-line ts-warn"><span>💶 ${esc(x)}</span></div>`).join('') : `<div class="ts-line ts-ok">✅ Tous les arrêts finalisés.</div>`; }
     openModal(`<div class="modal-head"><b>📋 ${esc(fmtDateFr(t.date))}${t.nom ? ' — ' + esc(t.nom) : ''}</b><button class="x" id="mX">✕</button></div>
-      <p class="hint">Ce qu'il reste à faire, regroupé — sans ouvrir la tournée.</p>
+      <p class="hint">Ce qu'il reste à faire, regroupé — modifiable ici sans ouvrir la tournée.</p>
       <div class="card"><div class="form-sec-h">① Préparation (avant la tournée)</div>${prep}</div>
       <div class="card"><div class="form-sec-h">② Fin de tournée (le jour J)</div>${clo}</div>
       <div class="actions"><button class="btn block" id="tsOpen">Ouvrir la tournée</button></div>`);
@@ -6747,12 +6774,11 @@ function modalTourStatus(t) {
     $('tsOpen').onclick = () => { closeModal(); openTour(t); };
     document.querySelectorAll('[data-tsopen]').forEach((b) => b.addEventListener('click', () => { closeModal(); openTour(t); }));
     const cb = $('tsCalc');
-    if (cb) cb.addEventListener('click', async () => {
-      cb.disabled = true; cb.textContent = 'Calcul…';
-      const r = await recomputeTourGeo(t);
-      if (r.ok) { render(); if (typeof renderTours === 'function') renderTours(); if ($('tab-accueil') && $('tab-accueil').classList.contains('active') && typeof renderHome === 'function') renderHome(); }
-      else { cb.disabled = false; cb.textContent = '🔄 Réessayer'; alert('Recalcul impossible : ' + (r.error || 'erreur') + '.\nVérifiez l\'adresse de départ et la connexion internet.'); }
-    });
+    if (cb) cb.addEventListener('click', async () => { cb.disabled = true; cb.textContent = 'Calcul…'; const r = await recomputeTourGeo(t); if (r.ok) { justRecalced = true; render(); refreshLists(); } else { cb.disabled = false; cb.textContent = '🔄 Réessayer'; alert('Recalcul impossible : ' + (r.error || 'erreur') + '.\nVérifiez l\'adresse de départ et la connexion internet.'); } });
+    document.querySelectorAll('[data-tsheure]').forEach((inp) => inp.addEventListener('change', () => { const v = inp.value || ''; if (v) { setClientHeureInTour(t, inp.dataset.tsheure, v); persist(); scheduleCalPush(t); render(); refreshLists(); } }));
+    document.querySelectorAll('[data-tsroute]').forEach((inp) => inp.addEventListener('change', () => { const v = parseInt(inp.value, 10); if (v >= 0 && t.arrets[+inp.dataset.tsroute]) { t.arrets[+inp.dataset.tsroute].realMin = v; persist(); render(); refreshLists(); } }));
+    { const rr = document.querySelector('[data-tsret]'); if (rr) rr.addEventListener('change', () => { const v = parseInt(rr.value, 10); if (v >= 0) { t.returnRealMin = v; persist(); render(); refreshLists(); } }); }
+    document.querySelectorAll('[data-tsactes]').forEach((b) => b.addEventListener('click', () => { const [ai, cid] = b.dataset.tsactes.split('|'); const a = t.arrets[+ai]; const cl = a && (a.clients || []).find((x) => x.clientId === cid); if (a && cl) openActesModal(t, a, cl, { withArticles: true, onDone: () => { render(); refreshLists(); } }); }));
   };
   render();
 }

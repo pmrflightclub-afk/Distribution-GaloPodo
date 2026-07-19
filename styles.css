@@ -202,6 +202,10 @@ input.gp-native { width: 1px !important; height: 1px !important; padding: 0 !imp
 .ts-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 2px; border-top: 1px solid var(--line); font-size: .9rem; }
 .ts-line:first-child { border-top: 0; }
 .ts-line .btn { flex: none; }
+.ts-line > span { min-width: 0; }
+.ts-line input[type=number] { flex: none; width: 80px; }
+.ts-line .gp-sel, .ts-line input[type=time] { flex: none; width: 110px; margin: 0; }
+.ts-sub-h { font-weight: 700; font-size: .82rem; color: var(--muted); margin: 8px 0 2px; padding-top: 6px; border-top: 1px solid var(--line); }
 .ts-warn > span { color: var(--danger); }
 .ts-ok { color: var(--ok, #2e9e5b); font-weight: 600; }
 .ts-muted { color: var(--muted); }
