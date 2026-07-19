@@ -5687,7 +5687,7 @@ function renderAnnulGroup() {
       html += `<div style="padding-left:12px;margin-top:4px"><label class="chk2"><input type="checkbox" data-agclient="${g.t.id}:${c.clientId}"/> <b>${esc(c.nom)}</b></label>`;
       c.chevaux.forEach((cv) => {
         const its = chevalCancelItems(g.t, c.clientId, cv.nom);
-        html += `<div style="padding-left:18px;margin-top:2px"><div class="li-sub">🐴 ${esc(cv.nom)}${chevalCancelled(cv) ? ' <span class="badge badge-cancel">déjà partiellement annulé</span>' : ''}</div>`;
+        html += `<div style="padding-left:18px;margin-top:2px"><div class="li-sub">🐴 ${esc(chevalLiveNom(c.clientId, cv))}${chevalCancelled(cv) ? ' <span class="badge badge-cancel">déjà partiellement annulé</span>' : ''}</div>`; // Lot 04-B : nom live (data-nom ci-dessous reste la clé figée)
         if (!its.length) html += `<div style="padding-left:12px" class="li-sub">aucune prestation facturable (déplacement seul, conservé)</div>`;
         its.forEach((it) => { html += `<div style="padding-left:12px"><label class="chk2"><input type="checkbox" class="ag-svc" data-tid="${g.t.id}" data-cid="${c.clientId}" data-chid="${cv.id != null ? cv.id : ''}" data-nom="${esc(cv.nom)}" data-key="${esc(it.key)}" data-ttc="${it.ttc}" data-ht="${it.ht}" data-tva="${it.tva}"/> ${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label></div>`; });
         html += `</div>`;
@@ -7343,6 +7343,13 @@ function ecurieNomFor(c, h) {
   if (e.source === 'societe') return c.societe || fullName(c);
   return e.nom || fullName(c) || 'Adresse';
 }
+// Lot 04-B — nom LIVE d'un cheval d'arrêt (résolu par id → un renommage se reflète même en tournée clôturée). AFFICHAGE UNIQUEMENT : les clés de jointure (norm(cv.nom), data-nom, tourCvKey) et les pièces figées (facture t.result, notes de crédit) gardent cv.nom.
+function chevalLiveNom(clientId, cv) {
+  if (!cv) return '';
+  const c = clients.find((x) => x.id === clientId);
+  const h = c && (c.chevaux || []).find((x) => (cv.id != null && x.id === cv.id) || (norm(cv.nom) && norm(x.nom) === norm(cv.nom)));
+  return (h && h.nom) || cv.nom || '';
+}
 // Migration ponctuelle : crée les écuries manquantes (id DÉTERMINISTE par clé → aucun doublon inter-appareils) et rattache chaque cheval via h.ecurieId.
 // Idempotente ; persistée SANS churn (déterministe : chaque appareil converge au même résultat, comme normalizeIds).
 function migrateEcuries() {
@@ -7420,7 +7427,7 @@ function modalClientAddr(t, a, cl) {
   const step3 = (uncheckedCvs, o2) => {
     const b2 = o2.q('#cadr2Body');
     b2.innerHTML = `<p class="hint">Ces chevaux ne changent PAS d'adresse. Pour chacun : le <b>reporter</b> (il quitte la tournée du jour → « RDV à prendre / Replacer ») ou le <b>garder</b> à son adresse actuelle.</p>
-      <div>${uncheckedCvs.map((cv, i) => `<div class="list-item"><div class="li-main"><b>🐴 ${esc(cv.nom)}</b></div><div class="li-act"><label class="chk2"><input type="checkbox" data-repl="${i}"/> 🔄 Reporter le RDV</label></div></div>`).join('')}</div>
+      <div>${uncheckedCvs.map((cv, i) => `<div class="list-item"><div class="li-main"><b>🐴 ${esc(chevalLiveNom(cid, cv))}</b></div><div class="li-act"><label class="chk2"><input type="checkbox" data-repl="${i}"/> 🔄 Reporter le RDV</label></div></div>`).join('')}</div>
       <div class="actions"><button class="btn primary block" id="cadrReplOk">Valider</button></div>`;
     b2.querySelector('#cadrReplOk').addEventListener('click', () => {
       Array.from(b2.querySelectorAll('[data-repl]:checked')).forEach((c) => { const cv = uncheckedCvs[+c.dataset.repl]; if (cv && !chevalCancelled(cv)) cv.cancel = { status: 'reporte', reason: 'client', note: '', at: new Date().toISOString(), replacedTourId: null, credited: false }; }); // reporté → sort de la tournée (RDV à prendre)
@@ -7436,7 +7443,7 @@ function modalClientAddr(t, a, cl) {
       <div id="cadrMount" style="margin:6px 0"></div>
       <p class="hint">📌 <b>Ponctuelle</b> = juste cette tournée (fiche inchangée). ⭐ <b>Par défaut</b> = corrige la fiche des chevaux cochés.</p>
       <div class="li-sub" style="margin:6px 0 2px"><b>Chevaux à déplacer à cette adresse :</b></div>
-      <div id="cadrChevaux">${cvsAt().map((cv, i) => `<label class="chk2"><input type="checkbox" data-cvchk="${i}" checked/> 🐴 ${esc(cv.nom)}</label>`).join('') || '<p class="hint">Aucun cheval.</p>'}</div>
+      <div id="cadrChevaux">${cvsAt().map((cv, i) => `<label class="chk2"><input type="checkbox" data-cvchk="${i}" checked/> 🐴 ${esc(chevalLiveNom(cid, cv))}</label>`).join('') || '<p class="hint">Aucun cheval.</p>'}</div>
       <div class="actions two"><button class="btn" id="cadrPonct">📌 Ponctuelle</button><button class="btn primary" id="cadrDef">⭐ Par défaut</button></div>`;
     mountAddress(b2.querySelector('#cadrMount'), target, (na) => { Object.assign(target, na); });
     o2.q('[data-x]').onclick = o2.close;
@@ -7618,7 +7625,7 @@ function renderEditorArrets(locked) {
               const st = cv.cancel.status === 'reporte' ? '↩ reporté' : '🚫 annulé';
               const nc = cv.cancel.creditNoteNum ? ' · <b>NC #' + esc(String(cv.cancel.creditNoteNum)) + '</b>' : (cv.cancel.credited ? ' · <b>NC</b>' : '');
               const its = (cv.cancel.items || []).map((it) => esc(it.label) + ' — ' + eur(it.ttc)).join(' · ');
-              return `<div class="list-item"><div class="li-main"><b>🐴 ${esc(cv.nom)}</b><span class="li-sub">${st}${nc}${its ? ' · ' + its : ''}</span></div></div>`;
+              return `<div class="list-item"><div class="li-main"><b>🐴 ${esc(chevalLiveNom(cl.clientId, cv))}</b><span class="li-sub">${st}${nc}${its ? ' · ' + its : ''}</span></div></div>`; // Lot 04-B : nom live (identité), le détail NC (it.label) reste figé
             }).join('');
             el.appendChild(rbox);
           }
@@ -12696,7 +12703,7 @@ function modalRecoverStats(t, opts) {
     (a.clients || []).forEach((cl, j) => {
       const present = (cl.chevaux || []).some((cv) => !chevalCancelled(cv));
       if (present) h += `<label>🕘 ${esc(clientName(cl.clientId))} — heure de RDV<input type="time" data-clheure="${i}.${j}" value="${cl.heure || a.heure || ''}"/></label>`;
-      (cl.chevaux || []).forEach((cv, k) => { if (!chevalFait(cv)) return; h += `<label>🐴 ${esc(cv.nom)} — consultation (min)<input type="number" min="0" step="1" data-consult="${i}.${j}.${k}" value="${typeof cv.consultMin === 'number' ? cv.consultMin : ''}"/></label>`; });
+      (cl.chevaux || []).forEach((cv, k) => { if (!chevalFait(cv)) return; h += `<label>🐴 ${esc(chevalLiveNom(cl.clientId, cv))} — consultation (min)<input type="number" min="0" step="1" data-consult="${i}.${j}.${k}" value="${typeof cv.consultMin === 'number' ? cv.consultMin : ''}"/></label>`; });
     });
     wrap.innerHTML = h; body.appendChild(wrap);
   });
@@ -13019,7 +13026,7 @@ function modalArretPlanche(t, a, onlyClientId) {
     else if (hasPlancheTodo(cl.clientId, cv.nom, t.date)) cvSt = hasPlancheDone(cl.clientId, cv.nom, t.date) ? 'green' : 'red'; // legacy sans stade
     const stLbl = cvSt === 'green' ? ' <span class="td-eta">✅ toutes faites</span>' : cvSt === 'orange' ? ' <span class="td-eta td-past">📷 en partie</span>' : cvSt === 'red' ? ' <span class="td-eta td-past">📷 à faire</span>' : '';
     const el = document.createElement('div'); el.className = 'list-item stack-act';
-    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(cv.nom)}</b>${stLbl}<span class="li-sub">${esc(clientName(cl.clientId))}</span></div><div class="li-act li-act-col"><button class="btn small${plancheBtnClass(cvSt) || ' primary'}" data-make>🖼 Créer la planche</button><button class="btn small" data-todo>➕ Compte rendu photo</button></div>`;
+    el.innerHTML = `<div class="li-main"><b>🐴 ${esc(chevalLiveNom(cl.clientId, cv))}</b>${stLbl}<span class="li-sub">${esc(clientName(cl.clientId))}</span></div><div class="li-act li-act-col"><button class="btn small${plancheBtnClass(cvSt) || ' primary'}" data-make>🖼 Créer la planche</button><button class="btn small" data-todo>➕ Compte rendu photo</button></div>`;
     el.querySelector('[data-make]').addEventListener('click', () => { closeModal(); modalPlancheCreate('contact', { cheval: cv.nom, client: clientName(cl.clientId), clientId: cl.clientId, date: t.date }); });
     const tb = el.querySelector('[data-todo]');
     tb.addEventListener('click', () => { const added = addPlancheTodo({ clientId: cl.clientId, chevalId: cv.id, chevalNom: cv.nom, date: t.date, tourId: t.id }); tb.textContent = added ? '✓ Ajouté' : 'Déjà dans la liste'; tb.disabled = true; renderHome(); });
