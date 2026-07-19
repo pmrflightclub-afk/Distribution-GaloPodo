@@ -613,6 +613,8 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 .a-sort-bar { display: flex; justify-content: flex-end; margin: 2px 0 6px; }
 .carte-fac { white-space: pre-wrap; word-break: break-word; font-size: .82rem; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; max-height: 55vh; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; }
 .pay-actrow { display: flex; gap: 6px; margin: 0 0 8px; }
+.ac-inline { margin: 4px 0 2px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font-size: .85rem; }
+.ac-inline .ch-opt { display: inline-flex; margin-right: 8px; }
 .a-nav-b { flex: 1 1 100%; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .a-nav-b > .btn { flex: 0 1 auto; min-width: 0; }
 .a-heure { display: inline-flex; align-items: center; gap: 3px; font-size: .82rem; border: 1px solid var(--line); border-radius: 8px; padding: 2px 6px; }

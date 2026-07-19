@@ -11,10 +11,16 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.92';
+const APP_VERSION = '1.7.93';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.93', date: '2026-07-19',
+    ajouts: [
+      'MODALE ACTES — « 📷 Photo » (angles + types de planche) et « Difficile » (montant HT + remise) se déplient désormais EN LIGNE, directement dans la modale. Ils fonctionnent partout : depuis « Agir » comme depuis la modale Actes superposée au paiement (plus de fenêtre séparée).',
+    ],
+  },
   {
     version: '1.7.92', date: '2026-07-19',
     ajouts: [
@@ -12642,10 +12648,15 @@ function openActesModal(t, a, cl, opts) {
       let o = ck('data-key="parage"', cv && cv.parage, 'Parage', false);
       o += ck('data-vis', cv && cv.visite, 'Visite', !visArts.length);
       pathoCols.forEach((c) => { o += ck('data-key="' + c.key + '"', cv && cv[c.key], c.label, !acte); });
-      if (!opts.sub) { o += ck('data-photo', !!(cv && cv.photo && (cv.photo.stades || []).length), '📷 Photo', false); o += ck('data-supp="difficile"', cv && cv.difficile, 'Difficile', !acte); } // Difficile/Photo : uniquement en modale principale (Agir) — leurs sous-fenêtres ont besoin du niveau libre
+      o += ck('data-photo', !!(cv && cv.photo), '📷 Photo', false);
+      o += ck('data-supp="difficile"', cv && cv.difficile, 'Difficile', !acte);
       let visSel = '';
       if (cv && cv.visite && visArts.length > 1) visSel = `<label class="li-sub">Prestation visite <select data-visart="${pi}">${visArts.map((x) => `<option value="${x.id}"${cv.visiteArtId === x.id ? ' selected' : ''}>${esc(x.libelle)} (${eur(x.prixHT)})</option>`).join('')}</select></label>`;
-      return `<div class="ch-row"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${acte ? '' : ' <span class="badge badge-noacte">⚠ à cocher</span>'}</div><div class="ch-opts">${o}</div>${visSel}</div>`;
+      // Panneaux dépliés EN LIGNE (pas de 3ᵉ fenêtre) → Difficile/Photo marchent depuis Agir ET depuis le paiement.
+      let extra = '';
+      if (cv && cv.difficile) { const ht = (cv.difficileHT != null && cv.difficileHT !== '') ? cv.difficileHT : (S.difficileHT || 0); extra += `<div class="ac-inline"><label class="li-sub">Difficile · montant HT <input type="number" data-diffht="${pi}" step="0.01" min="0" value="${ht || ''}" style="width:90px"/></label> <label class="ch-opt"><input type="checkbox" data-diffrem="${pi}" ${cv.difficileRemise !== false ? 'checked' : ''}/> remise éligible</label></div>`; }
+      if (cv && cv.photo) { const angs = [3, 4, 5]; const stades = (S.planche && S.planche.stades) || []; extra += `<div class="ac-inline"><span class="li-sub">📷 Angles :</span> ${angs.map((n) => `<label class="ch-opt"><input type="radio" name="phang${pi}" data-phang="${pi}" value="${n}" ${(cv.photo.angle || 3) === n ? 'checked' : ''}/> ${n}</label>`).join('')}<div style="margin-top:2px">${stades.map((sd) => `<label class="ch-opt"><input type="checkbox" data-phstade="${pi}" value="${esc(sd)}" ${(cv.photo.stades || []).includes(sd) ? 'checked' : ''}/> ${esc(sd)}${plancheStadeBillable(sd) ? '' : ' <span class="li-sub">(non facturée)</span>'}</label>`).join('')}</div></div>`; }
+      return `<div class="ch-row"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${acte ? '' : ' <span class="badge badge-noacte">⚠ à cocher</span>'}</div><div class="ch-opts">${o}</div>${visSel}${extra}</div>`;
     }).join('');
     let artHtml = '';
     if (opts.withArticles && !opts.sub) {
@@ -12667,8 +12678,12 @@ function openActesModal(t, a, cl, opts) {
     root.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => { const cv = ensureCv(pool[+inp.dataset.pi]); const key = inp.dataset.key; cv[key] = e.target.checked; if (key === 'parage' && !e.target.checked && !cv.visite) { cv.fourbure = cv.npas = cv.infection = false; cv.difficile = false; } persistTour(); render(); refreshBehind(); }));
     root.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => { const cv = ensureCv(pool[+inp.dataset.pi]); cv.visite = e.target.checked; if (!cv.visite) { cv.visiteArtId = null; if (!cv.parage) { cv.fourbure = cv.npas = cv.infection = false; cv.difficile = false; } } else if (visArts.length === 1) cv.visiteArtId = visArts[0].id; persistTour(); render(); refreshBehind(); }));
     root.querySelectorAll('[data-visart]').forEach((sel) => sel.addEventListener('change', (e) => { const cv = ensureCv(pool[+sel.dataset.visart]); cv.visiteArtId = e.target.value || null; persistTour(); refreshBehind(); }));
-    root.querySelectorAll('[data-photo]').forEach((inp) => inp.addEventListener('change', () => { const ph = pool[+inp.dataset.pi], cv = ensureCv(ph); if (inp.checked) modalPhotoPick(cv, () => { if (typeof syncPhotoTodos === 'function') syncPhotoTodos(cid, cv, t.date, t.id); persistTour(); render(); refreshBehind(); }); else { delete cv.photo; if (typeof removePlancheTodoAll === 'function') removePlancheTodoAll(cid, ph.nom, t.date); if (typeof removePlancheDoneAll === 'function') removePlancheDoneAll(cid, ph.nom, t.date); persistTour(); render(); refreshBehind(); } })); // Photo : réutilise modalPhotoPick (retour à Actes ensuite)
-    root.querySelectorAll('[data-supp]').forEach((inp) => inp.addEventListener('change', () => { const ph = pool[+inp.dataset.pi], cv = ensureCv(ph), key = inp.dataset.supp; if (!inp.checked) { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; persistTour(); render(); refreshBehind(); return; } modalSupplement(ph.nom, cv, key, () => { persistTour(); render(); refreshBehind(); }); })); // Difficile : réutilise modalSupplement (saisie du montant HT)
+    root.querySelectorAll('[data-photo]').forEach((inp) => inp.addEventListener('change', () => { const ph = pool[+inp.dataset.pi], cv = ensureCv(ph); if (inp.checked) { cv.photo = cv.photo || { angle: 3, stades: [] }; if (typeof syncPhotoTodos === 'function') syncPhotoTodos(cid, cv, t.date, t.id); } else { delete cv.photo; if (typeof removePlancheTodoAll === 'function') removePlancheTodoAll(cid, ph.nom, t.date); if (typeof removePlancheDoneAll === 'function') removePlancheDoneAll(cid, ph.nom, t.date); } persistTour(); render(); refreshBehind(); })); // Photo : panneau EN LIGNE (angles/types), pas de fenêtre séparée
+    root.querySelectorAll('[data-supp]').forEach((inp) => inp.addEventListener('change', () => { const cv = ensureCv(pool[+inp.dataset.pi]), key = inp.dataset.supp; if (inp.checked) { cv[key] = true; if (cv[key + 'HT'] == null) cv[key + 'HT'] = S[key + 'HT'] || 0; } else { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; } persistTour(); render(); refreshBehind(); })); // Difficile : panneau EN LIGNE (montant HT)
+    root.querySelectorAll('[data-diffht]').forEach((inp) => inp.addEventListener('change', () => { const cv = ensureCv(pool[+inp.dataset.diffht]); cv.difficileHT = Math.max(0, parseNum(inp.value)); persistTour(); refreshBehind(); }));
+    root.querySelectorAll('[data-diffrem]').forEach((inp) => inp.addEventListener('change', () => { const cv = ensureCv(pool[+inp.dataset.diffrem]); cv.difficileRemise = inp.checked; persistTour(); refreshBehind(); }));
+    root.querySelectorAll('[data-phang]').forEach((inp) => inp.addEventListener('change', () => { const cv = ensureCv(pool[+inp.dataset.phang]); if (cv.photo) { cv.photo.angle = +inp.value; persistTour(); refreshBehind(); } }));
+    root.querySelectorAll('[data-phstade]').forEach((inp) => inp.addEventListener('change', () => { const ph = pool[+inp.dataset.phstade], cv = ensureCv(ph); if (!cv.photo) cv.photo = { angle: 3, stades: [] }; const set = new Set(cv.photo.stades || []); if (inp.checked) set.add(inp.value); else set.delete(inp.value); cv.photo.stades = [...set]; if (typeof syncPhotoTodos === 'function') syncPhotoTodos(cid, cv, t.date, t.id); persistTour(); refreshBehind(); }));
     root.querySelectorAll('[data-artdel]').forEach((b) => b.addEventListener('click', () => { t.articles = (t.articles || []).filter((ar) => ar.id !== b.dataset.artdel); persistTour(); render(); refreshBehind(); }));
     if (root.querySelector('#acArtCat')) root.querySelector('#acArtCat').addEventListener('change', (e) => { const art = (S.articlesCatalogue || []).find((x) => x.id === e.target.value); if (art) { root.querySelector('#acArtLib').value = art.libelle || ''; root.querySelector('#acArtPrix').value = art.prixHT || ''; if (root.querySelector('#acArtTva') && art.tvaPct != null) root.querySelector('#acArtTva').value = String(art.tvaPct); } }); // catalogue → pré-remplit intitulé/prix/TVA
     if (root.querySelector('#acArtAdd')) root.querySelector('#acArtAdd').addEventListener('click', () => { const lib = (root.querySelector('#acArtLib').value || '').trim(); const prix = Math.max(0, parseNum(root.querySelector('#acArtPrix').value)); const tva = parseFloat(root.querySelector('#acArtTva') ? root.querySelector('#acArtTva').value : '') || (PAYS_TVA[S.pays] || PAYS_TVA.be).std; if (!lib || !(prix > 0)) { alert('Renseignez un intitulé et un prix HT.'); return; } const ids = (cl.chevaux || []).map((c) => c.id).filter(Boolean); const noms = (cl.chevaux || []).map((c) => c.nom).filter(Boolean); (t.articles = t.articles || []).push({ id: uid(), clientId: cid, chevalIds: ids, chevalNoms: noms, libelle: lib, prixHT: prix, tvaPct: tva }); persistTour(); render(); refreshBehind(); });
