@@ -11,10 +11,18 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.95';
+const APP_VERSION = '1.7.96';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.96', date: '2026-07-19',
+    ajouts: [
+      'PROGRAMMER LE SUIVI (RDV) — pour chaque cheval, les deux cases « ne pas replacer » / « date différente » sont remplacées par une LISTE DÉROULANTE « Sélectionner un mode » (Sur le RDV commun · Date différente · Ne pas replacer le parage).',
+      'STATUT (temps de route) — chaque arrêt a un bouton « 🧭 Étape » (itinéraire arrêt précédent → arrêt ; le 1ᵉʳ arrêt utilise le DÉPART de la tournée, + un bouton Waze). Le temps de RETOUR a aussi un « 🧭 Étape » (dernier arrêt → arrivée/domicile de la tournée) — pour relever le temps facilement.',
+      'TICKET / RÉCAP TOURNÉE — à côté du prix du carburant : le prix au km du carburant et de la base véhicule (HT et TTC), et le tarif de déplacement « tournée » au km (HT/TTC = base + carburant). Indicatif pour le client.',
+    ],
+  },
   {
     version: '1.7.95', date: '2026-07-19',
     ajouts: [
@@ -6734,6 +6742,7 @@ function modalIntercaler(t, placements, onDone) {
 // Deux blocs SÉPARÉS et distincts : ① Préparation (itinéraire/adresses/heures/chevaux) · ② Clôture (jour J : paiement).
 function modalTourStatus(t) {
   let justRecalced = false;
+  const homeOf = () => (t.home && addrStr(t.home).trim()) ? t.home : S.home; // départ de CETTE tournée (propre si défini, sinon domicile)
   const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); } else { const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); } else saveTournees(); } };
   const refreshLists = () => { if (typeof renderTours === 'function') renderTours(); if ($('tab-accueil') && $('tab-accueil').classList.contains('active') && typeof renderHome === 'function') renderHome(); };
   const render = () => {
@@ -6753,11 +6762,11 @@ function modalTourStatus(t) {
     Object.keys(byClient).forEach((cid) => { const e = byClient[cid]; if (e.has && !e.present) prep += `<div class="ts-line ts-warn"><span>⚠ ${esc(clientName(cid))} : aucun cheval présent</span><button class="btn small" data-tsopen>Ouvrir</button></div>`; });
     const heureMiss = Object.keys(byClient).filter((cid) => byClient[cid].present && !clientRdvHeure(t, cid));
     if (heureMiss.length) { prep += `<div class="ts-sub-h">🕘 Heure de RDV à renseigner</div>`; heureMiss.forEach((cid) => { prep += `<div class="ts-line ts-warn"><span>${esc(clientName(cid))}</span><input type="time" data-tsheure="${cid}" value=""/></div>`; }); }
-    // Temps de route par arrêt (champ en ligne)
-    let routeRows = ''; (t.arrets || []).forEach((a, i) => { if (!(a.realMin > 0)) routeRows += `<div class="ts-line ts-warn"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}${a.realMin === 0 ? ' · à recalculer' : ''}</span><input type="number" min="0" step="1" inputmode="numeric" data-tsroute="${i}" placeholder="min"/></div>`; });
+    // Temps de route par arrêt (champ en ligne + bouton « Étape » = itinéraire arrêt précédent→arrêt, comme dans le Trajet du jour ; 1ᵉʳ arrêt = départ→arrêt (+ Waze)).
+    let routeRows = ''; (t.arrets || []).forEach((a, i) => { if (!(a.realMin > 0)) routeRows += `<div class="ts-line ts-warn"><span>${i + 1}. ${esc(labelFor(a)) || 'arrêt'}${a.realMin === 0 ? ' · à recalculer' : ''}</span><span class="ts-act">${i === 0 ? '<button class="btn small" data-tswaze="0" title="Waze / Maps vers le 1ᵉʳ arrêt">🚗</button>' : ''}<button class="btn small" data-tsetape="${i}" title="Itinéraire ${i === 0 ? 'départ' : 'arrêt précédent'} → cet arrêt">🧭 Étape</button><input type="number" min="0" step="1" inputmode="numeric" data-tsroute="${i}" placeholder="min"/></span></div>`; });
     if (routeRows) prep += `<div class="ts-sub-h">🕒 Temps de route à renseigner (min)</div>` + routeRows;
-    // Temps de retour (champ en ligne)
-    if (!(t.returnRealMin > 0)) prep += `<div class="ts-sub-h">🏁 Temps de retour (route)</div><div class="ts-line ts-warn"><span>Retour → départ</span><input type="number" min="0" step="1" inputmode="numeric" data-tsret placeholder="min"/></div>`;
+    // Temps de retour (champ en ligne + bouton « Étape » = dernier arrêt → arrivée/domicile de la tournée).
+    if (!(t.returnRealMin > 0)) prep += `<div class="ts-sub-h">🏁 Temps de retour (route)</div><div class="ts-line ts-warn"><span>Retour → arrivée</span><span class="ts-act"><button class="btn small" data-tsretetape title="Itinéraire dernier arrêt → arrivée/domicile">🧭 Étape</button><input type="number" min="0" step="1" inputmode="numeric" data-tsret placeholder="min"/></span></div>`;
     // Actes manquants par cheval → bouton qui ouvre la modale Actes
     let acteRows = ''; (t.arrets || []).forEach((a, i) => (a.clients || []).forEach((cl) => { const miss = (cl.chevaux || []).filter((cv) => !chevalCancelled(cv) && !chevalBilled(cv) && !(cv.photo && photoHasBillableStades(cv.photo))); if (miss.length) acteRows += `<div class="ts-line ts-warn"><span>${esc(clientName(cl.clientId))} · arrêt ${i + 1} : ${esc(miss.map((cv) => cv.nom).join(', '))}</span><button class="btn small" data-tsactes="${i}|${cl.clientId}">🐴 Actes</button></div>`; }));
     if (acteRows) prep += `<div class="ts-sub-h">🐴 Actes à définir (cheval sans acte)</div>` + acteRows;
@@ -6777,6 +6786,9 @@ function modalTourStatus(t) {
     if (cb) cb.addEventListener('click', async () => { cb.disabled = true; cb.textContent = 'Calcul…'; const r = await recomputeTourGeo(t); if (r.ok) { justRecalced = true; render(); refreshLists(); } else { cb.disabled = false; cb.textContent = '🔄 Réessayer'; alert('Recalcul impossible : ' + (r.error || 'erreur') + '.\nVérifiez l\'adresse de départ et la connexion internet.'); } });
     document.querySelectorAll('[data-tsheure]').forEach((inp) => inp.addEventListener('change', () => { const v = inp.value || ''; if (v) { setClientHeureInTour(t, inp.dataset.tsheure, v); persist(); scheduleCalPush(t); render(); refreshLists(); } }));
     document.querySelectorAll('[data-tsroute]').forEach((inp) => inp.addEventListener('change', () => { const v = parseInt(inp.value, 10); if (v >= 0 && t.arrets[+inp.dataset.tsroute]) { t.arrets[+inp.dataset.tsroute].realMin = v; persist(); render(); refreshLists(); } }));
+    document.querySelectorAll('[data-tswaze]').forEach((b) => b.addEventListener('click', () => { const a = t.arrets[+b.dataset.tswaze]; if (a) openNav(a.addr); }));
+    document.querySelectorAll('[data-tsetape]').forEach((b) => b.addEventListener('click', () => { const i = +b.dataset.tsetape; const orig = i > 0 ? t.arrets[i - 1].addr : homeOf(); const dest = t.arrets[i] && t.arrets[i].addr; if (!orig || !addrStr(orig).trim()) { alert('Départ de la tournée non défini.'); return; } if (!dest || !addrStr(dest).trim()) { alert('Adresse d\'arrêt non définie.'); return; } openMapsRoute(addrQuery(orig), addrQuery(dest)); }));
+    { const rb = document.querySelector('[data-tsretetape]'); if (rb) rb.addEventListener('click', () => { const last = (t.arrets || [])[t.arrets.length - 1]; const dest = returnAddrOf(t); if (!last || !addrStr(last.addr).trim()) { alert('Dernier arrêt non défini.'); return; } openMapsRoute(addrQuery(last.addr), addrQuery(dest)); }); }
     { const rr = document.querySelector('[data-tsret]'); if (rr) rr.addEventListener('change', () => { const v = parseInt(rr.value, 10); if (v >= 0) { t.returnRealMin = v; persist(); render(); refreshLists(); } }); }
     document.querySelectorAll('[data-tsactes]').forEach((b) => b.addEventListener('click', () => { const [ai, cid] = b.dataset.tsactes.split('|'); const a = t.arrets[+ai]; const cl = a && (a.clients || []).find((x) => x.clientId === cid); if (a && cl) openActesModal(t, a, cl, { withArticles: true, onDone: () => { render(); refreshLists(); } }); }));
   };
@@ -8062,8 +8074,10 @@ function recapText(R, tour) {
     const missing = tour.arrets.length - withReal.length;
     s += `Trajet réel renseigné : ${realTot} min (${withReal.length}/${tour.arrets.length} arrêt(s)${missing ? ` · ${missing} sans temps réel` : ''})\n`;
   }
-  s += `Carburant : ${eur(S.prixPleinL)}/L (TVAC)\n`;
-  s += `Frais de déplacement — HT ${eur(htDep)} · TVA ${eur(htDep * stdRate)} · TTC ${eur(htDep * (1 + stdRate))}\n\n`;
+  s += `Carburant : ${eur(S.prixPleinL)}/L (TVAC) — ${eurkm(fuelPerKmHT())}/km HT · ${eurkm(ttc(fuelPerKmHT()))}/km TTC\n`;
+  s += `Base véhicule : ${eurkm(baseVehiculeHT())}/km HT · ${eurkm(ttc(baseVehiculeHT()))}/km TTC\n`;
+  s += `Tarif déplacement (tournée) : ${eurkm(tarifHT('tournee'))}/km HT · ${eurkm(ttc(tarifHT('tournee')))}/km TTC\n`;
+  s += `Frais de déplacement (total) — HT ${eur(htDep)} · TVA ${eur(htDep * stdRate)} · TTC ${eur(htDep * (1 + stdRate))}\n\n`;
   s += `Km par client (anonymisé) :\n`;
   const kmByClient = {};
   (R.rows || []).forEach((r) => { const kmc = (r.kmAttribue || 0) / Math.max(1, r.nbClients); r.clients.forEach((cl) => { kmByClient[cl.clientId] = (kmByClient[cl.clientId] || 0) + kmc; }); });
@@ -12744,7 +12758,11 @@ function tourRecapHtml(t) {
       ${withReal.length ? `<div><span class="cc-k">Trajet réel</span><span class="cc-v">${realTot} min (${withReal.length}/${t.arrets.length})</span></div>` : ''}
       <div><span class="cc-k">Carburant</span><span class="cc-v">${eur(S.prixPleinL)}/L</span></div>
     </div>
-    <div class="ac-sec-h" style="margin-top:10px">Frais de déplacement</div>
+    <div class="ac-sec-h" style="margin-top:10px">Tarifs au km (indicatif)</div>
+    <div class="inv-line"><span>Carburant</span><span>${eurkm(fuelPerKmHT())} HT · ${eurkm(ttc(fuelPerKmHT()))} TTC</span></div>
+    <div class="inv-line"><span>Base véhicule</span><span>${eurkm(baseVehiculeHT())} HT · ${eurkm(ttc(baseVehiculeHT()))} TTC</span></div>
+    <div class="inv-line inv-total"><span>Déplacement (tournée)</span><span>${eurkm(tarifHT('tournee'))} HT · ${eurkm(ttc(tarifHT('tournee')))} TTC</span></div>
+    <div class="ac-sec-h" style="margin-top:10px">Frais de déplacement (total)</div>
     <div class="inv-line"><span>HT</span><span>${eur(htDep)}</span></div>
     <div class="inv-line"><span>TVA</span><span>${eur(htDep * stdRate)}</span></div>
     <div class="inv-line inv-total"><span>TTC</span><span>${eur(htDep * (1 + stdRate))}</span></div>
@@ -13772,7 +13790,7 @@ function modalRDV(t, arret, cid, onDone) {
     const fiche = (client.chevaux || []).find((x) => norm(x.nom) === norm(h.nom));
     const sp = (fiche && fiche.suiviPatho && fiche.suiviPatho.actif) ? fiche.suiviPatho : null;
     return { id: h.id, nom: h.nom, fiche, curType, hasPatho: !!sp,
-      ignore: curType === 'patho', sep: false, date: proposed, heure: '', // parage : ignoré par défaut si l'occurrence courante est un RDV pathologique
+      mode: curType === 'patho' ? 'ignore' : '', date: proposed, heure: '', // mode parage : '' (Sélectionner) | 'commun' | 'sep' (date différente) | 'ignore' (ne pas replacer)
       pathoStatus: sp ? 'maintenir' : null, pathoDate: sp ? proposedPathoDate(t.date || todayStr(), sp) : '', pathoHeure: '' };
   });
   const previewHtml = (d) => { const pv = rdvDayPreview(d); return `<b>${d ? fmtDateFr(d) : '—'}</b> — Arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}`; };
@@ -13790,18 +13808,15 @@ function modalRDV(t, arret, cid, onDone) {
     { const ch = $('rdvCommonHeure'); if (ch) { ch._gpTakenFn = () => { const tt = targetTourFor(common.date); return tt ? takenRdvSlots(tt) : null; }; ch._gpOnConflict = (val, d) => { const tt = targetTourFor(common.date); if (tt) openRdvReassign(tt, val, d, () => { common.heure = val; }); }; ch.addEventListener('change', (e) => { common.heure = e.target.value; }); } }
     const box = $('rdvChevaux');
     entries.forEach((en) => {
-      const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.curType !== 'patho' && en.ignore ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
+      const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.curType !== 'patho' && (en.mode === 'ignore' || !en.mode) ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
       let inner = `<div class="rdv-ch-head"><b>🐴 ${esc(en.nom)}</b>${en.curType === 'patho' ? ' <span class="badge">RDV patho</span>' : ''}</div>`;
-      // --- Parage (prochain suivi normal) ---
+      // --- Parage (prochain suivi normal) : liste déroulante de mode (au lieu de 2 cases à cocher) ---
       if (en.curType === 'patho') {
         inner += `<p class="hint">RDV pathologique effectué : le <b>parage</b> suit son propre cycle et n'est pas reprogrammé ici.</p>`;
       } else {
-        inner += `<label class="rdv-ch-opt"><input type="checkbox" data-ign ${en.ignore ? 'checked' : ''}/> ne pas replacer le parage</label>`;
-        if (!en.ignore) {
-          inner += `<label class="rdv-ch-opt"><input type="checkbox" data-sep ${en.sep ? 'checked' : ''}/> date différente</label>`;
-          if (en.sep) inner += `<div class="rdv-dh"><label>Date du parage<input type="date" data-date value="${en.date}"/></label><label>Heure<input type="time" data-heure value="${en.heure}"/></label></div><p class="hint" data-prev></p>` + chevalRdvWarnHtml(client.id, en.id, en.date, t.date, t.id);
-          else inner += `<p class="hint">→ sur le RDV commun</p>` + chevalRdvWarnHtml(client.id, en.id, common.date, t.date, t.id);
-        }
+        inner += `<label class="rdv-ch-opt">Parage <select data-mode><option value=""${!en.mode ? ' selected' : ''}>Sélectionner un mode</option><option value="commun"${en.mode === 'commun' ? ' selected' : ''}>Sur le RDV commun</option><option value="sep"${en.mode === 'sep' ? ' selected' : ''}>Date différente</option><option value="ignore"${en.mode === 'ignore' ? ' selected' : ''}>Ne pas replacer le parage</option></select></label>`;
+        if (en.mode === 'sep') inner += `<div class="rdv-dh"><label>Date du parage<input type="date" data-date value="${en.date}"/></label><label>Heure<input type="time" data-heure value="${en.heure}"/></label></div><p class="hint" data-prev></p>` + chevalRdvWarnHtml(client.id, en.id, en.date, t.date, t.id);
+        else if (en.mode === 'commun') inner += `<p class="hint">→ sur le RDV commun</p>` + chevalRdvWarnHtml(client.id, en.id, common.date, t.date, t.id);
       }
       // --- Suivi pathologique (2ᵉ RDV) : statut Maintenir / Arrêter décidé ici, après paiement ---
       if (en.hasPatho) {
@@ -13812,8 +13827,7 @@ function modalRDV(t, arret, cid, onDone) {
         inner += `</div>`;
       }
       wrap.innerHTML = inner;
-      const ign = wrap.querySelector('[data-ign]'); if (ign) ign.addEventListener('change', (e) => { en.ignore = e.target.checked; render(); });
-      const sep = wrap.querySelector('[data-sep]'); if (sep) sep.addEventListener('change', (e) => { en.sep = e.target.checked; render(); });
+      const md = wrap.querySelector('[data-mode]'); if (md) md.addEventListener('change', (e) => { en.mode = e.target.value; render(); });
       const dt = wrap.querySelector('[data-date]'), prev = wrap.querySelector('[data-prev]');
       if (dt) { if (prev) prev.innerHTML = previewHtml(dt.value); dt.addEventListener('change', (e) => { en.date = e.target.value; render(); }); }
       wrap.querySelectorAll('[data-psstat]').forEach((r) => r.addEventListener('change', (e) => { en.pathoStatus = e.target.value; render(); }));
@@ -13826,7 +13840,7 @@ function modalRDV(t, arret, cid, onDone) {
     $('rdvOk').addEventListener('click', () => {
       // Parage : regroupement par date (commune/séparée) → 1 heure par date (même client, même date = même arrêt = même heure).
       const byDate = {}; // date -> { ids:[], heure }
-      entries.forEach((en) => { if (en.curType === 'patho' || en.ignore) return; const d = en.sep ? en.date : common.date; const hh = en.sep ? en.heure : common.heure; if (!d) return; const g = byDate[d] = byDate[d] || { ids: [], heure: '' }; g.ids.push(en.id); if (!g.heure && hh) g.heure = hh; });
+      entries.forEach((en) => { if (en.curType === 'patho' || en.mode === 'ignore' || !en.mode) return; const d = en.mode === 'sep' ? en.date : common.date; const hh = en.mode === 'sep' ? en.heure : common.heure; if (!d) return; const g = byDate[d] = byDate[d] || { ids: [], heure: '' }; g.ids.push(en.id); if (!g.heure && hh) g.heure = hh; });
       // ≥1 cheval OBLIGATOIRE : au moins un parage (avec date) OU un 2ᵉ RDV patho maintenu (avec date).
       const hasParage = Object.keys(byDate).length > 0;
       const hasPathoMaint = entries.some((en) => en.hasPatho && en.pathoStatus === 'maintenir' && en.pathoDate);

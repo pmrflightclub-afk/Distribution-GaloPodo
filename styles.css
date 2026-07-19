@@ -206,6 +206,8 @@ input.gp-native { width: 1px !important; height: 1px !important; padding: 0 !imp
 .ts-line input[type=number] { flex: none; width: 80px; }
 .ts-line .gp-sel, .ts-line input[type=time] { flex: none; width: 110px; margin: 0; }
 .ts-sub-h { font-weight: 700; font-size: .82rem; color: var(--muted); margin: 8px 0 2px; padding-top: 6px; border-top: 1px solid var(--line); }
+.ts-act { display: flex; gap: 4px; align-items: center; flex: none; }
+.ts-act input[type=number] { width: 66px; }
 .ts-warn > span { color: var(--danger); }
 .ts-ok { color: var(--ok, #2e9e5b); font-weight: 600; }
 .ts-muted { color: var(--muted); }
