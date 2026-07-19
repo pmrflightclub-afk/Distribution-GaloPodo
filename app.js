@@ -8875,13 +8875,14 @@ const GRAPH_ENC = [{ key: 'liquide', color: '#2e9e5b', label: 'Liquide' }, { key
 const shortMonthLabel = (ym) => { const d = new Date(ym + '-01T00:00:00'); return isNaN(d.getTime()) ? ym : d.toLocaleDateString('fr-FR', { month: 'short' }); };
 // Agrégats par mois : CA (Σ m.totalTTC), km (Σ result.totalKm), nb tournées, encaissements (comptaData).
 function graphMonthData(months) {
+  // Lot 03b-2 : le CA suit le MOIS EFFECTIF du client (comptaPeriod pour un liquide-sans-facture rattaché) — cohérent avec comptaData. Les km et le nombre de tournées restent au mois de la tournée (fait physique daté, non splittable — cf. 3b-3).
+  const clientEffYm = (t, m) => { const p = (t.payments || {})[m.clientId]; return (p && p.method === 'liquide' && !p.facture && p.comptaPeriod) ? p.comptaPeriod : (t.date || '').slice(0, 7); };
   return months.map((ym) => {
     let ca = 0, kmv = 0, tours = 0;
     allTours().forEach((t) => {
-      if (!(t.date || '').startsWith(ym) || !t.result) return;
-      if (!(t.result.parClient && t.result.parClient.length)) return;
-      tours++; kmv += t.result.totalKm || 0;
-      (t.result.parClient || []).forEach((m) => { ca += m.totalTTC || 0; });
+      if (!t.result || !(t.result.parClient && t.result.parClient.length)) return;
+      if ((t.date || '').startsWith(ym)) { tours++; kmv += t.result.totalKm || 0; } // physique → mois de la tournée
+      (t.result.parClient || []).forEach((m) => { if (clientEffYm(t, m) === ym) ca += m.totalTTC || 0; }); // CA → mois effectif du client
     });
     const d = comptaData(ym);
     const enc = { liquide: d.liquideTotal.ttc, virement: d.virementTotal.ttc, facture: d.factureLiqTotal.ttc + d.factureVirTotal.ttc };
