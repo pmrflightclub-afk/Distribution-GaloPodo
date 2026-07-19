@@ -8722,7 +8722,7 @@ function renderClienteleStats() {
   const box = $('clienteleStats'); if (!box) return;
   const cAct = clients.filter(isClientActif).length, cNoir = clients.filter(isClientNoir).length, cInact = clients.filter((c) => c.actif === false && !c.blacklist).length;
   let hTot = 0, hAct = 0, hInact = 0, hNoir = 0;
-  clients.forEach((c) => (c.chevaux || []).forEach((h) => { hTot++; if (h.blacklist) hNoir++; else if (h.actif === false) hInact++; else hAct++; }));
+  clients.forEach((c) => (c.chevaux || []).forEach((h) => { hTot++; const bl = h.blacklist || c.blacklist; const ina = h.actif === false || c.actif === false; if (bl) hNoir++; else if (ina) hInact++; else hAct++; })); // le cheval HÉRITE du statut de son client (client inactif/noir → ses chevaux comptés inactifs/noirs)
   const addrs = chevalAddresses();
   const aNoir = addrs.filter((e) => addrStatusOf(e.addr) === 'noir').length, aInact = addrs.filter((e) => addrStatusOf(e.addr) === 'inactif').length, aAct = addrs.filter((e) => addrStatusOf(e.addr) === 'actif').length;
   const tile = (lbl, val, cls) => `<div class="cl-tile${cls ? ' ' + cls : ''}"><div class="cl-num">${val}</div><div class="cl-lbl">${lbl}</div></div>`;
