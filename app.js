@@ -3012,6 +3012,7 @@ if (!Array.isArray(S.plancheDone)) S.plancheDone = [];
 { const nm = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' '); S.plancheDone.forEach((y) => { const want = 'pd:' + (y.clientId || '') + '|' + nm(y.chevalNom) + '|' + (y.date || '') + '|' + nm(y.type); if (y.id !== want) y.id = want; }); }
 if (!Array.isArray(S.plancheHistory)) S.plancheHistory = []; // historique des planches de contact générées (métadonnées : client, cheval, date, stade, note, cycle, modèle) — jamais d'images
 if (!Array.isArray(S.lieuxRefs)) S.lieuxRefs = []; // adresses de référence saisies à la main (écuries connues, hors chevaux actuels) : { id, addr, clientRef, status } — statut répercuté dans S.addrStatus
+if (!Array.isArray(S.ecuries)) S.ecuries = []; // Lot 04-A — entité ÉCURIE réifiée : { id, key, nom, privee, source:'own'|'client'|'societe', clientId, addr, updatedAt } ; cheval → h.ecurieId. Statut porté par S.addrStatus (clé adresse).
 // Tarifs « photos / planches » (supplément par cheval). 3 angles = référence ; 4 & 5 = manuels OU calculés en % (base/photo × (1−%) × nb photos).
 S.photoTarifs = Object.assign({ angle3HT: 10, angle4HT: 9, angle5HT: 11, pctMode: false, pct4: 0, pct5: 0 }, S.photoTarifs || {});
 // Contact mail (Gmail) : mots-clés de tri + liste des mails « prise de contact » récupérés (données PARSÉES persistées, pas le mail brut).
@@ -3414,7 +3415,7 @@ function bgSaveFlash() { // enregistrement local (instantané) : brève confirma
 // Collections id-clés DANS les réglages : elles doivent fusionner par enregistrement (union + tombstones) comme clients/tournées,
 // sinon un ajout/suppression fait sur un appareil est écrasé en bloc par l'autre appareil (perte de rappels, frais, écritures…).
 // L1-1d : 'adresses' et 'plancheTodo' AJOUTÉES → fusion par enregistrement AVEC tombstones (une suppression ne « ressuscite » plus après synchro).
-const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone']; // #7a : plancheDone AJOUTÉE → fusion par enregistrement AVEC tombstones (une planche « refaite »/retirée ne ressuscite plus)
+const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone', 'ecuries']; // #7a : plancheDone → fusion par enregistrement AVEC tombstones ; Lot 04-A : 'ecuries' → fusion par id + updatedAt (résolution de conflit correcte)
 // P1-9 : réglages PROPRES à l'appareil — SOURCE UNIQUE partagée par mergeSettings ET applyRemoteReplace (fin de la classe de bug « deux listes device-local divergentes » : calPush/calDureeMin manquaient côté applyRemoteReplace → bascule silencieuse du push agenda à l'adoption/restauration).
 const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile', 'deviceName', 'deviceId'];
 // 100 % : champs de réglages EXCLUS de l'horodatage PAR CHAMP (ils sont déjà résolus autrement — maps unies, collections par enregistrement, thème/planche/setup à horodatage dédié, device-local). Tout le RESTE (tarifs de calcul, seuils, carburant, suppléments, véhicule…) est fusionné champ par champ selon sa propre date de modif.
@@ -7314,6 +7315,51 @@ function chevalAddrNom(c, h) {
   if (src === 'specifique') { if (h.addrPrivee) return fullName(c); const ea = chevalActiveAddrEntry(h); const nm = ea ? (ea.nom || '').trim() : (h.addrNom || '').trim(); return nm || fullName(c) || 'Adresse'; }
   if (src === 'societe') return c.societe || fullName(c);
   return fullName(c) || 'Adresse';
+}
+// ---------- Lot 04-A — ÉCURIE RÉIFIÉE : modèle + résolveurs PARALLÈLES (NON branchés sur chevalAddr tant que l'éditeur n'est pas migré → 0 changement de comportement) ----------
+function ecurieById(id) { return id ? (S.ecuries || []).find((e) => e && e.id === id) || null : null; }
+// Écurie CIBLE d'un cheval selon sa source actuelle (pour la migration) : clé de dédup DÉTERMINISTE, source, privée, adresse propre (spécifique) ou dérivée (client/société).
+function ecurieSpecFor(c, h) {
+  const src = chevalAddrSrc(h);
+  if (src === 'client') return { key: 'C:' + c.id, source: 'client', privee: true, clientId: c.id, nom: null, addr: null };
+  if (src === 'societe') return { key: 'S:' + c.id, source: 'societe', privee: false, clientId: c.id, nom: (c.societe || '').trim() || null, addr: null };
+  const ea = chevalActiveAddrEntry(h);
+  const raw = (ea && addrStr(ea.addr).trim()) ? ea.addr : (addrStr(h.addr).trim() ? h.addr : null);
+  if (!raw) return null; // cheval spécifique SANS adresse → pas d'écurie (chevalAddr renvoie vide → repli)
+  const addr = toAddr(raw), k = addrKey(addr);
+  if (h.addrPrivee) return { key: 'P:' + c.id + ':' + k, source: 'own', privee: true, clientId: c.id, nom: null, addr };
+  return { key: 'U:' + k, source: 'own', privee: false, clientId: null, nom: ((ea && ea.nom) || h.addrNom || '').trim() || null, addr };
+}
+// Résolveurs équivalents à chevalAddr/chevalAddrNom (prouvés par harness). Repli sur la logique actuelle si le cheval n'est pas (encore) rattaché à une écurie.
+function ecurieAddrFor(c, h) {
+  const e = ecurieById(h.ecurieId); if (!e) return chevalAddr(c, h);
+  if (e.source === 'client') return c.addr;
+  if (e.source === 'societe') return societeAddrOf(c);
+  return e.addr || emptyAddr();
+}
+function ecurieNomFor(c, h) {
+  const e = ecurieById(h.ecurieId); if (!e) return chevalAddrNom(c, h);
+  if (e.privee) return fullName(c) || 'Adresse';
+  if (e.source === 'societe') return c.societe || fullName(c);
+  return e.nom || fullName(c) || 'Adresse';
+}
+// Migration ponctuelle : crée les écuries manquantes (id DÉTERMINISTE par clé → aucun doublon inter-appareils) et rattache chaque cheval via h.ecurieId.
+// Idempotente ; persistée SANS churn (déterministe : chaque appareil converge au même résultat, comme normalizeIds).
+function migrateEcuries() {
+  if (!Array.isArray(S.ecuries)) S.ecuries = [];
+  let changed = false;
+  const byKey = {}; S.ecuries.forEach((e) => { if (e && e.key) byKey[e.key] = e; });
+  (clients || []).forEach((c) => {
+    (c.chevaux || []).forEach((h) => {
+      if (h.ecurieId && ecurieById(h.ecurieId)) return; // déjà rattaché
+      const spec = ecurieSpecFor(c, h); if (!spec) return;
+      let e = byKey[spec.key];
+      if (!e) { e = { id: 'ecu' + hashStr(spec.key), key: spec.key, nom: spec.nom, privee: spec.privee, source: spec.source, clientId: spec.clientId, addr: spec.addr, updatedAt: Date.now() }; S.ecuries.push(e); byKey[spec.key] = e; changed = true; }
+      if (h.ecurieId !== e.id) { h.ecurieId = e.id; changed = true; }
+    });
+  });
+  if (changed) { LS.set('ftr.clients', clients); LS.set('ftr.settings', S); try { rebuildSyncHashes(); } catch (e) {} } // anti-churn (déterministe)
+  return changed;
 }
 // Statut d'une adresse PHYSIQUE (clé = adresse normalisée), partagé par tous les chevaux à cette adresse : 'actif' (défaut) | 'inactif' | 'noir' (liste noire).
 const addrKey = (a) => norm(addrStr(a));
@@ -15089,7 +15135,8 @@ window.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !_lockModal) { const m2 = document.getElementById('modal2'); if (m2 && !m2.classList.contains('hidden')) { closeSubModal(); return; } const m = $('modal'); if (m && !m.classList.contains('hidden')) closeModal(); } }); // L8 : Échap ferme la sous-modale d'abord, sinon la modale principale
 
   normalizeIds(); // Lot 01 — socle d'identité : ids stables sur arrêts/adresses/chevaux/paiements manquants (avant toute maintenance/rendu)
-  recordAppRun(); // LOT 2 — trace « quelle version a démarré, quand, et avec quel volume » (après la normalisation d'id, avant les passes de maintenance)
+  migrateEcuries(); // Lot 04-A — réifie les écuries + rattache h.ecurieId (déterministe, sans churn ; résolveurs parallèles non encore branchés sur chevalAddr)
+  recordAppRun(); // LOT 2 — trace « quelle version a démarré, quand, et avec quel volume » (après la normalisation d'id/écuries, avant les passes de maintenance)
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
