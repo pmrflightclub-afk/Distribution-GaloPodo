@@ -3670,6 +3670,42 @@ function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', cl
 function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); markSyncDirty(); bgSaveFlash(); }
 function saveArchive() { syncStamp('tournees', allTours()); LS.set('ftr.archive', archive); markSyncDirty(); bgSaveFlash(); }
 
+// ---------- Lot 01 — SOCLE D'IDENTITÉ ----------
+// Attribue un id stable à toute entité persistée qui en manque : arrêt (repéré par index aujourd'hui), adresse d'arrêt,
+// cheval d'arrêt (backfill depuis la fiche → id partagé, stable inter-appareils), paiement, et fiches/adresses de cheval.
+// IDEMPOTENT (ne touche que ce qui manque) et SANS CHURN de synchro : on écrit direct puis on rebase les empreintes
+// (rebuildSyncHashes) → aucun updatedAt bumpé, donc un simple ajout d'id ne fait pas « gagner » une tournée aux fusions.
+function normalizeIds() {
+  let changed = false;
+  const need = (o) => { if (o && typeof o === 'object' && !o.id) { o.id = uid(); changed = true; } };
+  (clients || []).forEach((c) => {
+    need(c);
+    (c.chevaux || []).forEach((h) => { need(h); (h.adresses || []).forEach((a) => need(a)); });
+  });
+  allTours().forEach((t) => {
+    need(t);
+    (t.arrets || []).forEach((a) => {
+      need(a);
+      if (a.addr && typeof a.addr === 'object' && !a.addr.id) { a.addr.id = uid(); changed = true; }
+      (a.clients || []).forEach((cl) => {
+        const cFiche = (clients || []).find((c) => c.id === cl.clientId);
+        (cl.chevaux || []).forEach((cv) => {
+          if (cv && typeof cv === 'object' && !cv.id) {
+            const h = cFiche && (cFiche.chevaux || []).find((x) => norm(x.nom) === norm(cv.nom)); // backfill : copie l'id de la fiche (stable partout), id neuf en dernier recours
+            cv.id = (h && h.id) || uid(); changed = true;
+          }
+        });
+      });
+    });
+    if (t.payments) Object.keys(t.payments).forEach((cid) => { const p = t.payments[cid]; if (p && typeof p === 'object' && !p.id) { p.id = uid(); changed = true; } });
+  });
+  if (changed) {
+    LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
+    try { rebuildSyncHashes(); } catch (e) {} // rebase les empreintes sur le nouvel état → le prochain syncStamp ne rebumpe pas tout
+  }
+  return changed;
+}
+
 // ---------- Synchro D1 : fusion idempotente (moteur pur — utilisé par l'import fichier et, plus tard, Drive) ----------
 // Union de deux collections par id : garde le updatedAt le plus élevé ; un tombstone plus récent supprime l'enregistrement.
 function mergeCollection(localArr, remoteArr, tomb) {
@@ -14986,7 +15022,8 @@ window.addEventListener('DOMContentLoaded', () => {
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !_lockModal) closeModal(); }); // config initiale = non fermable par clic sur le fond
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !_lockModal) { const m2 = document.getElementById('modal2'); if (m2 && !m2.classList.contains('hidden')) { closeSubModal(); return; } const m = $('modal'); if (m && !m.classList.contains('hidden')) closeModal(); } }); // L8 : Échap ferme la sous-modale d'abord, sinon la modale principale
 
-  recordAppRun(); // LOT 2 — trace « quelle version a démarré, quand, et avec quel volume » (avant toute passe de maintenance)
+  normalizeIds(); // Lot 01 — socle d'identité : ids stables sur arrêts/adresses/chevaux/paiements manquants (avant toute maintenance/rendu)
+  recordAppRun(); // LOT 2 — trace « quelle version a démarré, quand, et avec quel volume » (après la normalisation d'id, avant les passes de maintenance)
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
