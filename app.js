@@ -13478,6 +13478,33 @@ function ncBreakdown(n) {
 // Numéro de NC = préfixe APPAREIL (2-3 car. stables, device-local) + séquence propre à cet appareil → jamais de doublon même hors-ligne sur 2 appareils.
 function ncDevicePfx() { const d = (S.deviceId || '').replace(/[^a-z0-9]/gi, ''); return ((d.slice(-3) || 'x0') + '').toUpperCase(); }
 function nextNcNumero() { const pfx = ncDevicePfx(); const seq = (S.notesCredit || []).reduce((m, n) => { const s = String(n.numero == null ? '' : n.numero); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; return Math.max(m, v); } return m; }, 0) + 1; return pfx + '-' + seq; }
+// ---------- Lot 02 — IDENTITÉ FACTURE PERSISTÉE ----------
+// Numéro par appareil (comme les NC), préfixe 'F' distinct → aucune collision NC/facture ni inter-appareils. Séquence = max existant + 1.
+function nextFactureNumero() {
+  const pfx = 'F' + ncDevicePfx(); let max = 0;
+  allTours().forEach((t) => { const fi = (t && t.factureIds) || {}; Object.keys(fi).forEach((cid) => { const s = String((fi[cid] && fi[cid].numero) || ''); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; if (v > max) max = v; } }); });
+  return pfx + '-' + (max + 1);
+}
+function factureOf(t, clientId) { return (t && t.factureIds && t.factureIds[clientId]) || null; }
+// Attribue une identité facture (id + numéro + frozenAt) à chaque client des tournées CLÔTURÉES (pièce émise à la clôture).
+// IDEMPOTENT (ignore un client déjà numéroté → jamais renumérotée). Ordre RÉTROACTIF chronologique (date puis id) → séquence cohérente.
+// N'AFFECTE AUCUN MONTANT ni t.result : champ purement additif `t.factureIds`.
+function ensureFacturesForClosedTours() {
+  let changed = false;
+  const closed = allTours().filter((t) => t && t.closed && t.result && t.result.parClient && t.result.parClient.length);
+  closed.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.id || '').localeCompare(String(b.id || '')));
+  closed.forEach((t) => {
+    if (!t.factureIds || typeof t.factureIds !== 'object') t.factureIds = {};
+    t.result.parClient.forEach((m) => {
+      if (!m || m.clientId == null) return;
+      if (t.factureIds[m.clientId] && t.factureIds[m.clientId].numero) return; // déjà émise → jamais renumérotée
+      const frozenAt = t.endedAt || t.autoClosedAt || (Date.parse((t.date || '') + 'T12:00:00') || Date.now());
+      t.factureIds[m.clientId] = { id: uid(), numero: nextFactureNumero(), frozenAt };
+      changed = true;
+    });
+  });
+  return changed;
+}
 // NC PAR (client, tournée/date) — modèle définitif (2026-07-17). Regroupe des lignes { chevalNom, key, label, moHT, matHT, depHT, tva, ttc }.
 //  numero séquentiel ; opts: { motif, note, cashRefunded }. La NC réduit le CA (aucune ne le fait « en double » : les cas NC laissent la tournée figée). Le déplacement peut faire partie des lignes (crédité au choix).
 function createClientCreditNote(clientId, tour, lines, opts) {
@@ -15028,6 +15055,7 @@ window.addEventListener('DOMContentLoaded', () => {
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
   migrateCreditedCancellations(); // 1.1.57 : marque « credited » les chevaux annulés portant une note de crédit (évite la double réduction du CA)
+  if (ensureFacturesForClosedTours()) { LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive); try { rebuildSyncHashes(); } catch (e) {} } // Lot 02 — identité facture rétroactive (après auto-clôture/archivage), persistée sans churn
   bindSettings(); refreshEverywhere(); renderHome();
   setTimeout(() => { plDraftMaybeRestore(); }, 900); // propose de reprendre une planche non terminée (après mise en arrière-plan / rechargement)
   if ($('homeSetupBtn')) $('homeSetupBtn').addEventListener('click', modalSetup);
@@ -15105,6 +15133,7 @@ window.addEventListener('DOMContentLoaded', () => {
     currentTour.closed = true;
     if (!currentTour.priceSnap) currentTour.priceSnap = buildPriceSnap(currentTour); /* LOT 3 : fige les tarifs a la cloture */
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
+    ensureFacturesForClosedTours(); // Lot 02 — émet l'identité facture (id + numéro) des clients de cette tournée, persistée par le saveTournees ci-dessous
     saveTournees(); scheduleDrivePush(); scheduleCalPush(currentTour); openEditor(); // clôture = JALON → synchro Drive rapide
   });
   $('edBack').addEventListener('click', () => showTab('tournees'));
