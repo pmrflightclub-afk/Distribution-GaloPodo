@@ -8521,14 +8521,28 @@ function openFactureDetail() {
 }
 
 // ================= GESTION → FRAIS VÉHICULE =================
+// ---------- Lot 03b — mois comptable effectif d'un client + part de km attribuable ----------
+function clientComptaMonth(t, clientId) { const p = ((t && t.payments) || {})[clientId]; return (p && p.method === 'liquide' && !p.facture && p.comptaPeriod) ? p.comptaPeriod : ((t && t.date) || '').slice(0, 7); }
+// Part de km d'UN client dans une tournée = Σ (kmAttribue / nbClients) sur ses arrêts. Déterministe (même formule que le déplacement facturé et kmStats.parClient). Le km à vide non attribuable reste au mois de la tournée.
+function clientTourKm(t, clientId) { if (!t || !t.result || !t.result.rows) return 0; return t.result.rows.reduce((s, r) => s + (((r.clients || []).some((c) => c.clientId === clientId)) ? (r.kmAttribue || 0) / Math.max(1, r.nbClients) : 0), 0); }
+// Km PHYSIQUE de l'année en cours (roulé) — NE suit PAS le rattachement caisse : réservé aux calculs de COÛT (amortissement / durée de vie véhicule).
+function physicalKmYear() { const y = todayStr().slice(0, 4); return allTours().reduce((s, t) => s + ((t.result && (t.date || '').startsWith(y)) ? (t.result.totalKm || 0) : 0), 0); }
 function kmStats() {
   const now = new Date();
   const ym = todayStr().slice(0, 7), y = todayStr().slice(0, 4); // robustesse : clé locale (comme t.date) et non UTC → « Km ce mois/année » n'omet plus les tournées du jour dans les 1-2 h après minuit
   let mois = 0, annee = 0; const cmap = {};
   allTours().forEach((t) => {
     if (!t.result) return;
-    if ((t.date || '').startsWith(ym)) mois += t.result.totalKm;
-    if ((t.date || '').startsWith(y)) annee += t.result.totalKm;
+    const tourYm = (t.date || '').slice(0, 7), tourY = tourYm.slice(0, 4);
+    if (tourYm === ym) mois += t.result.totalKm; // base physique au mois de la tournée
+    if (tourY === y) annee += t.result.totalKm;
+    // Lot 03b-3 (B2) : la PART de km d'un client rattaché (liquide-sans-facture) migre vers son mois/année effectif — comme le CA. Le km à vide (non attribuable) reste au mois de la tournée.
+    (t.result.parClient || []).forEach((m) => {
+      const eff = clientComptaMonth(t, m.clientId); if (eff === tourYm) return;
+      const pk = clientTourKm(t, m.clientId); if (!pk) return; const effY = eff.slice(0, 4);
+      if (tourYm === ym) mois -= pk; if (eff === ym) mois += pk;
+      if (tourY === y) annee -= pk; if (effY === y) annee += pk;
+    });
     const w = travailForTour(t); // temps réel si la tournée a été suivie (Démarrer→Clôturer), sinon durée estimée
     const totMin = (w && w.totalMs != null) ? w.totalMs / 60000 : t.result.totalMin;
     const mpk = t.result.totalKm > 0 ? totMin / t.result.totalKm : 0; // minutes par km (réel si dispo)
@@ -8875,14 +8889,18 @@ const GRAPH_ENC = [{ key: 'liquide', color: '#2e9e5b', label: 'Liquide' }, { key
 const shortMonthLabel = (ym) => { const d = new Date(ym + '-01T00:00:00'); return isNaN(d.getTime()) ? ym : d.toLocaleDateString('fr-FR', { month: 'short' }); };
 // Agrégats par mois : CA (Σ m.totalTTC), km (Σ result.totalKm), nb tournées, encaissements (comptaData).
 function graphMonthData(months) {
-  // Lot 03b-2 : le CA suit le MOIS EFFECTIF du client (comptaPeriod pour un liquide-sans-facture rattaché) — cohérent avec comptaData. Les km et le nombre de tournées restent au mois de la tournée (fait physique daté, non splittable — cf. 3b-3).
-  const clientEffYm = (t, m) => { const p = (t.payments || {})[m.clientId]; return (p && p.method === 'liquide' && !p.facture && p.comptaPeriod) ? p.comptaPeriod : (t.date || '').slice(0, 7); };
+  // Lot 03b : le CA ET la part de km d'un client suivent son MOIS EFFECTIF (comptaPeriod pour un liquide-sans-facture rattaché) — cohérent avec comptaData et kmStats. Le nb de tournées et le km non attribuable restent au mois de la tournée.
   return months.map((ym) => {
     let ca = 0, kmv = 0, tours = 0;
     allTours().forEach((t) => {
       if (!t.result || !(t.result.parClient && t.result.parClient.length)) return;
-      if ((t.date || '').startsWith(ym)) { tours++; kmv += t.result.totalKm || 0; } // physique → mois de la tournée
-      (t.result.parClient || []).forEach((m) => { if (clientEffYm(t, m) === ym) ca += m.totalTTC || 0; }); // CA → mois effectif du client
+      const tourYm = (t.date || '').slice(0, 7);
+      if (tourYm === ym) { tours++; kmv += t.result.totalKm || 0; } // nb tournées + base km physique au mois de la tournée
+      (t.result.parClient || []).forEach((m) => {
+        const eff = clientComptaMonth(t, m.clientId);
+        if (eff === ym) ca += m.totalTTC || 0; // CA → mois effectif
+        if (eff !== tourYm) { const pk = clientTourKm(t, m.clientId); if (tourYm === ym) kmv -= pk; if (eff === ym) kmv += pk; } // part km migre avec le client
+      });
     });
     const d = comptaData(ym);
     const enc = { liquide: d.liquideTotal.ttc, virement: d.virementTotal.ttc, facture: d.factureLiqTotal.ttc + d.factureVirTotal.ttc };
@@ -15004,7 +15022,7 @@ function updateReglagesUI() {
     ? '« Client proche » : distance domicile→arrêt < seuil → forfait, sorti du partage.'
     : 'Seuil et forfait inactifs pour ce mode : tous les arrêts partagent le kilométrage.';
   if ($('amortHint')) {
-    const dv = S.amortissement.dureeVieKm, kmAn = kmStats().annee;
+    const dv = S.amortissement.dureeVieKm, kmAn = physicalKmYear(); // Lot 03b-3 : amortissement basé sur le km PHYSIQUE roulé (jamais le km rattaché caisse)
     const ans = (dv > 0 && kmAn > 0) ? dv / kmAn : null;
     $('amortHint').innerHTML = amortContribHT() > 0
       ? `Amortissement = ${eur(S.amortissement.achatHT)} ÷ ${km(dv)} = <b>${eurkm(amortContribHT())}/km</b> (inclus dans la base).`
