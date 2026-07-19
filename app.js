@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.91';
+const APP_VERSION = '1.7.92';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.92', date: '2026-07-19',
+    ajouts: [
+      'AGIR — SMS et Email reviennent aussi à la modale « Agir » après usage (tous les boutons qui ouvrent une fenêtre reviennent à Agir ; seule la navigation Waze/Maps quitte l\'app, forcément).',
+      'MODALE ACTES (depuis Agir) — ajout de « 📷 Photo » et « Difficile » par cheval (mêmes fenêtres que l\'éditeur), et des articles plus complets : choix TVA + reprise depuis le catalogue.',
+    ],
+  },
   {
     version: '1.7.91', date: '2026-07-19',
     ajouts: [
@@ -9806,23 +9813,24 @@ function ncPdfBlob(n) {
   ]);
 }
 // Email libre au client (depuis « Agir ») : joindre un PDF/image (→ partage natif vers Gmail) ou email prérempli (mailto, destinataire rempli, sans pièce jointe).
-function modalEmailClient(client) {
+function modalEmailClient(client, onDone) {
   if (!client) { alert('Client introuvable.'); return; }
   let file = null;
+  const done = () => { closeModal(); if (onDone) onDone(); };
   openModal(`<div class="modal-head"><b>📧 Email — ${esc(fullName(client))}</b><button class="x" id="mX">✕</button></div>
     <p class="hint">Destinataire : <b>${client.email ? esc(client.email) : '⚠ aucune adresse email en fiche client'}</b>. Joignez un PDF (planche ou facture déjà enregistrée) puis choisissez Gmail dans le partage, ou ouvrez un email prérempli sans pièce jointe.</p>
     <input type="file" id="emFile" accept="application/pdf,image/*" hidden/>
     <button class="btn block" id="emPick">📎 Joindre un fichier (PDF / image)</button>
     <p class="hint" id="emFileName"></p>
     <div class="actions"><button class="btn primary block" id="emSend">📧 Ouvrir l'email</button><button class="btn block" id="emClose">Fermer</button></div>`);
-  $('mX').onclick = closeModal; $('emClose').onclick = closeModal;
+  $('mX').onclick = done; $('emClose').onclick = done;
   $('emPick').onclick = () => $('emFile').click();
   $('emFile').addEventListener('change', (e) => { file = (e.target.files && e.target.files[0]) || null; if ($('emFileName')) $('emFileName').textContent = file ? '📎 ' + file.name : ''; });
   $('emSend').onclick = async () => {
     const body = mailBodyFor(client, file ? file.name : 'notre échange');
-    if (file) { await shareDoc(file, file.name, 'Document — ' + fullName(client), body); closeModal(); return; }
+    if (file) { await shareDoc(file, file.name, 'Document — ' + fullName(client), body); done(); return; }
     location.href = 'mailto:' + encodeURIComponent(client.email || '') + '?subject=' + encodeURIComponent('Message') + '&body=' + encodeURIComponent(body);
-    closeModal();
+    done();
   };
 }
 // Partage un document client par email (pièce jointe), puis exécute onSent() si l'envoi a bien été lancé.
@@ -12088,8 +12096,9 @@ function fillSms(tpl, data) { return String(tpl || '').replace(/\{(\w+)\}/g, (m,
 function smsDataFor(c, extra) { return Object.assign({ civilite: (c && c.civilite) || '', prenom: (c && c.prenom) || '', nom: (c && c.nom) || '', client: fullName(c || {}), societe: (c && c.societe) || '' }, extra || {}); }
 // Choix du modèle SMS (politesse / standard) AVANT copie. Pré-sélectionne le réglage du client (défaut : politesse),
 // fige le choix dans la fiche client (pour les prochaines fois), puis copie le message avec le bon modèle.
-function modalSmsChoice(c, data) {
+function modalSmsChoice(c, data, onDone) {
   let politesse = !c || c.politesse !== false; // défaut : politesse
+  const done = () => { closeModal(); if (onDone) onDone(); };
   const build = () => fillSms(politesse ? (S.smsTemplatePolitesse || S.smsTemplate) : S.smsTemplate, data);
   openModal(`<div class="modal-head"><b>✉️ SMS — ${esc(fullName(c || {}) || 'client')}</b><button class="x" id="mX">✕</button></div>
     <label>Formule du message</label>
@@ -12098,13 +12107,13 @@ function modalSmsChoice(c, data) {
     <div class="actions"><button class="btn primary block" id="smsGo">📋 Copier &amp; envoyer</button></div>`);
   const prev = $('smsPrev'); const refresh = () => { if (prev) prev.innerHTML = '<b>Aperçu :</b> ' + esc(build()); };
   refresh();
-  $('mX').addEventListener('click', closeModal);
+  $('mX').addEventListener('click', done);
   document.querySelectorAll('#smsSeg .seg-btn').forEach((b) => b.addEventListener('click', () => { politesse = b.dataset.p === '1'; document.querySelectorAll('#smsSeg .seg-btn').forEach((x) => x.classList.toggle('on', x === b)); refresh(); }));
   $('smsGo').addEventListener('click', async () => {
     if (c && c.id != null) { c.politesse = politesse; saveClients(); } // fige le choix pour la prochaine fois
     const msg = build();
-    try { await navigator.clipboard.writeText(msg); const btn = $('smsGo'); if (btn) { btn.textContent = 'Copié ✔'; setTimeout(closeModal, 700); } else closeModal(); }
-    catch { closeModal(); alert(msg); }
+    try { await navigator.clipboard.writeText(msg); const btn = $('smsGo'); if (btn) { btn.textContent = 'Copié ✔'; setTimeout(done, 700); } else done(); }
+    catch { done(); alert(msg); }
   });
 }
 function insertAtCursor(ta, text) {
@@ -12633,6 +12642,7 @@ function openActesModal(t, a, cl, opts) {
       let o = ck('data-key="parage"', cv && cv.parage, 'Parage', false);
       o += ck('data-vis', cv && cv.visite, 'Visite', !visArts.length);
       pathoCols.forEach((c) => { o += ck('data-key="' + c.key + '"', cv && cv[c.key], c.label, !acte); });
+      if (!opts.sub) { o += ck('data-photo', !!(cv && cv.photo && (cv.photo.stades || []).length), '📷 Photo', false); o += ck('data-supp="difficile"', cv && cv.difficile, 'Difficile', !acte); } // Difficile/Photo : uniquement en modale principale (Agir) — leurs sous-fenêtres ont besoin du niveau libre
       let visSel = '';
       if (cv && cv.visite && visArts.length > 1) visSel = `<label class="li-sub">Prestation visite <select data-visart="${pi}">${visArts.map((x) => `<option value="${x.id}"${cv.visiteArtId === x.id ? ' selected' : ''}>${esc(x.libelle)} (${eur(x.prixHT)})</option>`).join('')}</select></label>`;
       return `<div class="ch-row"><div class="ch-top"><b>🐴 ${esc(ph.nom)}</b>${acte ? '' : ' <span class="badge badge-noacte">⚠ à cocher</span>'}</div><div class="ch-opts">${o}</div>${visSel}</div>`;
@@ -12640,8 +12650,13 @@ function openActesModal(t, a, cl, opts) {
     let artHtml = '';
     if (opts.withArticles && !opts.sub) {
       const arts = clientArts();
-      artHtml = `<hr class="ac-div"/><div class="ac-sec-h">📝 Articles</div><div id="acArtList">${arts.length ? arts.map((ar) => `<div class="list-item"><div class="li-main"><b>${esc(ar.libelle) || 'Article'}</b><span class="li-sub">${eur(ar.prixHT)} HT</span></div><div class="li-act"><button class="btn small" data-artdel="${ar.id}">✕</button></div></div>`).join('') : '<p class="hint">Aucun article libre.</p>'}</div>
-        <div class="row" style="gap:6px"><input type="text" id="acArtLib" placeholder="Intitulé" style="flex:2"/><input type="number" id="acArtPrix" step="0.01" min="0" placeholder="Prix HT" style="flex:1"/><button class="btn small" id="acArtAdd">＋ Ajouter</button></div>`;
+      const rates = (PAYS_TVA[S.pays] || PAYS_TVA.be).rates, stdTva = (PAYS_TVA[S.pays] || PAYS_TVA.be).std;
+      const tvaOpts = rates.map((r) => `<option value="${r}"${r === stdTva ? ' selected' : ''}>${r}%</option>`).join('');
+      const cat = (S.articlesCatalogue || []).filter((x) => !x.visite);
+      const catSel = cat.length ? `<select id="acArtCat" style="flex:1"><option value="">— depuis le catalogue —</option>${cat.map((x) => `<option value="${x.id}">${esc(x.libelle)} (${eur(x.prixHT)})</option>`).join('')}</select>` : '';
+      artHtml = `<hr class="ac-div"/><div class="ac-sec-h">📝 Articles</div><div id="acArtList">${arts.length ? arts.map((ar) => `<div class="list-item"><div class="li-main"><b>${esc(ar.libelle) || 'Article'}</b><span class="li-sub">${eur(ar.prixHT)} HT · TVA ${ar.tvaPct || 0}%</span></div><div class="li-act"><button class="btn small" data-artdel="${ar.id}">✕</button></div></div>`).join('') : '<p class="hint">Aucun article libre.</p>'}</div>
+        ${catSel ? '<div class="row" style="gap:6px;margin-top:6px">' + catSel + '</div>' : ''}
+        <div class="row" style="gap:6px;margin-top:6px"><input type="text" id="acArtLib" placeholder="Intitulé" style="flex:2"/><input type="number" id="acArtPrix" step="0.01" min="0" placeholder="Prix HT" style="flex:1"/><select id="acArtTva" style="flex:0 0 auto">${tvaOpts}</select><button class="btn small" id="acArtAdd">＋</button></div>`;
     }
     openFn(`<div class="modal-head"><b>🐴 Actes — ${esc(clientName(cid))}</b><button class="x" id="acX">✕</button></div>
       <p class="hint">Cochez <b>Parage</b> ou <b>Visite</b> pour chaque cheval de ce client à cet arrêt (obligatoire pour clôturer).</p>
@@ -12652,8 +12667,11 @@ function openActesModal(t, a, cl, opts) {
     root.querySelectorAll('[data-key]').forEach((inp) => inp.addEventListener('change', (e) => { const cv = ensureCv(pool[+inp.dataset.pi]); const key = inp.dataset.key; cv[key] = e.target.checked; if (key === 'parage' && !e.target.checked && !cv.visite) { cv.fourbure = cv.npas = cv.infection = false; cv.difficile = false; } persistTour(); render(); refreshBehind(); }));
     root.querySelectorAll('[data-vis]').forEach((inp) => inp.addEventListener('change', (e) => { const cv = ensureCv(pool[+inp.dataset.pi]); cv.visite = e.target.checked; if (!cv.visite) { cv.visiteArtId = null; if (!cv.parage) { cv.fourbure = cv.npas = cv.infection = false; cv.difficile = false; } } else if (visArts.length === 1) cv.visiteArtId = visArts[0].id; persistTour(); render(); refreshBehind(); }));
     root.querySelectorAll('[data-visart]').forEach((sel) => sel.addEventListener('change', (e) => { const cv = ensureCv(pool[+sel.dataset.visart]); cv.visiteArtId = e.target.value || null; persistTour(); refreshBehind(); }));
+    root.querySelectorAll('[data-photo]').forEach((inp) => inp.addEventListener('change', () => { const ph = pool[+inp.dataset.pi], cv = ensureCv(ph); if (inp.checked) modalPhotoPick(cv, () => { if (typeof syncPhotoTodos === 'function') syncPhotoTodos(cid, cv, t.date, t.id); persistTour(); render(); refreshBehind(); }); else { delete cv.photo; if (typeof removePlancheTodoAll === 'function') removePlancheTodoAll(cid, ph.nom, t.date); if (typeof removePlancheDoneAll === 'function') removePlancheDoneAll(cid, ph.nom, t.date); persistTour(); render(); refreshBehind(); } })); // Photo : réutilise modalPhotoPick (retour à Actes ensuite)
+    root.querySelectorAll('[data-supp]').forEach((inp) => inp.addEventListener('change', () => { const ph = pool[+inp.dataset.pi], cv = ensureCv(ph), key = inp.dataset.supp; if (!inp.checked) { cv[key] = false; delete cv[key + 'HT']; delete cv[key + 'Remise']; delete cv[key + 'Offert']; persistTour(); render(); refreshBehind(); return; } modalSupplement(ph.nom, cv, key, () => { persistTour(); render(); refreshBehind(); }); })); // Difficile : réutilise modalSupplement (saisie du montant HT)
     root.querySelectorAll('[data-artdel]').forEach((b) => b.addEventListener('click', () => { t.articles = (t.articles || []).filter((ar) => ar.id !== b.dataset.artdel); persistTour(); render(); refreshBehind(); }));
-    if (root.querySelector('#acArtAdd')) root.querySelector('#acArtAdd').addEventListener('click', () => { const lib = (root.querySelector('#acArtLib').value || '').trim(); const prix = Math.max(0, parseNum(root.querySelector('#acArtPrix').value)); if (!lib || !(prix > 0)) { alert('Renseignez un intitulé et un prix HT.'); return; } const ids = (cl.chevaux || []).map((c) => c.id).filter(Boolean); const noms = (cl.chevaux || []).map((c) => c.nom).filter(Boolean); (t.articles = t.articles || []).push({ id: uid(), clientId: cid, chevalIds: ids, chevalNoms: noms, libelle: lib, prixHT: prix, tvaPct: (PAYS_TVA[S.pays] || PAYS_TVA.be).std }); persistTour(); render(); refreshBehind(); });
+    if (root.querySelector('#acArtCat')) root.querySelector('#acArtCat').addEventListener('change', (e) => { const art = (S.articlesCatalogue || []).find((x) => x.id === e.target.value); if (art) { root.querySelector('#acArtLib').value = art.libelle || ''; root.querySelector('#acArtPrix').value = art.prixHT || ''; if (root.querySelector('#acArtTva') && art.tvaPct != null) root.querySelector('#acArtTva').value = String(art.tvaPct); } }); // catalogue → pré-remplit intitulé/prix/TVA
+    if (root.querySelector('#acArtAdd')) root.querySelector('#acArtAdd').addEventListener('click', () => { const lib = (root.querySelector('#acArtLib').value || '').trim(); const prix = Math.max(0, parseNum(root.querySelector('#acArtPrix').value)); const tva = parseFloat(root.querySelector('#acArtTva') ? root.querySelector('#acArtTva').value : '') || (PAYS_TVA[S.pays] || PAYS_TVA.be).std; if (!lib || !(prix > 0)) { alert('Renseignez un intitulé et un prix HT.'); return; } const ids = (cl.chevaux || []).map((c) => c.id).filter(Boolean); const noms = (cl.chevaux || []).map((c) => c.nom).filter(Boolean); (t.articles = t.articles || []).push({ id: uid(), clientId: cid, chevalIds: ids, chevalNoms: noms, libelle: lib, prixHT: prix, tvaPct: tva }); persistTour(); render(); refreshBehind(); });
     root.querySelector('#acX').addEventListener('click', () => { closeFn(); if (opts.onDone) opts.onDone(); });
     if (root.querySelector('#acBack')) root.querySelector('#acBack').addEventListener('click', () => { closeFn(); if (opts.onDone) opts.onDone(); });
     root.querySelector('#acOk').addEventListener('click', () => { closeFn(); if (opts.onDone) opts.onDone(); });
@@ -12717,14 +12735,14 @@ function dayJClientAgir(t, a, cl, ctx) {
     { label: '🗺️ Carte client', onClick: () => modalCarteClient(t, cid, reopenAgir) },
     { label: navLabel(), onClick: () => openNav(a.addr) },
     { label: 'Route (temps réel)', done: ctx.rDone, orange: ctx.rStale, onClick: () => modalRouteTime(t, a, ctx.est, reopenAgir) },
-    { label: 'SMS', keepOpen: true, onClick: () => modalSmsChoice(c, smsDataFor(c, { cheval: chNames, trajet: ctx.trajet, adresse: ctx.adresse })) },
+    { label: 'SMS', onClick: () => modalSmsChoice(c, smsDataFor(c, { cheval: chNames, trajet: ctx.trajet, adresse: ctx.adresse }), reopenAgir) },
     { label: 'Ticket', keepOpen: true, onClick: ticket },
     { label: '＋ Prêt', orange: (c.prets || []).length > 0, onClick: () => modalPret(cid, t, reopenAgir) },
     (isClientLastArret(t, cid, a)
       ? { label: '💶 Paiement', done: clientPaiementDone(t, cid), disabled: clientPaiementDone(t, cid), onClick: () => modalPayment(t, a, reopenAgir, () => { closeClientAt(t, a, cl); persist(); scheduleCalPush(t); }, cid) } // dernier arrêt du client → paiement (facture globale) ; clôture TOUS ses arrêts (garde actes dans modalPayment)
       : { label: '🔒 Clôturer (en attente)', done: clientValidated(cl), disabled: clientValidated(cl), onClick: () => { const finish = () => { if (closeClientPending(t, a, cl)) { persist(); scheduleCalPush(t); } reopenAgir(); }; if (!clientActeOK(a, cl)) { openActesModal(t, a, cl, { onDone: finish }); return; } finish(); } }), // arrêt intermédiaire → clôture en attente (paiement au dernier arrêt) ; actes manquants → modale Actes en place
     { label: '📅 RDV', done: !!cl.rdvDone, disabled: !!cl.rdvDone, onClick: () => modalRDV(t, a, cid, reopenAgir) },
-    { label: '📧 Email au client', keepOpen: true, onClick: () => modalEmailClient(c) },
+    { label: '📧 Email au client', onClick: () => modalEmailClient(c, reopenAgir) },
   ];
 }
 function renderHomeTrajet() {
