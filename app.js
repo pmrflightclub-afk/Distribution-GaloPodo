@@ -6210,7 +6210,8 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
       (w.chevaux || []).forEach((h) => { if (!h) return; const o = h.id ? oldById[h.id] : null; if (!o || strip(o) !== strip(h)) h.updatedAt = now;
         (h.adresses || []).forEach((a) => { if (!a) return; const oa = o && (o.adresses || []).find((x) => x.id === a.id); if (!oa || strip(oa) !== strip(a)) a.updatedAt = now; }); }); }
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
-    DRAFTS.clear(key); saveClients(); reconcileActiveTours(); closeModal();
+    (w.chevaux || []).forEach((h) => { if (h) relinkChevalEcurie(w, h); }); // Lot 04-D : re-dérive l'écurie de chaque cheval depuis son état édité (l'écurie est la source de résolution)
+    DRAFTS.clear(key); saveClients(); saveSettings(); reconcileActiveTours(); closeModal();
     geocodeClientAddresses(w); // localise en arrière-plan TOUTES les adresses complètes (client, société, chevaux — actives ET inactives)
     if (onSaved) onSaved(w); else renderClients();
   });
@@ -6227,7 +6228,7 @@ async function geocodeClientAddresses(w) {
   if (!todo.length) return; let changed = false;
   for (const a of todo) { try { const g = await geocode(a); a.lat = g.lat; a.lon = g.lon; changed = true; } catch { /* introuvable → différé */ } if (S.provider === 'osm') await sleep(1100); }
   // L8 : n'écrit les coordonnées QUE si la fiche n'a pas été remplacée entre-temps (ré-édition/synchro) → évite d'écraser une version plus récente ; sinon le géocodage se refera au prochain passage.
-  if (changed && clients.find((c) => c.id === w.id) === w) { (w.chevaux || []).forEach((h) => chevalSyncActive(h)); saveClients(); }
+  if (changed && clients.find((c) => c.id === w.id) === w) { (w.chevaux || []).forEach((h) => { chevalSyncActive(h); relinkChevalEcurie(w, h); }); saveClients(); saveSettings(); } // Lot 04-D : reporte les coordonnées géocodées dans l'écurie liée
 }
 
 // Mise en page d'un formulaire (anamnèse / mail) : chaque champ = l'intitulé de référence encadré/surligné, puis la réponse du client en dessous, avec de l'espace pour bien les distinguer.
@@ -7290,6 +7291,9 @@ function chevalEditAddr(h) {
 }
 const chevalAddrSrc = (h) => h.addrSource || (h.memeAdresse === false ? 'specifique' : 'client');
 const chevalAddr = (c, h) => {
+  // Lot 04-D : résolution via l'ÉCURIE réifiée si le cheval y est rattaché (source unique partagée). Repli sur l'ancienne logique sinon.
+  const e = ecurieById(h.ecurieId);
+  if (e) { if (e.source === 'client') return c.addr; if (e.source === 'societe') return societeAddrOf(c); return e.addr || emptyAddr(); }
   const src = chevalAddrSrc(h);
   if (src === 'specifique') { const ea = chevalActiveAddrEntry(h); if (ea && addrStr(ea.addr).trim()) return ea.addr; return addrStr(h.addr) ? h.addr : emptyAddr(); } // Bug 7 (a) : un cheval « spécifique » SANS adresse renvoie « non défini » (adresse vide) — il ne bascule PLUS sur le domicile du client (sinon arrêt domicile fantôme)
   if (src === 'societe') return societeAddrOf(c);
@@ -7311,6 +7315,9 @@ function addrNomForAddr(h, addr) { const e = chevalAddrEntry(h, addr); return e 
 function setAddrNomForAddr(h, addr, val) { const e = chevalAddrEntry(h, addr); if (e) { e.nom = val; if (e.actif) h.addrNom = val; } else { h.addrNom = val; } }
 // Nom d'affichage de l'adresse d'un cheval, selon la source : client → nom du client ; société → nom de la société ; spécifique → « adresse privée » (= nom du client) ou nom saisi.
 function chevalAddrNom(c, h) {
+  // Lot 04-D : nom via l'ÉCURIE si rattaché. Privée → nom du client ; société → société ; publique → nom de l'écurie.
+  const e = ecurieById(h.ecurieId);
+  if (e) { if (e.privee) return fullName(c) || 'Adresse'; if (e.source === 'societe') return c.societe || fullName(c); return e.nom || fullName(c) || 'Adresse'; }
   const src = chevalAddrSrc(h);
   if (src === 'specifique') { if (h.addrPrivee) return fullName(c); const ea = chevalActiveAddrEntry(h); const nm = ea ? (ea.nom || '').trim() : (h.addrNom || '').trim(); return nm || fullName(c) || 'Adresse'; }
   if (src === 'societe') return c.societe || fullName(c);
@@ -7330,18 +7337,25 @@ function ecurieSpecFor(c, h) {
   if (h.addrPrivee) return { key: 'P:' + c.id + ':' + k, source: 'own', privee: true, clientId: c.id, nom: null, addr };
   return { key: 'U:' + k, source: 'own', privee: false, clientId: null, nom: ((ea && ea.nom) || h.addrNom || '').trim() || null, addr };
 }
-// Résolveurs équivalents à chevalAddr/chevalAddrNom (prouvés par harness). Repli sur la logique actuelle si le cheval n'est pas (encore) rattaché à une écurie.
-function ecurieAddrFor(c, h) {
-  const e = ecurieById(h.ecurieId); if (!e) return chevalAddr(c, h);
-  if (e.source === 'client') return c.addr;
-  if (e.source === 'societe') return societeAddrOf(c);
-  return e.addr || emptyAddr();
+// Trouve/crée une écurie 'own' pour une adresse et y rattache le cheval (publique nommée si `nom`, privée si `privee`). Réutilisé par le pont d'édition et (à venir) le carnet d'adresses.
+function linkChevalToAddress(c, h, addr, nom, privee) {
+  const k = addrKey(addr); if (!k) { h.ecurieId = null; return null; }
+  const key = privee ? 'P:' + c.id + ':' + k : 'U:' + k;
+  let e = (S.ecuries || []).find((x) => x.key === key);
+  if (!e) { e = { id: 'ecu' + hashStr(key), key, nom: privee ? null : ((nom || '').trim() || null), privee: !!privee, source: 'own', clientId: privee ? c.id : null, addr: toAddr(addr), updatedAt: Date.now() }; S.ecuries.push(e); }
+  else { e.addr = toAddr(addr); if (!privee && (nom || '').trim()) e.nom = nom.trim(); e.updatedAt = Date.now(); }
+  h.ecurieId = e.id;
+  return e;
 }
-function ecurieNomFor(c, h) {
-  const e = ecurieById(h.ecurieId); if (!e) return chevalAddrNom(c, h);
-  if (e.privee) return fullName(c) || 'Adresse';
-  if (e.source === 'societe') return c.societe || fullName(c);
-  return e.nom || fullName(c) || 'Adresse';
+// Lot 04-D — PONT : après une édition via l'ancien éditeur (h.addrSource / h.adresses), RE-DÉRIVE l'écurie du cheval depuis son état courant.
+// Keyé par adresse (ecurieSpecFor) : une adresse changée → nouvelle clé → écurie distincte (les chevaux qui partageaient l'ancienne ne bougent PAS) ; adresse identique (typo/géo) → même écurie mise à jour (bénéficie à tous ses chevaux). Gère aussi le changement de type (client/société/spécifique).
+function relinkChevalEcurie(c, h) {
+  const spec = ecurieSpecFor(c, h);
+  if (!spec) { h.ecurieId = null; return; } // spécifique sans adresse → pas d'écurie (repli résolution)
+  let e = (S.ecuries || []).find((x) => x.key === spec.key);
+  if (!e) { e = { id: 'ecu' + hashStr(spec.key), key: spec.key, nom: spec.nom, privee: spec.privee, source: spec.source, clientId: spec.clientId, addr: spec.addr, updatedAt: Date.now() }; S.ecuries.push(e); }
+  else if (spec.source === 'own') { e.addr = spec.addr; if (!spec.privee && spec.nom) e.nom = spec.nom; e.updatedAt = Date.now(); } // maj géo/nom en place (même adresse)
+  h.ecurieId = e.id;
 }
 // Lot 04-B — nom LIVE d'un cheval d'arrêt (résolu par id → un renommage se reflète même en tournée clôturée). AFFICHAGE UNIQUEMENT : les clés de jointure (norm(cv.nom), data-nom, tourCvKey) et les pièces figées (facture t.result, notes de crédit) gardent cv.nom.
 function chevalLiveNom(clientId, cv) {
