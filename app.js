@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.96';
+const APP_VERSION = '1.7.97';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '1.7.97', date: '2026-07-19',
+    ajouts: [
+      'THÈME — nouveau réglage « Fond des fenêtres (modales) » (Réglages → Thème) : distingue le fond des fenêtres qui s\'ouvrent de celui de l\'app. Par défaut, il est automatiquement décalé du fond de l\'app (plus visible), et personnalisable.',
+      'PROGRAMMER LE SUIVI — la liste déroulante du parage a désormais « Sur le RDV commun (date/heure en haut) » comme choix par DÉFAUT (plus clair : c\'est le champ date/heure du haut qui sert de référence).',
+    ],
+  },
   {
     version: '1.7.96', date: '2026-07-19',
     ajouts: [
@@ -2793,6 +2800,7 @@ const DEFAULTS = {
   topbarColor: '',                             // couleur du bandeau principal (vide = suit accentColor)
   navBarColor: '',                             // couleur de fond de la barre d'onglets (vide = couleur carte)
   appBg: '#0d0d0d',                            // fond de l'app (sombre) — noir par défaut, réglable
+  modalBg: '',                                 // fond des fenêtres (modales) — vide = décalé auto du fond de l'app
   logoBg: 'transparent',                       // fond derrière le logo (transparent/blanc/noir/couleur)
   smsTemplate: 'Bonjour {prenom}, je passe aujourd\'hui pour {cheval}. J\'arrive dans environ {trajet}. À tout de suite !',
   smsTemplatePolitesse: 'Bonjour {civilite} {nom}, je passe aujourd\'hui pour {cheval}. J\'arrive dans environ {trajet}. À tout de suite !',
@@ -3092,6 +3100,7 @@ if (typeof S.smsTemplate !== 'string') S.smsTemplate = DEFAULTS.smsTemplate;
 if (typeof S.smsTemplatePolitesse !== 'string') S.smsTemplatePolitesse = DEFAULTS.smsTemplatePolitesse;
 if (typeof S.smsTemplatePrevenir !== 'string') S.smsTemplatePrevenir = DEFAULTS.smsTemplatePrevenir;
 if (!S.appBg) S.appBg = '#0d0d0d';
+if (typeof S.modalBg !== 'string') S.modalBg = '';
 if (!S.logoBg) S.logoBg = 'transparent';
 S.home = toAddr(S.home && S.home.adresse !== undefined ? { rue: S.home.adresse, lat: S.home.lat, lon: S.home.lon } : S.home);
 if (typeof S.tvaRate !== 'number') S.tvaRate = 21;
@@ -3390,7 +3399,7 @@ const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'so
 // P1-9 : réglages PROPRES à l'appareil — SOURCE UNIQUE partagée par mergeSettings ET applyRemoteReplace (fin de la classe de bug « deux listes device-local divergentes » : calPush/calDureeMin manquaient côté applyRemoteReplace → bascule silencieuse du push agenda à l'adoption/restauration).
 const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile', 'deviceName', 'deviceId'];
 // 100 % : champs de réglages EXCLUS de l'horodatage PAR CHAMP (ils sont déjà résolus autrement — maps unies, collections par enregistrement, thème/planche/setup à horodatage dédié, device-local). Tout le RESTE (tarifs de calcul, seuils, carburant, suppléments, véhicule…) est fusionné champ par champ selon sa propre date de modif.
-const PERFIELD_EXCLUDE = new Set(['updatedAt', '_fieldTs', '_mapTs', 'changelogRead', 'changelogHideBelow', 'agendaImported', 'agendaInactive', 'agendaPrive', 'agendaPriveVus', 'agendaTrajetVus', 'calPushed', 'calPendingDelete', 'home', 'odoReleves', 'lieuxRefs', 'plancheHistory', 'addrStatus', 'comptaRecu', 'comptaDemarche', 'comptaStatus', 'tileLabels', 'badgeColors', 'accentColor', 'topbarColor', 'appBg', 'navBarColor', 'themeUpdatedAt', 'planche', 'plancheUpdatedAt', 'setupDone', 'setupLocked', 'pays', 'tvaRegime', 'formeJuridique', 'tvaRate', 'fiscalParams', 'mailKeywords', 'analyticAlloc'].concat(SETTINGS_COLLECTIONS).concat(DEVICE_LOCAL_KEYS));
+const PERFIELD_EXCLUDE = new Set(['updatedAt', '_fieldTs', '_mapTs', 'changelogRead', 'changelogHideBelow', 'agendaImported', 'agendaInactive', 'agendaPrive', 'agendaPriveVus', 'agendaTrajetVus', 'calPushed', 'calPendingDelete', 'home', 'odoReleves', 'lieuxRefs', 'plancheHistory', 'addrStatus', 'comptaRecu', 'comptaDemarche', 'comptaStatus', 'tileLabels', 'badgeColors', 'accentColor', 'topbarColor', 'appBg', 'modalBg', 'navBarColor', 'themeUpdatedAt', 'planche', 'plancheUpdatedAt', 'setupDone', 'setupLocked', 'pays', 'tvaRegime', 'formeJuridique', 'tvaRate', 'fiscalParams', 'mailKeywords', 'analyticAlloc'].concat(SETTINGS_COLLECTIONS).concat(DEVICE_LOCAL_KEYS));
 // FIABILITÉ FUSION — maps compta/adresses/affichage résolues par HORODATAGE PAR CLÉ (set ET suppression). Un « dé-set » (déverrouiller un mois, décocher un paiement reçu/démarche, réactiver un lieu, réinitialiser un libellé) mémorise SA date par clé → il se propage entre appareils, et sur conflit la valeur la PLUS RÉCENTE gagne (fini le « Drive gagne en bloc » et la perte de sous-statut par Object.assign superficiel). `statOrder`/`analyticOrder` sortent de l'exclusion → résolus par l'horodatage PAR CHAMP (l'ordre le plus récent, retraits inclus, se propage).
 const STAMPED_MAPS = ['comptaRecu', 'comptaDemarche', 'addrStatus', 'tileLabels']; // maps plates {clé:valeur}. comptaStatus est traité à part (imbriqué).
 // comptaStatus est imbriqué {ym:{sousStatut:val}} → aplati en clés « ym|sousStatut » pour horodater/fusionner au niveau du SOUS-STATUT (sinon encoder un 2ᵉ sous-statut écrase l'autre à la fusion).
@@ -3463,9 +3472,15 @@ function applyTheme() {
   const top = S.topbarColor || acc; root.setProperty('--topbar', top); root.setProperty('--topbar-ink', idealInk(top));
   // Barre d'onglets : couleur propre, sinon couleur de la carte
   const nav = S.navBarColor || card; root.setProperty('--navbar', nav); root.setProperty('--navbar-ink', idealInk(nav));
+  // Fond des fenêtres (modales) : couleur propre, sinon décalé du fond de l'app pour se distinguer.
+  const modalBg = S.modalBg || defaultModalBg(bg); root.setProperty('--modal-bg', modalBg);
   root.setProperty('--logo-bg', currentLogoBg());
   const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', top);
 }
+// Décale une couleur hex de `delta` sur chaque canal (clampé).
+function shiftHex(hex, delta) { const m = /^#?([0-9a-fA-F]{6})$/.exec(hex || ''); if (!m) return hex; const n = parseInt(m[1], 16); const cl = (v) => Math.max(0, Math.min(255, v + delta)); const r = cl((n >> 16) & 255), g = cl((n >> 8) & 255), b = cl(n & 255); return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1); }
+// Fond de modale par défaut = fond de l'app décalé de « 2 tons » : un peu plus clair si le fond est très sombre (sinon 2 tons plus foncé) → toujours une différence visible.
+function defaultModalBg(bg) { return lum(bg) < 0.15 ? shiftHex(bg, 22) : shiftHex(bg, -24); }
 function renderSwatchSet(boxId, presets, current, onPick) {
   const box = $(boxId); if (!box) return; box.innerHTML = '';
   const cur = (current || '').toLowerCase();
@@ -3481,6 +3496,7 @@ function refreshSwatches() {
   renderSwatchSet('topbarSwatches', THEME_PRESETS, S.topbarColor || S.accentColor, (c) => { S.topbarColor = c; if ($('setTopbar')) $('setTopbar').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
   renderSwatchSet('navbarSwatches', BG_PRESETS, S.navBarColor || cardCol(), (c) => { S.navBarColor = c; if ($('setNavbar')) $('setNavbar').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
   renderSwatchSet('bgSwatches', BG_PRESETS, S.appBg, (c) => { S.appBg = c; if ($('setAppBg')) $('setAppBg').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
+  renderSwatchSet('modalBgSwatches', BG_PRESETS, S.modalBg || defaultModalBg(S.appBg), (c) => { S.modalBg = c; if ($('setModalBg')) $('setModalBg').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
   renderSwatchSet('logoBgSwatches', LOGO_BG_PRESETS, currentLogoBg(), (c) => { S[logoBgKey()] = c; if (c !== 'transparent' && $('setLogoBg')) $('setLogoBg').value = c; applyTheme(); refreshSwatches(); saveThemeSettings(); });
 }
 // ===== Couleurs des badges (Réglages → Badges) : chaque badge = une variable CSS, personnalisable, sinon couleur par défaut =====
@@ -3774,7 +3790,7 @@ function mergeSettings(localS, remoteS) {
     const lT = (localS && localS.themeUpdatedAt) || 0, rT = (remoteS && remoteS.themeUpdatedAt) || 0;
     const themeSrc = rT > lT ? remoteS : (lT > rT ? localS : base);
     const otherSrc = themeSrc === remoteS ? localS : remoteS;
-    ['accentColor', 'topbarColor', 'appBg', 'navBarColor', 'themeUpdatedAt'].forEach((k) => { if (themeSrc && themeSrc[k] !== undefined) merged[k] = themeSrc[k]; });
+    ['accentColor', 'topbarColor', 'appBg', 'modalBg', 'navBarColor', 'themeUpdatedAt'].forEach((k) => { if (themeSrc && themeSrc[k] !== undefined) merged[k] = themeSrc[k]; });
     merged.badgeColors = Object.assign({}, (otherSrc && otherSrc.badgeColors) || {}, (themeSrc && themeSrc.badgeColors) || {});
   }
   // Petites listes de config sans identifiant : union dédoublonnée (mots-clés mail, ordre des tuiles) → pas de perte croisée.
@@ -13790,7 +13806,7 @@ function modalRDV(t, arret, cid, onDone) {
     const fiche = (client.chevaux || []).find((x) => norm(x.nom) === norm(h.nom));
     const sp = (fiche && fiche.suiviPatho && fiche.suiviPatho.actif) ? fiche.suiviPatho : null;
     return { id: h.id, nom: h.nom, fiche, curType, hasPatho: !!sp,
-      mode: curType === 'patho' ? 'ignore' : '', date: proposed, heure: '', // mode parage : '' (Sélectionner) | 'commun' | 'sep' (date différente) | 'ignore' (ne pas replacer)
+      mode: curType === 'patho' ? 'ignore' : 'commun', date: proposed, heure: '', // mode parage (défaut = RDV commun) : 'commun' | 'sep' (date différente) | 'ignore' (ne pas replacer)
       pathoStatus: sp ? 'maintenir' : null, pathoDate: sp ? proposedPathoDate(t.date || todayStr(), sp) : '', pathoHeure: '' };
   });
   const previewHtml = (d) => { const pv = rdvDayPreview(d); return `<b>${d ? fmtDateFr(d) : '—'}</b> — Arrêts déjà prévus : ${pv.arrets.length ? esc(pv.arrets.join(' · ')) : 'aucune tournée'}${pv.priv.length ? '<br>📅 Agenda privé : ' + pv.priv.map((p) => esc((eventHeure(p) ? eventHeure(p) + ' ' : '') + p.title)).join(' · ') : ''}`; };
@@ -13808,13 +13824,13 @@ function modalRDV(t, arret, cid, onDone) {
     { const ch = $('rdvCommonHeure'); if (ch) { ch._gpTakenFn = () => { const tt = targetTourFor(common.date); return tt ? takenRdvSlots(tt) : null; }; ch._gpOnConflict = (val, d) => { const tt = targetTourFor(common.date); if (tt) openRdvReassign(tt, val, d, () => { common.heure = val; }); }; ch.addEventListener('change', (e) => { common.heure = e.target.value; }); } }
     const box = $('rdvChevaux');
     entries.forEach((en) => {
-      const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.curType !== 'patho' && (en.mode === 'ignore' || !en.mode) ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
+      const wrap = document.createElement('div'); wrap.className = 'card rdv-cheval' + (en.curType !== 'patho' && en.mode === 'ignore' ? ' rdv-ignored' : ''); wrap.style.marginBottom = '8px';
       let inner = `<div class="rdv-ch-head"><b>🐴 ${esc(en.nom)}</b>${en.curType === 'patho' ? ' <span class="badge">RDV patho</span>' : ''}</div>`;
       // --- Parage (prochain suivi normal) : liste déroulante de mode (au lieu de 2 cases à cocher) ---
       if (en.curType === 'patho') {
         inner += `<p class="hint">RDV pathologique effectué : le <b>parage</b> suit son propre cycle et n'est pas reprogrammé ici.</p>`;
       } else {
-        inner += `<label class="rdv-ch-opt">Parage <select data-mode><option value=""${!en.mode ? ' selected' : ''}>Sélectionner un mode</option><option value="commun"${en.mode === 'commun' ? ' selected' : ''}>Sur le RDV commun</option><option value="sep"${en.mode === 'sep' ? ' selected' : ''}>Date différente</option><option value="ignore"${en.mode === 'ignore' ? ' selected' : ''}>Ne pas replacer le parage</option></select></label>`;
+        inner += `<label class="rdv-ch-opt">Parage <select data-mode><option value="commun"${en.mode === 'commun' ? ' selected' : ''}>Sur le RDV commun (date/heure en haut)</option><option value="sep"${en.mode === 'sep' ? ' selected' : ''}>Date différente</option><option value="ignore"${en.mode === 'ignore' ? ' selected' : ''}>Ne pas replacer le parage</option></select></label>`;
         if (en.mode === 'sep') inner += `<div class="rdv-dh"><label>Date du parage<input type="date" data-date value="${en.date}"/></label><label>Heure<input type="time" data-heure value="${en.heure}"/></label></div><p class="hint" data-prev></p>` + chevalRdvWarnHtml(client.id, en.id, en.date, t.date, t.id);
         else if (en.mode === 'commun') inner += `<p class="hint">→ sur le RDV commun</p>` + chevalRdvWarnHtml(client.id, en.id, common.date, t.date, t.id);
       }
@@ -13840,7 +13856,7 @@ function modalRDV(t, arret, cid, onDone) {
     $('rdvOk').addEventListener('click', () => {
       // Parage : regroupement par date (commune/séparée) → 1 heure par date (même client, même date = même arrêt = même heure).
       const byDate = {}; // date -> { ids:[], heure }
-      entries.forEach((en) => { if (en.curType === 'patho' || en.mode === 'ignore' || !en.mode) return; const d = en.mode === 'sep' ? en.date : common.date; const hh = en.mode === 'sep' ? en.heure : common.heure; if (!d) return; const g = byDate[d] = byDate[d] || { ids: [], heure: '' }; g.ids.push(en.id); if (!g.heure && hh) g.heure = hh; });
+      entries.forEach((en) => { if (en.curType === 'patho' || en.mode === 'ignore') return; const d = en.mode === 'sep' ? en.date : common.date; const hh = en.mode === 'sep' ? en.heure : common.heure; if (!d) return; const g = byDate[d] = byDate[d] || { ids: [], heure: '' }; g.ids.push(en.id); if (!g.heure && hh) g.heure = hh; });
       // ≥1 cheval OBLIGATOIRE : au moins un parage (avec date) OU un 2ᵉ RDV patho maintenu (avec date).
       const hasParage = Object.keys(byDate).length > 0;
       const hasPathoMaint = entries.some((en) => en.hasPatho && en.pathoStatus === 'maintenir' && en.pathoDate);
@@ -14415,6 +14431,7 @@ function bindSettings() {
   if ($('setTopbar')) { $('setTopbar').value = S.topbarColor || S.accentColor; bindColor('setTopbar', (v) => { S.topbarColor = v; }); }
   if ($('setNavbar')) { $('setNavbar').value = S.navBarColor || (lum(S.appBg) < 0.45 ? '#1d1d1d' : '#ffffff'); bindColor('setNavbar', (v) => { S.navBarColor = v; }); }
   if ($('setAppBg')) { $('setAppBg').value = S.appBg; bindColor('setAppBg', (v) => { S.appBg = v; }); }
+  if ($('setModalBg')) { $('setModalBg').value = S.modalBg || defaultModalBg(S.appBg); bindColor('setModalBg', (v) => { S.modalBg = v; }); }
   if ($('setLogoBg')) { const cur = currentLogoBg(); if (cur && cur !== 'transparent') $('setLogoBg').value = cur; bindColor('setLogoBg', (v) => { S[logoBgKey()] = v; }); } // écrit sur la clé du type d'appareil courant (ordinateur / téléphone)
   refreshSwatches();
   // Champs numériques : séparateur de milliers + unité DANS le champ, mise à jour en direct.

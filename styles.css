@@ -103,7 +103,7 @@ input.gp-native { width: 1px !important; height: 1px !important; padding: 0 !imp
 .cm-filters .gp-sel-btn { padding: 8px 10px; font-size: .9rem; }
 /* Sélecteur d'heure maison — MODALE centrée avec molette/roue (HH:MM, chiffres glissables de haut en bas) */
 .gp-tm-backdrop { position: fixed; inset: 0; z-index: 12000; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; padding: 16px; } /* au-dessus des modales/sous-modales (10001) → la roue s'ouvre depuis une sous-modale (réattribution d'heure) */
-.gp-tm-dialog { background: var(--card); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 16px; width: min(320px, 92vw); max-height: 92vh; overflow: auto; }
+.gp-tm-dialog { background: var(--modal-bg, var(--card)); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 16px; width: min(320px, 92vw); max-height: 92vh; overflow: auto; }
 .gp-tm-title { font-weight: 800; font-size: 1rem; text-align: center; color: var(--ink); margin-bottom: 10px; }
 .gp-tm-actions { display: flex; gap: 8px; margin-top: 14px; }
 .gp-tm-actions .btn { flex: 1; }
@@ -542,7 +542,7 @@ td input { width: 90px; margin: 0; padding: 7px 8px; }
 /* Modal */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-start; justify-content: center; z-index: 3000; padding: 16px; padding-top: calc(var(--topbar-h, 88px) + var(--tabs-h, 64px) + 10px); padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 .modal-overlay.hidden { display: none; }
-.modal { background: var(--card); width: 100%; max-width: 640px; max-height: 100%; overflow-y: auto; border-radius: 16px; padding: 16px; }
+.modal { background: var(--modal-bg, var(--card)); width: 100%; max-width: 640px; max-height: 100%; overflow-y: auto; border-radius: 16px; padding: 16px; }
 @media (min-width: 700px) { .modal { max-width: min(960px, 94vw); } } /* PC : modale plus large (couvre mieux, ~largeur de la barre de nav) */
 .rem-tag { font-size: .68rem; font-weight: 700; color: var(--badge-info, var(--danger)); background: color-mix(in srgb, var(--badge-info, var(--danger)) 12%, transparent); padding: 1px 5px; border-radius: 6px; }
 .bk-area { width: 100%; height: 210px; margin: 6px 0 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; resize: vertical; }
