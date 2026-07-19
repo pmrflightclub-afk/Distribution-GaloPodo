@@ -9275,7 +9275,12 @@ function comptaData(ym) {
     if (!t.result || !t.result.parClient) return;
     const tourYm = (t.date || '').slice(0, 7); // mois « naturel » (date de la tournée)
     t.result.parClient.forEach((m) => {
-      if (tourYm === ym) { // base analytique = CA figé du mois de la tournée, indépendamment du rattachement caisse
+      // Lot 03b-1 : calcul HISSÉ du mode/mois effectif AVANT le bloc analytique. Rattachement caisse : SEUL le liquide sans facture peut migrer de mois (comptaPeriod) ; tout le reste suit la date de tournée.
+      const p = (t.payments || {})[m.clientId];
+      const method = p ? p.method : null; const fac = !!(p && p.facture);
+      const mode = method === 'liquide' ? (fac ? 'facliq' : 'liquide') : method === 'virement' ? (fac ? 'facvir' : 'virement') : 'aclasser';
+      const effYm = (mode === 'liquide' && p && p.comptaPeriod) ? p.comptaPeriod : tourYm;
+      if (effYm === ym) { // Lot 03b-1 : base analytique (CA/TVA/offert/remise) au MOIS EFFECTIF du client → migre AVEC la caisse pour un liquide-sans-facture rattaché ; pour tout autre client effYm===tourYm (inchangé)
         const depHT = (m.deplacement || []).reduce((s, l) => s + (l.partHT || 0), 0);
         const matHT = m.htMat || 0;
         // P1-3 : une ligne « Impayé du … » réinjectée est la COLLECTE d'un CA déjà accru le mois d'origine, pas un CA neuf → l'exclure de la base analytique (sinon double-comptage → provisions social/TVA surévaluées).
@@ -9284,11 +9289,6 @@ function comptaData(ym) {
         baseMat += matHT; baseDep += depHT; baseMO += (m.totalHT || 0) - matHT - depHT - impHT; tvaCol += (m.totalTVA || 0) - impTVA;
         const orM = offRemOfClient(m); offertM += orM.offert; remiseM += orM.remise; // L5 : offert/remise du mois (info, hors CA)
       }
-      const p = (t.payments || {})[m.clientId];
-      const method = p ? p.method : null; const fac = !!(p && p.facture);
-      const mode = method === 'liquide' ? (fac ? 'facliq' : 'liquide') : method === 'virement' ? (fac ? 'facvir' : 'virement') : 'aclasser';
-      // Rattachement caisse : SEUL le liquide sans facture peut être rattaché à un autre mois (comptaPeriod). Tout le reste suit la date de tournée.
-      const effYm = (mode === 'liquide' && p && p.comptaPeriod) ? p.comptaPeriod : tourYm;
       const entry = { tourId: t.id, tourDate: t.date, clientId: m.clientId, nom: m.nom, ht: m.totalHT, tva: m.totalTVA, ttc: m.totalTTC, mode, m, payment: p };
       if (mode === 'aclasser') { if (tourYm === ym) aclasserClients.push(entry); return; }
       if (mode === 'virement') { if (tourYm === ym) virementClients.push(entry); return; }
@@ -9323,7 +9323,9 @@ function comptaData(ym) {
   const ncTTC = ncMonth.filter((n) => !n.documentaire).reduce((s, n) => s + (n.montantTTC || 0), 0);
   const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
   // Extourne des BASES analytiques (provisions) ventilée par poste (main d'œuvre / matériel / déplacement crédité) selon la composition réelle des NC — ATTRIBUÉE AU MOIS DE LA TOURNÉE créditée (là où le CA a été accru), pas au mois d'émission de la NC → sinon la base du mois de tournée n'est pas réduite et celle du mois d'émission est clampée à 0 (sur-provisionnement).
-  const ncTourMonth = (S.notesCredit || []).filter((n) => !n.documentaire && ((n.tourDate || '').slice(0, 7) === ym));
+  // Lot 03b-1 : l'extourne de base d'une NC suit le MÊME mois effectif que le CA du client crédité (comptaPeriod si liquide-sans-facture rattaché, sinon mois de tournée) — sinon la base migrerait sans sa réduction (perte au source clampée à 0 + sur-évaluation à la cible).
+  const ncComptaMonth = (n) => { const tt = allTours().find((x) => x.id === n.tourId); const pp = tt && tt.payments && tt.payments[n.clientId]; return (pp && pp.method === 'liquide' && !pp.facture && pp.comptaPeriod) ? pp.comptaPeriod : (n.tourDate || '').slice(0, 7); };
+  const ncTourMonth = (S.notesCredit || []).filter((n) => !n.documentaire && ncComptaMonth(n) === ym);
   let ncMO = 0, ncMat = 0, ncDep = 0, ncTVA = 0;
   ncTourMonth.forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncDep += b.depHT || 0; ncTVA += b.tva; });
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
@@ -13432,8 +13434,12 @@ function modalVisitePick(nom, currentId, visArts, onPick) {
 function comptaLocked(tour, clientId) {
   if (!tour) return false;
   if (S.comptaDemarche && S.comptaDemarche[tour.id + ':' + clientId]) return true;
-  const ym = (tour.date || '').slice(0, 7); const st = S.comptaStatus && S.comptaStatus[ym];
-  return !!(st && st.liquide === 'encode');
+  const enc = (yy) => !!(yy && S.comptaStatus && S.comptaStatus[yy] && S.comptaStatus[yy].liquide === 'encode');
+  if (enc((tour.date || '').slice(0, 7))) return true;
+  // Lot 03b-1 : un liquide-sans-facture RATTACHÉ à un mois ENCODÉ est aussi figé — sinon modifier sa tournée (dont le mois-date reste ouvert) altérerait rétroactivement un mois déjà déclaré (le verrou par mois-date ne le couvre pas).
+  const p = tour.payments && tour.payments[clientId];
+  if (p && p.method === 'liquide' && !p.facture && p.comptaPeriod && enc(p.comptaPeriod)) return true;
+  return false;
 }
 // M2 : une tournée est « verrouillée compta » si l'un de ses clients l'est (démarche validée ou mois liquide encodé). Sert à figer définitivement une pièce déclarée.
 function tourComptaLocked(t) { return !!t && (t.arrets || []).some((a) => (a.clients || []).some((cl) => comptaLocked(t, cl.clientId))); }
