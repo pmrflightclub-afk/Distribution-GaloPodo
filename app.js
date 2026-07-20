@@ -2765,8 +2765,17 @@ const LS = {
           // salvés sont déjà en mémoire dans `durable`), enfin réécrire la valeur cible. Les tombstones ne sont jamais perdus.
           localStorage.setItem('ftr.syncmeta', JSON.stringify({ hash: {} })); // on ne jette QUE les empreintes (reconstructibles)
           localStorage.setItem('ftr.tomb', JSON.stringify(durable));          // petit, durable — JAMAIS purgé
+          // LOT 2 — la purge est consignée AVANT la ré-écriture : si le stockage est TOUJOURS plein, `setItem` lève
+          // à nouveau et tout ce qui suit est sauté. C'est justement le cas le plus grave (empreintes vidées ET
+          // reconstruction jamais faite → re-horodatage de masse au prochain enregistrement) : il ne doit pas être
+          // le seul à ne laisser aucune trace. L'issue est complétée juste après, si on va au bout.
+          const _qAt = Date.now();
+          const _qlog = (patch) => { try { const q = JSON.parse(localStorage.getItem('ftr.quotaLog') || '[]'); const i = q.findIndex((x) => x && x.at === _qAt); if (i >= 0) Object.assign(q[i], patch); else q.push(Object.assign({ at: _qAt, cle: k, rebuilt: false, err: '' }, patch)); localStorage.setItem('ftr.quotaLog', JSON.stringify(q.slice(-20))); } catch (e4) {} };
+          _qlog({});
           localStorage.setItem(k, JSON.stringify(v));
-          try { rebuildSyncHashes(); } catch (e3) {} // #1 : reconstruit les empreintes depuis l'état courant SANS bumper updatedAt → le prochain syncStamp ne rebumpe pas TOUT (sinon la version locale gagnerait le LWW et écraserait des éditions distantes)
+          let rebuilt = false, rerr = '';
+          try { rebuilt = rebuildSyncHashes() !== false; } catch (e3) { rerr = (e3 && e3.message) || String(e3); }
+          _qlog({ rebuilt, err: rerr, ecrit: true });
           return;
         } catch (e2) { /* toujours plein après purge → on laisse remonter l'erreur (pas d'écrasement silencieux) */ }
       }
@@ -3604,13 +3613,58 @@ function syncStamp(kind, arr) {
 }
 // #1 : reconstruit les empreintes de synchro (m.hash/m.upd) depuis l'état COURANT, SANS toucher aux updatedAt. Utilisé après une purge
 // quota (LS.set) — sinon le prochain syncStamp verrait « tout changé » (hash absent) et rebumperait TOUS les updatedAt (perte d'éditions distantes).
+// LOT 2 — JOURNAL DES DÉMARRAGES ET DES MONTÉES DE VERSION.
+// Sans cette trace, il est impossible d'attribuer une passe de masse à une mise à jour : c'est exactement ce qui a
+// rendu l'enquête du 2026-07-20 si longue (5 tournées clôturées ré-horodatées à la même milliseconde, sans qu'aucune
+// donnée ne dise quelle version tournait). On consigne AUSSI les compteurs d'entités actées AVANT toute passe de
+// maintenance : une montée de version qui les fait DIMINUER devient visible, au lieu d'être silencieuse.
+function _entityCounts() {
+  const safe = (fn, d) => { try { const v = fn(); return v === undefined ? d : v; } catch (e) { return d; } };
+  const tours = safe(() => allTours(), []) || [];
+  const cli = safe(() => clients, []) || [];
+  let cv = 0, art = 0, pay = 0, lignes = 0, clos = 0;
+  tours.forEach((t) => {
+    if (t.closed || t.endedAt) clos++;
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((c) => { cv += (c.chevaux || []).length; }));
+    art += (t.articles || []).length;
+    pay += Object.keys(t.payments || {}).length;
+    lignes += ((t.result && t.result.parClient) || []).length;
+  });
+  return { tournees: tours.length, cloturees: clos, chevaux: cv, articles: art, paiements: pay, lignes, clients: cli.length, chevauxFiche: cli.reduce((s, c) => s + ((c.chevaux || []).length), 0) };
+}
+function recordAppRun() {
+  try {
+    const prev = JSON.parse(localStorage.getItem('ftr.lastRun') || 'null');
+    const now = { at: Date.now(), v: APP_VERSION, counts: _entityCounts() };
+    localStorage.setItem('ftr.lastRun', JSON.stringify(now));
+    if (!prev || prev.v === now.v) return; // même version → pas un événement de migration
+    // MONTÉE (ou descente) DE VERSION : on archive le couple avant/après avec le delta des compteurs actés.
+    const delta = {}; Object.keys(now.counts).forEach((k) => { const d = (now.counts[k] || 0) - ((prev.counts && prev.counts[k]) || 0); if (d) delta[k] = d; });
+    const hist = JSON.parse(localStorage.getItem('ftr.migHist') || '[]');
+    hist.push({ at: now.at, de: prev.v, vers: now.v, avant: prev.counts, apres: now.counts, delta, baisse: Object.keys(delta).some((k) => delta[k] < 0) });
+    localStorage.setItem('ftr.migHist', JSON.stringify(hist.slice(-40)));
+  } catch (e) { /* la trace ne doit JAMAIS empêcher l'app de démarrer */ }
+}
+// LOT 2 — `typeof x` NE PROTÈGE PAS d'une variable `let`/`const` en ZONE MORTE TEMPORELLE : contrairement à une
+// variable non déclarée, elle lève une ReferenceError. Or `clients` (3531), `tournees` (3541), `archive` (3542) et
+// SETTINGS_COLLECTIONS (3407) sont déclarés APRÈS six `LS.set` de niveau module (3074, 3078, 3080, 3163, 3165, 3277).
+// Si le quota débordait sur l'un d'eux, la reconstruction levait, l'erreur était avalée par le `catch (e3) {}` de
+// LS.set, `m.hash` restait VIDE — et le prochain `saveTournees()` re-horodatait TOUT le parc, tournées clôturées
+// comprises, rendant cette copie autoritaire partout. C'est la seconde moitié de la cause racine du 2026-07-16.
+// Chaque source est désormais lue derrière un accès protégé, et un échec est TRACÉ au lieu d'être silencieux.
 function rebuildSyncHashes() {
   const m = syncMeta(); // lit hash/tomb/upd courants (hash vidé par la purge)
+  const safe = (fn, d) => { try { const v = fn(); return v === undefined ? d : v; } catch (e) { return d; } }; // couvre AUSSI la zone morte temporelle
   const put = (kind, arr) => { m.hash[kind] = m.hash[kind] || {}; m.upd[kind] = m.upd[kind] || {}; (arr || []).forEach((rec) => { if (!rec || !rec.id) return; m.hash[kind][rec.id] = hashRec(rec); if (rec.updatedAt) m.upd[kind][rec.id] = rec.updatedAt; }); };
-  put('clients', typeof clients !== 'undefined' ? clients : []);
-  put('tournees', typeof allTours === 'function' ? allTours() : []);
-  (typeof SETTINGS_COLLECTIONS !== 'undefined' ? SETTINGS_COLLECTIONS : []).forEach((k) => put('set:' + k, S && S[k]));
+  const cli = safe(() => clients, null), trs = safe(() => allTours(), null), cols = safe(() => SETTINGS_COLLECTIONS, null);
+  put('clients', cli || []);
+  put('tournees', trs || []);
+  (cols || []).forEach((k) => put('set:' + k, safe(() => S && S[k], [])));
   localStorage.setItem('ftr.syncmeta', JSON.stringify({ hash: m.hash, upd: m.upd })); // écriture DIRECTE (évite de re-déclencher LS.set → quota → récursion)
+  // Reconstruction PARTIELLE (appelée trop tôt : une source n'était pas encore initialisée) → on le consigne.
+  // Ce n'est plus dangereux depuis le Lot 1 (une référence absente n'autorise plus le bump), mais ça doit rester VISIBLE.
+  if (!cli || !trs || !cols) { try { const j = JSON.parse(localStorage.getItem('ftr.rebuildFail') || '[]'); j.push({ at: Date.now(), clients: !!cli, tournees: !!trs, collections: !!cols }); localStorage.setItem('ftr.rebuildFail', JSON.stringify(j.slice(-20))); } catch (e) {} }
+  return !!(cli && trs && cols);
 }
 function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); markSyncDirty(); bgSaveFlash(); }
 function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); markSyncDirty(); bgSaveFlash(); }
@@ -14909,6 +14963,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !_lockModal) closeModal(); }); // config initiale = non fermable par clic sur le fond
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !_lockModal) { const m2 = document.getElementById('modal2'); if (m2 && !m2.classList.contains('hidden')) { closeSubModal(); return; } const m = $('modal'); if (m && !m.classList.contains('hidden')) closeModal(); } }); // L8 : Échap ferme la sous-modale d'abord, sinon la modale principale
 
+  recordAppRun(); // LOT 2 — trace « quelle version a démarré, quand, et avec quel volume » (avant toute passe de maintenance)
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
