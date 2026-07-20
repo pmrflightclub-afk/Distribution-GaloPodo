@@ -4298,7 +4298,12 @@ function applyRemoteReplace(remote) {
   const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
   const isArch = (t) => { const d = t.date || ''; return !!d && (t.closed || d < todayStr()) && d < cutoff; }; // L1-1h : une tournée SANS date reste active (ne part pas en archive à chaque fusion)
   tournees = tours.filter((t) => !isArch(t)); archive = tours.filter(isArch);
-  const m = syncMeta(); m.tomb = Object.assign({}, remote.tomb || {}); m.hash = {}; saveSyncMeta(m);
+  // LOT 4 : les tombstones sont des faits MONOTONES (une suppression reste vraie). On les UNIT, comme le fait
+  // `applyMerged` — ils étaient ici REMPLACÉS par ceux du distant, ce qui pouvait ressusciter une fiche supprimée
+  // localement. Asymétrie non intentionnelle entre les deux chemins d'application.
+  const m = syncMeta(); const rt = (remote && remote.tomb) || {};
+  m.tomb = m.tomb || {}; Object.keys(rt).forEach((kind) => { m.tomb[kind] = mergeTomb(m.tomb[kind], rt[kind]); });
+  m.hash = {}; saveSyncMeta(m);
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
 }
 // ---------- L0 — Récupération : restaurer une version antérieure du coffre Drive ----------
@@ -4444,15 +4449,24 @@ async function restoreDriveSnapshot(snap, token, fileId) {
 }
 // Restauration GRANULAIRE : ne remet QUE les tournées (clôturées + actives) de la version choisie, en CONSERVANT vos clients et réglages ACTUELS.
 // Résout le « tout-ou-rien » : on récupère la tournée perdue sans régresser les fiches clients / encodages faits depuis.
+// LOT 4 (2026-07-20) — cette fonction REMPLAÇAIT `tournees`/`archive` EN BLOC, puis faisait `delete m.hash.tournees`
+// pour forcer le ré-horodatage de TOUT le parc, et poussait immédiatement sur Drive. Trois conséquences :
+//   • toute tournée absente de la version choisie était SUPPRIMÉE (y compris celles créées depuis) ;
+//   • toute saisie postérieure à cette version — clôture, encaissement, acte — était écrasée sans fusion,
+//     alors que `reinjectTour` juste en dessous sait, lui, fusionner en préservant l'état terminal ;
+//   • le ré-horodatage global rendait cette copie autoritaire sur l'ensemble du parc chez tous les appareils.
+// Le bouton portait le libellé « (recommandé) » : c'est exactement ce qu'on clique en constatant une perte, et
+// c'est ce qui l'aggravait. On applique désormais la MÊME sémantique que la réinjection unitaire, tournée par
+// tournée : fusion avec `graftClosure` (la clôture ne régresse jamais) et ré-horodatage CIBLÉ sur les seules
+// tournées restaurées. Une tournée locale absente de la sauvegarde est CONSERVÉE (« ♻ Tout » reste là pour un
+// véritable retour en arrière).
 async function restoreDriveTournees(snap, token, fileId) {
-  downloadSnapshot(); // filet réversible
+  downloadSnapshot(); _restoreBackedUp = true; // filet réversible, une seule fois (reinjectTour ne le refera pas)
   const tours = Array.isArray(snap.tours) ? snap.tours : (Array.isArray(snap.tournees) ? snap.tournees : []);
-  const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
-  const isArch = (t) => { const dd = t.date || ''; return !!dd && (t.closed || dd < todayStr()) && dd < cutoff; };
-  tournees = tours.filter((t) => !isArch(t)); archive = tours.filter(isArch);
-  const m = syncMeta(); m.hash = m.hash || {}; delete m.hash.tournees; saveSyncMeta(m); // force le ré-horodatage à « maintenant » → la version restaurée l'emporte à la prochaine fusion
-  saveTournees(); saveArchive();
+  let n = 0;
+  tours.forEach((rt) => { if (rt && rt.id) { try { reinjectTour(rt, snap); n++; } catch (e) { /* une tournée en échec ne doit pas interrompre la récupération des autres */ } } });
   try { if (token && fileId) { await driveUpload(token, fileId, exportSnapshot()); _lastPushHash = snapshotHash(exportSnapshot()); _syncDirty = false; } } catch (e) {}
+  return n;
 }
 // Réinjection CIBLÉE d'UNE tournée depuis une sauvegarde antérieure : on récupère juste cette tournée (clôtures/paiements/temps réel)
 // et on la FUSIONNE dans l'état actuel — les AUTRES tournées et tout ce qui a été fait depuis sont CONSERVÉS. Réversible (sauvegarde de sécurité).
@@ -4606,8 +4620,8 @@ function modalDriveRestore() {
           if (!snap) return;
           const run = async (fn, msg) => { setSt('', msg); try { await fn(snap, token, file.id); alert('✅ Restauré. L\'app va se recharger.'); location.reload(); } catch (err) { setSt('err', 'Restauration impossible : ' + err.message); } };
           modalActions('Restaurer — que voulez-vous remettre ?', [
-            { label: '🐴 Les tournées seulement (recommandé)', onClick: () => { if (confirm('Remettre les TOURNÉES de cette version ?\n\nVos CLIENTS et RÉGLAGES actuels sont CONSERVÉS (on ne touche qu\'aux tournées : clôtures, paiements, temps réel…). Une sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveTournees, 'Restauration des tournées…'); } },
-            { label: '♻ Tout (clients + réglages + tournées)', onClick: () => { if (confirm('Remplacer TOUT par cette version ?\n\nVos clients, réglages ET tournées reviennent à l\'état de cette sauvegarde — les modifications faites depuis sont annulées. Une sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveSnapshot, 'Restauration complète…'); } },
+            { label: '🐴 Fusionner les tournées (sans rien perdre)', onClick: () => { if (confirm('Fusionner les TOURNÉES de cette version dans vos données actuelles ?\n\n• Ce qui manque est REMIS (chevaux, actes, articles, paiements, clôtures).\n• Rien n\'est supprimé : vos tournées créées depuis sont conservées.\n• Une clôture déjà faite ne revient jamais en arrière.\n• Vos clients et réglages actuels ne sont pas touchés.\n\nUne sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveTournees, 'Fusion des tournées…'); } },
+            { label: '⚠️ Tout remplacer (retour en arrière complet)', onClick: () => { if (confirm('⚠️ REMPLACER TOUT par cette version ?\n\nVos clients, réglages ET tournées reviennent à l\'état de cette sauvegarde.\nTOUT ce qui a été fait depuis est ANNULÉ, y compris les encaissements et les tournées créées depuis.\n\nÀ n\'utiliser que pour un véritable retour en arrière. Pour récupérer des données manquantes, préférez « Fusionner ».\n\nUne sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveSnapshot, 'Remplacement complet…'); } },
           ]);
         });
       });
