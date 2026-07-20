@@ -3343,7 +3343,16 @@ if (!S.pincesAdded) {
 // TVA par pays : taux standard + taux autorisés pour les articles
 const PAYS_TVA = { be: { nom: 'Belgique', std: 21, rates: [21, 6, 0] }, fr: { nom: 'France', std: 20, rates: [20, 10, 5.5, 0] } };
 const tvaRatesPays = () => (PAYS_TVA[S.pays] || PAYS_TVA.be).rates;
-const baseMateriel = () => S.materiel.reduce((s, m) => s + ((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1)), 0);
+// ---------- LOT 3 — GEL DES TARIFS D'UNE TOURNÉE CLÔTURÉE ----------
+// Une facture clôturée ne doit JAMAIS être re-tarifée aux prix du jour. Or la configuration évolue légitimement
+// (frais véhicule remplacé à échéance, carburant, tarif de parage revu, article du catalogue, option « lourd » d'un
+// cheval décochée dans sa fiche) et `recomputeTourLocal` — appelé par des flux parfaitement normaux et POSTÉRIEURS à
+// la clôture : encaissement, réduction liquide, annulation, note de crédit, remboursement — reconstruit les lignes
+// depuis l'état COURANT. Une tournée de juillet pouvait ainsi être re-tarifée avec la configuration d'août.
+// Correction : à la clôture on FIGE les tarifs dans `t.priceSnap` ; tout recalcul ultérieur de cette tournée lit ce gel.
+// `var` (et non `let`) : ces helpers sont appelés très tôt au chargement — pas de zone morte temporelle possible.
+var _fp = null; // contexte de tarifs gelés actif pendant un recalcul (null = tarifs vivants)
+const baseMateriel = () => (_fp && _fp.baseMat != null) ? _fp.baseMat : S.materiel.reduce((s, m) => s + ((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1)), 0);
 // Chevaux facturés (parés/visités) dans une tournée.
 function billedHorsesInTour(t) { let n = 0; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv)) n++; }))); return n; }
 const shiftYm = (ym, delta) => { const [y, mo] = ym.split('-').map(Number); const idx = (y * 12 + (mo - 1)) + delta; return Math.floor(idx / 12) + '-' + String((idx % 12) + 1).padStart(2, '0'); };
@@ -3624,7 +3633,8 @@ function graftClosure(to, from) {
   if (from.startedAt && !to.startedAt) to.startedAt = from.startedAt;       // démarrage : garder le plus ancien non-nul
   if (from.endedAt && !to.endedAt) to.endedAt = from.endedAt;
   if (from.autoClosedAt && !to.autoClosedAt) to.autoClosedAt = from.autoClosedAt;
-  if (from.closed && !to.closed) to.closed = true;                          // clôture = état terminal (aucun « déclôturage » dans l'app)
+  if (from.closed && !to.closed) to.closed = true;
+  if (from.priceSnap && !to.priceSnap) to.priceSnap = JSON.parse(JSON.stringify(from.priceSnap)); // LOT 3 : le gel des tarifs suit la cloture                          // clôture = état terminal (aucun « déclôturage » dans l'app)
   // P0-2 : greffer l'ÉTAT FINANCIER manquant. La greffe de clôture protégeait les jalons mais PAS les paiements : une tournée
   // pouvait devenir « clôturée » avec un encaissement perdu (le gagnant LWW n'avait pas les payments). On ne fait que COMPLÉTER
   // (jamais écraser un paiement présent sur `to`) → aucune régression d'une édition légitime du gagnant.
@@ -4794,8 +4804,8 @@ function haversineKm(a, b) {
   const s = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
 }
-const rate = () => (S.tvaRegime === 'franchise' ? 0 : (S.tvaRate || 0) / 100); // franchise en base → 0 % (non assujetti)
-const fuelPerKmHT = () => (S.consoL100 / 100) * S.prixPleinL / (1 + rate());
+const rate = () => (_fp && _fp.rate != null) ? _fp.rate : (S.tvaRegime === 'franchise' ? 0 : (S.tvaRate || 0) / 100); // franchise en base → 0 % (non assujetti)
+const fuelPerKmHT = () => (_fp && _fp.fuel != null) ? _fp.fuel : (S.consoL100 / 100) * S.prixPleinL / (1 + rate());
 // Odomètre = somme des km de toutes les tournées calculées (chaque tournée compte une fois).
 // ---- Odomètre RÉEL / ESTIMÉ ----
 // Réel = relevés compteur saisis par l'utilisateur (Statut véhicule). Estimé = dernier relevé réel + Σ km des tournées faites APRÈS ce relevé.
@@ -4828,8 +4838,8 @@ const fraisActif = (f) => f.statut !== 'remplace';
 const fraisSeuil = (f) => (f.kmDebut || 0) + (f.kmPrevus || 0) + (f.kmReport || 0); // km d'échéance (report d'échéance inclus)
 const fraisContribHT = (f) => (f.kmPrevus > 0 && fraisActif(f)) ? (f.montantHT || 0) / f.kmPrevus : 0;
 const amortContribHT = () => (S.amortissement.achatHT > 0 && S.amortissement.dureeVieKm > 0) ? S.amortissement.achatHT / S.amortissement.dureeVieKm : 0;
-const baseVehiculeHT = () => amortContribHT() + S.frais.reduce((s, f) => s + fraisContribHT(f), 0);
-const tempsPerKm = () => (S.kmHeure > 0 ? (S.prixHeure || 0) / S.kmHeure : 0); // temps de déplacement €/km = prix/heure ÷ km/heure
+const baseVehiculeHT = () => (_fp && _fp.baseVeh != null) ? _fp.baseVeh : amortContribHT() + S.frais.reduce((s, f) => s + fraisContribHT(f), 0);
+const tempsPerKm = () => (_fp && _fp.temps != null) ? _fp.temps : (S.kmHeure > 0 ? (S.prixHeure || 0) / S.kmHeure : 0); // temps de déplacement €/km = prix/heure ÷ km/heure
 const tarifHT = (type) => baseVehiculeHT() + fuelPerKmHT() + (type !== 'tournee' ? tempsPerKm() : 0) + (type === 'urgence' ? S.urgenceSuppKm : 0);
 const ttc = (ht) => ht * (1 + rate());
 const fullName = (c) => c ? [c.prenom, c.nom].filter((x) => x && String(x).trim()).join(' ').trim() : '';
@@ -7966,17 +7976,62 @@ function recomputeMoney() {
 }
 
 // Recalcule (sans API) durée + montants d'une tournée à partir de sa géométrie mémorisée.
+// LOT 3 — Clés de configuration TARIFAIRE lues directement par computeResultMoney/rowFromArret (hors helpers dérivés,
+// gelés à part). Inventaire établi par relevé exhaustif des lectures `S.*` de la chaîne de calcul.
+const PRICE_KEYS = ['parage', 'seuilKm', 'forfait', 'repartition', 'reducLiquide', 'urgenceSuppKm', 'fourbureHT', 'npasHT', 'infectionHT', 'difficileHT', 'lourdHT', 'tvaRate', 'tvaRegime'];
+function _cvKeyOf(cv) { return (cv && cv.id != null) ? 'id' + cv.id : 'nm' + norm(cv && cv.nom); }
+// Photographie des tarifs applicables à CETTE tournée, à cet instant. Compact : 5 scalaires dérivés + les clés
+// tarifaires + les seuls articles du catalogue réellement utilisés + les options « lourd » figées par cheval.
+function buildPriceSnap(t, derived) {
+  const snap = { at: Date.now(), v: (typeof APP_VERSION === 'string' ? APP_VERSION : ''), baseVeh: baseVehiculeHT(), fuel: fuelPerKmHT(), temps: tempsPerKm(), baseMat: baseMateriel(), rate: rate(), S: {}, cv: {} };
+  if (derived) snap.derived = true; // gel posé APRÈS coup (tournée déjà clôturée) : reflète la config du jour du gel, pas celle de la clôture
+  PRICE_KEYS.forEach((k) => { if (S[k] !== undefined) snap.S[k] = JSON.parse(JSON.stringify(S[k])); });
+  // Articles du catalogue référencés par la tournée (visites par cheval) — on ne copie que ceux-là.
+  const usedIds = {};
+  ((t && t.arrets) || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (cv && cv.visiteArtId) usedIds[cv.visiteArtId] = 1; })));
+  snap.S.articlesCatalogue = (S.articlesCatalogue || []).filter((x) => x && usedIds[x.id]).map((x) => JSON.parse(JSON.stringify(x)));
+  // Options facturables portées par la FICHE du cheval (lourd) — sinon un décochage ultérieur modifie une facture close.
+  ((t && t.arrets) || []).forEach((a) => (a.clients || []).forEach((cl) => {
+    const c = (typeof clients !== 'undefined' ? clients : []).find((x) => x.id === cl.clientId); if (!c) return;
+    (cl.chevaux || []).forEach((cv) => {
+      const h = (c.chevaux || []).find((x) => (cv.id != null && x.id === cv.id) || (norm(cv.nom) && norm(x.nom) === norm(cv.nom))); if (!h) return;
+      (snap.cv[cl.clientId] = snap.cv[cl.clientId] || {})[_cvKeyOf(cv)] = { lourd: !!h.lourd, lourdHT: h.lourdHT, lourdRemise: h.lourdRemise };
+    });
+  }));
+  return snap;
+}
+// Pose le gel si la tournée est clôturée et n'en a pas encore (tournées closes AVANT ce correctif).
+// Ne modifie AUCUN montant : `t.result` est laissé tel quel. Effet = la dérive s'arrête ici.
+function ensurePriceSnap(t) { if (!t || !t.priceSnap || !t.priceSnap.S) { if (t && (t.closed || t.endedAt)) { t.priceSnap = buildPriceSnap(t, true); return true; } } return false; }
+// Exécute `fn` avec les tarifs GELÉS de `t` (si elle en a). Restauration garantie par `finally` → aucun état résiduel.
+// On n'échange que la CONFIGURATION : les formules de calcul ne sont pas touchées d'une ligne.
+function withFrozenPrices(t, fn) {
+  const snap = t && t.priceSnap && t.priceSnap.S ? t.priceSnap : null;
+  if (!snap) return fn();
+  const oldS = S, oldC = (typeof clients !== 'undefined' ? clients : []), oldFp = _fp;
+  try {
+    S = Object.assign({}, S, snap.S);
+    _fp = { baseVeh: snap.baseVeh, fuel: snap.fuel, temps: snap.temps, baseMat: snap.baseMat, rate: snap.rate };
+    if (snap.cv && Object.keys(snap.cv).length) { // superpose les options « lourd » figées, sans rien perdre du reste de la fiche
+      clients = oldC.map((c) => { const per = snap.cv[c.id]; if (!per) return c; return Object.assign({}, c, { chevaux: (c.chevaux || []).map((h) => { const f = per['id' + h.id] || per['nm' + norm(h.nom)]; return f ? Object.assign({}, h, f) : h; }) }); });
+    }
+    return fn();
+  } finally { S = oldS; clients = oldC; _fp = oldFp; }
+}
 function recomputeTourLocal(t) {
   const R = t.result;
   if (!R || !R.rows || R.rows.length !== (t.arrets || []).length) return false; // géométrie absente/périmée
-  const rows = t.arrets.map((a, i) => rowFromArret(a, R.rows[i]));
-  const prov = (R.providerMin != null ? R.providerMin : R.totalMin);
-  const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 90));
-  const geom = { totalKm: R.totalKm, totalMin, kmHomeFirst: R.kmHomeFirst, kmLastHome: R.kmLastHome };
-  const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff, t.payments);
-  res.providerMin = prov; res.routeGeo = R.routeGeo || [];
-  t.result = res;
-  return true;
+  ensurePriceSnap(t); // tournée clôturée sans gel (antérieure au correctif) → on fige MAINTENANT : la dérive s'arrête ici
+  return withFrozenPrices(t, () => { // clôturée = tarifs du jour de la clôture ; non clôturée = tarifs vivants (pas de priceSnap)
+    const rows = t.arrets.map((a, i) => rowFromArret(a, R.rows[i]));
+    const prov = (R.providerMin != null ? R.providerMin : R.totalMin);
+    const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 90));
+    const geom = { totalKm: R.totalKm, totalMin, kmHomeFirst: R.kmHomeFirst, kmLastHome: R.kmLastHome };
+    const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff, t.payments);
+    res.providerMin = prov; res.routeGeo = R.routeGeo || [];
+    t.result = res;
+    return true;
+  });
 }
 // Bouton Réglages : actualise durées + montants des tournées d'aujourd'hui et à venir (PAS les clôturées/archivées).
 function refreshActiveTours() {
@@ -8978,7 +9033,7 @@ function autoCloseOverdueTours() {
     const deadline = arr + 3 * 3600 * 1000;
     if (Date.now() > deadline) {
       if (tourFinalizeBlock(t).length) return; // arrêts non finalisés → NE PAS clôturer automatiquement (l'utilisateur doit finaliser ; alerte « Arrêts à finaliser »)
-      t.endedAt = deadline; t.closed = true; t.autoClosedAt = deadline; changed = true;
+      t.endedAt = deadline; t.closed = true; t.autoClosedAt = deadline; changed = true; if (!t.priceSnap) t.priceSnap = buildPriceSnap(t); /* LOT 3 : fige les tarifs applicables au moment de la cloture */
     }
   });
   if (changed) { saveTournees(); scheduleDrivePush(); } // clôture (auto) = JALON → synchro Drive rapide
@@ -12447,7 +12502,7 @@ function persistTourAnywhere(t) {
 // des dépassées et devient une tournée clôturée normale ; l'utilisateur complète ensuite ses données manquantes (stats).
 function recoverTour(t) {
   if (!confirm('Récupérer l\'ancienne tournée du ' + fmtDateFr(t.date) + ' ? Elle est figée à sa date (arrêts non modifiables). Vous pourrez compléter ses données manquantes (heures de RDV, temps de route, durées de consultation) pour des statistiques complètes.')) return;
-  t.recovered = true; t.closed = true;
+  t.recovered = true; t.closed = true; if (!t.priceSnap) t.priceSnap = buildPriceSnap(t); /* LOT 3 : fige les tarifs applicables au moment de la cloture */
   persistTourAnywhere(t); scheduleDrivePush(); // récupération/clôture = JALON → synchro Drive rapide
   renderHome();
   modalRecoverStats(t);
@@ -13134,7 +13189,7 @@ function renderHomeTrajet() {
         { label: navLabel(), onClick: () => openNav(retAddr) },
         { label: 'Route (temps réel du retour)', onClick: () => modalReturnTime(t, estRet, renderHomeTrajet) },
       ]));
-      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourFinalizeBlock(t); if (blk.length) { alert('🔒 Clôture impossible — chaque arrêt doit être finalisé (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); scheduleDrivePush(); renderHome(); }); // clôture = JALON → synchro Drive rapide
+      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourFinalizeBlock(t); if (blk.length) { alert('🔒 Clôture impossible — chaque arrêt doit être finalisé (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; if (!t.priceSnap) t.priceSnap = buildPriceSnap(t); /* LOT 3 : fige les tarifs applicables au moment de la cloture */ persistTour(); scheduleDrivePush(); renderHome(); }); // clôture = JALON → synchro Drive rapide
       box.appendChild(rr);
     }
   });
@@ -14933,6 +14988,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
     currentTour.closed = true;
+    if (!currentTour.priceSnap) currentTour.priceSnap = buildPriceSnap(currentTour); /* LOT 3 : fige les tarifs a la cloture */
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
     saveTournees(); scheduleDrivePush(); scheduleCalPush(currentTour); openEditor(); // clôture = JALON → synchro Drive rapide
   });
