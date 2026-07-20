@@ -11,7 +11,7 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.7.97';
+const APP_VERSION = '1.8.0';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
@@ -2765,8 +2765,17 @@ const LS = {
           // salvés sont déjà en mémoire dans `durable`), enfin réécrire la valeur cible. Les tombstones ne sont jamais perdus.
           localStorage.setItem('ftr.syncmeta', JSON.stringify({ hash: {} })); // on ne jette QUE les empreintes (reconstructibles)
           localStorage.setItem('ftr.tomb', JSON.stringify(durable));          // petit, durable — JAMAIS purgé
+          // LOT 2 — la purge est consignée AVANT la ré-écriture : si le stockage est TOUJOURS plein, `setItem` lève
+          // à nouveau et tout ce qui suit est sauté. C'est justement le cas le plus grave (empreintes vidées ET
+          // reconstruction jamais faite → re-horodatage de masse au prochain enregistrement) : il ne doit pas être
+          // le seul à ne laisser aucune trace. L'issue est complétée juste après, si on va au bout.
+          const _qAt = Date.now();
+          const _qlog = (patch) => { try { const q = JSON.parse(localStorage.getItem('ftr.quotaLog') || '[]'); const i = q.findIndex((x) => x && x.at === _qAt); if (i >= 0) Object.assign(q[i], patch); else q.push(Object.assign({ at: _qAt, cle: k, rebuilt: false, err: '' }, patch)); localStorage.setItem('ftr.quotaLog', JSON.stringify(q.slice(-20))); } catch (e4) {} };
+          _qlog({});
           localStorage.setItem(k, JSON.stringify(v));
-          try { rebuildSyncHashes(); } catch (e3) {} // #1 : reconstruit les empreintes depuis l'état courant SANS bumper updatedAt → le prochain syncStamp ne rebumpe pas TOUT (sinon la version locale gagnerait le LWW et écraserait des éditions distantes)
+          let rebuilt = false, rerr = '';
+          try { rebuilt = rebuildSyncHashes() !== false; } catch (e3) { rerr = (e3 && e3.message) || String(e3); }
+          _qlog({ rebuilt, err: rerr, ecrit: true });
           return;
         } catch (e2) { /* toujours plein après purge → on laisse remonter l'erreur (pas d'écrasement silencieux) */ }
       }
@@ -3343,7 +3352,16 @@ if (!S.pincesAdded) {
 // TVA par pays : taux standard + taux autorisés pour les articles
 const PAYS_TVA = { be: { nom: 'Belgique', std: 21, rates: [21, 6, 0] }, fr: { nom: 'France', std: 20, rates: [20, 10, 5.5, 0] } };
 const tvaRatesPays = () => (PAYS_TVA[S.pays] || PAYS_TVA.be).rates;
-const baseMateriel = () => S.materiel.reduce((s, m) => s + ((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1)), 0);
+// ---------- LOT 3 — GEL DES TARIFS D'UNE TOURNÉE CLÔTURÉE ----------
+// Une facture clôturée ne doit JAMAIS être re-tarifée aux prix du jour. Or la configuration évolue légitimement
+// (frais véhicule remplacé à échéance, carburant, tarif de parage revu, article du catalogue, option « lourd » d'un
+// cheval décochée dans sa fiche) et `recomputeTourLocal` — appelé par des flux parfaitement normaux et POSTÉRIEURS à
+// la clôture : encaissement, réduction liquide, annulation, note de crédit, remboursement — reconstruit les lignes
+// depuis l'état COURANT. Une tournée de juillet pouvait ainsi être re-tarifée avec la configuration d'août.
+// Correction : à la clôture on FIGE les tarifs dans `t.priceSnap` ; tout recalcul ultérieur de cette tournée lit ce gel.
+// `var` (et non `let`) : ces helpers sont appelés très tôt au chargement — pas de zone morte temporelle possible.
+var _fp = null; // contexte de tarifs gelés actif pendant un recalcul (null = tarifs vivants)
+const baseMateriel = () => (_fp && _fp.baseMat != null) ? _fp.baseMat : S.materiel.reduce((s, m) => s + ((m.montantHT || 0) / Math.max(1, m.nbChevaux || 1)), 0);
 // Chevaux facturés (parés/visités) dans une tournée.
 function billedHorsesInTour(t) { let n = 0; (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (chevalFait(cv)) n++; }))); return n; }
 const shiftYm = (ym, delta) => { const [y, mo] = ym.split('-').map(Number); const idx = (y * 12 + (mo - 1)) + delta; return Math.floor(idx / 12) + '-' + String((idx % 12) + 1).padStart(2, '0'); };
@@ -3570,10 +3588,23 @@ function saveSyncMeta(m) { LS.set('ftr.tomb', (m && m.tomb) || {}); LS.set('ftr.
 function syncStamp(kind, arr) {
   const m = syncMeta(); m.hash[kind] = m.hash[kind] || {}; m.tomb[kind] = m.tomb[kind] || {}; m.upd = m.upd || {}; m.upd[kind] = m.upd[kind] || {};
   const now = Date.now(); const seen = {};
+  // GARDE ANTI RE-HORODATAGE DE MASSE (2026-07-20). Sans elle, la PERTE DE LA RÉFÉRENCE d'empreintes — purge quota
+  // (LS.set), changement de la FORMULE hashRec (elle a été réécrite 4 fois entre le 05 et le 15/07), ou 1ᵉʳ boot d'une
+  // version — fait paraître TOUS les enregistrements « modifiés » : ils reçoivent alors le MÊME `now` et cette copie
+  // devient autoritaire sur le parc ENTIER, y compris les tournées CLÔTURÉES, qu'elle écrase chez les autres appareils.
+  // Signature observée en production le 2026-07-16T11:53:31 : 14 clients (.835) puis 5 tournées (.839), soit tout le parc.
+  // Ici on distingue « je n'ai PAS de référence » de « la référence DIFFÈRE » : sans référence on ADOPTE l'empreinte
+  // sans toucher à updatedAt — exactement ce que fait déjà rebuildSyncHashes (3585) après une purge.
+  // Compromis assumé : une édition locale réelle faite pendant cette fenêtre ne sera pas propagée (elle reste locale).
+  // C'est le sens sûr : une édition non propagée est récupérable, un écrasement du coffre ne l'est pas.
+  const _known = arr.reduce((n, r) => n + ((r && r.id && Object.prototype.hasOwnProperty.call(m.hash[kind], r.id)) ? 1 : 0), 0);
+  const _baselineLost = arr.length >= 3 && _known === 0; // aucune référence alors qu'on a du contenu = référence perdue, pas N éditions simultanées
+  if (_baselineLost) { try { const j = LS.get('ftr.stampGuard', []); j.push({ at: now, kind, n: arr.length, v: APP_VERSION }); LS.set('ftr.stampGuard', j.slice(-50)); } catch (e) {} } // trace : ces épisodes doivent être visibles, pas silencieux
   arr.forEach((rec) => {
     if (!rec.id) rec.id = uid(); seen[rec.id] = true;
     const h = hashRec(rec);
-    if (m.hash[kind][rec.id] !== h) { rec.updatedAt = Math.max(now, (rec.updatedAt || 0) + 1); m.hash[kind][rec.id] = h; } else if (!rec.updatedAt) rec.updatedAt = now; // Fix (4) : updatedAt MONOTONE — une édition ne descend jamais sous la dernière valeur connue (garde anti décalage d'horloge / anti-rajeunissement)
+    if (_baselineLost) { m.hash[kind][rec.id] = h; if (!rec.updatedAt) rec.updatedAt = now; } // référence perdue → on se recale SANS rajeunir (pas de prise d'autorité sur le parc)
+    else if (m.hash[kind][rec.id] !== h) { rec.updatedAt = Math.max(now, (rec.updatedAt || 0) + 1); m.hash[kind][rec.id] = h; } else if (!rec.updatedAt) rec.updatedAt = now; // Fix (4) : updatedAt MONOTONE — une édition ne descend jamais sous la dernière valeur connue (garde anti décalage d'horloge / anti-rajeunissement)
     m.upd[kind][rec.id] = rec.updatedAt; // Fix (7) : mémorise le dernier updatedAt connu par id (pour majorer un futur tombstone)
     if (m.tomb[kind][rec.id] && m.tomb[kind][rec.id] <= (rec.updatedAt || 0)) delete m.tomb[kind][rec.id]; // réapparu → tombstone périmé
   });
@@ -3582,13 +3613,58 @@ function syncStamp(kind, arr) {
 }
 // #1 : reconstruit les empreintes de synchro (m.hash/m.upd) depuis l'état COURANT, SANS toucher aux updatedAt. Utilisé après une purge
 // quota (LS.set) — sinon le prochain syncStamp verrait « tout changé » (hash absent) et rebumperait TOUS les updatedAt (perte d'éditions distantes).
+// LOT 2 — JOURNAL DES DÉMARRAGES ET DES MONTÉES DE VERSION.
+// Sans cette trace, il est impossible d'attribuer une passe de masse à une mise à jour : c'est exactement ce qui a
+// rendu l'enquête du 2026-07-20 si longue (5 tournées clôturées ré-horodatées à la même milliseconde, sans qu'aucune
+// donnée ne dise quelle version tournait). On consigne AUSSI les compteurs d'entités actées AVANT toute passe de
+// maintenance : une montée de version qui les fait DIMINUER devient visible, au lieu d'être silencieuse.
+function _entityCounts() {
+  const safe = (fn, d) => { try { const v = fn(); return v === undefined ? d : v; } catch (e) { return d; } };
+  const tours = safe(() => allTours(), []) || [];
+  const cli = safe(() => clients, []) || [];
+  let cv = 0, art = 0, pay = 0, lignes = 0, clos = 0;
+  tours.forEach((t) => {
+    if (t.closed || t.endedAt) clos++;
+    (t.arrets || []).forEach((a) => (a.clients || []).forEach((c) => { cv += (c.chevaux || []).length; }));
+    art += (t.articles || []).length;
+    pay += Object.keys(t.payments || {}).length;
+    lignes += ((t.result && t.result.parClient) || []).length;
+  });
+  return { tournees: tours.length, cloturees: clos, chevaux: cv, articles: art, paiements: pay, lignes, clients: cli.length, chevauxFiche: cli.reduce((s, c) => s + ((c.chevaux || []).length), 0) };
+}
+function recordAppRun() {
+  try {
+    const prev = JSON.parse(localStorage.getItem('ftr.lastRun') || 'null');
+    const now = { at: Date.now(), v: APP_VERSION, counts: _entityCounts() };
+    localStorage.setItem('ftr.lastRun', JSON.stringify(now));
+    if (!prev || prev.v === now.v) return; // même version → pas un événement de migration
+    // MONTÉE (ou descente) DE VERSION : on archive le couple avant/après avec le delta des compteurs actés.
+    const delta = {}; Object.keys(now.counts).forEach((k) => { const d = (now.counts[k] || 0) - ((prev.counts && prev.counts[k]) || 0); if (d) delta[k] = d; });
+    const hist = JSON.parse(localStorage.getItem('ftr.migHist') || '[]');
+    hist.push({ at: now.at, de: prev.v, vers: now.v, avant: prev.counts, apres: now.counts, delta, baisse: Object.keys(delta).some((k) => delta[k] < 0) });
+    localStorage.setItem('ftr.migHist', JSON.stringify(hist.slice(-40)));
+  } catch (e) { /* la trace ne doit JAMAIS empêcher l'app de démarrer */ }
+}
+// LOT 2 — `typeof x` NE PROTÈGE PAS d'une variable `let`/`const` en ZONE MORTE TEMPORELLE : contrairement à une
+// variable non déclarée, elle lève une ReferenceError. Or `clients` (3531), `tournees` (3541), `archive` (3542) et
+// SETTINGS_COLLECTIONS (3407) sont déclarés APRÈS six `LS.set` de niveau module (3074, 3078, 3080, 3163, 3165, 3277).
+// Si le quota débordait sur l'un d'eux, la reconstruction levait, l'erreur était avalée par le `catch (e3) {}` de
+// LS.set, `m.hash` restait VIDE — et le prochain `saveTournees()` re-horodatait TOUT le parc, tournées clôturées
+// comprises, rendant cette copie autoritaire partout. C'est la seconde moitié de la cause racine du 2026-07-16.
+// Chaque source est désormais lue derrière un accès protégé, et un échec est TRACÉ au lieu d'être silencieux.
 function rebuildSyncHashes() {
   const m = syncMeta(); // lit hash/tomb/upd courants (hash vidé par la purge)
+  const safe = (fn, d) => { try { const v = fn(); return v === undefined ? d : v; } catch (e) { return d; } }; // couvre AUSSI la zone morte temporelle
   const put = (kind, arr) => { m.hash[kind] = m.hash[kind] || {}; m.upd[kind] = m.upd[kind] || {}; (arr || []).forEach((rec) => { if (!rec || !rec.id) return; m.hash[kind][rec.id] = hashRec(rec); if (rec.updatedAt) m.upd[kind][rec.id] = rec.updatedAt; }); };
-  put('clients', typeof clients !== 'undefined' ? clients : []);
-  put('tournees', typeof allTours === 'function' ? allTours() : []);
-  (typeof SETTINGS_COLLECTIONS !== 'undefined' ? SETTINGS_COLLECTIONS : []).forEach((k) => put('set:' + k, S && S[k]));
+  const cli = safe(() => clients, null), trs = safe(() => allTours(), null), cols = safe(() => SETTINGS_COLLECTIONS, null);
+  put('clients', cli || []);
+  put('tournees', trs || []);
+  (cols || []).forEach((k) => put('set:' + k, safe(() => S && S[k], [])));
   localStorage.setItem('ftr.syncmeta', JSON.stringify({ hash: m.hash, upd: m.upd })); // écriture DIRECTE (évite de re-déclencher LS.set → quota → récursion)
+  // Reconstruction PARTIELLE (appelée trop tôt : une source n'était pas encore initialisée) → on le consigne.
+  // Ce n'est plus dangereux depuis le Lot 1 (une référence absente n'autorise plus le bump), mais ça doit rester VISIBLE.
+  if (!cli || !trs || !cols) { try { const j = JSON.parse(localStorage.getItem('ftr.rebuildFail') || '[]'); j.push({ at: Date.now(), clients: !!cli, tournees: !!trs, collections: !!cols }); localStorage.setItem('ftr.rebuildFail', JSON.stringify(j.slice(-20))); } catch (e) {} }
+  return !!(cli && trs && cols);
 }
 function saveClients() { syncStamp('clients', clients); LS.set('ftr.clients', clients); markSyncDirty(); bgSaveFlash(); }
 function saveTournees() { syncStamp('tournees', allTours()); LS.set('ftr.tournees', tournees); markSyncDirty(); bgSaveFlash(); }
@@ -3611,7 +3687,8 @@ function graftClosure(to, from) {
   if (from.startedAt && !to.startedAt) to.startedAt = from.startedAt;       // démarrage : garder le plus ancien non-nul
   if (from.endedAt && !to.endedAt) to.endedAt = from.endedAt;
   if (from.autoClosedAt && !to.autoClosedAt) to.autoClosedAt = from.autoClosedAt;
-  if (from.closed && !to.closed) to.closed = true;                          // clôture = état terminal (aucun « déclôturage » dans l'app)
+  if (from.closed && !to.closed) to.closed = true;
+  if (from.priceSnap && !to.priceSnap) to.priceSnap = JSON.parse(JSON.stringify(from.priceSnap)); // LOT 3 : le gel des tarifs suit la cloture                          // clôture = état terminal (aucun « déclôturage » dans l'app)
   // P0-2 : greffer l'ÉTAT FINANCIER manquant. La greffe de clôture protégeait les jalons mais PAS les paiements : une tournée
   // pouvait devenir « clôturée » avec un encaissement perdu (le gagnant LWW n'avait pas les payments). On ne fait que COMPLÉTER
   // (jamais écraser un paiement présent sur `to`) → aucune régression d'une édition légitime du gagnant.
@@ -4221,7 +4298,12 @@ function applyRemoteReplace(remote) {
   const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
   const isArch = (t) => { const d = t.date || ''; return !!d && (t.closed || d < todayStr()) && d < cutoff; }; // L1-1h : une tournée SANS date reste active (ne part pas en archive à chaque fusion)
   tournees = tours.filter((t) => !isArch(t)); archive = tours.filter(isArch);
-  const m = syncMeta(); m.tomb = Object.assign({}, remote.tomb || {}); m.hash = {}; saveSyncMeta(m);
+  // LOT 4 : les tombstones sont des faits MONOTONES (une suppression reste vraie). On les UNIT, comme le fait
+  // `applyMerged` — ils étaient ici REMPLACÉS par ceux du distant, ce qui pouvait ressusciter une fiche supprimée
+  // localement. Asymétrie non intentionnelle entre les deux chemins d'application.
+  const m = syncMeta(); const rt = (remote && remote.tomb) || {};
+  m.tomb = m.tomb || {}; Object.keys(rt).forEach((kind) => { m.tomb[kind] = mergeTomb(m.tomb[kind], rt[kind]); });
+  m.hash = {}; saveSyncMeta(m);
   LS.set('ftr.settings', S); LS.set('ftr.clients', clients); LS.set('ftr.tournees', tournees); LS.set('ftr.archive', archive);
 }
 // ---------- L0 — Récupération : restaurer une version antérieure du coffre Drive ----------
@@ -4238,6 +4320,124 @@ function snapshotSummary(snap) {
   }
   return `${tours.length} tournées · ${closed} clôturées · ${todayTxt} · ${(snap && snap.clients || []).length} clients`;
 }
+// ---------- T1 — COMPARER une révision du coffre à l'état LOCAL : « qu'est-ce qui a DISPARU ? » ----------
+// Outil de DIAGNOSTIC et de réconciliation manuelle : il n'écrit RIEN, il ne fait que lire et comparer.
+// Répond à la question qu'aucune trace de l'app ne savait traiter : quel cheval / article / paiement / ligne de
+// facture existait dans cette version du coffre et n'existe plus aujourd'hui. Descend jusqu'au grain le plus fin.
+// Volontairement ASYMÉTRIQUE : on ne signale QUE les retraits et les baisses de montant (ce qui est perdu),
+// pas les ajouts — un ajout postérieur est normal, une disparition ne l'est jamais sur une pièce actée.
+function _dvAddrKey(a) { try { return norm(addrStr(a && a.addr)); } catch (e) { return ''; } }
+function _dvCvKey(cv) { return (cv && cv.id != null) ? 'id:' + cv.id : 'nm:' + norm(cv && cv.nom); }
+function _dvCvLabel(cv) { const n = (cv && cv.nom || '').trim(); return n || '(cheval sans nom)'; }
+function _dvMoney(n) { return (Math.round((+n || 0) * 100) / 100).toFixed(2); }
+// Compare l'instantané `snap` (référence, plus ancien) à l'état LOCAL courant. Renvoie une structure de RETRAITS.
+function diffVaultVsLocal(snap, localTours, localClients) {
+  const oldTours = (snap && (snap.tours || snap.tournees)) || [];
+  const curTours = localTours || (typeof allTours === 'function' ? allTours() : []);
+  const curClients = localClients || (typeof clients !== 'undefined' ? clients : []);
+  const oldClients = (snap && snap.clients) || [];
+  const byId = (arr) => { const m = {}; (arr || []).forEach((x) => { if (x && x.id != null) m[x.id] = x; }); return m; };
+  const curTourById = byId(curTours), curClientById = byId(curClients);
+  const nomOf = (cid) => { const c = curClientById[cid] || byId(oldClients)[cid]; return c ? [c.prenom, c.nom, c.societe].filter(Boolean).join(' ').trim() || '(client)' : '(client inconnu)'; };
+  const out = { tours: [], clients: [], totals: { tours: 0, arrets: 0, clientsInTour: 0, chevaux: 0, articles: 0, paiements: 0, lignes: 0, chevauxFiche: 0, montantPerdu: 0 } };
+
+  oldTours.forEach((ot) => {
+    if (!ot || !ot.id) return;
+    const ct = curTourById[ot.id];
+    const entry = { id: ot.id, date: ot.date || '', nom: (ot.nom || '').trim(), closed: !!(ot.closed || ot.endedAt), missing: !ct, arrets: [], articles: [], paiements: [], lignes: [] };
+    if (!ct) { out.totals.tours++; out.tours.push(entry); return; } // tournée entièrement absente
+
+    // --- arrêts / clients / chevaux
+    const curArrByKey = {}; (ct.arrets || []).forEach((a) => { const k = _dvAddrKey(a); if (k) curArrByKey[k] = a; });
+    (ot.arrets || []).forEach((oa) => {
+      const k = _dvAddrKey(oa); const ca = curArrByKey[k];
+      if (!ca) { out.totals.arrets++; entry.arrets.push({ addr: addrStr(oa.addr), missing: true, clients: (oa.clients || []).map((cl) => ({ cid: cl.clientId, nom: nomOf(cl.clientId), missing: true, chevaux: (cl.chevaux || []).map(_dvCvLabel) })) }); return; }
+      const ae = { addr: addrStr(oa.addr), missing: false, clients: [] };
+      (oa.clients || []).forEach((ocl) => {
+        const ccl = (ca.clients || []).find((x) => x.clientId === ocl.clientId);
+        if (!ccl) { out.totals.clientsInTour++; ae.clients.push({ cid: ocl.clientId, nom: nomOf(ocl.clientId), missing: true, chevaux: (ocl.chevaux || []).map(_dvCvLabel) }); return; }
+        const curKeys = new Set((ccl.chevaux || []).map(_dvCvKey));
+        const perdus = (ocl.chevaux || []).filter((cv) => !curKeys.has(_dvCvKey(cv)));
+        if (perdus.length) { out.totals.chevaux += perdus.length; ae.clients.push({ cid: ocl.clientId, nom: nomOf(ocl.clientId), missing: false, chevaux: perdus.map(_dvCvLabel) }); }
+      });
+      if (ae.clients.length) entry.arrets.push(ae);
+    });
+
+    // --- articles (matériel / prestations / impayés)
+    const curArtIds = new Set((ct.articles || []).map((a) => a && a.id).filter((x) => x != null));
+    (ot.articles || []).forEach((oa) => { if (oa && oa.id != null && !curArtIds.has(oa.id)) { out.totals.articles++; entry.articles.push({ id: oa.id, libelle: oa.libelle || (oa.impaye ? 'Impayé reporté' : 'Article'), chevaux: oa.chevalNoms || [], impaye: !!oa.impaye, ht: oa.ht }); } });
+
+    // --- paiements (encaissements)
+    const curPay = ct.payments || {};
+    Object.keys(ot.payments || {}).forEach((cid) => {
+      const op = ot.payments[cid]; if (!op) return;
+      const cp = curPay[cid];
+      if (!cp) { out.totals.paiements++; entry.paiements.push({ cid, nom: nomOf(cid), missing: true, method: op.method || '(non classé)', montant: op.rectifie != null ? op.rectifie : op.montantPaye }); return; }
+      const om = op.rectifie != null ? op.rectifie : op.montantPaye, cm = cp.rectifie != null ? cp.rectifie : cp.montantPaye;
+      if (om != null && (cm == null || +cm < +om)) { out.totals.paiements++; entry.paiements.push({ cid, nom: nomOf(cid), missing: false, method: op.method || '(non classé)', montant: om, montantNow: cm }); }
+    });
+
+    // --- lignes de facture (result.parClient) : client disparu de la facture, ou TTC en BAISSE
+    const curPc = (ct.result && ct.result.parClient) || [];
+    ((ot.result && ot.result.parClient) || []).forEach((op) => {
+      const cp = curPc.find((x) => x.clientId === op.clientId);
+      if (!cp) { out.totals.lignes++; out.totals.montantPerdu += (+op.totalTTC || 0); entry.lignes.push({ cid: op.clientId, nom: nomOf(op.clientId), missing: true, ttc: op.totalTTC }); return; }
+      if ((+cp.totalTTC || 0) < (+op.totalTTC || 0) - 0.005) { out.totals.lignes++; out.totals.montantPerdu += ((+op.totalTTC || 0) - (+cp.totalTTC || 0)); entry.lignes.push({ cid: op.clientId, nom: nomOf(op.clientId), missing: false, ttc: op.totalTTC, ttcNow: cp.totalTTC }); }
+    });
+
+    if (entry.arrets.length || entry.articles.length || entry.paiements.length || entry.lignes.length) out.tours.push(entry);
+  });
+
+  // --- fiches clients : client disparu, ou cheval disparu / dont le NOM a été vidé
+  oldClients.forEach((oc) => {
+    if (!oc || oc.id == null) return;
+    const cc = curClientById[oc.id];
+    if (!cc) { out.clients.push({ id: oc.id, nom: nomOf(oc.id), missing: true, chevaux: (oc.chevaux || []).map((h) => ({ nom: _dvCvLabel(h), raison: 'client absent' })) }); return; }
+    const perdus = [];
+    (oc.chevaux || []).forEach((oh) => {
+      const ch = (cc.chevaux || []).find((x) => (oh.id != null && x.id === oh.id) || (norm(oh.nom) && norm(x.nom) === norm(oh.nom)));
+      if (!ch) perdus.push({ nom: _dvCvLabel(oh), raison: 'cheval absent de la fiche' });
+      else if ((oh.nom || '').trim() && !(ch.nom || '').trim()) perdus.push({ nom: (oh.nom || '').trim(), raison: 'NOM VIDÉ (le cheval existe encore)' });
+    });
+    if (perdus.length) { out.totals.chevauxFiche += perdus.length; out.clients.push({ id: oc.id, nom: nomOf(oc.id), missing: false, chevaux: perdus }); }
+  });
+
+  return out;
+}
+// Rendu HTML du diff (lecture seule).
+function renderVaultDiff(d) {
+  const T = d.totals;
+  const rien = !d.tours.length && !d.clients.length;
+  const chip = (n, lbl) => n ? `<span class="badge">${n} ${esc(lbl)}</span> ` : '';
+  let h = `<p class="hint">${rien ? '✅ <b>Rien n\'a disparu.</b> Tout ce que contenait cette version est encore présent dans vos données actuelles.'
+    : '⚠️ <b>Éléments présents dans cette version et ABSENTS aujourd\'hui.</b><br>Les ajouts faits depuis ne sont pas listés : seuls les <b>retraits</b> et les <b>baisses de montant</b> apparaissent.'}</p>`;
+  if (rien) return h;
+  h += `<p style="margin:6px 0">${chip(T.tours, 'tournée(s)')}${chip(T.arrets, 'arrêt(s)')}${chip(T.clientsInTour, 'client(s) en tournée')}${chip(T.chevaux, 'cheval/chevaux')}${chip(T.articles, 'article(s)')}${chip(T.paiements, 'paiement(s)')}${chip(T.lignes, 'ligne(s) de facture')}${chip(T.chevauxFiche, 'cheval/chevaux en fiche')}`;
+  if (T.montantPerdu > 0.005) h += `<br><b style="color:var(--danger,#c00)">Montant facturé manquant : ${_dvMoney(T.montantPerdu)} €</b>`;
+  h += '</p>';
+  d.tours.forEach((t) => {
+    h += `<div class="list-item" style="display:block"><div class="li-main"><b>${esc(fmtDateFr(t.date))}</b>${t.nom ? ' — ' + esc(t.nom) : ''}${t.closed ? ' <span class="badge">clôturée</span>' : ''}`;
+    if (t.missing) { h += `<span class="li-sub" style="color:var(--danger,#c00)"><b>TOURNÉE ENTIÈREMENT ABSENTE</b></span>`; }
+    h += '</div>';
+    if (!t.missing) {
+      h += '<ul style="margin:4px 0 0 16px;padding:0">';
+      t.arrets.forEach((a) => {
+        if (a.missing) h += `<li>📍 arrêt <b>${esc(a.addr)}</b> — absent${a.clients.length ? ' (' + a.clients.map((c) => esc(c.nom) + (c.chevaux.length ? ' : ' + c.chevaux.map(esc).join(', ') : '')).join(' · ') + ')' : ''}</li>`;
+        else a.clients.forEach((c) => { h += c.missing ? `<li>👤 <b>${esc(c.nom)}</b> retiré de l'arrêt ${esc(a.addr)}${c.chevaux.length ? ' (' + c.chevaux.map(esc).join(', ') + ')' : ''}</li>` : `<li>🐴 ${esc(c.nom)} — cheval/chevaux absent(s) : <b>${c.chevaux.map(esc).join(', ')}</b></li>`; });
+      });
+      t.articles.forEach((a) => { h += `<li>📦 article absent : <b>${esc(a.libelle)}</b>${a.chevaux.length ? ' (' + a.chevaux.map(esc).join(', ') + ')' : ''}${a.impaye ? ' — impayé reporté' : ''}${a.ht != null ? ' · ' + _dvMoney(a.ht) + ' € HT' : ''}</li>`; });
+      t.paiements.forEach((p) => { h += p.missing ? `<li>💶 <b style="color:var(--danger,#c00)">paiement disparu</b> — ${esc(p.nom)} · ${esc(p.method)}${p.montant != null ? ' · ' + _dvMoney(p.montant) + ' €' : ''}</li>` : `<li>💶 paiement en baisse — ${esc(p.nom)} : ${_dvMoney(p.montant)} € → ${p.montantNow == null ? '(vide)' : _dvMoney(p.montantNow) + ' €'}</li>`; });
+      t.lignes.forEach((l) => { h += l.missing ? `<li>🧾 ligne de facture disparue — ${esc(l.nom)} · ${_dvMoney(l.ttc)} € TTC</li>` : `<li>🧾 facture en BAISSE — ${esc(l.nom)} : ${_dvMoney(l.ttc)} € → ${_dvMoney(l.ttcNow)} €</li>`; });
+      h += '</ul>';
+    }
+    h += '</div>';
+  });
+  if (d.clients.length) {
+    h += '<p class="hint" style="margin-top:10px"><b>Fiches clients</b></p>';
+    d.clients.forEach((c) => { h += `<div class="list-item" style="display:block"><div class="li-main"><b>${esc(c.nom)}</b>${c.missing ? ' <span class="badge">fiche absente</span>' : ''}<span class="li-sub">${c.chevaux.map((x) => esc(x.nom) + ' — ' + esc(x.raison)).join(' · ')}</span></div></div>`; });
+  }
+  return h;
+}
 // Restaure un instantané (révision) : sauvegarde de sécurité de l'état actuel, remplacement (réglages device-local préservés),
 // RE-HORODATAGE de tout à « maintenant » (pour que la version restaurée l'emporte sur toute copie corrompue d'un autre appareil),
 // puis pousse la version restaurée comme référence sur Drive, et recharge.
@@ -4249,15 +4449,24 @@ async function restoreDriveSnapshot(snap, token, fileId) {
 }
 // Restauration GRANULAIRE : ne remet QUE les tournées (clôturées + actives) de la version choisie, en CONSERVANT vos clients et réglages ACTUELS.
 // Résout le « tout-ou-rien » : on récupère la tournée perdue sans régresser les fiches clients / encodages faits depuis.
+// LOT 4 (2026-07-20) — cette fonction REMPLAÇAIT `tournees`/`archive` EN BLOC, puis faisait `delete m.hash.tournees`
+// pour forcer le ré-horodatage de TOUT le parc, et poussait immédiatement sur Drive. Trois conséquences :
+//   • toute tournée absente de la version choisie était SUPPRIMÉE (y compris celles créées depuis) ;
+//   • toute saisie postérieure à cette version — clôture, encaissement, acte — était écrasée sans fusion,
+//     alors que `reinjectTour` juste en dessous sait, lui, fusionner en préservant l'état terminal ;
+//   • le ré-horodatage global rendait cette copie autoritaire sur l'ensemble du parc chez tous les appareils.
+// Le bouton portait le libellé « (recommandé) » : c'est exactement ce qu'on clique en constatant une perte, et
+// c'est ce qui l'aggravait. On applique désormais la MÊME sémantique que la réinjection unitaire, tournée par
+// tournée : fusion avec `graftClosure` (la clôture ne régresse jamais) et ré-horodatage CIBLÉ sur les seules
+// tournées restaurées. Une tournée locale absente de la sauvegarde est CONSERVÉE (« ♻ Tout » reste là pour un
+// véritable retour en arrière).
 async function restoreDriveTournees(snap, token, fileId) {
-  downloadSnapshot(); // filet réversible
+  downloadSnapshot(); _restoreBackedUp = true; // filet réversible, une seule fois (reinjectTour ne le refera pas)
   const tours = Array.isArray(snap.tours) ? snap.tours : (Array.isArray(snap.tournees) ? snap.tournees : []);
-  const d = new Date(); d.setDate(d.getDate() - 28); const cutoff = d.toISOString().slice(0, 10);
-  const isArch = (t) => { const dd = t.date || ''; return !!dd && (t.closed || dd < todayStr()) && dd < cutoff; };
-  tournees = tours.filter((t) => !isArch(t)); archive = tours.filter(isArch);
-  const m = syncMeta(); m.hash = m.hash || {}; delete m.hash.tournees; saveSyncMeta(m); // force le ré-horodatage à « maintenant » → la version restaurée l'emporte à la prochaine fusion
-  saveTournees(); saveArchive();
+  let n = 0;
+  tours.forEach((rt) => { if (rt && rt.id) { try { reinjectTour(rt, snap); n++; } catch (e) { /* une tournée en échec ne doit pas interrompre la récupération des autres */ } } });
   try { if (token && fileId) { await driveUpload(token, fileId, exportSnapshot()); _lastPushHash = snapshotHash(exportSnapshot()); _syncDirty = false; } } catch (e) {}
+  return n;
 }
 // Réinjection CIBLÉE d'UNE tournée depuis une sauvegarde antérieure : on récupère juste cette tournée (clôtures/paiements/temps réel)
 // et on la FUSIONNE dans l'état actuel — les AUTRES tournées et tout ce qui a été fait depuis sont CONSERVÉS. Réversible (sauvegarde de sécurité).
@@ -4386,9 +4595,20 @@ function modalDriveRestore() {
             // Sous-modale (au-dessus) : appareil + résumé + réinjection d'UNE tournée. ✕ → revient sur la liste des versions.
             openSubModal(`<div class="modal-head"><b>🔍 ${esc(rv ? new Date(rv.modifiedTime).toLocaleString('fr-FR') : 'Version')}</b><button class="x" id="mX2">✕</button></div>
               <p class="hint"><b>${esc(dev)}</b> · ${esc(snapshotSummary(snap))}</p>
+              <button class="btn small block" id="drDiff" style="margin-top:8px">🔎 Ce qui a DISPARU depuis cette version</button>
+              <div id="drDiffBox" style="margin-top:8px"></div>
               <p class="hint" style="margin-top:8px"><b>Réinjecter UNE tournée</b> de cette sauvegarde (fusion — garde tout le reste) :</p>
               <div class="list" id="drTours2"></div>`);
             $('mX2').addEventListener('click', closeSubModal);
+            // T1 — comparaison LECTURE SEULE : n'écrit rien, ne synchronise rien. Sert à réconcilier à la main.
+            $('drDiff').addEventListener('click', (ev) => {
+              const bd = ev.currentTarget, box = $('drDiffBox');
+              if (box.dataset.open === '1') { box.innerHTML = ''; box.dataset.open = ''; bd.textContent = '🔎 Ce qui a DISPARU depuis cette version'; return; }
+              bd.disabled = true; bd.textContent = 'Comparaison…';
+              try { box.innerHTML = renderVaultDiff(diffVaultVsLocal(snap)); box.dataset.open = '1'; bd.textContent = '🔽 Masquer la comparaison'; }
+              catch (err) { box.innerHTML = '<p class="hint">Comparaison impossible : ' + esc(err.message) + '</p>'; }
+              finally { bd.disabled = false; }
+            });
             const box2 = $('drTours2');
             box2.innerHTML = tours.length ? tours.map((t, ti) => { const arr = t.arrets || []; const nv = arr.filter((a) => typeof a.validatedAt === 'number' || (a.clients || []).some((cl) => typeof cl.validatedAt === 'number')).length; const st = (t.closed || t.endedAt) ? '✅ clôturée' : (t.startedAt ? '🚗 démarrée' : '⏳ non démarrée'); return `<div class="list-item"><div class="li-main"><b>${esc(fmtDateFr(t.date))}</b>${t.nom && t.nom.trim() ? ' — ' + esc(t.nom.trim()) : ''}<span class="li-sub">${nv}/${arr.length} arrêts clôturés · ${st}</span></div><div class="li-act"><button class="btn small" data-reinj="${ti}">♻ Réinjecter</button></div></div>`; }).join('') : '<p class="hint">Aucune tournée datée dans cette version.</p>';
             box2.querySelectorAll('[data-reinj]').forEach((rb) => rb.addEventListener('click', () => { const t = tours[+rb.dataset.reinj]; if (!confirm(`Réinjecter la tournée du ${fmtDateFr(t.date)} ?\n\nElle est FUSIONNÉE dans vos données actuelles (ses clôtures / paiements / temps réel reviennent) SANS toucher à vos autres tournées ni aux modifications faites depuis. Une sauvegarde de sécurité est téléchargée avant.`)) return; try { reinjectTour(t, snap); refreshEverywhere(); rb.textContent = '✔ réinjectée'; rb.disabled = true; } catch (err) { alert('Réinjection impossible : ' + err.message); } }));
@@ -4400,8 +4620,8 @@ function modalDriveRestore() {
           if (!snap) return;
           const run = async (fn, msg) => { setSt('', msg); try { await fn(snap, token, file.id); alert('✅ Restauré. L\'app va se recharger.'); location.reload(); } catch (err) { setSt('err', 'Restauration impossible : ' + err.message); } };
           modalActions('Restaurer — que voulez-vous remettre ?', [
-            { label: '🐴 Les tournées seulement (recommandé)', onClick: () => { if (confirm('Remettre les TOURNÉES de cette version ?\n\nVos CLIENTS et RÉGLAGES actuels sont CONSERVÉS (on ne touche qu\'aux tournées : clôtures, paiements, temps réel…). Une sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveTournees, 'Restauration des tournées…'); } },
-            { label: '♻ Tout (clients + réglages + tournées)', onClick: () => { if (confirm('Remplacer TOUT par cette version ?\n\nVos clients, réglages ET tournées reviennent à l\'état de cette sauvegarde — les modifications faites depuis sont annulées. Une sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveSnapshot, 'Restauration complète…'); } },
+            { label: '🐴 Fusionner les tournées (sans rien perdre)', onClick: () => { if (confirm('Fusionner les TOURNÉES de cette version dans vos données actuelles ?\n\n• Ce qui manque est REMIS (chevaux, actes, articles, paiements, clôtures).\n• Rien n\'est supprimé : vos tournées créées depuis sont conservées.\n• Une clôture déjà faite ne revient jamais en arrière.\n• Vos clients et réglages actuels ne sont pas touchés.\n\nUne sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveTournees, 'Fusion des tournées…'); } },
+            { label: '⚠️ Tout remplacer (retour en arrière complet)', onClick: () => { if (confirm('⚠️ REMPLACER TOUT par cette version ?\n\nVos clients, réglages ET tournées reviennent à l\'état de cette sauvegarde.\nTOUT ce qui a été fait depuis est ANNULÉ, y compris les encaissements et les tournées créées depuis.\n\nÀ n\'utiliser que pour un véritable retour en arrière. Pour récupérer des données manquantes, préférez « Fusionner ».\n\nUne sauvegarde de sécurité est téléchargée avant. L\'app se recharge.')) run(restoreDriveSnapshot, 'Remplacement complet…'); } },
           ]);
         });
       });
@@ -4652,8 +4872,8 @@ function haversineKm(a, b) {
   const s = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
 }
-const rate = () => (S.tvaRegime === 'franchise' ? 0 : (S.tvaRate || 0) / 100); // franchise en base → 0 % (non assujetti)
-const fuelPerKmHT = () => (S.consoL100 / 100) * S.prixPleinL / (1 + rate());
+const rate = () => (_fp && _fp.rate != null) ? _fp.rate : (S.tvaRegime === 'franchise' ? 0 : (S.tvaRate || 0) / 100); // franchise en base → 0 % (non assujetti)
+const fuelPerKmHT = () => (_fp && _fp.fuel != null) ? _fp.fuel : (S.consoL100 / 100) * S.prixPleinL / (1 + rate());
 // Odomètre = somme des km de toutes les tournées calculées (chaque tournée compte une fois).
 // ---- Odomètre RÉEL / ESTIMÉ ----
 // Réel = relevés compteur saisis par l'utilisateur (Statut véhicule). Estimé = dernier relevé réel + Σ km des tournées faites APRÈS ce relevé.
@@ -4686,8 +4906,8 @@ const fraisActif = (f) => f.statut !== 'remplace';
 const fraisSeuil = (f) => (f.kmDebut || 0) + (f.kmPrevus || 0) + (f.kmReport || 0); // km d'échéance (report d'échéance inclus)
 const fraisContribHT = (f) => (f.kmPrevus > 0 && fraisActif(f)) ? (f.montantHT || 0) / f.kmPrevus : 0;
 const amortContribHT = () => (S.amortissement.achatHT > 0 && S.amortissement.dureeVieKm > 0) ? S.amortissement.achatHT / S.amortissement.dureeVieKm : 0;
-const baseVehiculeHT = () => amortContribHT() + S.frais.reduce((s, f) => s + fraisContribHT(f), 0);
-const tempsPerKm = () => (S.kmHeure > 0 ? (S.prixHeure || 0) / S.kmHeure : 0); // temps de déplacement €/km = prix/heure ÷ km/heure
+const baseVehiculeHT = () => (_fp && _fp.baseVeh != null) ? _fp.baseVeh : amortContribHT() + S.frais.reduce((s, f) => s + fraisContribHT(f), 0);
+const tempsPerKm = () => (_fp && _fp.temps != null) ? _fp.temps : (S.kmHeure > 0 ? (S.prixHeure || 0) / S.kmHeure : 0); // temps de déplacement €/km = prix/heure ÷ km/heure
 const tarifHT = (type) => baseVehiculeHT() + fuelPerKmHT() + (type !== 'tournee' ? tempsPerKm() : 0) + (type === 'urgence' ? S.urgenceSuppKm : 0);
 const ttc = (ht) => ht * (1 + rate());
 const fullName = (c) => c ? [c.prenom, c.nom].filter((x) => x && String(x).trim()).join(' ').trim() : '';
@@ -6448,12 +6668,19 @@ function archiveOldTours() {
 // Migration ponctuelle (montant INCHANGÉ) : retire les chevaux non faits des résultats DÉJÀ calculés
 // (clôturées/archivées gardent leur `result` figé) pour que les stats/analyses n'imputent plus de « cheval fantôme ».
 // On ne touche qu'aux LISTES de chevaux (rows + déplacement), jamais aux montants/matériel/articles.
+// Prédicat de CONSERVATION dans un `result` déjà calculé. Il DOIT être celui qui a construit ce result : `keep()` (rowFromArret).
+// Or la projection stockée dans result (rowFromArret) NE RECOPIE PAS `cancel` → sur ces objets `chevalCredited`/`chevalCancelled`
+// sont toujours faux et `keep()` se réduit exactement à `chevalBilled(c) || photoHasBillableStades(c.photo)`.
+// C'est cette équivalence qu'on pose ici. Utiliser `chevalFait` (plus ÉTROIT) supprimait de la facture des chevaux réellement
+// facturés — un cheval facturé par une PLANCHE seule (photoHasBillableStades, ligne « Photos / planches ») n'a aucun des cinq
+// drapeaux d'acte : il disparaissait de la facture alors que son montant y restait (« 0 ligne, TTC 114,29 »).
+function chevalKeptInResult(c) { return chevalBilled(c) || photoHasBillableStades(c && c.photo); }
 function sanitizeTourStats(t) {
   const R = t.result; if (!R || !R.rows) return false;
   let changed = false; const faitByClient = {};
   (R.rows || []).forEach((r) => (r.clients || []).forEach((cl) => {
     const set = faitByClient[cl.clientId] || (faitByClient[cl.clientId] = new Set());
-    const kept = (cl.chevaux || []).filter(chevalFait);
+    const kept = (cl.chevaux || []).filter(chevalKeptInResult);
     if (kept.length !== (cl.chevaux || []).length) changed = true;
     cl.chevaux = kept; kept.forEach((c) => set.add(c.nom));
   }));
@@ -6465,15 +6692,24 @@ function sanitizeTourStats(t) {
   }));
   return changed;
 }
+// GARDE DE GEL (2026-07-20). Cette passe s'exécute à CHAQUE démarrage (DOMContentLoaded) et écrivait dans `t.result` —
+// la PIÈCE COMPTABLE FIGÉE — des tournées CLÔTURÉES et ARCHIVÉES, en contradiction avec son propre en-tête ci-dessus.
+// Comme `result` ∈ _HASH_SKIP, elle ne bumpe aucun updatedAt : la corruption était SILENCIEUSE et sans trace.
+// Une facture clôturée ne se re-dérive jamais. On ne nettoie donc plus que les tournées NON clôturées ;
+// `archive` est par construction 100 % clôturée → on ne l'itère plus du tout.
 function sanitizeAllTourStats() {
-  let a = false, b = false;
-  (tournees || []).forEach((t) => { if (sanitizeTourStats(t)) a = true; });
-  (archive || []).forEach((t) => { if (sanitizeTourStats(t)) b = true; });
-  if (a) saveTournees(); if (b) saveArchive();
+  let a = false;
+  (tournees || []).forEach((t) => { if (statusOf(t) === 'cloturee') return; if (sanitizeTourStats(t)) a = true; });
+  if (a) saveTournees();
 }
 // Migration 1.1.57 : un cheval annulé qui porte une note de crédit doit être marqué « credited »
 // (facturé dans le result figé, la NC le neutralise). Sans ça, l'ancienne donnée le sortait de la facture ET la NC le soustrayait → double réduction.
+// GARDE DE GEL (2026-07-20) : migration LEGACY 1.1.57, exécutée jusqu'ici à CHAQUE démarrage sur `tournees` ET `archive`
+// (donc sur du figé) et ré-armable par une note de crédit arrivée par synchro — chaque exécution qui touchait un
+// enregistrement le RE-HORODATAIT (`cancel.credited` est dans le hash), le rendant autoritaire à la fusion.
+// Elle n'a de sens qu'UNE fois, sur les données d'avant la 1.1.57 : drapeau LOCAL (non synchronisé) par appareil.
 function migrateCreditedCancellations() {
+  try { if (localStorage.getItem('ftr.mig1157') === '1') return; } catch (e) {}
   const ncByKey = {};
   (S.notesCredit || []).forEach((n) => { ncByKey[n.tourId + '|' + n.clientId + '|' + norm(n.chevalNom)] = n; });
   let ta = false, tb = false;
@@ -6484,6 +6720,7 @@ function migrateCreditedCancellations() {
   })))); return ch; };
   if (scan(tournees)) ta = true; if (scan(archive)) tb = true;
   if (ta) saveTournees(); if (tb) saveArchive();
+  try { localStorage.setItem('ftr.mig1157', '1'); } catch (e) {} // appliquée : ne plus jamais rejouer sur cet appareil
 }
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
 // Accès DIRECT depuis le Trajet du jour : ouvre l'éditeur de la tournée et se positionne sur le bloc du client (actes/articles) avec un bref surlignage.
@@ -7807,17 +8044,62 @@ function recomputeMoney() {
 }
 
 // Recalcule (sans API) durée + montants d'une tournée à partir de sa géométrie mémorisée.
+// LOT 3 — Clés de configuration TARIFAIRE lues directement par computeResultMoney/rowFromArret (hors helpers dérivés,
+// gelés à part). Inventaire établi par relevé exhaustif des lectures `S.*` de la chaîne de calcul.
+const PRICE_KEYS = ['parage', 'seuilKm', 'forfait', 'repartition', 'reducLiquide', 'urgenceSuppKm', 'fourbureHT', 'npasHT', 'infectionHT', 'difficileHT', 'lourdHT', 'tvaRate', 'tvaRegime'];
+function _cvKeyOf(cv) { return (cv && cv.id != null) ? 'id' + cv.id : 'nm' + norm(cv && cv.nom); }
+// Photographie des tarifs applicables à CETTE tournée, à cet instant. Compact : 5 scalaires dérivés + les clés
+// tarifaires + les seuls articles du catalogue réellement utilisés + les options « lourd » figées par cheval.
+function buildPriceSnap(t, derived) {
+  const snap = { at: Date.now(), v: (typeof APP_VERSION === 'string' ? APP_VERSION : ''), baseVeh: baseVehiculeHT(), fuel: fuelPerKmHT(), temps: tempsPerKm(), baseMat: baseMateriel(), rate: rate(), S: {}, cv: {} };
+  if (derived) snap.derived = true; // gel posé APRÈS coup (tournée déjà clôturée) : reflète la config du jour du gel, pas celle de la clôture
+  PRICE_KEYS.forEach((k) => { if (S[k] !== undefined) snap.S[k] = JSON.parse(JSON.stringify(S[k])); });
+  // Articles du catalogue référencés par la tournée (visites par cheval) — on ne copie que ceux-là.
+  const usedIds = {};
+  ((t && t.arrets) || []).forEach((a) => (a.clients || []).forEach((cl) => (cl.chevaux || []).forEach((cv) => { if (cv && cv.visiteArtId) usedIds[cv.visiteArtId] = 1; })));
+  snap.S.articlesCatalogue = (S.articlesCatalogue || []).filter((x) => x && usedIds[x.id]).map((x) => JSON.parse(JSON.stringify(x)));
+  // Options facturables portées par la FICHE du cheval (lourd) — sinon un décochage ultérieur modifie une facture close.
+  ((t && t.arrets) || []).forEach((a) => (a.clients || []).forEach((cl) => {
+    const c = (typeof clients !== 'undefined' ? clients : []).find((x) => x.id === cl.clientId); if (!c) return;
+    (cl.chevaux || []).forEach((cv) => {
+      const h = (c.chevaux || []).find((x) => (cv.id != null && x.id === cv.id) || (norm(cv.nom) && norm(x.nom) === norm(cv.nom))); if (!h) return;
+      (snap.cv[cl.clientId] = snap.cv[cl.clientId] || {})[_cvKeyOf(cv)] = { lourd: !!h.lourd, lourdHT: h.lourdHT, lourdRemise: h.lourdRemise };
+    });
+  }));
+  return snap;
+}
+// Pose le gel si la tournée est clôturée et n'en a pas encore (tournées closes AVANT ce correctif).
+// Ne modifie AUCUN montant : `t.result` est laissé tel quel. Effet = la dérive s'arrête ici.
+function ensurePriceSnap(t) { if (!t || !t.priceSnap || !t.priceSnap.S) { if (t && (t.closed || t.endedAt)) { t.priceSnap = buildPriceSnap(t, true); return true; } } return false; }
+// Exécute `fn` avec les tarifs GELÉS de `t` (si elle en a). Restauration garantie par `finally` → aucun état résiduel.
+// On n'échange que la CONFIGURATION : les formules de calcul ne sont pas touchées d'une ligne.
+function withFrozenPrices(t, fn) {
+  const snap = t && t.priceSnap && t.priceSnap.S ? t.priceSnap : null;
+  if (!snap) return fn();
+  const oldS = S, oldC = (typeof clients !== 'undefined' ? clients : []), oldFp = _fp;
+  try {
+    S = Object.assign({}, S, snap.S);
+    _fp = { baseVeh: snap.baseVeh, fuel: snap.fuel, temps: snap.temps, baseMat: snap.baseMat, rate: snap.rate };
+    if (snap.cv && Object.keys(snap.cv).length) { // superpose les options « lourd » figées, sans rien perdre du reste de la fiche
+      clients = oldC.map((c) => { const per = snap.cv[c.id]; if (!per) return c; return Object.assign({}, c, { chevaux: (c.chevaux || []).map((h) => { const f = per['id' + h.id] || per['nm' + norm(h.nom)]; return f ? Object.assign({}, h, f) : h; }) }); });
+    }
+    return fn();
+  } finally { S = oldS; clients = oldC; _fp = oldFp; }
+}
 function recomputeTourLocal(t) {
   const R = t.result;
   if (!R || !R.rows || R.rows.length !== (t.arrets || []).length) return false; // géométrie absente/périmée
-  const rows = t.arrets.map((a, i) => rowFromArret(a, R.rows[i]));
-  const prov = (R.providerMin != null ? R.providerMin : R.totalMin);
-  const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 90));
-  const geom = { totalKm: R.totalKm, totalMin, kmHomeFirst: R.kmHomeFirst, kmLastHome: R.kmLastHome };
-  const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff, t.payments);
-  res.providerMin = prov; res.routeGeo = R.routeGeo || [];
-  t.result = res;
-  return true;
+  ensurePriceSnap(t); // tournée clôturée sans gel (antérieure au correctif) → on fige MAINTENANT : la dérive s'arrête ici
+  return withFrozenPrices(t, () => { // clôturée = tarifs du jour de la clôture ; non clôturée = tarifs vivants (pas de priceSnap)
+    const rows = t.arrets.map((a, i) => rowFromArret(a, R.rows[i]));
+    const prov = (R.providerMin != null ? R.providerMin : R.totalMin);
+    const totalMin = S.dureeAuto ? prov : (R.totalKm * 60 / (S.vitesseKmh || 90));
+    const geom = { totalKm: R.totalKm, totalMin, kmHomeFirst: R.kmHomeFirst, kmLastHome: R.kmLastHome };
+    const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff, t.payments);
+    res.providerMin = prov; res.routeGeo = R.routeGeo || [];
+    t.result = res;
+    return true;
+  });
 }
 // Bouton Réglages : actualise durées + montants des tournées d'aujourd'hui et à venir (PAS les clôturées/archivées).
 function refreshActiveTours() {
@@ -8819,7 +9101,7 @@ function autoCloseOverdueTours() {
     const deadline = arr + 3 * 3600 * 1000;
     if (Date.now() > deadline) {
       if (tourFinalizeBlock(t).length) return; // arrêts non finalisés → NE PAS clôturer automatiquement (l'utilisateur doit finaliser ; alerte « Arrêts à finaliser »)
-      t.endedAt = deadline; t.closed = true; t.autoClosedAt = deadline; changed = true;
+      t.endedAt = deadline; t.closed = true; t.autoClosedAt = deadline; changed = true; if (!t.priceSnap) t.priceSnap = buildPriceSnap(t); /* LOT 3 : fige les tarifs applicables au moment de la cloture */
     }
   });
   if (changed) { saveTournees(); scheduleDrivePush(); } // clôture (auto) = JALON → synchro Drive rapide
@@ -12288,7 +12570,7 @@ function persistTourAnywhere(t) {
 // des dépassées et devient une tournée clôturée normale ; l'utilisateur complète ensuite ses données manquantes (stats).
 function recoverTour(t) {
   if (!confirm('Récupérer l\'ancienne tournée du ' + fmtDateFr(t.date) + ' ? Elle est figée à sa date (arrêts non modifiables). Vous pourrez compléter ses données manquantes (heures de RDV, temps de route, durées de consultation) pour des statistiques complètes.')) return;
-  t.recovered = true; t.closed = true;
+  t.recovered = true; t.closed = true; if (!t.priceSnap) t.priceSnap = buildPriceSnap(t); /* LOT 3 : fige les tarifs applicables au moment de la cloture */
   persistTourAnywhere(t); scheduleDrivePush(); // récupération/clôture = JALON → synchro Drive rapide
   renderHome();
   modalRecoverStats(t);
@@ -12975,7 +13257,7 @@ function renderHomeTrajet() {
         { label: navLabel(), onClick: () => openNav(retAddr) },
         { label: 'Route (temps réel du retour)', onClick: () => modalReturnTime(t, estRet, renderHomeTrajet) },
       ]));
-      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourFinalizeBlock(t); if (blk.length) { alert('🔒 Clôture impossible — chaque arrêt doit être finalisé (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; persistTour(); scheduleDrivePush(); renderHome(); }); // clôture = JALON → synchro Drive rapide
+      const cb = rr.querySelector('[data-close]'); if (cb && started) cb.addEventListener('click', () => { const blk = tourFinalizeBlock(t); if (blk.length) { alert('🔒 Clôture impossible — chaque arrêt doit être finalisé (💶 Paiement & clôture) :\n\n• ' + blk.join('\n• ')); return; } if (!confirm('Clôturer la tournée ? Elle sera figée (non modifiable).')) return; t.endedAt = Date.now(); t.closed = true; if (!t.priceSnap) t.priceSnap = buildPriceSnap(t); /* LOT 3 : fige les tarifs applicables au moment de la cloture */ persistTour(); scheduleDrivePush(); renderHome(); }); // clôture = JALON → synchro Drive rapide
       box.appendChild(rr);
     }
   });
@@ -14695,6 +14977,7 @@ window.addEventListener('DOMContentLoaded', () => {
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !_lockModal) closeModal(); }); // config initiale = non fermable par clic sur le fond
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !_lockModal) { const m2 = document.getElementById('modal2'); if (m2 && !m2.classList.contains('hidden')) { closeSubModal(); return; } const m = $('modal'); if (m && !m.classList.contains('hidden')) closeModal(); } }); // L8 : Échap ferme la sous-modale d'abord, sinon la modale principale
 
+  recordAppRun(); // LOT 2 — trace « quelle version a démarré, quand, et avec quel volume » (avant toute passe de maintenance)
   autoCloseOverdueTours(); // clôture auto des tournées démarrées oubliées (retour + 3 h)
   archiveOldTours(); // D2 : sort les tournées clôturées > 4 semaines du jeu actif
   sanitizeAllTourStats(); // retire les chevaux non faits des résultats déjà calculés (stats sans « cheval fantôme »)
@@ -14774,6 +15057,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     if (!confirm('Clôturer cette tournée ? Elle sera figée et ne pourra plus être modifiée.')) return;
     currentTour.closed = true;
+    if (!currentTour.priceSnap) currentTour.priceSnap = buildPriceSnap(currentTour); /* LOT 3 : fige les tarifs a la cloture */
     const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
     saveTournees(); scheduleDrivePush(); scheduleCalPush(currentTour); openEditor(); // clôture = JALON → synchro Drive rapide
   });
