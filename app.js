@@ -3570,10 +3570,23 @@ function saveSyncMeta(m) { LS.set('ftr.tomb', (m && m.tomb) || {}); LS.set('ftr.
 function syncStamp(kind, arr) {
   const m = syncMeta(); m.hash[kind] = m.hash[kind] || {}; m.tomb[kind] = m.tomb[kind] || {}; m.upd = m.upd || {}; m.upd[kind] = m.upd[kind] || {};
   const now = Date.now(); const seen = {};
+  // GARDE ANTI RE-HORODATAGE DE MASSE (2026-07-20). Sans elle, la PERTE DE LA RÉFÉRENCE d'empreintes — purge quota
+  // (LS.set), changement de la FORMULE hashRec (elle a été réécrite 4 fois entre le 05 et le 15/07), ou 1ᵉʳ boot d'une
+  // version — fait paraître TOUS les enregistrements « modifiés » : ils reçoivent alors le MÊME `now` et cette copie
+  // devient autoritaire sur le parc ENTIER, y compris les tournées CLÔTURÉES, qu'elle écrase chez les autres appareils.
+  // Signature observée en production le 2026-07-16T11:53:31 : 14 clients (.835) puis 5 tournées (.839), soit tout le parc.
+  // Ici on distingue « je n'ai PAS de référence » de « la référence DIFFÈRE » : sans référence on ADOPTE l'empreinte
+  // sans toucher à updatedAt — exactement ce que fait déjà rebuildSyncHashes (3585) après une purge.
+  // Compromis assumé : une édition locale réelle faite pendant cette fenêtre ne sera pas propagée (elle reste locale).
+  // C'est le sens sûr : une édition non propagée est récupérable, un écrasement du coffre ne l'est pas.
+  const _known = arr.reduce((n, r) => n + ((r && r.id && Object.prototype.hasOwnProperty.call(m.hash[kind], r.id)) ? 1 : 0), 0);
+  const _baselineLost = arr.length >= 3 && _known === 0; // aucune référence alors qu'on a du contenu = référence perdue, pas N éditions simultanées
+  if (_baselineLost) { try { const j = LS.get('ftr.stampGuard', []); j.push({ at: now, kind, n: arr.length, v: APP_VERSION }); LS.set('ftr.stampGuard', j.slice(-50)); } catch (e) {} } // trace : ces épisodes doivent être visibles, pas silencieux
   arr.forEach((rec) => {
     if (!rec.id) rec.id = uid(); seen[rec.id] = true;
     const h = hashRec(rec);
-    if (m.hash[kind][rec.id] !== h) { rec.updatedAt = Math.max(now, (rec.updatedAt || 0) + 1); m.hash[kind][rec.id] = h; } else if (!rec.updatedAt) rec.updatedAt = now; // Fix (4) : updatedAt MONOTONE — une édition ne descend jamais sous la dernière valeur connue (garde anti décalage d'horloge / anti-rajeunissement)
+    if (_baselineLost) { m.hash[kind][rec.id] = h; if (!rec.updatedAt) rec.updatedAt = now; } // référence perdue → on se recale SANS rajeunir (pas de prise d'autorité sur le parc)
+    else if (m.hash[kind][rec.id] !== h) { rec.updatedAt = Math.max(now, (rec.updatedAt || 0) + 1); m.hash[kind][rec.id] = h; } else if (!rec.updatedAt) rec.updatedAt = now; // Fix (4) : updatedAt MONOTONE — une édition ne descend jamais sous la dernière valeur connue (garde anti décalage d'horloge / anti-rajeunissement)
     m.upd[kind][rec.id] = rec.updatedAt; // Fix (7) : mémorise le dernier updatedAt connu par id (pour majorer un futur tombstone)
     if (m.tomb[kind][rec.id] && m.tomb[kind][rec.id] <= (rec.updatedAt || 0)) delete m.tomb[kind][rec.id]; // réapparu → tombstone périmé
   });
@@ -6448,12 +6461,19 @@ function archiveOldTours() {
 // Migration ponctuelle (montant INCHANGÉ) : retire les chevaux non faits des résultats DÉJÀ calculés
 // (clôturées/archivées gardent leur `result` figé) pour que les stats/analyses n'imputent plus de « cheval fantôme ».
 // On ne touche qu'aux LISTES de chevaux (rows + déplacement), jamais aux montants/matériel/articles.
+// Prédicat de CONSERVATION dans un `result` déjà calculé. Il DOIT être celui qui a construit ce result : `keep()` (rowFromArret).
+// Or la projection stockée dans result (rowFromArret) NE RECOPIE PAS `cancel` → sur ces objets `chevalCredited`/`chevalCancelled`
+// sont toujours faux et `keep()` se réduit exactement à `chevalBilled(c) || photoHasBillableStades(c.photo)`.
+// C'est cette équivalence qu'on pose ici. Utiliser `chevalFait` (plus ÉTROIT) supprimait de la facture des chevaux réellement
+// facturés — un cheval facturé par une PLANCHE seule (photoHasBillableStades, ligne « Photos / planches ») n'a aucun des cinq
+// drapeaux d'acte : il disparaissait de la facture alors que son montant y restait (« 0 ligne, TTC 114,29 »).
+function chevalKeptInResult(c) { return chevalBilled(c) || photoHasBillableStades(c && c.photo); }
 function sanitizeTourStats(t) {
   const R = t.result; if (!R || !R.rows) return false;
   let changed = false; const faitByClient = {};
   (R.rows || []).forEach((r) => (r.clients || []).forEach((cl) => {
     const set = faitByClient[cl.clientId] || (faitByClient[cl.clientId] = new Set());
-    const kept = (cl.chevaux || []).filter(chevalFait);
+    const kept = (cl.chevaux || []).filter(chevalKeptInResult);
     if (kept.length !== (cl.chevaux || []).length) changed = true;
     cl.chevaux = kept; kept.forEach((c) => set.add(c.nom));
   }));
@@ -6465,15 +6485,24 @@ function sanitizeTourStats(t) {
   }));
   return changed;
 }
+// GARDE DE GEL (2026-07-20). Cette passe s'exécute à CHAQUE démarrage (DOMContentLoaded) et écrivait dans `t.result` —
+// la PIÈCE COMPTABLE FIGÉE — des tournées CLÔTURÉES et ARCHIVÉES, en contradiction avec son propre en-tête ci-dessus.
+// Comme `result` ∈ _HASH_SKIP, elle ne bumpe aucun updatedAt : la corruption était SILENCIEUSE et sans trace.
+// Une facture clôturée ne se re-dérive jamais. On ne nettoie donc plus que les tournées NON clôturées ;
+// `archive` est par construction 100 % clôturée → on ne l'itère plus du tout.
 function sanitizeAllTourStats() {
-  let a = false, b = false;
-  (tournees || []).forEach((t) => { if (sanitizeTourStats(t)) a = true; });
-  (archive || []).forEach((t) => { if (sanitizeTourStats(t)) b = true; });
-  if (a) saveTournees(); if (b) saveArchive();
+  let a = false;
+  (tournees || []).forEach((t) => { if (statusOf(t) === 'cloturee') return; if (sanitizeTourStats(t)) a = true; });
+  if (a) saveTournees();
 }
 // Migration 1.1.57 : un cheval annulé qui porte une note de crédit doit être marqué « credited »
 // (facturé dans le result figé, la NC le neutralise). Sans ça, l'ancienne donnée le sortait de la facture ET la NC le soustrayait → double réduction.
+// GARDE DE GEL (2026-07-20) : migration LEGACY 1.1.57, exécutée jusqu'ici à CHAQUE démarrage sur `tournees` ET `archive`
+// (donc sur du figé) et ré-armable par une note de crédit arrivée par synchro — chaque exécution qui touchait un
+// enregistrement le RE-HORODATAIT (`cancel.credited` est dans le hash), le rendant autoritaire à la fusion.
+// Elle n'a de sens qu'UNE fois, sur les données d'avant la 1.1.57 : drapeau LOCAL (non synchronisé) par appareil.
 function migrateCreditedCancellations() {
+  try { if (localStorage.getItem('ftr.mig1157') === '1') return; } catch (e) {}
   const ncByKey = {};
   (S.notesCredit || []).forEach((n) => { ncByKey[n.tourId + '|' + n.clientId + '|' + norm(n.chevalNom)] = n; });
   let ta = false, tb = false;
@@ -6484,6 +6513,7 @@ function migrateCreditedCancellations() {
   })))); return ch; };
   if (scan(tournees)) ta = true; if (scan(archive)) tb = true;
   if (ta) saveTournees(); if (tb) saveArchive();
+  try { localStorage.setItem('ftr.mig1157', '1'); } catch (e) {} // appliquée : ne plus jamais rejouer sur cet appareil
 }
 function openTour(t) { currentTour = JSON.parse(JSON.stringify(t)); openEditor(); }
 // Accès DIRECT depuis le Trajet du jour : ouvre l'éditeur de la tournée et se positionne sur le bloc du client (actes/articles) avec un bref surlignage.
