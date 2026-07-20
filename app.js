@@ -4251,6 +4251,124 @@ function snapshotSummary(snap) {
   }
   return `${tours.length} tournées · ${closed} clôturées · ${todayTxt} · ${(snap && snap.clients || []).length} clients`;
 }
+// ---------- T1 — COMPARER une révision du coffre à l'état LOCAL : « qu'est-ce qui a DISPARU ? » ----------
+// Outil de DIAGNOSTIC et de réconciliation manuelle : il n'écrit RIEN, il ne fait que lire et comparer.
+// Répond à la question qu'aucune trace de l'app ne savait traiter : quel cheval / article / paiement / ligne de
+// facture existait dans cette version du coffre et n'existe plus aujourd'hui. Descend jusqu'au grain le plus fin.
+// Volontairement ASYMÉTRIQUE : on ne signale QUE les retraits et les baisses de montant (ce qui est perdu),
+// pas les ajouts — un ajout postérieur est normal, une disparition ne l'est jamais sur une pièce actée.
+function _dvAddrKey(a) { try { return norm(addrStr(a && a.addr)); } catch (e) { return ''; } }
+function _dvCvKey(cv) { return (cv && cv.id != null) ? 'id:' + cv.id : 'nm:' + norm(cv && cv.nom); }
+function _dvCvLabel(cv) { const n = (cv && cv.nom || '').trim(); return n || '(cheval sans nom)'; }
+function _dvMoney(n) { return (Math.round((+n || 0) * 100) / 100).toFixed(2); }
+// Compare l'instantané `snap` (référence, plus ancien) à l'état LOCAL courant. Renvoie une structure de RETRAITS.
+function diffVaultVsLocal(snap, localTours, localClients) {
+  const oldTours = (snap && (snap.tours || snap.tournees)) || [];
+  const curTours = localTours || (typeof allTours === 'function' ? allTours() : []);
+  const curClients = localClients || (typeof clients !== 'undefined' ? clients : []);
+  const oldClients = (snap && snap.clients) || [];
+  const byId = (arr) => { const m = {}; (arr || []).forEach((x) => { if (x && x.id != null) m[x.id] = x; }); return m; };
+  const curTourById = byId(curTours), curClientById = byId(curClients);
+  const nomOf = (cid) => { const c = curClientById[cid] || byId(oldClients)[cid]; return c ? [c.prenom, c.nom, c.societe].filter(Boolean).join(' ').trim() || '(client)' : '(client inconnu)'; };
+  const out = { tours: [], clients: [], totals: { tours: 0, arrets: 0, clientsInTour: 0, chevaux: 0, articles: 0, paiements: 0, lignes: 0, chevauxFiche: 0, montantPerdu: 0 } };
+
+  oldTours.forEach((ot) => {
+    if (!ot || !ot.id) return;
+    const ct = curTourById[ot.id];
+    const entry = { id: ot.id, date: ot.date || '', nom: (ot.nom || '').trim(), closed: !!(ot.closed || ot.endedAt), missing: !ct, arrets: [], articles: [], paiements: [], lignes: [] };
+    if (!ct) { out.totals.tours++; out.tours.push(entry); return; } // tournée entièrement absente
+
+    // --- arrêts / clients / chevaux
+    const curArrByKey = {}; (ct.arrets || []).forEach((a) => { const k = _dvAddrKey(a); if (k) curArrByKey[k] = a; });
+    (ot.arrets || []).forEach((oa) => {
+      const k = _dvAddrKey(oa); const ca = curArrByKey[k];
+      if (!ca) { out.totals.arrets++; entry.arrets.push({ addr: addrStr(oa.addr), missing: true, clients: (oa.clients || []).map((cl) => ({ cid: cl.clientId, nom: nomOf(cl.clientId), missing: true, chevaux: (cl.chevaux || []).map(_dvCvLabel) })) }); return; }
+      const ae = { addr: addrStr(oa.addr), missing: false, clients: [] };
+      (oa.clients || []).forEach((ocl) => {
+        const ccl = (ca.clients || []).find((x) => x.clientId === ocl.clientId);
+        if (!ccl) { out.totals.clientsInTour++; ae.clients.push({ cid: ocl.clientId, nom: nomOf(ocl.clientId), missing: true, chevaux: (ocl.chevaux || []).map(_dvCvLabel) }); return; }
+        const curKeys = new Set((ccl.chevaux || []).map(_dvCvKey));
+        const perdus = (ocl.chevaux || []).filter((cv) => !curKeys.has(_dvCvKey(cv)));
+        if (perdus.length) { out.totals.chevaux += perdus.length; ae.clients.push({ cid: ocl.clientId, nom: nomOf(ocl.clientId), missing: false, chevaux: perdus.map(_dvCvLabel) }); }
+      });
+      if (ae.clients.length) entry.arrets.push(ae);
+    });
+
+    // --- articles (matériel / prestations / impayés)
+    const curArtIds = new Set((ct.articles || []).map((a) => a && a.id).filter((x) => x != null));
+    (ot.articles || []).forEach((oa) => { if (oa && oa.id != null && !curArtIds.has(oa.id)) { out.totals.articles++; entry.articles.push({ id: oa.id, libelle: oa.libelle || (oa.impaye ? 'Impayé reporté' : 'Article'), chevaux: oa.chevalNoms || [], impaye: !!oa.impaye, ht: oa.ht }); } });
+
+    // --- paiements (encaissements)
+    const curPay = ct.payments || {};
+    Object.keys(ot.payments || {}).forEach((cid) => {
+      const op = ot.payments[cid]; if (!op) return;
+      const cp = curPay[cid];
+      if (!cp) { out.totals.paiements++; entry.paiements.push({ cid, nom: nomOf(cid), missing: true, method: op.method || '(non classé)', montant: op.rectifie != null ? op.rectifie : op.montantPaye }); return; }
+      const om = op.rectifie != null ? op.rectifie : op.montantPaye, cm = cp.rectifie != null ? cp.rectifie : cp.montantPaye;
+      if (om != null && (cm == null || +cm < +om)) { out.totals.paiements++; entry.paiements.push({ cid, nom: nomOf(cid), missing: false, method: op.method || '(non classé)', montant: om, montantNow: cm }); }
+    });
+
+    // --- lignes de facture (result.parClient) : client disparu de la facture, ou TTC en BAISSE
+    const curPc = (ct.result && ct.result.parClient) || [];
+    ((ot.result && ot.result.parClient) || []).forEach((op) => {
+      const cp = curPc.find((x) => x.clientId === op.clientId);
+      if (!cp) { out.totals.lignes++; out.totals.montantPerdu += (+op.totalTTC || 0); entry.lignes.push({ cid: op.clientId, nom: nomOf(op.clientId), missing: true, ttc: op.totalTTC }); return; }
+      if ((+cp.totalTTC || 0) < (+op.totalTTC || 0) - 0.005) { out.totals.lignes++; out.totals.montantPerdu += ((+op.totalTTC || 0) - (+cp.totalTTC || 0)); entry.lignes.push({ cid: op.clientId, nom: nomOf(op.clientId), missing: false, ttc: op.totalTTC, ttcNow: cp.totalTTC }); }
+    });
+
+    if (entry.arrets.length || entry.articles.length || entry.paiements.length || entry.lignes.length) out.tours.push(entry);
+  });
+
+  // --- fiches clients : client disparu, ou cheval disparu / dont le NOM a été vidé
+  oldClients.forEach((oc) => {
+    if (!oc || oc.id == null) return;
+    const cc = curClientById[oc.id];
+    if (!cc) { out.clients.push({ id: oc.id, nom: nomOf(oc.id), missing: true, chevaux: (oc.chevaux || []).map((h) => ({ nom: _dvCvLabel(h), raison: 'client absent' })) }); return; }
+    const perdus = [];
+    (oc.chevaux || []).forEach((oh) => {
+      const ch = (cc.chevaux || []).find((x) => (oh.id != null && x.id === oh.id) || (norm(oh.nom) && norm(x.nom) === norm(oh.nom)));
+      if (!ch) perdus.push({ nom: _dvCvLabel(oh), raison: 'cheval absent de la fiche' });
+      else if ((oh.nom || '').trim() && !(ch.nom || '').trim()) perdus.push({ nom: (oh.nom || '').trim(), raison: 'NOM VIDÉ (le cheval existe encore)' });
+    });
+    if (perdus.length) { out.totals.chevauxFiche += perdus.length; out.clients.push({ id: oc.id, nom: nomOf(oc.id), missing: false, chevaux: perdus }); }
+  });
+
+  return out;
+}
+// Rendu HTML du diff (lecture seule).
+function renderVaultDiff(d) {
+  const T = d.totals;
+  const rien = !d.tours.length && !d.clients.length;
+  const chip = (n, lbl) => n ? `<span class="badge">${n} ${esc(lbl)}</span> ` : '';
+  let h = `<p class="hint">${rien ? '✅ <b>Rien n\'a disparu.</b> Tout ce que contenait cette version est encore présent dans vos données actuelles.'
+    : '⚠️ <b>Éléments présents dans cette version et ABSENTS aujourd\'hui.</b><br>Les ajouts faits depuis ne sont pas listés : seuls les <b>retraits</b> et les <b>baisses de montant</b> apparaissent.'}</p>`;
+  if (rien) return h;
+  h += `<p style="margin:6px 0">${chip(T.tours, 'tournée(s)')}${chip(T.arrets, 'arrêt(s)')}${chip(T.clientsInTour, 'client(s) en tournée')}${chip(T.chevaux, 'cheval/chevaux')}${chip(T.articles, 'article(s)')}${chip(T.paiements, 'paiement(s)')}${chip(T.lignes, 'ligne(s) de facture')}${chip(T.chevauxFiche, 'cheval/chevaux en fiche')}`;
+  if (T.montantPerdu > 0.005) h += `<br><b style="color:var(--danger,#c00)">Montant facturé manquant : ${_dvMoney(T.montantPerdu)} €</b>`;
+  h += '</p>';
+  d.tours.forEach((t) => {
+    h += `<div class="list-item" style="display:block"><div class="li-main"><b>${esc(fmtDateFr(t.date))}</b>${t.nom ? ' — ' + esc(t.nom) : ''}${t.closed ? ' <span class="badge">clôturée</span>' : ''}`;
+    if (t.missing) { h += `<span class="li-sub" style="color:var(--danger,#c00)"><b>TOURNÉE ENTIÈREMENT ABSENTE</b></span>`; }
+    h += '</div>';
+    if (!t.missing) {
+      h += '<ul style="margin:4px 0 0 16px;padding:0">';
+      t.arrets.forEach((a) => {
+        if (a.missing) h += `<li>📍 arrêt <b>${esc(a.addr)}</b> — absent${a.clients.length ? ' (' + a.clients.map((c) => esc(c.nom) + (c.chevaux.length ? ' : ' + c.chevaux.map(esc).join(', ') : '')).join(' · ') + ')' : ''}</li>`;
+        else a.clients.forEach((c) => { h += c.missing ? `<li>👤 <b>${esc(c.nom)}</b> retiré de l'arrêt ${esc(a.addr)}${c.chevaux.length ? ' (' + c.chevaux.map(esc).join(', ') + ')' : ''}</li>` : `<li>🐴 ${esc(c.nom)} — cheval/chevaux absent(s) : <b>${c.chevaux.map(esc).join(', ')}</b></li>`; });
+      });
+      t.articles.forEach((a) => { h += `<li>📦 article absent : <b>${esc(a.libelle)}</b>${a.chevaux.length ? ' (' + a.chevaux.map(esc).join(', ') + ')' : ''}${a.impaye ? ' — impayé reporté' : ''}${a.ht != null ? ' · ' + _dvMoney(a.ht) + ' € HT' : ''}</li>`; });
+      t.paiements.forEach((p) => { h += p.missing ? `<li>💶 <b style="color:var(--danger,#c00)">paiement disparu</b> — ${esc(p.nom)} · ${esc(p.method)}${p.montant != null ? ' · ' + _dvMoney(p.montant) + ' €' : ''}</li>` : `<li>💶 paiement en baisse — ${esc(p.nom)} : ${_dvMoney(p.montant)} € → ${p.montantNow == null ? '(vide)' : _dvMoney(p.montantNow) + ' €'}</li>`; });
+      t.lignes.forEach((l) => { h += l.missing ? `<li>🧾 ligne de facture disparue — ${esc(l.nom)} · ${_dvMoney(l.ttc)} € TTC</li>` : `<li>🧾 facture en BAISSE — ${esc(l.nom)} : ${_dvMoney(l.ttc)} € → ${_dvMoney(l.ttcNow)} €</li>`; });
+      h += '</ul>';
+    }
+    h += '</div>';
+  });
+  if (d.clients.length) {
+    h += '<p class="hint" style="margin-top:10px"><b>Fiches clients</b></p>';
+    d.clients.forEach((c) => { h += `<div class="list-item" style="display:block"><div class="li-main"><b>${esc(c.nom)}</b>${c.missing ? ' <span class="badge">fiche absente</span>' : ''}<span class="li-sub">${c.chevaux.map((x) => esc(x.nom) + ' — ' + esc(x.raison)).join(' · ')}</span></div></div>`; });
+  }
+  return h;
+}
 // Restaure un instantané (révision) : sauvegarde de sécurité de l'état actuel, remplacement (réglages device-local préservés),
 // RE-HORODATAGE de tout à « maintenant » (pour que la version restaurée l'emporte sur toute copie corrompue d'un autre appareil),
 // puis pousse la version restaurée comme référence sur Drive, et recharge.
@@ -4399,9 +4517,20 @@ function modalDriveRestore() {
             // Sous-modale (au-dessus) : appareil + résumé + réinjection d'UNE tournée. ✕ → revient sur la liste des versions.
             openSubModal(`<div class="modal-head"><b>🔍 ${esc(rv ? new Date(rv.modifiedTime).toLocaleString('fr-FR') : 'Version')}</b><button class="x" id="mX2">✕</button></div>
               <p class="hint"><b>${esc(dev)}</b> · ${esc(snapshotSummary(snap))}</p>
+              <button class="btn small block" id="drDiff" style="margin-top:8px">🔎 Ce qui a DISPARU depuis cette version</button>
+              <div id="drDiffBox" style="margin-top:8px"></div>
               <p class="hint" style="margin-top:8px"><b>Réinjecter UNE tournée</b> de cette sauvegarde (fusion — garde tout le reste) :</p>
               <div class="list" id="drTours2"></div>`);
             $('mX2').addEventListener('click', closeSubModal);
+            // T1 — comparaison LECTURE SEULE : n'écrit rien, ne synchronise rien. Sert à réconcilier à la main.
+            $('drDiff').addEventListener('click', (ev) => {
+              const bd = ev.currentTarget, box = $('drDiffBox');
+              if (box.dataset.open === '1') { box.innerHTML = ''; box.dataset.open = ''; bd.textContent = '🔎 Ce qui a DISPARU depuis cette version'; return; }
+              bd.disabled = true; bd.textContent = 'Comparaison…';
+              try { box.innerHTML = renderVaultDiff(diffVaultVsLocal(snap)); box.dataset.open = '1'; bd.textContent = '🔽 Masquer la comparaison'; }
+              catch (err) { box.innerHTML = '<p class="hint">Comparaison impossible : ' + esc(err.message) + '</p>'; }
+              finally { bd.disabled = false; }
+            });
             const box2 = $('drTours2');
             box2.innerHTML = tours.length ? tours.map((t, ti) => { const arr = t.arrets || []; const nv = arr.filter((a) => typeof a.validatedAt === 'number' || (a.clients || []).some((cl) => typeof cl.validatedAt === 'number')).length; const st = (t.closed || t.endedAt) ? '✅ clôturée' : (t.startedAt ? '🚗 démarrée' : '⏳ non démarrée'); return `<div class="list-item"><div class="li-main"><b>${esc(fmtDateFr(t.date))}</b>${t.nom && t.nom.trim() ? ' — ' + esc(t.nom.trim()) : ''}<span class="li-sub">${nv}/${arr.length} arrêts clôturés · ${st}</span></div><div class="li-act"><button class="btn small" data-reinj="${ti}">♻ Réinjecter</button></div></div>`; }).join('') : '<p class="hint">Aucune tournée datée dans cette version.</p>';
             box2.querySelectorAll('[data-reinj]').forEach((rb) => rb.addEventListener('click', () => { const t = tours[+rb.dataset.reinj]; if (!confirm(`Réinjecter la tournée du ${fmtDateFr(t.date)} ?\n\nElle est FUSIONNÉE dans vos données actuelles (ses clôtures / paiements / temps réel reviennent) SANS toucher à vos autres tournées ni aux modifications faites depuis. Une sauvegarde de sécurité est téléchargée avant.`)) return; try { reinjectTour(t, snap); refreshEverywhere(); rb.textContent = '✔ réinjectée'; rb.disabled = true; } catch (err) { alert('Réinjection impossible : ' + err.message); } }));
