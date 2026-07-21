@@ -14791,12 +14791,17 @@ function factoryReset() {
   location.reload();
 }
 function modalBackup() {
-  const dump = JSON.stringify(exportSnapshot(), null, 2);
+  // FIABILITÉ (2026-07-21) : on NE pré-remplit PLUS le textarea avec l'instantané complet. Sur une base réelle il pèse
+  // plusieurs Mo (contactMails à lui seul ~2,6 Mo) ; `esc()` sur toute la chaîne PUIS l'injection via innerHTML gelaient
+  // la page pendant plusieurs secondes, voire la bloquaient. L'EXPORT passe désormais par « Télécharger » (blob, aucun
+  // rendu DOM) ou « Copier » (généré à la demande). Le textarea ne sert plus qu'à COLLER un contenu à IMPORTER.
+  const sizeHint = () => { try { return ' (' + humanSize(new Blob([JSON.stringify(exportSnapshot())]).size) + ')'; } catch (e) { return ''; } };
   openModal(`<div class="modal-head"><b>💾 Sauvegarde / transfert</b><button class="x" id="mX">✕</button></div>
-    <p class="hint">Sauvegardez (fichier ou copie), transférez, ou repartez sur une base saine. La sauvegarde contient <b>tout</b> : réglages, Gestion, clients, tournées, annulations et notes de crédit.</p>
-    <textarea id="bkText" class="bk-area" spellcheck="false">${esc(dump)}</textarea>
-    <div class="actions two"><button class="btn" id="bkDl">⬇️ Télécharger</button><button class="btn" id="bkCopy">📋 Copier</button></div>
+    <p class="hint">Sauvegardez (fichier ou copie), transférez, ou repartez sur une base saine. La sauvegarde contient <b>tout</b> : réglages, Gestion, clients, tournées, annulations et notes de crédit${esc(sizeHint())}.</p>
+    <div class="actions two"><button class="btn primary" id="bkDl">⬇️ Télécharger</button><button class="btn" id="bkCopy">📋 Copier</button></div>
     <h3 class="rsub">Importer</h3>
+    <p class="hint">Collez ci-dessous le contenu d'une sauvegarde (ou d'un « 📋 Copier » d'un autre appareil), puis choisissez le mode d'import.</p>
+    <textarea id="bkText" class="bk-area" spellcheck="false" placeholder="Collez ici le contenu JSON d'une sauvegarde à importer…"></textarea>
     <div class="actions two"><button class="btn primary" id="bkMerge">🔀 Fusion</button><button class="btn" id="bkDataOnly">📥 Données seules</button></div>
     <div class="actions"><button class="btn danger block" id="bkImport">⚠ Remplace tout</button></div>
     <p class="hint">« Fusion » = synchroniser 2 appareils (le plus récent gagne, sans écraser). « Données seules » = importe tournées + clients + annulations + notes de crédit en <b>gardant vos réglages actuels</b> (idéal après un retour usine). « Remplace tout » = restauration complète. Les tournées importées sont <b>« à revalider »</b> (ouvrez-les une par une pour vérifier chaque arrêt, même clôturées).</p>
@@ -14809,8 +14814,9 @@ function modalBackup() {
   $('bkFactory').addEventListener('click', factoryReset);
   $('bkDataOnly').addEventListener('click', () => {
     if (!confirm('Importer les tournées + clients + annulations + notes de crédit, en GARDANT vos réglages actuels ? Les tournées seront « à revalider ».')) return;
+    const _bkTxt = ($('bkText').value || '').trim(); if (!_bkTxt) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = "Collez d'abord le contenu d'une sauvegarde dans la zone ci-dessus."; return; } 
     try {
-      const o = JSON.parse($('bkText').value);
+      const o = JSON.parse(_bkTxt);
       if (!o.tours && Array.isArray(o.tournees)) o.tours = o.tournees;
       if (!Array.isArray(o.clients) || !Array.isArray(o.tours)) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'Format non reconnu (clients/tours attendus).'; return; }
       LS.set('ftr.clients', o.clients);
@@ -14830,10 +14836,12 @@ function modalBackup() {
       setTimeout(() => location.reload(), 800);
     } catch (e) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'JSON invalide : ' + e.message; }
   });
-  $('bkCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('bkText').value); $('bkStatus').className = 'status ok'; $('bkStatus').textContent = 'Copié dans le presse-papier.'; } catch { $('bkText').select(); document.execCommand && document.execCommand('copy'); $('bkStatus').textContent = 'Sélectionné — Ctrl+C pour copier.'; } });
+  // « Copier » = EXPORT à la demande (le textarea reste vide, réservé à l'import) → jamais de rendu multi-Mo.
+  $('bkCopy').addEventListener('click', async () => { const dump = JSON.stringify(exportSnapshot(), null, 2); try { await navigator.clipboard.writeText(dump); $('bkStatus').className = 'status ok'; $('bkStatus').textContent = 'Sauvegarde copiée dans le presse-papier' + (function () { try { return ' (' + humanSize(new Blob([dump]).size) + ')'; } catch (e) { return ''; } })() + '.'; } catch { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'Copie refusée par le navigateur — utilisez « ⬇️ Télécharger ».'; } });
   $('bkMerge').addEventListener('click', () => {
+    const _bkTxt = ($('bkText').value || '').trim(); if (!_bkTxt) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = "Collez d'abord le contenu d'une sauvegarde dans la zone ci-dessus."; return; } 
     try {
-      const o = JSON.parse($('bkText').value);
+      const o = JSON.parse(_bkTxt);
       // Compat : ancienne sauvegarde {tournees} → convertie en {tours}.
       if (!o.tours && Array.isArray(o.tournees)) o.tours = o.tournees;
       if (!o.settings || !Array.isArray(o.clients) || !Array.isArray(o.tours)) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'Format non reconnu (settings/clients/tours attendus).'; return; }
@@ -14843,9 +14851,10 @@ function modalBackup() {
     } catch (e) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = 'JSON invalide : ' + e.message; }
   });
   $('bkImport').addEventListener('click', () => {
+    const _bkTxt = ($('bkText').value || '').trim(); if (!_bkTxt) { $('bkStatus').className = 'status err'; $('bkStatus').textContent = "Collez d'abord le contenu d'une sauvegarde dans la zone ci-dessus."; return; }
     if (!confirm('Remplacer TOUS vos réglages et données par cette sauvegarde ? (écrase l\'existant)')) return;
     try {
-      const o = JSON.parse($('bkText').value);
+      const o = JSON.parse(_bkTxt);
       if (o.settings && typeof o.settings === 'object') LS.set('ftr.settings', o.settings);
       if (Array.isArray(o.clients)) LS.set('ftr.clients', o.clients);
       const tours0 = Array.isArray(o.tours) ? o.tours : (Array.isArray(o.tournees) ? o.tournees : null);
