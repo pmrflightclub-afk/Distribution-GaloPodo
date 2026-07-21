@@ -186,13 +186,74 @@ générique n'a de sens qu'une fois les défauts connus corrigés, sinon il refu
 
 ---
 
+## 5bis. ⚠ CORRECTION MAJEURE — le déclencheur n'est PAS la clôture
+
+L'analyse complète (110/110 agents, voir **`SPEC-immutabilite.md`**) réfute la formulation du §1 sur un point
+essentiel :
+
+> **Le gel se déclenche sur l'ACTE (`p.method != null`), pas sur la clôture (`t.closed`).**
+
+Motif : `recoverTour` (12944) clôture une tournée **sans aucune méthode de paiement** — il alimente même sa liste
+depuis `tourFinalizeBlock`, qui inclut « mode de paiement non choisi ». Une garde `if (t.closed) refuser`
+**empêcherait la première classification d'une tournée récupérée**. Et `graftClosure` (3728) propage `closed`
+sans revérifier les paiements.
+
+Prédicat retenu : `paiementActe(t, cid)` = méthode choisie **ET** (client clôturé **OU** tournée figée **OU**
+période déclarée). Détail et code dans `SPEC-immutabilite.md` §1.
+
+### Deux défauts supplémentaires, atteignables aujourd'hui
+
+- **Le `<select>` de Compta n'est pas coupé par un mois déclaré.** Seul le *recalcul* est gardé (9590) ;
+  l'écriture 9581-9586 passe toujours. Une pièce d'un mois déjà déposé peut changer de section.
+- **En pleine tournée** : un client encaissé et clôturé à 9 h peut passer liquide→virement à 17 h (le bouton
+  💶 n'est grisé que pour une tournée future). Pire — `commitPayments()` est appelé **avant** l'ouverture des
+  sous-modales (`[data-pactes]`, `[data-rdv]`, `[data-carte]`) **sans** le contrôle `payOk.disabled` qui protège
+  le bouton nominal : **un simple clic de navigation réécrit et persiste le paiement.**
+
+### Mécanisme retenu
+
+**Ne pas** accrocher sur `saveTournees` : elle porte tout le tableau (un refus global perdrait l'encaissement en
+cours) et elle est contournée par 8 écritures directes. À la place, un **écrivain unique** `writePayment(t, cid,
+next, ctx)` + **refus en amont** (jamais de rollback silencieux : `syncStamp` s'exécute *avant* `LS.set`, un
+rollback laisserait l'empreinte désalignée — la panne de juillet).
+
+### Journal — la règle qui évite l'auto-sabotage
+
+`ftr.wlog` / `ftr.wlogFrozen` doivent être ajoutés à la liste de purge de `LS.set` **avant** `ftr.syncmeta`
+et **jamais avant** `ftr.tomb`. Sans ça, sous quota, le dispositif de traçabilité **redeviendrait la cause de la
+perte qu'il documente**.
+
+---
+
 ## 6. Reste à trancher
 
-1. **Le module de contrepassation** — les 7 questions du §3.
-2. **`modalEditPrestations`** : le supprime-t-on sur les clôturées, ou le réserve-t-on aux tournées récupérées ?
-3. **Stratégie de refus** : annuler la modification en mémoire, ou refuser le lot ? ⚠ *agent coupé, à compléter*
-4. **Coût du contrôle** à chaque enregistrement. ⚠ *agent coupé, à compléter*
-5. **Formulation finale de la règle** de blocage. ⚠ *agent coupé, à compléter*
+✅ Analyse **terminée** (110/110). Stratégie de refus, mécanisme et formulation de la règle : tranchés dans
+`SPEC-immutabilite.md`. Restent **trois décisions métier**, qui n'appartiennent qu'au propriétaire :
 
-Les points 3 à 5 relèvent des 7 agents coupés par la limite de session (réinitialisation à 19 h) — à relancer
-avant de coder.
+### D1 — La facture d'un client clôturé peut encore bouger avant la clôture de la tournée
+`computeResultMoney` redistribue le déplacement **au prorata entre tous les clients** : ajouter un arrêt fait
+varier le `totalTTC` d'un client **déjà clôturé et payé**. C'est pourquoi le gel porte sur `t.payments` et non sur
+`t.result` d'une tournée ouverte.
+**Question** : acceptable, ou faut-il figer le montant de chaque client dès **sa** clôture ? (lot séparé et lourd)
+
+### D2 — Un virement annoncé mais jamais reçu, finalement payé en espèces
+Un virement n'est pas un encaissement mais une **créance** : `clientPaiementIssue` n'exige aucun montant, et
+`S.comptaRecu` trace séparément la réception. Avec la règle stricte, ce cas tombe sous le refus.
+**Proposition** : autoriser `virement → liquide` **tant que la réception n'est pas cochée et que le mois n'est pas
+déclaré**, avec motif obligatoire et entrée de journal. À valider.
+
+### D3 — Décocher « Facture nécessaire » juste après clôture
+Le retrait du drapeau facture est interdit (c'est un retrait de pièce, et ça déplace le CA de mois).
+**Proposition** : tolérance de 24 h après émission, journalisée. À valider.
+
+### D4 — Le module de contrepassation
+Le geste correctif recommandé (`modalCorrigerReglement`) produit **deux pièces** : une note de crédit intégrale
+de la facture erronée + un **règlement rectificatif** dans une collection `S.reglements[]`, lue en plus de
+`t.payments` par la compta. La pièce d'origine reste intacte.
+⚠️ **À ne pas faire** : corriger un mode via `modalEditPrestations` — il marque les chevaux « annulé » et
+déclenche un `rembourse +=` pour une facture liquide, c'est-à-dire **un remboursement cash qui n'a jamais eu lieu**.
+
+### Défauts de conformité hors périmètre du blocage, mais bloquants
+- `nextFactureNumero` **et** `nextNcNumero` déduisent la séquence du vivant → **réemploi de numéro** après
+  suppression. Compteur persisté monotone requis.
+- `factureIds` absent de `graftClosure` et de `reinjectTour` → renumérotation d'une facture émise.
