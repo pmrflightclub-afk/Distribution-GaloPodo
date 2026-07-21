@@ -76,5 +76,27 @@ if (fs.existsSync(REF)) {
   console.log('  ⏭  sauvegarde de référence absente — test 4 sauté');
 }
 
+// 5. Le carnet remplace le champ « Reprendre une adresse connue » : il doit proposer AUSSI les lieux connus.
+{
+  const api = boot({ tvaRate: 21, tvaRegime: 'normal', frais: [], materiel: [], amortissement: {}, articlesCatalogue: [], ecuries: [],
+    home: { rue: 'Rue du Depot', numero: '1', cp: '5000', localite: 'Namur' },
+    adresses: [{ id: 'ad1', nom: 'Forge centrale', addr: { rue: 'Rue de la Forge', numero: '9', cp: '4000', localite: 'Liege' } }] },
+    [{ id: 'c1', prenom: 'Alice', nom: 'Martin', addr: { rue: 'Rue A', cp: '1000', localite: 'Ville' }, chevaux: [{ id: 'h1', nom: 'Bijou', addrSource: 'client' }] }]);
+  api.migrateEcuries();
+  const carnet = api.ecurieCarnet();
+  const has = (frag) => carnet.some(x => api.norm(api.addrStr(x.addr)).indexOf(api.norm(frag)) >= 0);
+  ok('5.1 le DOMICILE figure dans le carnet', has('rue du depot'), JSON.stringify(carnet.map(x => x.nom)));
+  ok('5.2 « Mes adresses » figurent dans le carnet', has('rue de la forge'));
+  ok('5.3 ces lieux sont marqués comme tels (badge « lieu »)', carnet.filter(x => x.lieu).length === 2);
+  ok('5.4 l\'écurie du client reste présente', has('rue a'));
+}
+
+// 6. Le champ « Reprendre une adresse connue » ne doit PLUS exister dans la fiche (déplacé dans la modale).
+{
+  const src = fs.readFileSync(APP, 'utf8');
+  ok('6.1 plus de champ data-afind dans la fiche', src.indexOf('data-afind') === -1);
+  ok('6.2 le bouton « Carnet d\'adresses » est bien présent', src.indexOf('data-acarnet') > 0);
+}
+
 console.log('\n' + (fail === 0 ? '✅ ' : '❌ ') + pass + ' réussis, ' + fail + ' échoués\n');
 process.exit(fail === 0 ? 0 : 1);

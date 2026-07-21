@@ -6099,7 +6099,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
         </select></label>
         ${h.addrSource === 'specifique'
     ? `<label class="chk2 chk-wrap"><input type="checkbox" data-priv ${h.addrPrivee ? 'checked' : ''}/> 🔒 Écurie privée (nom = nom du client)</label>
-        <div class="ch-adr-list">${(h.adresses || []).map((a, ai) => `<div class="ch-adr" data-ai="${ai}"><div class="a-top"><label class="chk2" style="margin:0"><input type="radio" name="chdef_${esc(h.id)}" data-def ${a.actif ? 'checked' : ''}/> ⭐ Par défaut</label>${h.addrPrivee ? '' : `<input type="text" class="grow" data-anom value="${esc(a.nom || '')}" placeholder="Nom de l'écurie (Écurie du Nord…)"/>`}<button type="button" class="a-del" data-adel title="Supprimer cette adresse">✕</button></div><button type="button" class="btn small block" data-acarnet>📇 Carnet d'adresses</button><label>Reprendre une adresse connue<input type="text" data-afind list="chevAddrList" placeholder="Nom client / société / adresse déjà connue…"/></label><div data-amount></div></div>`).join('') || '<p class="hint">Aucune adresse propre. Ajoutez-en une ci-dessous.</p>'}</div>
+        <div class="ch-adr-list">${(h.adresses || []).map((a, ai) => `<div class="ch-adr" data-ai="${ai}"><div class="a-top"><label class="chk2" style="margin:0"><input type="radio" name="chdef_${esc(h.id)}" data-def ${a.actif ? 'checked' : ''}/> ⭐ Par défaut</label>${h.addrPrivee ? '' : `<input type="text" class="grow" data-anom value="${esc(a.nom || '')}" placeholder="Nom de l'écurie (Écurie du Nord…)"/>`}<button type="button" class="a-del" data-adel title="Supprimer cette adresse">✕</button></div><button type="button" class="btn small block" data-acarnet>📇 Carnet d'adresses</button><div data-amount></div></div>`).join('') || '<p class="hint">Aucune adresse propre. Ajoutez-en une ci-dessous.</p>'}</div>
         <button type="button" class="btn small" data-aadd>＋ Ajouter une adresse</button>`
     : `<p class="hint">Nom de l'écurie : <b>${esc(chevalAddrNom(w, h))}</b> (repris ${h.addrSource === 'societe' ? 'de la société' : 'du client'}).</p>`}
       </div>`;
@@ -6136,7 +6136,6 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
           const def = el.querySelector('[data-def]'); if (def) def.addEventListener('change', () => { h.adresses.forEach((x) => { x.actif = false; }); a.actif = true; chevalSyncActive(h); saveDraft(); refreshChBadge(); });
           const nm = el.querySelector('[data-anom]'); if (nm) nm.addEventListener('input', (e) => { a.nom = e.target.value; if (a.actif) h.addrNom = a.nom; saveDraft(); });
           const del = el.querySelector('[data-adel]'); if (del) del.addEventListener('click', () => { if (!confirm('Supprimer cette adresse ?')) return; const wasActive = a.actif; if (a.id) { h.adrDel = h.adrDel || {}; h.adrDel[a.id] = Date.now(); } h.adresses.splice(ai, 1); if (wasActive && h.adresses.length) h.adresses[0].actif = true; if (!h.adresses.length) { h.addr = emptyAddr(); h.addrNom = ''; } chevalSyncActive(h); renderCh(); saveDraft(); }); // tombstone adresse + vider miroir si plus d'adresse
-          const find = el.querySelector('[data-afind]'); if (find) find.addEventListener('change', (e) => { const txt = (e.target.value || '').trim(); if (!txt) return; const places = collectRoutePlaces(); const p = places.find((x) => norm(x.label) === norm(txt)) || places.find((x) => norm(x.label).includes(norm(txt))); if (p && p.addr) { const s = toAddr(p.addr); a.addr = Object.assign(emptyAddr(), { rue: s.rue || '', numero: s.numero || '', cp: s.cp || '', localite: s.localite || '', pays: s.pays || '', lat: s.lat || null, lon: s.lon || null }); if (!a.nom && p.label && String(p.label).includes(' · ')) a.nom = String(p.label).split(' · ').slice(1).join(' · ').trim(); chevalSyncActive(h); saveDraft(); renderCh(); } else { alert('Adresse non trouvée. Choisissez un nom dans la liste proposée.'); } }); // reprend aussi le nom d'écurie (après « · »)
           // Lot 04-D : « 📇 Carnet d'adresses » — choisit une écurie ACTIVE existante (recherche par client/cheval) et
           // remplit cette entrée. Le rattachement `h.ecurieId` se fait à l'enregistrement (relinkChevalEcurie, keyé par
           // adresse) → choisir la même adresse qu'un autre cheval le met AUTOMATIQUEMENT sur la même écurie partagée.
@@ -7418,6 +7417,16 @@ function ecurieCarnet() {
     const cur = byKey[addrKey(chevalAddr(c, h))]; if (!cur) return;
     cur.occupants.push({ client: fullName(c) || 'Client', cheval: h.nom || '(cheval)' });
   }));
+  // AUTRES LIEUX CONNUS (domicile + « Mes adresses ») : le carnet remplace l'ancien champ « Reprendre une adresse
+  // connue » — il doit donc proposer AUSSI ces lieux, sinon on perdrait une source. Ajoutés seulement s'ils ne sont
+  // pas déjà couverts par une écurie (dédup par adresse) et s'ils ne sont pas en liste noire.
+  const addLieu = (nom, addr) => {
+    const k = addrKey(addr); if (!k || byKey[k]) return;
+    if (addrStatusOf(addr) === 'noir') return;
+    byKey[k] = { key: k, addr: toAddr(addr), nom: nom, privee: false, lieu: true, occupants: [] };
+  };
+  if (addrStr(S.home).trim()) addLieu('🏠 Domicile', S.home);
+  (S.adresses || []).forEach((a) => { if (a && addrStr(a.addr).trim()) addLieu((a.nom || 'Adresse').trim(), a.addr); });
   return Object.values(byKey).sort((a, b) => norm(a.nom).localeCompare(norm(b.nom)));
 }
 // Modale « 📇 Carnet d'adresses » : liste plate des écuries actives + recherche par nom d'écurie, client, cheval ou rue.
@@ -7435,7 +7444,8 @@ function modalCarnetAdresses(onPick) {
     cnt.textContent = f.length + ' adresse(s)' + (nq ? ' correspondant à « ' + q + ' »' : '') + ' · ' + list.length + ' au total';
     box.innerHTML = f.length ? f.map((x, i) => {
       const occ = x.occupants.slice(0, 4).map((p) => p.cheval + ' (' + p.client + ')').join(', ');
-      return `<div class="list-item"><div class="li-main"><b>${esc(x.nom)}</b>${x.privee ? ' <span class="badge">privée</span>' : ''}<span class="li-sub">${esc(addrStr(x.addr))}${x.occupants.length ? '<br>🐴 ' + esc(occ) + (x.occupants.length > 4 ? ' +' + (x.occupants.length - 4) : '') : ''}</span></div><div class="li-act"><button class="btn small" data-pick="${i}">Choisir</button></div></div>`;
+      const tag = x.lieu ? ' <span class="badge">lieu</span>' : (x.privee ? ' <span class="badge">privée</span>' : '');
+      return `<div class="list-item"><div class="li-main"><b>${esc(x.nom)}</b>${tag}<span class="li-sub">${esc(addrStr(x.addr))}${x.occupants.length ? '<br>🐴 ' + esc(occ) + (x.occupants.length > 4 ? ' +' + (x.occupants.length - 4) : '') : ''}</span></div><div class="li-act"><button class="btn small" data-pick="${i}">Choisir</button></div></div>`;
     }).join('') : '<p class="empty">Aucune adresse trouvée.</p>';
     box.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => { const x = f[+b.dataset.pick]; o.close(); if (onPick) onPick(x); }));
   };
