@@ -18,7 +18,7 @@ function boot(settings, clients) {
   const sb = { console, JSON, Math, Date, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, Promise, parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent, setTimeout: noop, clearTimeout: noop, setInterval: noop, clearInterval: noop, localStorage: { getItem: k => k in store ? store[k] : null, setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } }, sessionStorage: { getItem: () => null, setItem: noop, removeItem: noop }, document: doc, navigator: { onLine: true, userAgent: 'node', serviceWorker: { register: () => Promise.resolve(), addEventListener: noop } }, location: { href: '', reload: noop, search: '' }, fetch: () => Promise.reject(new Error('off')), matchMedia: () => ({ matches: false, addEventListener: noop, addListener: noop }), alert: noop, confirm: () => false, prompt: () => null, requestAnimationFrame: noop, URL: { createObjectURL: () => '', revokeObjectURL: noop }, Blob: function () {}, FileReader: function () {}, Image: function () {}, TextEncoder, TextDecoder, crypto: { getRandomValues: a => a, randomUUID: () => 'x' }, performance: { now: () => 0 } };
   sb.addEventListener = noop; sb.removeEventListener = noop; sb.dispatchEvent = noop; sb.window = sb; sb.globalThis = sb; sb.self = sb;
   vm.createContext(sb);
-  const EPI = ';globalThis.__api={ecurieCarnet:ecurieCarnet,addrStatusOf:addrStatusOf,ecurieAddrOf:ecurieAddrOf,ecurieNomOf:ecurieNomOf,migrateEcuries:migrateEcuries,addrKey:addrKey,addrStr:addrStr,norm:norm,setAddrStatus:setAddrStatus,S:function(){return S},clients:function(){return clients}};';
+  const EPI = ';globalThis.__api={ecurieCarnet:ecurieCarnet,addrStatusOf:addrStatusOf,relinkChevalEcurie:relinkChevalEcurie,chevalAddr:chevalAddr,emptyAddr:emptyAddr,parseAddrLoose:parseAddrLoose,ecurieAddrOf:ecurieAddrOf,ecurieNomOf:ecurieNomOf,migrateEcuries:migrateEcuries,addrKey:addrKey,addrStr:addrStr,norm:norm,setAddrStatus:setAddrStatus,S:function(){return S},clients:function(){return clients}};';
   vm.runInContext(fs.readFileSync(APP, 'utf8') + EPI, sb, { filename: 'app.js' });
   return sb.__api;
 }
@@ -120,6 +120,28 @@ if (fs.existsSync(REF)) {
   const noirs = tous.filter(x => api.addrStatusOf(x.addr) === 'noir');
   ok('7.4 le filtre « Liste noire » la retrouve', noirs.length === 1);
   ok('7.5 le filtre « Actives » ne la retient pas', tous.filter(x => api.addrStatusOf(x.addr) === 'actif' && x.occupants.length).every(x => api.norm(api.addrStr(x.addr)).indexOf('rue partagee') < 0));
+}
+
+// 8. IMPORT MAIL : un cheval créé depuis un mail, à une adresse d'écurie DÉJÀ connue, doit rejoindre la MÊME écurie.
+{
+  const ecu = { rue: 'Rue du Nord', numero: '10', cp: '5000', localite: 'Namur' };
+  const cli = [{ id: 'c1', prenom: 'Alice', nom: 'Martin', addr: { rue: 'Rue A', cp: '1000', localite: 'V' }, chevaux: [{ id: 'h1', nom: 'Bijou', addrSource: 'specifique', adresses: [{ id: 'a1', nom: 'Ecurie du Nord', actif: true, addr: ecu }] }] }];
+  const api = boot({ tvaRate: 21, tvaRegime: 'normal', frais: [], materiel: [], amortissement: {}, articlesCatalogue: [], ecuries: [] }, cli);
+  api.migrateEcuries();
+  const nAvant = (api.S().ecuries || []).length;
+  // reproduit la création par import mail (app.js ~6003)
+  const w = { id: 'c2', prenom: 'Bob', nom: 'Durand', addr: { rue: 'Rue B', cp: '2000', localite: 'B' }, chevaux: [] };
+  const ch = { id: 'hM', nom: 'Caramel', actif: true, addrSource: 'specifique', addr: Object.assign(api.emptyAddr(), api.parseAddrLoose('Rue du Nord 10, 5000 Namur')), addrNom: 'Ecurie du Nord' };
+  ch.adresses = [{ id: 'am', nom: ch.addrNom, addr: ch.addr, actif: true }];
+  w.chevaux.push(ch); api.clients().push(w);
+  ok('8.1 l\'entrée « adresses » est créée dès l\'import (pas de rattrapage différé)', Array.isArray(ch.adresses) && ch.adresses.length === 1);
+  api.relinkChevalEcurie(w, ch);
+  const bijou = api.clients().find(c => c.id === 'c1').chevaux[0];
+  ok('8.2 le cheval importé rejoint la MÊME écurie que celle déjà connue', !!ch.ecurieId && ch.ecurieId === bijou.ecurieId, ch.ecurieId + ' vs ' + bijou.ecurieId);
+  ok('8.3 aucune écurie en double n\'est créée', (api.S().ecuries || []).length === nAvant, nAvant + ' -> ' + (api.S().ecuries || []).length);
+  ok('8.4 son adresse se résout correctement', /Rue du Nord/.test(api.addrStr(api.chevalAddr(w, ch))), api.addrStr(api.chevalAddr(w, ch)));
+  const e = api.ecurieCarnet().find(x => api.norm(api.addrStr(x.addr)).indexOf('rue du nord') >= 0);
+  ok('8.5 le carnet montre les 2 occupants sur cette écurie', !!e && e.occupants.length === 2, e ? JSON.stringify(e.occupants) : '—');
 }
 
 console.log('\n' + (fail === 0 ? '✅ ' : '❌ ') + pass + ' réussis, ' + fail + ' échoués\n');

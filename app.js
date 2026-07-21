@@ -6000,7 +6000,12 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
     if (prefill.cheval && (prefill.cheval.nom || prefill.cheval.anamnese)) {
       const pc = prefill.cheval;
       const ch = { id: uid(), nom: pc.nom || '', dateNaissance: pc.dateNaissance || '', race: pc.race || '', anamnese: pc.anamnese || null, dateDemandeSuivi: pc.dateDemandeSuivi || '', actif: !chOff, addrSource: 'client', addr: emptyAddr() };
-      if (pc.ecurieAddr) { ch.addrSource = 'specifique'; ch.addr = Object.assign(emptyAddr(), parseAddrLoose(pc.ecurieAddr)); if (pc.ecurieNom) ch.addrNom = pc.ecurieNom; } // adresse de l'écurie fournie dans le formulaire → adresse spécifique du cheval
+      // Adresse d'écurie fournie dans le formulaire → adresse spécifique du cheval. Lot 04-D : on crée AUSSI l'entrée
+      // `adresses` dès l'import (même référence que ch.addr, convention de chevalSyncActive) au lieu de compter sur le
+      // rattrapage au rendu/au boot → la fiche est cohérente immédiatement. Le rattachement à l'écurie se fait à
+      // l'enregistrement (relinkChevalEcurie, keyé par adresse) : un cheval importé à une adresse DÉJÀ connue rejoint
+      // automatiquement la MÊME écurie partagée que les chevaux qui s'y trouvent.
+      if (pc.ecurieAddr) { ch.addrSource = 'specifique'; ch.addr = Object.assign(emptyAddr(), parseAddrLoose(pc.ecurieAddr)); if (pc.ecurieNom) ch.addrNom = pc.ecurieNom; ch.adresses = [{ id: uid(), nom: ch.addrNom || '', addr: ch.addr, actif: true }]; }
       (w.chevaux = w.chevaux || []).push(ch);
     }
     if (prefill.status === 'inactif') w.actif = false;
