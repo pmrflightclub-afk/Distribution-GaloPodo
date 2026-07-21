@@ -163,6 +163,8 @@ Contenu par entrée : horodatage · origine · entité · id · champs modifiés
 ## 5. Plan de codage (en une fois, quand tout sera validé)
 
 ```
+L0  Saisie liquide   MODULE D — champ « Montant liquide reçu », impayé auto dès 1 € d'écart,
+                     « paiement partiel » coché automatiquement (fin de la fausse « remise »)
 L1  Traçabilité      withOrigin + les 2 anneaux + les 30 sites d'écriture de paiement
                      (⚠ la table SPEC §6.a en annonce 18 et en oublie 8 — cf. SPEC-modules-correction §0.3)
 L2  Recalculs gelés  recomputeMoney · calcTour · sanitizeTourStats

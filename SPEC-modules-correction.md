@@ -400,9 +400,97 @@ Pour chacun : client A clôturé et payé, tournée **non** close, puis —
 
 ---
 
+## 3bis. MODULE D — Saisie de l'encaissement liquide : l'impayé au lieu de la « remise »
+
+> Décision du propriétaire, 2026-07-22 : **« si le montant liquide payé rempli par l'utilisateur est plus bas
+> que le montant total, c'est un impayé. Il faut l'indiquer sous la case impayée et la case à cocher paiement
+> partiel doit s'activer automatiquement. »** Seuil retenu : **≥ 1 €**. Champ reformulé : **« Montant liquide reçu »**.
+
+### 3bis.1 Le défaut actuel
+
+Dans `modalPayment`, saisir 100 € sur un total de 120 € affiche aujourd'hui :
+*« Différence (arrondi) : −20,00 € TTC **(remise)** »* (app.js:14367). Rien ne coche « Paiement partiel »,
+rien ne parle d'impayé. **Un manque de 20 € est présenté comme un geste commercial volontaire**, et il finit
+dans le poste « Arrondi caisse » (9648) — indiscernable d'un vrai cadeau à la relecture.
+
+### 3bis.2 Le piège à ne pas reproduire — `rectifie` n'est pas l'argent en main
+
+`payRecu(m, p) = payRectifie(m, p) − payImpaye(m, p)` (app.js:8644). Donc **`p.rectifie` est le TOTAL de la
+transaction arrondi à l'euro**, pas le cash encaissé. Les deux se confondent seulement quand `impaye = 0` —
+d'où l'ambiguïté, que l'app entretient elle-même en libellant **le même champ** de deux façons :
+
+| Écran | Ligne | Libellé du champ `p.rectifie` |
+|---|---|---|
+| `modalPayment` | app.js:14325 | « Montant décimal **rectifié** (TTC, arrondi à l'euro) » |
+| `modalAdjustArrondi` | app.js:14229 | « Montant liquide **encaissé** (arrondi à l'euro) » |
+
+⛔ **Implémentation naïve à éviter** : auto-remplir `impaye = 20` en laissant `rectifie = 100` donnerait
+`payRecu = 100 − 20 = 80 €`. **Erreur de 20 € dans l'autre sens.** `rectifie` doit être remis au total arrondi.
+
+### 3bis.3 Règle de dérivation
+
+Le champ saisi devient **`reçu`** = l'argent en main. À chaque frappe, l'app dérive :
+
+```
+ecart = round(m.totalTTC) − reçu
+
+si ecart < 1 €            →  ARRONDI (comportement actuel, geste volontaire)
+                             rectifie = reçu ; partiel = false ; impaye = null
+                             (couvre aussi reçu > total : arrondi vers le haut / supplément)
+
+si ecart ≥ 1 €            →  IMPAYÉ
+                             rectifie = round(m.totalTTC)
+                             impaye   = ecart              ← pré-rempli, MODIFIABLE
+                             partiel  = true               ← coché automatiquement
+                             .pay-reste révélé, resteMode défaut « Prochaine visite »
+```
+
+Par construction `payRecu = rectifie − impaye = reçu` dans les deux branches — l'invariant est préservé.
+
+**Seuil = 1 €, en dur.** Justification : toute la saisie liquide est à l'euro (`step="1"`, normalisation au
+blur 14384), donc **aucun arrondi légitime ne peut atteindre 1 €**. Pas de réglage : un paramètre qui déplace
+la frontière entre cadeau et créance déplacerait aussi le CA.
+
+### 3bis.4 Interface
+
+- Champ 14325 relibellé **« Montant liquide reçu (TTC, à l'euro) »**. Même relibellé en 14229
+  (`modalAdjustArrondi`), qui est l'autre porte d'entrée sur le même champ.
+- Le bandeau `[data-diff]` (14366-14367) cesse d'écrire « (remise) » sous 0 dès que l'écart atteint 1 € ;
+  il affiche **trois lignes vérifiables d'un coup d'œil** : `Total facturé` · `Reçu` · `Impayé`.
+- **L'auto-cochage doit rester visible et réversible** : si le manque est un vrai geste commercial, décocher
+  « Paiement partiel » repasse en arrondi (`rectifie = reçu`, `impaye = null`). L'app propose, elle n'impose pas.
+
+> ⚠️ Raison impérative de garder ce contrôle sous la main de l'utilisateur : un impayé enregistré est
+> **re-facturé à la visite suivante** (`addClientToTour` app.js:7757). Un impayé posé par erreur va réclamer
+> de l'argent déjà encaissé.
+
+### 3bis.5 Points de vigilance
+
+1. **La garde de validation 14345 reste vraie** : `impaye ≤ rectifie` est satisfait par construction
+   (`impaye = round(ttc) − reçu ≤ round(ttc) = rectifie` dès que `reçu ≥ 0`). Ne pas la retirer.
+2. **`setClientImpaye` (14404)** sera déclenché beaucoup plus souvent (créance portée sur la fiche client dès
+   que `resteMode === 'report'`). Comportement voulu, mais à couvrir par test.
+3. **Aucune reprise rétroactive.** Les tournées déjà clôturées gardent leur interprétation actuelle (un vieil
+   écart reste un « arrondi caisse »). Les re-qualifier violerait l'immutabilité. La règle vaut pour les
+   saisies **neuves** uniquement.
+4. **Le sens inverse n'est pas couvert** : saisir 200 € pour un total de 120 € reste un « arrondi caisse » de
+   +80 €. C'est le seul cas de faute de frappe qui subsiste, et il est très visible (la caisse gonfle).
+
+### 3bis.6 Ce que ce module règle
+
+**Il ferme le point ouvert §5.1 par la prévention.** Une faute de frappe sur un encaissement liquide ne se
+corrige plus après coup : elle est **rendue visible au moment de l'encaissement**, sous forme d'un impayé
+pré-rempli et d'une case cochée. Aucun troisième type de pièce n'est nécessaire, et le verrouillage de
+`p.rectifie` (lots L3 / L8) devient acceptable puisqu'il n'y a plus de saisie muette à rattraper.
+
+---
+
 ## 4. ORDRE DE CODAGE MIS À JOUR
 
 ```
+L0  Saisie liquide    MODULE D — « Montant liquide reçu » + impayé auto ≥ 1 € + partiel auto-coché.
+                      EN PREMIER : ne dépend de rien, et c'est la PRÉVENTION qui rend le verrouillage
+                      de p.rectifie (L3/L8) acceptable — plus de saisie muette à rattraper.
 L1  Traçabilité       withOrigin + 2 anneaux + les 30 sites (table §6.a à remplacer, cf. §0.3)
 L2  Recalculs gelés   recomputeMoney · calcTour · sanitizeTourStats · rowFromArret (id) · nom client figé
 L3  Argent acté       purge d'arrondi · setComptaPayment (partiel/créance orpheline)
@@ -423,10 +511,11 @@ la correction des défauts connus refuserait en permanence.
 
 ## 5. CE QUI RESTE À TRANCHER
 
-1. **L'écart de caisse sur du liquide SANS facture.** Aucune facture n'a été émise, donc pas d'avoir possible ;
-   `p.rectifie` porte le cash compté. Si l'utilisateur compte 100 € et s'aperçoit le lendemain qu'il y en avait
-   120, faut-il un troisième type de pièce (`type: 'ecart-caisse'`), ou considérer que le comptage fait foi
-   définitivement ? **Non inclus dans le module B en l'état.**
+1. ~~**L'écart de caisse sur du liquide SANS facture.**~~ ✅ **RÉSOLU 2026-07-22 par le MODULE D (§3bis)** —
+   et par la **prévention**, pas par une pièce corrective. Un montant reçu inférieur au total n'est pas un écart
+   de caisse à rattraper : **c'est un impayé**, constaté immédiatement (case « paiement partiel » cochée
+   automatiquement, montant pré-rempli). Aucun troisième type de pièce n'est créé. Seul subsiste le cas
+   symétrique — saisir *plus* que le total — qui reste un arrondi caisse et demeure très visible (§3bis.5-4).
 2. **Affichage du net dans le PDF facliq** : `detailPdf` (app.js:10637) imprime la facture **pleine** de chaque
    client alors que le total de section vaut `payRecu` — elles ne coïncident déjà pas en cas d'impayé partiel.
    Le poste « Remboursements » rend l'écart plus visible. Faut-il corriger ce PDF dans le même lot (hors
