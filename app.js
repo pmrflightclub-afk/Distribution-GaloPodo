@@ -4578,6 +4578,78 @@ function importTourFile(file) {
   r.onload = () => { let data; try { data = JSON.parse(r.result); } catch { alert('Fichier illisible.'); return; } if (!data || data.kind !== 'tour-export' || !data.tour) { alert('Ce fichier n\'est pas un export de tournée GaloPodo.'); return; } modalImportTour(data); };
   r.readAsText(file);
 }
+// ---------- Lot 05 — VOIE DE MIGRATION « REVUE » : fusion CHAMP PAR CHAMP d'un client importé ----------
+// Jusqu'ici l'import ne savait qu'AJOUTER les clients manquants (« ne remplace jamais un existant ») : corriger une
+// fiche par réimport était donc impossible. La revue permet de choisir, champ par champ, la valeur locale ou importée.
+// INVARIANTS (règle « pas de suppression d'identité ») : l'id LOCAL est toujours conservé ; les PRÊTS et les IMPAYÉS ne
+// sont jamais écrasés (union par id, le local prime) ; aucun cheval n'est retiré — seuls des ajouts sont proposés.
+const CLIENT_REVUE_FIELDS = [
+  { k: 'prenom', lbl: 'Prénom' }, { k: 'nom', lbl: 'Nom' }, { k: 'societe', lbl: 'Société' },
+  { k: 'email', lbl: 'Email' }, { k: 'tel', lbl: 'Téléphone' }, { k: 'tvaNum', lbl: 'N° TVA' },
+  { k: 'addr', lbl: 'Adresse', addr: true }, { k: 'societeAddr', lbl: 'Adresse société', addr: true },
+];
+function clientRevueDiff(local, imp) {
+  const out = [];
+  CLIENT_REVUE_FIELDS.forEach((f) => {
+    const lv = f.addr ? addrStr(local && local[f.k]) : String((local && local[f.k]) || '');
+    const iv = f.addr ? addrStr(imp && imp[f.k]) : String((imp && imp[f.k]) || '');
+    if (norm(lv) !== norm(iv)) out.push({ k: f.k, lbl: f.lbl, addr: !!f.addr, local: lv, imported: iv, hasLocal: !!lv.trim(), hasImported: !!iv.trim() });
+  });
+  return out;
+}
+// Chevaux présents dans l'import et ABSENTS en local (par id, repli sur le nom) → proposés à l'ajout.
+function clientRevueNewChevaux(local, imp) {
+  const cur = (local && local.chevaux) || [];
+  return ((imp && imp.chevaux) || []).filter((h) => h && !cur.some((x) => (h.id != null && x.id === h.id) || (norm(h.nom) && norm(x.nom) === norm(h.nom))));
+}
+// `choices[k] === 'imp'` → prend la valeur importée ; sinon garde la locale. `addChevalIds` = ids des chevaux à ajouter.
+function applyClientRevue(local, imp, choices, addChevalIds) {
+  if (!local || !imp) return local;
+  CLIENT_REVUE_FIELDS.forEach((f) => { if (choices && choices[f.k] === 'imp') local[f.k] = f.addr ? toAddr(imp[f.k] || emptyAddr()) : (imp[f.k] || ''); });
+  const addSet = addChevalIds ? new Set(addChevalIds) : null;
+  clientRevueNewChevaux(local, imp).forEach((h) => { if (!addSet || addSet.has(h.id)) { local.chevaux = local.chevaux || []; local.chevaux.push(JSON.parse(JSON.stringify(h))); } });
+  const union = (key) => { local[key] = local[key] || []; ((imp && imp[key]) || []).forEach((x) => { if (!x || x.id == null) return; if (!local[key].some((y) => y && y.id === x.id)) local[key].push(JSON.parse(JSON.stringify(x))); }); };
+  union('prets'); union('impayes'); // jamais écrasés : union par id, le local prime
+  return local;
+}
+// Modale de revue : n'affiche QUE les clients en conflit (au moins un champ divergent ou un cheval en plus).
+// Les clients importés inconnus en local sont simplement ajoutés (signalés, rien à arbitrer).
+function modalRevueClients(imported, onDone) {
+  const list = (imported || []).map((imp) => {
+    const local = clients.find((c) => c.id === imp.id);
+    return { imp, local, diff: local ? clientRevueDiff(local, imp) : [], neufs: local ? clientRevueNewChevaux(local, imp) : [] };
+  });
+  const nouveaux = list.filter((x) => !x.local);
+  const conflits = list.filter((x) => x.local && (x.diff.length || x.neufs.length));
+  if (!conflits.length) { // rien à arbitrer → on ajoute les nouveaux et on sort
+    nouveaux.forEach((x) => clients.push(JSON.parse(JSON.stringify(x.imp))));
+    if (nouveaux.length) saveClients();
+    alert(nouveaux.length ? '✅ ' + nouveaux.length + ' client(s) ajouté(s). Aucune divergence à arbitrer.' : '✅ Aucune divergence : vos fiches sont déjà à jour.');
+    if (onDone) onDone(); return;
+  }
+  const rows = conflits.map((x, i) => {
+    const champs = x.diff.map((d) => `<div class="rev-f"><div class="li-sub"><b>${esc(d.lbl)}</b></div>
+      <label class="chk2"><input type="radio" name="rv_${i}_${esc(d.k)}" data-rv="${i}|${esc(d.k)}|loc" checked/> Garder : <b>${esc(d.local || '(vide)')}</b></label>
+      <label class="chk2"><input type="radio" name="rv_${i}_${esc(d.k)}" data-rv="${i}|${esc(d.k)}|imp"/> Importé : <b>${esc(d.imported || '(vide)')}</b></label></div>`).join('');
+    const chevs = x.neufs.length ? `<div class="rev-f"><div class="li-sub"><b>Chevaux présents seulement dans l'import</b></div>${x.neufs.map((h) => `<label class="chk2"><input type="checkbox" data-rvch="${i}|${esc(String(h.id))}" checked/> ＋ Ajouter 🐴 ${esc(h.nom || 'cheval')}</label>`).join('')}</div>` : '';
+    return `<div class="list-item" style="display:block"><div class="li-main"><b>👤 ${esc(fullName(x.local) || 'Client')}</b></div>${champs}${chevs}</div>`;
+  }).join('');
+  openModal(`<div class="modal-head"><b>🔎 Revue des fiches importées</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">${conflits.length} fiche(s) divergente(s)${nouveaux.length ? ' · ' + nouveaux.length + ' nouvelle(s) fiche(s) seront ajoutée(s)' : ''}. Choisissez, champ par champ, la valeur à conserver.<br><b>Vos prêts et impayés ne sont jamais écrasés</b>, et aucun cheval n'est supprimé.</p>
+    ${rows}
+    <div class="actions"><button class="btn primary block" id="rvOk">Appliquer</button></div>`);
+  $('mX').onclick = closeModal;
+  $('rvOk').addEventListener('click', () => {
+    const choices = {}, adds = {};
+    document.querySelectorAll('[data-rv]:checked').forEach((r) => { const [i, k, v] = r.dataset.rv.split('|'); (choices[i] = choices[i] || {})[k] = v; });
+    document.querySelectorAll('[data-rvch]:checked').forEach((c) => { const [i, id] = c.dataset.rvch.split('|'); (adds[i] = adds[i] || []).push(id); });
+    conflits.forEach((x, i) => applyClientRevue(x.local, x.imp, choices[i] || {}, adds[i] || []));
+    nouveaux.forEach((x) => clients.push(JSON.parse(JSON.stringify(x.imp))));
+    saveClients(); reconcileActiveTours(); refreshEverywhere(); closeModal();
+    alert('✅ Revue appliquée : ' + conflits.length + ' fiche(s) mise(s) à jour' + (nouveaux.length ? ', ' + nouveaux.length + ' ajoutée(s)' : '') + '.');
+    if (onDone) onDone();
+  });
+}
 function modalImportTour(data) {
   const t = data.tour;
   const ensureClients = () => { (data.clients || []).forEach((ic) => { if (!clients.some((c) => c.id === ic.id)) clients.push(JSON.parse(JSON.stringify(ic))); }); saveClients(); }; // crée les clients référencés manquants (ne remplace jamais un existant)
@@ -4586,8 +4658,10 @@ function modalImportTour(data) {
     <div class="actions-col">
       <button class="btn block" id="itReinject">♻ <b>Réinjecter</b><br><span class="li-sub">Remet cette tournée telle quelle (clôtures, paiements, impayés, notes de crédit). Met à jour si elle existe déjà (même id).</span></button>
       <button class="btn block" id="itReplay">🔁 <b>Rejouer</b><br><span class="li-sub">Crée une NOUVELLE tournée pré-remplie (actes/articles repris, paiements et clôtures à refaire).</span></button>
+      <button class="btn block" id="itRevue">🔎 <b>Revoir les fiches clients</b><br><span class="li-sub">Compare champ par champ les fiches importées aux vôtres et choisit quoi garder. Prêts et impayés jamais écrasés.</span></button>
     </div>`);
   $('mX').onclick = closeModal;
+  $('itRevue').onclick = () => { closeModal(); modalRevueClients(data.clients || []); };
   $('itReinject').onclick = () => { closeModal(); ensureClients(); _restoreBackedUp = false; reinjectTour(JSON.parse(JSON.stringify(t)), { clients: data.clients || [], settings: { notesCredit: data.notesCredit || [] } }); refreshEverywhere(); alert('✅ Tournée réinjectée (avec ses impayés et notes de crédit).'); };
   $('itReplay').onclick = () => { closeModal(); ensureClients(); replayTour(t); };
 }
