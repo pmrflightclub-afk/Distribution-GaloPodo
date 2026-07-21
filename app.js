@@ -6548,6 +6548,17 @@ function tourListItem(t, showBadge) {
   const clotHtml = (showBadge && st === 'cloturee') ? `<span class="td-cloturee"${frozenTva ? ' title="Facture figée à TVA ' + esc(String(t.result.tvaRate)) + ' % (réglages actuels : ' + esc(String(S.tvaRate)) + ' %)"' : ''}>Clôturée${frozenTva ? ' · TVA ' + esc(String(t.result.tvaRate)) + ' %' : ''}</span>` : ''; // statut à DROITE, en orange clair
   const eta = tourEta(t.date, st); const etaHtml = eta ? ` <span class="${eta.cls}">${esc(eta.text)}</span>` : '';
   let fin = ''; // badge « prête » = paramétrage complet (adresses + itinéraire + cheval présent + heure), PAS acte/paiement ; « recalculer » prioritaire
+  // Lot 06 : pastille de PÉRIODE COMPTABLE sur une tournée clôturée — d'un coup d'œil dans la liste « Clôturées »,
+  // on voit s'il reste des clients à déclarer, si tout est figé, et si des clients sont rattachés à un autre mois.
+  if (st === 'cloturee') {
+    const s = tourComptaPeriodSummary(t);
+    if (s.total) {
+      if (s['a-declarer']) fin += ` <span class="td-badge warn" title="Clients dont la période comptable reste à déclarer">⏳ ${s['a-declarer']} à déclarer</span>`;
+      else if (s.declaree === s.total) fin += ' <span class="td-badge">🔒 déclarée</span>';
+      else if (s['en-cours']) fin += ` <span class="td-badge ok">🟢 ${s['en-cours']} en cours</span>`;
+      if (s.rattaches) fin += ` <span class="td-badge" title="Client(s) rattaché(s) à un autre mois comptable que celui de la tournée">↔ ${s.rattaches} rattaché(s)</span>`;
+    }
+  }
   if (st !== 'cloturee') {
     const warn = (txt) => ` <span class="td-badge warn" data-tstatus role="button" title="Voir ce qu'il reste à compléter">${txt}</span>`; // cliquable → modale récap
     if (tourRouteStale(t)) fin = warn('🔄 recalculer itinéraire');
@@ -7851,7 +7862,7 @@ function renderEditorArrets(locked) {
         const rdvInfo = cl.rdvDone ? 'fait ✓' : 'non défini';
         const arrAddr = addrStr(a.addr);
         const actBar = document.createElement('div'); actBar.className = 'a-client-hd';
-        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? '' : `<div class="ac-acts ac-hd-row"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-addr-line">📍 ${arrAddr ? esc(arrAddr) : '<i>adresse à définir</i>'}</div><hr class="ac-div"/><div class="ac-sec"><div class="ac-sec-h">📍 Sur place</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-prets-slot" data-prets-cid="${cl.clientId}"></div></div><hr class="ac-div"/><div class="ac-sec"><div class="ac-sec-h">🔒 Clôture de l'arrêt du client</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-status ${payDoneC ? 'ok' : 'ko'}">💶 Paiement : ${esc(payInfo)}</div><div class="ac-status ${cl.rdvDone ? 'ok' : 'ko'}">📅 RDV : ${esc(rdvInfo)}</div></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
+        actBar.innerHTML = `<div class="ac-name" data-cid="${cl.clientId}" data-ai="${i}">👤 <b>${esc(clientName(cl.clientId))}</b>${prevBadge}<span class="ac-ttc">${m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cl.clientId])) + ' TTC' : ''}</span></div>${locked ? comptaPeriodBanner(currentTour, cl.clientId) : `<div class="ac-acts ac-hd-row"><label class="a-heure${cl.heureStale ? ' stale' : (clH ? ' done' : '')}" title="${cl.heureStale ? '⚠ Heure à revoir — l\'ordre des arrêts a changé, l\'horaire d\'arrivée décale' : 'Heure de RDV de ce client (agenda)'}">🕘 <input type="time" data-clheure value="${clH}"/></label> <button class="btn small" data-cadr title="Adresse de ce client à cet arrêt">📍 Adresse</button>${prevBtn}</div><div class="ac-addr-line">📍 ${arrAddr ? esc(arrAddr) : '<i>adresse à définir</i>'}</div><hr class="ac-div"/><div class="ac-sec"><div class="ac-sec-h">📍 Sur place</div><div class="ac-acts"><button class="btn small${pretOn ? ' pret-on' : ''}" data-cpret>＋ Prêt</button> <button class="btn small${plCls}" data-cplanche data-cid="${cl.clientId}">📷 Planche</button></div><div class="ac-prets-slot" data-prets-cid="${cl.clientId}"></div></div><hr class="ac-div"/><div class="ac-sec"><div class="ac-sec-h">🔒 Clôture de l'arrêt du client</div><div class="ac-acts"><button class="btn small${cl.rdvDone ? ' done' : ''}" data-crdv${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>📅 RDV${cl.rdvDone ? ' ✓' : ''}</button> <button class="btn small${payDoneC ? ' done' : ''}" data-cpay${futureTour ? ' disabled title="Disponible le jour de la tournée"' : ''}>💶 Paiement${payDoneC ? ' ✓' : ''}</button></div><div class="ac-status ${payDoneC ? 'ok' : 'ko'}">💶 Paiement : ${esc(payInfo)}</div><div class="ac-status ${cl.rdvDone ? 'ok' : 'ko'}">📅 RDV : ${esc(rdvInfo)}</div></div><div class="ac-suivi" data-cid="${cl.clientId}">${suiviRowsInner(cl)}</div><label class="reduc-row ac-reduc"><span class="grow">Réduction articles</span><input type="number" data-creduc step="1" min="0" max="100" value="${redVal}" placeholder="0" style="width:70px"/><span>%</span></label>`}`;
         el.appendChild(actBar);
         // Tournée CLÔTURÉE : le bloc « actes » (et son badge) n'est pas rendu → on affiche ici un récap LECTURE SEULE des annulations / notes de crédit du client, avec le n° de NC.
         if (locked) {
@@ -13745,6 +13756,48 @@ function modalVisitePick(nom, currentId, visArts, onPick) {
   document.querySelectorAll('[data-vid]').forEach((b) => b.addEventListener('click', () => { closeModal(); onPick(b.dataset.vid); }));
 }
 // Verrou compta : annulation impossible si la démarche du couple tour-client est validée, ou le liquide du mois encodé.
+// ---------- Lot 06 — PÉRIODE COMPTABLE PAR CLIENT ----------
+// Chaque client d'une tournée relève d'un MOIS comptable, qui n'est pas toujours celui de la tournée : un paiement
+// LIQUIDE SANS FACTURE peut être rattaché à un autre mois (`comptaPeriod`, cf. rattachement liquide). Tout le reste
+// suit la date de la tournée. Trois états : « déclarée » (figée) · « à déclarer » (mois passé, pas encore encodé) ·
+// « en cours » (mois courant ou futur).
+function clientComptaPeriod(t, clientId) {
+  const tourYm = ((t && t.date) || '').slice(0, 7);
+  const p = ((t && t.payments) || {})[clientId];
+  const rattache = !!(p && p.method === 'liquide' && !p.facture && p.comptaPeriod && p.comptaPeriod !== tourYm);
+  const ym = rattache ? p.comptaPeriod : tourYm;
+  const declaree = !!(S.comptaDemarche && S.comptaDemarche[(t && t.id) + ':' + clientId])
+    || !!(S.comptaStatus && S.comptaStatus[ym] && S.comptaStatus[ym].liquide === 'encode');
+  const curYm = todayStr().slice(0, 7);
+  const etat = declaree ? 'declaree' : (ym && ym < curYm ? 'a-declarer' : 'en-cours');
+  return { ym, etat, rattache, tourYm };
+}
+const COMPTA_ETAT_LBL = { declaree: '🔒 déclarée', 'a-declarer': '⏳ à déclarer', 'en-cours': '🟢 en cours' };
+// Bandeau affiché sous le nom du client dans l'éditeur d'une tournée CLÔTURÉE (seul endroit où la période est figée et
+// donc utile à rappeler). Indique le mois de rattachement, son état, et signale un rattachement à un AUTRE mois.
+function comptaPeriodBanner(t, clientId) {
+  const i = clientComptaPeriod(t, clientId); if (!i.ym) return '';
+  const cls = i.etat === 'declaree' ? 'ok' : (i.etat === 'a-declarer' ? 'ko' : '');
+  return `<div class="ac-status ${cls}" title="Période comptable de ce client">📅 Période : <b>${esc(monthLabel(i.ym))}</b> · ${esc(COMPTA_ETAT_LBL[i.etat] || i.etat)}${i.rattache ? ' · <b>rattachée</b> (tournée de ' + esc(monthLabel(i.tourYm)) + ')' : ''}</div>`;
+}
+function comptaPeriodBadge(info) {
+  if (!info || !info.ym) return '';
+  const cls = info.etat === 'declaree' ? ' badge-noir' : '';
+  return `<span class="badge${cls}" title="Période comptable de ce client">${esc(monthLabel(info.ym))} · ${esc(COMPTA_ETAT_LBL[info.etat] || info.etat)}${info.rattache ? ' · rattachée' : ''}</span>`;
+}
+// Synthèse d'une tournée : combien de clients dans chaque état (pour la pastille de la liste « Clôturées »).
+function tourComptaPeriodSummary(t) {
+  const out = { declaree: 0, 'a-declarer': 0, 'en-cours': 0, rattaches: 0, mois: {} };
+  const seen = new Set();
+  ((t && t.arrets) || []).forEach((a) => (a.clients || []).forEach((cl) => {
+    if (seen.has(cl.clientId)) return; seen.add(cl.clientId);
+    const i = clientComptaPeriod(t, cl.clientId);
+    out[i.etat] = (out[i.etat] || 0) + 1; if (i.rattache) out.rattaches++;
+    out.mois[i.ym] = (out.mois[i.ym] || 0) + 1;
+  }));
+  out.total = seen.size;
+  return out;
+}
 function comptaLocked(tour, clientId) {
   if (!tour) return false;
   if (S.comptaDemarche && S.comptaDemarche[tour.id + ':' + clientId]) return true;
