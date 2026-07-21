@@ -8586,7 +8586,7 @@ function renderArretInvoices() {
   document.querySelectorAll('#edArrets .a-invoices').forEach((box) => {
     const cid = box.dataset.cid; if (!cid) { box.innerHTML = ''; return; }
     const m = (R && R.parClient) ? R.parClient.find((x) => x.clientId === cid) : null;
-    box.innerHTML = m ? `<div class="inv-client">${clientInvoiceHtml(m, pays[cid])}</div>` : '';
+    box.innerHTML = m ? `<div class="inv-client">${clientInvoiceHtml(m, pays[cid], factureOf(currentTour, cid))}</div>` : '';
   });
 }
 // Rendu : tuiles (haut) + factures fusionnées sous chaque arrêt + total général (bloc bas).
@@ -8661,10 +8661,18 @@ function tvaMentionText() {
   return S.pays === 'fr' ? 'TVA non applicable, art. 293 B du CGI' : 'Régime de la franchise de la taxe — TVA non applicable (art. 56bis du Code de la TVA)';
 }
 function tvaMentionHtml() { const t = tvaMentionText(); return t ? `<p class="inv-mention" style="font-size:.85em;color:var(--muted);margin:4px 0 0"><i>${esc(t)}</i></p>` : ''; }
-function clientInvoiceHtml(m, payment) {
+// Lot 02b — `fact` = pièce d'identité de la facture ({id, numero, frozenAt}, cf. t.factureIds). Quand elle est fournie,
+// on affiche le NUMÉRO en tête et une RÉFÉRENCE par ligne (« F-12/3 »).
+// Choix important : la référence de ligne est DÉRIVÉE (numéro + rang), elle n'est PAS écrite dans `t.result`. Ajouter des
+// ids dans une facture déjà figée reviendrait à modifier une pièce comptable après coup — exactement ce qu'on interdit.
+function clientInvoiceHtml(m, payment, fact) {
   const stdRate = rate();
+  const num = (fact && fact.numero) ? String(fact.numero) : '';
+  let _ln = 0;
+  const lref = () => { _ln++; return num ? ` <span class="inv-lref" title="Référence de cette ligne">${esc(num)}/${_ln}</span>` : ''; };
   // Colonnes : Poste | Prix unitaire | Base HT (×quantité, remise incluse) | TVA | TTC.
-  const row = (label, unitStr, baseHT, tva, ttc, cls) => `<tr${cls ? ' class="' + cls + '"' : ''}><td>${label}</td><td>${unitStr}</td><td>${eur(baseHT)}</td><td>${eur(tva)}</td><td>${eur(ttc)}</td></tr>`;
+  const row = (label, unitStr, baseHT, tva, ttc, cls) => `<tr${cls ? ' class="' + cls + '"' : ''}><td>${label}${lref()}</td><td>${unitStr}</td><td>${eur(baseHT)}</td><td>${eur(tva)}</td><td>${eur(ttc)}</td></tr>`;
+  const rowNR = (label, unitStr, baseHT, tva, ttc, cls) => `<tr${cls ? ' class="' + cls + '"' : ''}><td>${label}</td><td>${unitStr}</td><td>${eur(baseHT)}</td><td>${eur(tva)}</td><td>${eur(ttc)}</td></tr>`; // totaux : pas une ligne facturée → pas de référence
   const sec = (t) => `<tr class="inv-sec-row"><td colspan="5">${t}</td></tr>`;
   const arr = cashRounding(m, payment); // arrondi caisse (liquide)
   let rows = '';
@@ -8690,10 +8698,11 @@ function clientInvoiceHtml(m, payment) {
   const netHT = m.totalHT + arr.ht, netTVA = m.totalTVA + arr.tva, netTTC = m.totalTTC + arr.ttc; // total corrigé (arrondi inclus)
   const pp = partialPay(m, payment);
   const ppRows = pp ? row('💵 Montant réellement reçu (liquide)', '', pp.paidHT, pp.paid - pp.paidHT, pp.paid, 'inv-brut-row') + row('⏳ Montant impayé (' + pp.mode + ')', '', pp.resteHT, pp.reste - pp.resteHT, pp.reste, 'inv-reduc') : '';
-  return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(netTTC)} TTC</span></div>
+  const numHtml = num ? `<div class="inv-num">🧾 Facture <b>${esc(num)}</b>${fact && fact.frozenAt ? ' · émise le ' + esc(fmtDateFr(new Date(fact.frozenAt).toISOString().slice(0, 10))) : ''}</div>` : '';
+  return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(netTTC)} TTC</span></div>${numHtml}
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${row(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${row('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}${(payment && payment.rembourse > 0) ? `<tr class="inv-reduc"><td colspan="4">↩ Remboursé au client (annulation liquide — à votre charge)</td><td>${eur(payment.rembourse)}</td></tr>` : ''}</tfoot></table></div>${tvaMentionHtml()}`;
+    <tfoot>${rowNR(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${rowNR('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}${(payment && payment.rembourse > 0) ? `<tr class="inv-reduc"><td colspan="4">↩ Remboursé au client (annulation liquide — à votre charge)</td><td>${eur(payment.rembourse)}</td></tr>` : ''}</tfoot></table></div>${tvaMentionHtml()}`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
@@ -13466,7 +13475,7 @@ function modalCarteClient(t, cid, onBack) {
       ${arts ? '<div class="ac-sec-h" style="margin-top:6px">📝 Articles</div>' + arts : ''}
     </div>`;
   }).join('') || '<p class="hint">Aucun arrêt.</p>';
-  const carteFacture = () => m ? `<div class="inv-client">${clientInvoiceHtml(m, payment)}</div>` : '<p class="hint">Facture indisponible — la tournée doit être calculée.</p>';
+  const carteFacture = () => m ? `<div class="inv-client">${clientInvoiceHtml(m, payment, factureOf(t, cid))}</div>` : '<p class="hint">Facture indisponible — la tournée doit être calculée.</p>';
   const bodyOf = () => view === 'arret' ? carteArret() : (view === 'facture' ? carteFacture() : tourRecapHtml(t));
   const render = () => {
     openModal(`<div class="modal-head"><b>🗺️ Carte client — ${esc(clientName(cid))}</b><button class="x" id="ccX">✕</button></div>
