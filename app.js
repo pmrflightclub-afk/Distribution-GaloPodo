@@ -7494,12 +7494,24 @@ function addrStatusBadgeHtml(addr) {
   return '';
 }
 // Toutes les adresses de chevaux répertoriées, agrégées par adresse physique.
+// TOUTES les adresses répertoriées des chevaux — pas seulement celle en usage.
+// Correction (2026-07-21) : la tuile « Adresses » de Stats → Clientèle ne comptait que l'adresse ACTIVE résolue de chaque
+// cheval. Les autres adresses propres (h.adresses non actives) et surtout les ANCIENNES adresses abandonnées
+// (h.addrHistory, gardées en mémoire à un déménagement) n'étaient jamais comptées — donc « Inactives » sous-estimait la
+// réalité et une ancienne adresse mise en liste noire restait invisible. `active` distingue l'adresse en usage.
 function chevalAddresses() {
   const map = {};
+  const put = (a, c, h, active) => {
+    const k = addrKey(a); if (!k) return;
+    if (!map[k]) map[k] = { key: k, addr: a, noms: new Set(), usages: [], active: false };
+    if (active) map[k].active = true;
+    map[k].noms.add(chevalAddrNom(c, h)); map[k].usages.push({ client: c, cheval: h, active: !!active });
+  };
   clients.forEach((c) => (c.chevaux || []).forEach((h) => {
-    const a = chevalAddr(c, h); const k = addrKey(a); if (!k) return;
-    if (!map[k]) map[k] = { key: k, addr: a, noms: new Set(), usages: [] };
-    map[k].noms.add(chevalAddrNom(c, h)); map[k].usages.push({ client: c, cheval: h });
+    const cur = chevalAddr(c, h); const curK = addrKey(cur);
+    put(cur, c, h, true);                                                        // adresse en usage
+    if (Array.isArray(h.adresses)) h.adresses.forEach((e) => { if (e && addrKey(e.addr) !== curK) put(e.addr, c, h, false); }); // autres adresses propres
+    (h.addrHistory || []).forEach((ha) => { if (addrKey(ha) !== curK) put(ha, c, h, false); }); // anciennes adresses abandonnées
   }));
   return Object.values(map);
 }
@@ -8837,7 +8849,12 @@ function renderClienteleStats() {
   let hTot = 0, hAct = 0, hInact = 0, hNoir = 0;
   clients.forEach((c) => (c.chevaux || []).forEach((h) => { hTot++; const bl = h.blacklist || c.blacklist; const ina = h.actif === false || c.actif === false; if (bl) hNoir++; else if (ina) hInact++; else hAct++; })); // le cheval HÉRITE du statut de son client (client inactif/noir → ses chevaux comptés inactifs/noirs)
   const addrs = chevalAddresses();
-  const aNoir = addrs.filter((e) => addrStatusOf(e.addr) === 'noir').length, aInact = addrs.filter((e) => addrStatusOf(e.addr) === 'inactif').length, aAct = addrs.filter((e) => addrStatusOf(e.addr) === 'actif').length;
+  // « Inactives » = marquées inactives OU ABANDONNÉES (plus utilisées par aucun cheval : ancienne adresse, adresse propre
+  // non active). Une adresse n'est comptée « Active » que si elle est réellement EN USAGE et non marquée.
+  const stA = (e) => addrStatusOf(e.addr);
+  const aNoir = addrs.filter((e) => stA(e) === 'noir').length;
+  const aInact = addrs.filter((e) => stA(e) !== 'noir' && (stA(e) === 'inactif' || !e.active)).length;
+  const aAct = addrs.filter((e) => stA(e) === 'actif' && e.active).length;
   const tile = (lbl, val, cls) => `<div class="cl-tile${cls ? ' ' + cls : ''}"><div class="cl-num">${val}</div><div class="cl-lbl">${lbl}</div></div>`;
   box.innerHTML = `
     <h3 class="rsub">Clients</h3>
