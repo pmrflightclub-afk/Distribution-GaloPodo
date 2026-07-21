@@ -6210,7 +6210,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
       (w.chevaux || []).forEach((h) => { if (!h) return; const o = h.id ? oldById[h.id] : null; if (!o || strip(o) !== strip(h)) h.updatedAt = now;
         (h.adresses || []).forEach((a) => { if (!a) return; const oa = o && (o.adresses || []).find((x) => x.id === a.id); if (!oa || strip(oa) !== strip(a)) a.updatedAt = now; }); }); }
     const i = clients.findIndex((x) => x.id === w.id); if (i >= 0) clients[i] = w; else clients.push(w);
-    (w.chevaux || []).forEach((h) => { if (h) relinkChevalEcurie(w, h); }); // Lot 04-D : re-dérive l'écurie de chaque cheval depuis son état édité (l'écurie est la source de résolution)
+    (w.chevaux || []).forEach((h) => { if (h) { dedupChevalAddresses(h); relinkChevalEcurie(w, h); } }); // Lot 04-D : nettoie les doublons d'adresses (tombstonés) PUIS re-dérive l'écurie depuis l'état édité (source de résolution)
     DRAFTS.clear(key); saveClients(); saveSettings(); reconcileActiveTours(); closeModal();
     geocodeClientAddresses(w); // localise en arrière-plan TOUTES les adresses complètes (client, société, chevaux — actives ET inactives)
     if (onSaved) onSaved(w); else renderClients();
@@ -7307,7 +7307,31 @@ function setChevalDefaultAddr(h, addr) {
   h.adresses.forEach((e) => { const on = addrKey(e.addr) === k; e.actif = on; if (on) found = true; });
   if (!found) h.adresses.push({ id: uid(), nom: h.addrNom || '', addr: toAddr(addr), actif: true });
   h.addrSource = 'specifique';
+  dedupChevalAddresses(h);
   chevalSyncActive(h);
+}
+// Lot 04-D FIX — DÉDUP des adresses d'un cheval : collapse les entrées de MÊME adresse (addrKey) et retire les entrées
+// VIDES, en gardant l'entrée active/la plus récente. CHAQUE entrée retirée reçoit un tombstone `adrDel` (comme une
+// suppression manuelle) → la fusion inter-appareils (mergeOneCheval, union par id) ne la RÉ-INJECTE pas. Déclenché à
+// l'ÉDITION (setChevalDefaultAddr, sauvegarde de fiche) — jamais au boot en masse (pas de churn/résurrection).
+// Sans ça, chaque changement d'adresse ajoutait une entrée (le cheval « Test » d'un client réel en avait accumulé 5).
+function dedupChevalAddresses(h) {
+  if (!h || !Array.isArray(h.adresses) || h.adresses.length < 2) return false;
+  const now = Date.now();
+  const byKey = {}; const keep = []; let changed = false;
+  const tomb = (id) => { if (!id) return; h.adrDel = h.adrDel || {}; h.adrDel[id] = Math.max(h.adrDel[id] || 0, now); };
+  // On traite les entrées ACTIVES d'abord, puis les plus récentes → l'exemplaire CONSERVÉ pour chaque adresse est le plus pertinent.
+  const ordered = h.adresses.map((e, i) => [e, i]).sort((x, y) => ((y[0].actif ? 1 : 0) - (x[0].actif ? 1 : 0)) || ((y[0].updatedAt || 0) - (x[0].updatedAt || 0)) || (x[1] - y[1])).map((p) => p[0]);
+  ordered.forEach((e) => {
+    const k = addrKey(e.addr);
+    if (!k) { tomb(e.id); changed = true; return; } // entrée sans adresse → retirée + tombstone
+    const kept = byKey[k];
+    if (kept) { if (!(kept.nom || '').trim() && (e.nom || '').trim()) kept.nom = e.nom; if (e.actif) kept.actif = true; tomb(e.id); changed = true; return; } // doublon d'adresse → fusionné vers `kept`
+    byKey[k] = e; keep.push(e);
+  });
+  if (!keep.length) return false; // sécurité : ne jamais tout vider
+  if (changed) { h.adresses = keep; chevalSyncActive(h); }
+  return changed;
 }
 // Nom d'écurie d'une adresse PRÉCISE d'un cheval (entrée de h.adresses) — pour l'édition depuis « Adresses chevaux ».
 function chevalAddrEntry(h, addr) { const k = addrKey(addr); return (Array.isArray(h.adresses) ? h.adresses.find((e) => addrKey(e.addr) === k) : null) || null; }
@@ -7466,7 +7490,10 @@ function modalClientAddr(t, a, cl) {
       const listD = cvsAt(); const nom = (b2.querySelector('#cadrNom').value || '').trim();
       const checked = Array.from(b2.querySelectorAll('[data-cvchk]:checked')).map((c) => +c.dataset.cvchk);
       if (!checked.length) { alert('Cochez au moins un cheval.'); return; }
-      checked.forEach((idx) => { const cv = listD[idx]; if (mode === 'def') { const f = ficheOf(cv); if (f) { setChevalDefaultAddr(f, target); if (nom) setAddrNomForAddr(f, target, nom); } if (cv) delete cv.addrOverride; } else if (cv) { cv.addrOverride = toAddr(target); } });
+      checked.forEach((idx) => { const cv = listD[idx]; if (mode === 'def') { const f = ficheOf(cv); if (f) { setChevalDefaultAddr(f, target); if (nom) setAddrNomForAddr(f, target, nom); relinkChevalEcurie(cObj, f); } if (cv) delete cv.addrOverride; } else if (cv) { cv.addrOverride = toAddr(target); } });
+      // Lot 04-D FIX : re-dériver l'écurie APRÈS setChevalDefaultAddr — sinon h.ecurieId reste sur l'ancienne écurie et
+      // chevalAddr (qui résout par ecurieId en priorité) renvoie l'ANCIENNE adresse → le cheval « revenait » à son adresse
+      // d'origine au lieu d'adopter la nouvelle. C'est ce que fait déjà la sauvegarde de fiche (editClient), pas cette modale.
       const unchecked = listD.filter((cv, idx) => checked.indexOf(idx) < 0);
       if (unchecked.length) step3(unchecked, o2); else commit(o2);
     };
