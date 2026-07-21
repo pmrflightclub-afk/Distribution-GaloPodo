@@ -18,7 +18,7 @@ function boot(settings, clients) {
   const sb = { console, JSON, Math, Date, Object, Array, String, Number, Boolean, RegExp, Error, Map, Set, Promise, parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent, setTimeout: noop, clearTimeout: noop, setInterval: noop, clearInterval: noop, localStorage: { getItem: k => k in store ? store[k] : null, setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } }, sessionStorage: { getItem: () => null, setItem: noop, removeItem: noop }, document: doc, navigator: { onLine: true, userAgent: 'node', serviceWorker: { register: () => Promise.resolve(), addEventListener: noop } }, location: { href: '', reload: noop, search: '' }, fetch: () => Promise.reject(new Error('off')), matchMedia: () => ({ matches: false, addEventListener: noop, addListener: noop }), alert: noop, confirm: () => false, prompt: () => null, requestAnimationFrame: noop, URL: { createObjectURL: () => '', revokeObjectURL: noop }, Blob: function () {}, FileReader: function () {}, Image: function () {}, TextEncoder, TextDecoder, crypto: { getRandomValues: a => a, randomUUID: () => 'x' }, performance: { now: () => 0 } };
   sb.addEventListener = noop; sb.removeEventListener = noop; sb.dispatchEvent = noop; sb.window = sb; sb.globalThis = sb; sb.self = sb;
   vm.createContext(sb);
-  const EPI = ';globalThis.__api={ecurieCarnet:ecurieCarnet,ecurieAddrOf:ecurieAddrOf,ecurieNomOf:ecurieNomOf,migrateEcuries:migrateEcuries,addrKey:addrKey,addrStr:addrStr,norm:norm,setAddrStatus:setAddrStatus,S:function(){return S},clients:function(){return clients}};';
+  const EPI = ';globalThis.__api={ecurieCarnet:ecurieCarnet,addrStatusOf:addrStatusOf,ecurieAddrOf:ecurieAddrOf,ecurieNomOf:ecurieNomOf,migrateEcuries:migrateEcuries,addrKey:addrKey,addrStr:addrStr,norm:norm,setAddrStatus:setAddrStatus,S:function(){return S},clients:function(){return clients}};';
   vm.runInContext(fs.readFileSync(APP, 'utf8') + EPI, sb, { filename: 'app.js' });
   return sb.__api;
 }
@@ -96,6 +96,30 @@ if (fs.existsSync(REF)) {
   const src = fs.readFileSync(APP, 'utf8');
   ok('6.1 plus de champ data-afind dans la fiche', src.indexOf('data-afind') === -1);
   ok('6.2 le bouton « Carnet d\'adresses » est bien présent', src.indexOf('data-acarnet') > 0);
+}
+
+// 7. Vue « Par écurie » de la page Gestion : ecurieCarnet({all:true}) doit exposer TOUS les statuts pour filtrage.
+{
+  const ecu = { rue: 'Rue Partagee', numero: '4', cp: '5000', localite: 'Namur' };
+  const cli = [
+    { id: 'c1', prenom: 'Alice', nom: 'Martin', addr: { rue: 'Rue A', cp: '1000', localite: 'Ville' }, chevaux: [{ id: 'h1', nom: 'Bijou', addrSource: 'specifique', adresses: [{ id: 'a1', nom: 'Ecurie Partagee', actif: true, addr: ecu }] }] },
+    { id: 'c2', prenom: 'Bob', nom: 'Durand', addr: { rue: 'Rue B', cp: '2000', localite: 'Bourg' }, chevaux: [{ id: 'h2', nom: 'Caramel', addrSource: 'specifique', adresses: [{ id: 'a2', nom: 'Ecurie Partagee', actif: true, addr: ecu }] }] },
+  ];
+  const api = boot({ tvaRate: 21, tvaRegime: 'normal', frais: [], materiel: [], amortissement: {}, articlesCatalogue: [], ecuries: [] }, cli);
+  api.migrateEcuries();
+  const S = api.S(); S.addrStatus = S.addrStatus || {}; S.addrStatus[api.addrKey(ecu)] = 'noir';
+
+  const actifsOnly = api.ecurieCarnet();               // modale de CHOIX
+  const tous = api.ecurieCarnet({ all: true });        // page Gestion
+  const has = (l) => l.some(x => api.norm(api.addrStr(x.addr)).indexOf('rue partagee') >= 0);
+  ok('7.1 la modale de choix EXCLUT une écurie en liste noire', !has(actifsOnly));
+  ok('7.2 la page (all:true) l\'INCLUT pour pouvoir la filtrer', has(tous));
+  const part = tous.find(x => api.norm(api.addrStr(x.addr)).indexOf('rue partagee') >= 0);
+  ok('7.3 elle regroupe bien ses 2 occupants de clients différents', part && part.occupants.length === 2, part ? JSON.stringify(part.occupants) : '—');
+  // filtre de la page : liste noire
+  const noirs = tous.filter(x => api.addrStatusOf(x.addr) === 'noir');
+  ok('7.4 le filtre « Liste noire » la retrouve', noirs.length === 1);
+  ok('7.5 le filtre « Actives » ne la retient pas', tous.filter(x => api.addrStatusOf(x.addr) === 'actif' && x.occupants.length).every(x => api.norm(api.addrStr(x.addr)).indexOf('rue partagee') < 0));
 }
 
 console.log('\n' + (fail === 0 ? '✅ ' : '❌ ') + pass + ' réussis, ' + fail + ' échoués\n');

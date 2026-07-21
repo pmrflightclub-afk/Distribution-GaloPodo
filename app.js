@@ -6249,6 +6249,34 @@ function modalAnamnese(h) {
 }
 // ================= GESTION → ADRESSES CHEVAUX =================
 let adrChevFilter = 'actives'; // actives (défaut) | inactifs | noir
+let adrChevVue = 'client';     // vue de la page Carnet d'adresses : client (défaut) | ecurie
+// Vue « 🏠 Par écurie » : une ligne par LIEU (écurie ou adresse connue), avec ses occupants (chevaux + clients) et les
+// mêmes actions de statut que la vue par client. Filtrée par le même segment Actives / Inactives / Liste noire.
+// Complémentaire de la vue par client (qui, elle, gère l'adresse PAR DÉFAUT de chaque cheval) — aucune des deux ne remplace l'autre.
+function renderChevAddressesByEcurie(box) {
+  const wantSt = adrChevFilter === 'noir' ? 'noir' : adrChevFilter === 'inactifs' ? 'inactif' : 'actif';
+  const list = ecurieCarnet({ all: true }).filter((x) => {
+    const st = addrStatusOf(x.addr);
+    if (wantSt === 'noir') return st === 'noir';
+    if (wantSt === 'inactif') return st === 'inactif' || (st !== 'noir' && !x.occupants.length); // marquée inactive OU plus aucun cheval (abandonnée)
+    return st === 'actif' && x.occupants.length > 0;
+  });
+  if ($('adrChevEmpty')) { $('adrChevEmpty').style.display = list.length ? 'none' : 'block'; $('adrChevEmpty').textContent = 'Aucune adresse dans cette catégorie.'; }
+  list.forEach((x) => {
+    const st = addrStatusOf(x.addr);
+    const badge = st === 'noir' ? ' <span class="badge badge-noir">⛔ liste noire</span>' : st === 'inactif' ? ' <span class="badge">💤 inactif</span>' : (x.occupants.length ? '' : ' <span class="badge">abandonnée</span>');
+    const type = x.lieu ? '<span class="badge">lieu</span>' : (x.privee ? '<span class="badge">privée</span>' : '<span class="badge">publique</span>');
+    const byClient = {}; x.occupants.forEach((p) => { (byClient[p.client] = byClient[p.client] || []).push(p.cheval); });
+    const occ = Object.keys(byClient).sort().map((cn) => '👤 ' + esc(cn) + ' — 🐴 ' + esc(byClient[cn].join(', '))).join('<br>');
+    const el = document.createElement('div'); el.className = 'list-item stack-act' + (st !== 'actif' ? ' item-off' : '');
+    el.innerHTML = `<div class="li-main"><b>${esc(x.nom)}</b> ${type}${badge}
+      <div class="li-sub">${esc(addrStr(x.addr)) || '<i>adresse ?</i>'}</div>
+      ${occ ? '<div class="li-sub" style="margin-top:4px">' + occ + '</div>' : '<div class="li-sub" style="margin-top:4px"><i>aucun cheval à cette adresse</i></div>'}
+      <div class="ac-stbtns"><button class="btn small${st === 'noir' ? '' : ' danger'}" data-est="noir">${st === 'noir' ? '✅ Réautoriser' : '⛔ Refuser ce lieu'}</button><button class="btn small" data-est="inactif">${st === 'inactif' ? '✅ Réactiver le lieu' : '💤 Marquer inactif'}</button></div></div>`;
+    el.querySelectorAll('[data-est]').forEach((b) => b.addEventListener('click', () => { const to = b.dataset.est; setAddrStatus(x.addr, addrStatusOf(x.addr) === to ? 'actif' : to); renderChevAddresses(); }));
+    box.appendChild(el);
+  });
+}
 // Adresses chevaux groupées PAR CLIENT : une entrée par client (chevaux/adresses regroupés au sein du client).
 // Deux clients à la même adresse restent DEUX entrées distinctes (jamais globalisés). Le statut suit le client.
 function chevalAddressesByClient() {
@@ -6270,7 +6298,9 @@ function chevalAddressesByClient() {
 }
 function renderChevAddresses() {
   const seg = $('adrChevFilterSeg'); if (seg) seg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._afw) { b._afw = true; b.addEventListener('click', () => { adrChevFilter = b.dataset.af; renderChevAddresses(); }); } b.classList.toggle('on', b.dataset.af === adrChevFilter); });
+  const vseg = $('adrChevVueSeg'); if (vseg) vseg.querySelectorAll('.seg-btn').forEach((b) => { if (!b._avw) { b._avw = true; b.addEventListener('click', () => { adrChevVue = b.dataset.av; renderChevAddresses(); }); } b.classList.toggle('on', b.dataset.av === adrChevVue); });
   const box = $('adrChevList'); if (!box) return; box.innerHTML = '';
+  if (adrChevVue === 'ecurie') return renderChevAddressesByEcurie(box);
   const all = chevalAddressesByClient();
   const wantSt = adrChevFilter === 'noir' ? 'noir' : adrChevFilter === 'inactifs' ? 'inactif' : 'actif';
   const shown = all.filter((e) => clientState(e.client) === wantSt).sort((a, b) => fullName(a.client).localeCompare(fullName(b.client)));
@@ -7403,12 +7433,15 @@ function ecurieNomOf(e) {
 }
 // Entrées du carnet : écuries ACTIVES seulement, DÉDUPLIQUÉES par adresse (une même adresse = une seule ligne, même si
 // plusieurs écuries y pointent), enrichies des chevaux/clients qui s'y trouvent → recherche par client ou par cheval.
-function ecurieCarnet() {
+// `opts.all` = inclure TOUS les statuts (page Gestion, qui filtre elle-même actives/inactives/liste noire).
+// Par défaut (modale de choix) : écuries ACTIVES uniquement.
+function ecurieCarnet(opts) {
+  const all = !!(opts && opts.all);
   const byKey = {};
   (S.ecuries || []).forEach((e) => {
     const addr = ecurieAddrOf(e); const k = addrKey(addr);
-    if (!k) return;                             // écurie sans adresse résolue → hors carnet
-    if (addrStatusOf(addr) === 'noir') return;  // liste noire → hors carnet (actives uniquement)
+    if (!k) return;                                       // écurie sans adresse résolue → hors carnet
+    if (!all && addrStatusOf(addr) !== 'actif') return;    // liste noire / inactif → hors du carnet de CHOIX
     const cur = byKey[k] || (byKey[k] = { key: k, addr, nom: '', privee: !!e.privee, occupants: [] });
     const n = ecurieNomOf(e); if (n && (!cur.nom || (!e.privee && cur.privee))) { cur.nom = n; cur.privee = !!e.privee; } // un nom PUBLIC prime sur un nom privé
     if (!cur.nom) cur.nom = n;
@@ -7422,7 +7455,7 @@ function ecurieCarnet() {
   // pas déjà couverts par une écurie (dédup par adresse) et s'ils ne sont pas en liste noire.
   const addLieu = (nom, addr) => {
     const k = addrKey(addr); if (!k || byKey[k]) return;
-    if (addrStatusOf(addr) === 'noir') return;
+    if (!all && addrStatusOf(addr) !== 'actif') return;
     byKey[k] = { key: k, addr: toAddr(addr), nom: nom, privee: false, lieu: true, occupants: [] };
   };
   if (addrStr(S.home).trim()) addLieu('🏠 Domicile', S.home);
