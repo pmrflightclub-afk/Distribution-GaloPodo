@@ -178,18 +178,26 @@ et c'est son rôle légitime.)*
 
 ---
 
-## 6. QUESTIONS OUVERTES
+## 6. QUESTIONS OUVERTES — ✅ LES TROIS SONT TRANCHÉES (2026-07-22)
 
-1. **Le remboursement en espèces ne figure pas dans Compta.** `p.rembourse` est lu uniquement dans le pied de
-   facture (8705), le ticket (8759), la page Finances (9556) et la page Notes de crédit. `comptaData`
-   **l'ignore totalement**. L'intention est documentée (la NC réduit déjà le CA, l'ajouter serait un double
-   comptage) — **mais l'argent est physiquement sorti de la caisse et la caisse comptable ne le voit pas.**
-   → à trancher avec le propriétaire.
-2. `p.rembourse` n'est incrémenté que si `p.method === 'liquide' && p.facture` (facture pro payée en liquide).
-   Le liquide nu et le virement ne sont pas concernés. Comportement délibéré (« modèle B ») — confirmer qu'il
-   correspond bien à l'intention.
-3. Le gel du montant **par client dès sa clôture** (règle 3) : lot à concevoir — figer `m.totalTTC` à
-   `closeClientFully` (7280), sachant que `computeResultMoney` redistribue le déplacement au prorata.
+Conception complète dans **`SPEC-modules-correction.md`**. Résumé :
+
+1. **Le remboursement en espèces ne figure pas dans Compta.** ✅ **Décision : poste « Remboursements » négatif
+   et VISIBLE** (module A). Précision issue de l'investigation : le trou ne concerne **que** la branche
+   `facliq` — le liquide **sans** facture réduit déjà `p.rectifie` (app.js:14258), donc sa caisse est juste.
+   Source de la ligne = les **notes de crédit** (datées, numérotées), pas `p.rembourse` (cumul sans date).
+   ⛔ Ne **pas** toucher aux 4 bases analytiques : la NC les extourne déjà (9664/9669) → double comptage.
+2. ~~`p.rembourse` n'est incrémenté que si `p.method === 'liquide' && p.facture`.~~
+   ❌ **AFFIRMATION FAUSSE** — `applyLiquideRefund` (app.js:14246) ne teste **que** `p.method !== 'liquide'`,
+   sans aucun test sur `.facture` : le liquide **sans** facture incrémente `p.rembourse` lui aussi. Seul le
+   virement n'est jamais concerné. Question caduque, absorbée par le point 1. Détail : `SPEC-modules-correction.md` §0.2.
+3. **Gel du montant par client dès sa clôture.** ✅ **Décision : le bloc entier du client est photographié**
+   (module C) ; les clients suivants se partagent le déplacement restant. 25 événements recensés qui le font
+   bouger aujourd'hui. ⚠️ Le gel ne peut pas vivre dans `t.result` (il ne survivrait pas à une synchro).
+
+> ⚠️ **Autre correction factuelle** : `SPEC-immutabilite.md` §6.a annonce **18** sites d'écriture de
+> `t.payments` ; il y en a **30**, et 8 manquent à la table — dont `replayTour` (4568) et `modalPayment` (14338),
+> qui écrasent des paiements en bloc. À remplacer au lot L1.
 
 ---
 

@@ -90,7 +90,7 @@ positifs (tous complètent ou créent) et refuse la totalité des dégâts de ju
 
 ---
 
-## 3. Le module de contrepassation ⚠ à concevoir
+## 3. Le module de contrepassation ✅ conçu — voir `SPEC-modules-correction.md`
 
 **Décision du propriétaire** : une écriture ne se corrige pas, elle se **compense** par un document correctif
 qui lui fait face. Les deux pièces subsistent ; leur somme donne la réalité comptable.
@@ -98,21 +98,21 @@ qui lui fait face. Les deux pièces subsistent ; leur somme donne la réalité c
 Le défaut « reclassement de paiement » (§2.2) **ne sera pas corrigé sans ce module** : interdire le reclassement
 sans offrir de moyen de compenser laisserait sans recours face à une faute de frappe.
 
-### Questions à trancher avant de coder
+**Conception terminée le 2026-07-22** dans **`SPEC-modules-correction.md`**, après investigation en lecture de
+code. Les sept questions ci-dessous y sont toutes tranchées :
 
-1. **Types de pièce** : avoir (annulation de prestation) et contrepassation (erreur de saisie) — une seule
-   pièce polyvalente ou deux distinctes ?
-2. **Numérotation** : séquence propre, ou celle des NC (`nextNcNumero`) ? Doit être **monotone et persistée**
-   (cf. défaut `nextFactureNumero`).
-3. **Rattachement** : lien vers la pièce d'origine, et navigation dans les deux sens.
-4. **Mois d'imputation** : celui de l'erreur ou celui de la correction ? (impact TVA et déclaration)
-5. **Périmètre compensable** : méthode de paiement · montant encaissé · arrondi · prestation · déplacement.
-6. **Effet comptable** : caisse, TVA, CA — et articulation avec l'extourne existante (`ncBreakdown`).
-7. **Affichage** : la facture d'origine **inchangée**, la pièce corrective à côté, et le net qui en résulte.
+| # | Question | Réponse retenue (détail dans la spec) |
+|---|---|---|
+| 1 | Types de pièce | **Deux distinctes** : avoir = erreur de **montant** ; règlement rectificatif = erreur d'**imputation**. Frontière justifiée §2.1 |
+| 2 | Numérotation | Séquence propre `'C' + ncDevicePfx()`, **persistée et monotone dès le départ** (§2.5) |
+| 3 | Rattachement | `tourId` + `clientId` + `annuleId` pour la chaîne de contrepassations (§2.7) |
+| 4 | Mois d'imputation | Mois de la tournée **sauf si déjà déclaré** → mois courant. **Figé à la création**, jamais re-dérivé (§2.4) |
+| 5 | Périmètre | Imputation seulement (méthode / drapeau facture). Montant → NC. Écart de caisse → **non tranché**, §5 |
+| 6 | Effet comptable | **CA nul, TVA nulle, bases analytiques nulles** — seule la ventilation entre sections bouge (§2.6) |
+| 7 | Affichage | Deux jambes de signes opposés, en lignes `derived: true` (idiome existant app.js:9631), pièce d'origine intacte |
 
-**Existant réutilisable** : `createClientCreditNote` (13906), `modalCancelBilling` (14132), `ncBreakdown`,
-`S.notesCredit` — le mécanisme d'avoir existe déjà et fonctionne. Le module est probablement une **extension**
-de cet existant, pas une construction neuve.
+**Existant réutilisable confirmé** : `createClientCreditNote` (13906), `modalCancelBilling` (14132), `ncBreakdown`
+(13855), `S.notesCredit`, `sendClientDoc` (10563). `S.reglements` **n'entre en collision avec rien** (vérifié).
 
 ---
 
@@ -163,19 +163,25 @@ Contenu par entrée : horodatage · origine · entité · id · champs modifiés
 ## 5. Plan de codage (en une fois, quand tout sera validé)
 
 ```
-L1  Traçabilité      withOrigin + les 2 anneaux + les ~32 sites          (socle, ne bloque rien)
+L1  Traçabilité      withOrigin + les 2 anneaux + les 30 sites d'écriture de paiement
+                     (⚠ la table SPEC §6.a en annonce 18 et en oublie 8 — cf. SPEC-modules-correction §0.3)
 L2  Recalculs gelés  recomputeMoney · calcTour · sanitizeTourStats
                      rowFromArret (id) · nom du client figé
 L3  Argent acté      purge d'arrondi · setComptaPayment (partiel/créance)
 L4  Pièces           verrous de mois · NC orphelines · numérotation monotone
                      factureIds (fusion, réinjection, import) · deleteTourById
+                     + cohérence des 2 générateurs de PDF de NC (multi-taux)
 L5  Contournements   _review · modalEditPrestations · suppression de cheval · nom obligatoire
-L6  Contrepassation  le module (après conception §3)
-L7  Contrôle final   checkFrozenWrite dans les 4 points de persistance
+L6  Gel par client   MODULE C — après L2 (mêmes 4 points d'accroche sur t.result)
+L7  Poste Remb.      MODULE A — + suppression du champ mort `documentaire` + source unique
+                     des totaux de la caisse liquide
+L8  Contrepassation  MODULE B — après L4 (compteurs monotones) et L7 (lignes dérivées)
+L9  Contrôle final   checkFrozenWrite dans les points de persistance
 ```
 
-**L1 en premier** : il ne bloque rien mais rend tout le reste observable. **L7 en dernier** : le contrôle
+**L1 en premier** : il ne bloque rien mais rend tout le reste observable. **L9 en dernier** : le contrôle
 générique n'a de sens qu'une fois les défauts connus corrigés, sinon il refuserait en permanence.
+Les modules A, B et C sont spécifiés dans **`SPEC-modules-correction.md`**.
 
 ### Tests attendus
 
@@ -228,30 +234,40 @@ perte qu'il documente**.
 ## 6. Reste à trancher
 
 ✅ Analyse **terminée** (110/110). Stratégie de refus, mécanisme et formulation de la règle : tranchés dans
-`SPEC-immutabilite.md`. Restent **trois décisions métier**, qui n'appartiennent qu'au propriétaire :
+`SPEC-immutabilite.md`. **Les quatre décisions métier sont désormais tranchées** (2026-07-22) :
 
-### D1 — La facture d'un client clôturé peut encore bouger avant la clôture de la tournée
+### D1 — La facture d'un client clôturé peut encore bouger ✅ TRANCHÉ : gel par client
 `computeResultMoney` redistribue le déplacement **au prorata entre tous les clients** : ajouter un arrêt fait
-varier le `totalTTC` d'un client **déjà clôturé et payé**. C'est pourquoi le gel porte sur `t.payments` et non sur
-`t.result` d'une tournée ouverte.
-**Question** : acceptable, ou faut-il figer le montant de chaque client dès **sa** clôture ? (lot séparé et lourd)
+varier le `totalTTC` d'un client **déjà clôturé et payé**. **25 événements** peuvent le faire bouger (inventaire
+exhaustif dans `SPEC-modules-correction.md` §3.1) — dont deux majeurs : ajouter un client à un arrêt existant
+divise sa part de déplacement par 2, et un changement de mode de paiement déplace le total de ±20 %.
 
-### D2 — Un virement annoncé mais jamais reçu, finalement payé en espèces
-Un virement n'est pas un encaissement mais une **créance** : `clientPaiementIssue` n'exige aucun montant, et
-`S.comptaRecu` trace séparément la réception. Avec la règle stricte, ce cas tombe sous le refus.
-**Proposition** : autoriser `virement → liquide` **tant que la réception n'est pas cochée et que le mois n'est pas
-déclaré**, avec motif obligatoire et entrée de journal. À valider.
+**Décision du propriétaire : le bloc entier du client est photographié à SA clôture et ne bouge plus jamais.**
+Les clients suivants se partagent le déplacement **restant**. Conséquence assumée : une part figée a été calculée
+contre un itinéraire qui a pu changer depuis. → **MODULE C**, `SPEC-modules-correction.md` §3.
 
-### D3 — Décocher « Facture nécessaire » juste après clôture
-Le retrait du drapeau facture est interdit (c'est un retrait de pièce, et ça déplace le CA de mois).
-**Proposition** : tolérance de 24 h après émission, journalisée. À valider.
+⚠️ Contrainte découverte : un drapeau posé dans `t.result` **ne survivrait pas à une synchro** (trois raisons
+cumulées, §3.2). Le gel doit être un champ de premier niveau `t.frozenClients`, greffé dans `graftClosure`.
 
-### D4 — Le module de contrepassation
-Le geste correctif recommandé (`modalCorrigerReglement`) produit **deux pièces** : une note de crédit intégrale
-de la facture erronée + un **règlement rectificatif** dans une collection `S.reglements[]`, lue en plus de
-`t.payments` par la compta. La pièce d'origine reste intacte.
-⚠️ **À ne pas faire** : corriger un mode via `modalEditPrestations` — il marque les chevaux « annulé » et
-déclenche un `rembourse +=` pour une facture liquide, c'est-à-dire **un remboursement cash qui n'a jamais eu lieu**.
+### D2 — Un virement annoncé mais jamais reçu, finalement payé en espèces ✅ TRANCHÉ : par pièce corrective
+La tolérance proposée (autoriser `virement → liquide` tant que la réception n'est pas cochée) est **écartée** :
+elle contredit la règle 1 (« un virement acté est un virement à recevoir, même s'il n'arrive jamais »).
+Ce cas devient un **cas d'usage nominal du module B** : l'imputation se corrige par un règlement rectificatif,
+jamais par reclassement de la pièce d'origine.
+
+### D3 — Décocher « Facture nécessaire » juste après clôture ✅ TRANCHÉ : refusé
+Tolérance de 24 h **explicitement refusée par le propriétaire**. Une facture cochée ne se décoche jamais ;
+l'erreur se corrige par note de crédit.
+
+### D4 — Le module de contrepassation ✅ CONÇU
+Voir §3 ci-dessus et `SPEC-modules-correction.md` §2. Périmètre resserré après investigation : le module traite
+les erreurs d'**imputation** (méthode / drapeau facture), pas les erreurs de **montant**, qui restent du ressort
+de la note de crédit. La pièce porte **deux jambes** de signes opposés — CA, TVA et bases analytiques inchangés.
+
+⚠️ **À ne pas faire** : corriger un mode via `modalEditPrestations` (14069). *(Correction d'une erreur d'analyse
+antérieure : `modalEditPrestations` ne marque rien comme annulé et ne déclenche aucun `rembourse +=` — il refuse
+si le mois est déclaré et ignore les chevaux déjà annulés. C'est `modalCancelBilling` qui pose
+`cv.cancel.status='annule'` (14202) et `p.rembourse +=` (14209), et c'est son rôle légitime.)*
 
 ### Défauts de conformité hors périmètre du blocage, mais bloquants
 - `nextFactureNumero` **et** `nextNcNumero` déduisent la séquence du vivant → **réemploi de numéro** après

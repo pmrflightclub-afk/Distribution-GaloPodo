@@ -296,7 +296,13 @@ Trois couches, par ordre de livraison :
 
 ## 6. TRAÇABILITÉ
 
-### 6.a Sites à instrumenter : **18** (12 mutations en place + 6 remplacements en bloc)
+### 6.a Sites à instrumenter : ~~**18**~~ → **30** ⚠ TABLE INCOMPLÈTE
+
+> ⚠️ **CORRECTION 2026-07-22.** Recomptage indépendant : il y a **30 instructions d'écriture de `t.payments`
+> réparties sur 12 fonctions**, pas 18. La table ci-dessous **oublie 8 sites**, dont deux qui écrasent des
+> paiements en bloc : `replayTour` (4568, `nt.payments = {}`) et `modalPayment` (14338, restauration intégrale
+> du snapshot). Liste des manquants : 3734, 3736, 4568, 4911, 9578, 9586, 14306, 14338 — détail dans
+> **`SPEC-modules-correction.md` §0.3**. **Remplacer cette table au lot L1.**
 
 | # | Ligne | Fonction | Origine | Nature |
 |---|---|---|---|---|
@@ -423,9 +429,9 @@ Le contexte d'origine doit être posé en portée **strictement synchrone** (`wi
 
 ## 9. CE QUI RESTE RISQUÉ OU INCERTAIN
 
-1. **`t.result` d'une tournée OUVERTE bouge légitimement.** `computeResultMoney` (8202-8231) redistribue le déplacement au prorata entre tous les clients : ajouter un arrêt fait varier le `totalTTC` d'un client **déjà clôturé et payé**. C'est pourquoi l'empreinte gelée porte sur `t.payments` et **jamais** sur `t.result` avant `t.closed`. Conséquence assumée : entre la clôture d'un client et celle de la tournée, sa facture peut encore bouger. **À arbitrer avec le propriétaire** — si c'est inacceptable, il faut figer `m.totalTTC` par client à `closeClientFully` (7280), ce qui est un lot séparé et lourd.
-2. **Virement = créance, pas encaissement.** `clientPaiementIssue` (7237-7240) n'exige aucun montant en virement, et `S.comptaRecu` (10577) trace séparément la réception. Un virement annoncé mais jamais arrivé, que le client règle finalement en espèces, tombe sous le refus. **Recommandation** : autoriser la bascule `virement → liquide` **tant que `S.comptaRecu[tourId:cid]` est faux ET que le mois n'est pas déclaré**, avec motif obligatoire et entrée de journal. À valider explicitement avec le propriétaire.
-3. **`facliq → liquide` interdit** peut gêner un décochage de « Facture nécessaire » fait par erreur juste après clôture. Repli : autoriser dans les 24 h suivant `frozenAt` (13897), avec journal.
+1. ~~**`t.result` d'une tournée OUVERTE bouge légitimement.**~~ ✅ **TRANCHÉ 2026-07-22 — gel par client.** Le propriétaire a jugé le mouvement inacceptable : le bloc entier du client est figé à **sa** clôture, les suivants se partagent le déplacement restant. L'inventaire exhaustif (**25 événements** qui font bouger un client clôturé) et la conception sont dans **`SPEC-modules-correction.md` §3**. ⚠️ Contrainte majeure découverte : le gel **ne peut pas** vivre dans `t.result` (exclu de `_HASH_SKIP` 3570, retiré de `snapshotHash` 4305, non greffé par `graftClosure`) — il doit être un champ de premier niveau `t.frozenClients`.
+2. ~~**Virement = créance, pas encaissement.**~~ ✅ **TRANCHÉ — recommandation ÉCARTÉE.** La bascule `virement → liquide` reste **interdite en toutes circonstances** (règle 1 : un virement acté est un virement à recevoir, même s'il n'arrive jamais). Le cas se traite par **règlement rectificatif** (module B, `SPEC-modules-correction.md` §2), qui compense sans toucher la pièce d'origine.
+3. ~~**`facliq → liquide` interdit**~~ ✅ **TRANCHÉ — tolérance de 24 h REFUSÉE** par le propriétaire. Une facture cochée ne se décoche jamais ; l'erreur se corrige par note de crédit.
 4. **`_review` et l'import** : `markToursReview` (15245) pose `_review` sur toutes les tournées importées, y compris clôturées, ce qui lève `locked` (7301) et rouvre `modalPayment` — le correctif §5 couche 1 neutralise l'accès au paiement, mais **`calcTour(true)` via `edRevalider` (15515) reste hors gel** (8538). À traiter dans le même lot.
 5. **`nextFactureNumero` (13868) et `nextNcNumero` (13863)** déduisent la séquence du vivant → réemploi de numéro après suppression/perte de fusion. Correctif : compteur persisté `max(S.factureSeq, dérivé)`, monotone. **Hors périmètre du blocage, mais bloquant pour la conformité comptable.**
 6. **`factureIds` non fusionné** (absent de `graftClosure` 3722-3765 et de `reinjectTour` 4515-4522) → renumérotation d'une facture déjà émise. Correctif additif (union par `clientId`, jamais d'écrasement) à livrer avec la couche 3.
