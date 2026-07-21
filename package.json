@@ -1,0 +1,8 @@
+{
+  "name": "galopodo",
+  "private": true,
+  "description": "PWA de maréchalerie — harness de non-régression (aucune dépendance runtime).",
+  "scripts": {
+    "test": "node test/run-all.js"
+  }
+}
