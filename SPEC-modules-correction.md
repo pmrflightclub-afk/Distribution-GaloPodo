@@ -485,12 +485,118 @@ pré-rempli et d'une case cochée. Aucun troisième type de pièce n'est nécess
 
 ---
 
+## 3ter. MODULE E — Le virement jamais reçu devient une CRÉANCE
+
+> Décision du propriétaire, 2026-07-22, sur D2. **Écarte le règlement rectificatif pour ce cas** : un virement
+> qui n'arrive pas n'est pas une erreur de saisie, c'est une **créance impayée**.
+
+### 3ter.1 Le manque
+
+Un virement n'exige **aucun montant** à la clôture (app.js:7237 — cocher « Virement » suffit) ; l'arrivée réelle
+de l'argent se coche séparément dans la Compta (`S.comptaRecu`, app.js:10612). Entre les deux, il n'existe
+**aucune façon de dire « ce virement n'arrivera jamais »**. L'impayé (`p.partiel` / `p.impaye`) est réservé au
+liquide (app.js:7238-7241). La créance n'est représentable nulle part.
+
+### 3ter.2 Pourquoi la créance, et pas le règlement rectificatif
+
+| | Créance (retenu) | Règlement rectificatif (écarté) |
+|---|---|---|
+| Ce que la pièce raconte | « la prestation a été faite en juin, l'argent est rentré en août » — **vrai** | « ce n'était pas un virement mais du liquide » — **faux**, le virement était réel au moment de la saisie |
+| Mois d'origine | garde son CA (prestation rendue, facture émise) | inchangé aussi, mais une ligne **négative** de virement apparaît au mois de correction |
+| Mécanique | **existe déjà** (`c.impayes[]` + collecte automatique) | pièce neuve à créer |
+
+### 3ter.3 Le geste
+
+Dans la Compta, sur une ligne de virement dont la case « Reçu » n'est **pas** cochée : bouton
+**« ⚠ Jamais reçu »** → petite modale (montant, pré-rempli au TTC de la facture · motif obligatoire).
+
+Effet, en **deux écritures seulement** :
+1. `setClientImpaye(t, cid, montant)` (app.js:14420) → crée la créance sur la fiche client :
+   `{ id: uid(), sourceTourId, date, ttc, collected: false, collectedTourId: null }`.
+2. Un marqueur sur le paiement : `p.virementNonRecu = { at, montant, motif }`.
+
+**`p.method` n'est PAS touché.** Aucun reclassement, la règle 1 est intacte. Poser `virementNonRecu` est une
+écriture **« compléter un champ jamais renseigné »**, donc autorisée par la règle du §1 de `PLAN-finalisation.md`.
+
+### 3ter.4 La collecte est automatique — rien à coder
+
+À la visite suivante, `addClientToTour` (app.js:7757-7761) réintègre **toute** créance non collectée sous forme
+d'une ligne d'article « Impayé du … », et marque `im.collected = true`. Le mécanisme est déjà générique : il ne
+regarde que `c.impayes`, jamais la méthode de paiement d'origine.
+
+⚠️ **Point comptable décisif** : la créance doit être créée **sans** le drapeau `reporte`. À la collecte,
+app.js:7760 recopie `reporte: !!im.reporte`, et app.js:9621-9622 exclut de la base analytique les impayés
+`impaye && !reporte`. Motif : le CA a **déjà** été reconnu au mois de la tournée d'origine (le virement figure
+dans `virementClients` dès `tourYm`, app.js:9628) — le recompter à la collecte le doublerait.
+`setClientImpaye` ne pose pas `reporte` → comportement correct par défaut, **à verrouiller par test**.
+
+Résultat sur l'exemple (300 € promis en juin, encaissés en espèces en août) :
+
+| | Juin | Août |
+|---|---|---|
+| CA / base analytique | **+300 €** (virement, prestation rendue) | **0** (exclu — déjà reconnu) |
+| Caisse | 0 | **+300 €** (l'argent est physiquement rentré) |
+| Case « Reçu » du virement de juin | reste **décochée** | reste décochée |
+
+### 3ter.5 Points de vigilance
+
+1. **Réversible tant que la créance n'est pas collectée.** S'il finit par virer l'argent, retirer le marqueur
+   et la créance est légitime — rien n'a encore été acté. Dès que `im.collected === true`, c'est figé.
+2. **Autorisé même sur un mois déclaré.** Le geste **ne modifie aucun chiffre du mois d'origine** — il constate
+   un fait postérieur. Ne pas le brider sur `comptaLocked`, ce serait un faux positif.
+3. **Ne pas cocher « Reçu » automatiquement.** La case dit que l'argent est arrivé **par virement** ; il n'est
+   jamais arrivé. Elle doit rester décochée pour que la ligne se lise comme une créance.
+4. **À vérifier au codage** : le PDF de déclaration multi-mois (`comptaPrintFull` app.js:10646) additionne les
+   sections sur une plage. Sur une plage couvrant juin **et** août, les 300 € apparaissent en virement (juin) et
+   en caisse (août). Cette propriété **existe déjà** pour les impayés liquides actuels — ce module ne l'introduit
+   pas, mais elle doit être vérifiée et documentée, pas découverte à la déclaration.
+
+---
+
+## 3quater. EXTENSION DU MODULE A — Réconciliation du PDF « Facture pro — liquide »
+
+> Décision du propriétaire, 2026-07-22. **Section `facliq` uniquement** ; la section Virements garde son
+> comportement actuel.
+
+### Le défaut
+
+`comptaPrint(ym, 'facliq')` (app.js:10641) appelle `detailPdf` (app.js:10636-10637), qui imprime :
+- **corps** : `clientInvoiceHtml(e.m, e.payment)` par client = le montant **facturé** ;
+- **pied** : `factureLiqTotal` = la somme de `payRecu` = le montant **encaissé** (app.js:9632).
+
+Facture de 300 € dont 100 € impayés → le corps affiche 300 €, le pied affiche 200 €, et **rien n'explique
+l'écart**. Le total est juste ; c'est la justification qui manque. Le poste « Remboursements » (§1) creuse
+l'écart sans le combler, puisqu'il agit sur le total et non sur le corps.
+
+### Le correctif
+
+Ajouter en fin de document un bloc de réconciliation, avec le détail par client :
+
+```
+Total facturé          300,00 €
+− Impayés              100,00 €      (paiement partiel)
+− Remboursements       120,00 €      (NC #C-4 du 12/08)
+= Net encaissé          80,00 €      ← égal au total de la section à l'écran
+```
+
+Implémentation : paramétrer `detailPdf` (le bloc est **désactivé par défaut**, activé pour `facliq` seulement).
+Le générateur est partagé avec les sections Virements et Facture-virement — l'activer ailleurs plus tard sera un
+changement d'un argument.
+
+**Assertion à ajouter au harnais** : `Total facturé − impayés − remboursements === factureLiqTotal.ttc`, et
+`factureLiqTotal` identique entre l'écran (10589), le PDF de section (10641) et le PDF complet (10668).
+C'est le contrôle de réconciliation qui **n'existe nulle part aujourd'hui** (cf. §1.5-1).
+
+---
+
 ## 4. ORDRE DE CODAGE MIS À JOUR
 
 ```
 L0  Saisie liquide    MODULE D — « Montant liquide reçu » + impayé auto ≥ 1 € + partiel auto-coché.
                       EN PREMIER : ne dépend de rien, et c'est la PRÉVENTION qui rend le verrouillage
                       de p.rectifie (L3/L8) acceptable — plus de saisie muette à rattraper.
+L0b Virement non reçu MODULE E — bouton « ⚠ Jamais reçu » → créance via setClientImpaye ; collecte
+                      automatique déjà en place. p.method jamais touché.
 L1  Traçabilité       withOrigin + 2 anneaux + les 30 sites (table §6.a à remplacer, cf. §0.3)
 L2  Recalculs gelés   recomputeMoney · calcTour · sanitizeTourStats · rowFromArret (id) · nom client figé
 L3  Argent acté       purge d'arrondi · setComptaPayment (partiel/créance orpheline)
@@ -516,11 +622,12 @@ la correction des défauts connus refuserait en permanence.
    de caisse à rattraper : **c'est un impayé**, constaté immédiatement (case « paiement partiel » cochée
    automatiquement, montant pré-rempli). Aucun troisième type de pièce n'est créé. Seul subsiste le cas
    symétrique — saisir *plus* que le total — qui reste un arrondi caisse et demeure très visible (§3bis.5-4).
-2. **Affichage du net dans le PDF facliq** : `detailPdf` (app.js:10637) imprime la facture **pleine** de chaque
-   client alors que le total de section vaut `payRecu` — elles ne coïncident déjà pas en cas d'impayé partiel.
-   Le poste « Remboursements » rend l'écart plus visible. Faut-il corriger ce PDF dans le même lot (hors
-   périmètre strict) ?
-3. **Décisions D2 et D3 de `PLAN-finalisation.md`** (virement jamais reçu réglé en espèces ; décochage de
-   « Facture nécessaire ») : le propriétaire a **refusé** les tolérances proposées (D3 explicitement : « pas de
-   tolérance 24 h »). D2 devient un **cas d'usage du module B** — un virement mal imputé se corrige par
-   règlement rectificatif, pas par reclassement. À confirmer.
+2. ~~**Affichage du net dans le PDF facliq**~~ ✅ **TRANCHÉ 2026-07-22 — à corriger**, section `facliq`
+   uniquement (bloc de réconciliation `Total facturé − impayés − remboursements = Net encaissé`). Voir §3quater.
+   La section Virements garde son comportement actuel.
+3. ~~**Décisions D2 et D3**~~ ✅ **TRANCHÉES.** D3 : tolérance de 24 h **refusée**, une facture cochée ne se
+   décoche jamais. D2 : le virement jamais reçu **n'est PAS un cas du module B** — c'est une **créance**
+   (module E, §3ter). *Correction de ma propre recommandation antérieure : le règlement rectificatif aurait
+   raconté une erreur de saisie là où le virement était réel au moment où il a été noté.*
+
+**Il ne reste aucune question ouverte sur la conception de la Phase 3.**

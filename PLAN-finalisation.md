@@ -165,6 +165,8 @@ Contenu par entrée : horodatage · origine · entité · id · champs modifiés
 ```
 L0  Saisie liquide   MODULE D — champ « Montant liquide reçu », impayé auto dès 1 € d'écart,
                      « paiement partiel » coché automatiquement (fin de la fausse « remise »)
+L0b Virement non reçu MODULE E — bouton « ⚠ Jamais reçu » → créance (setClientImpaye) ;
+                     collecte automatique à la visite suivante, déjà en place. p.method intact.
 L1  Traçabilité      withOrigin + les 2 anneaux + les 30 sites d'écriture de paiement
                      (⚠ la table SPEC §6.a en annonce 18 et en oublie 8 — cf. SPEC-modules-correction §0.3)
 L2  Recalculs gelés  recomputeMoney · calcTour · sanitizeTourStats
@@ -251,11 +253,19 @@ contre un itinéraire qui a pu changer depuis. → **MODULE C**, `SPEC-modules-c
 ⚠️ Contrainte découverte : un drapeau posé dans `t.result` **ne survivrait pas à une synchro** (trois raisons
 cumulées, §3.2). Le gel doit être un champ de premier niveau `t.frozenClients`, greffé dans `graftClosure`.
 
-### D2 — Un virement annoncé mais jamais reçu, finalement payé en espèces ✅ TRANCHÉ : par pièce corrective
+### D2 — Un virement annoncé mais jamais reçu, finalement payé en espèces ✅ TRANCHÉ : c'est une CRÉANCE
 La tolérance proposée (autoriser `virement → liquide` tant que la réception n'est pas cochée) est **écartée** :
-elle contredit la règle 1 (« un virement acté est un virement à recevoir, même s'il n'arrive jamais »).
-Ce cas devient un **cas d'usage nominal du module B** : l'imputation se corrige par un règlement rectificatif,
-jamais par reclassement de la pièce d'origine.
+elle contredit la règle 1. Mais le **règlement rectificatif est écarté aussi** — il raconterait une erreur de
+saisie là où le virement était **réel au moment où il a été noté**.
+
+**Décision : le virement jamais reçu devient une créance impayée** (module E, `SPEC-modules-correction.md`
+§3ter). Le mois d'origine garde son CA (la prestation a été rendue) ; l'argent encaissé plus tard en espèces
+est la **collecte de cette créance**, mécanisme que l'app possède déjà (`c.impayes[]` + `addClientToTour`
+app.js:7757). `p.method` n'est jamais touché.
+
+⚠️ Manque fonctionnel à combler : aujourd'hui l'impayé n'existe **que pour le liquide** (app.js:7238-7241) ;
+sur un virement il n'y a qu'une case « Reçu » cochée ou non. Rien ne permet de dire « ce virement n'arrivera
+jamais ».
 
 ### D3 — Décocher « Facture nécessaire » juste après clôture ✅ TRANCHÉ : refusé
 Tolérance de 24 h **explicitement refusée par le propriétaire**. Une facture cochée ne se décoche jamais ;
