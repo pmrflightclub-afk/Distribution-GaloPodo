@@ -3063,6 +3063,12 @@ if (!S.declarations || typeof S.declarations !== 'object') S.declarations = {}; 
 if (!S.comptaRecu || typeof S.comptaRecu !== 'object') S.comptaRecu = {};       // { 'tourId:clientId': true } — paiement reçu (virement/facture)
 if (!S.comptaDemarche || typeof S.comptaDemarche !== 'object') S.comptaDemarche = {}; // { 'tourId:clientId': true } — démarche comptable effectuée (mois archivé)
 if (!Array.isArray(S.notesCredit)) S.notesCredit = []; // notes de crédit : { id, clientId, clientNom, tourId, tourDate, chevalNom, montantTTC, motif, note, date, rembourse, rembourseAt }
+if (typeof S.ncSeq !== 'number') S.ncSeq = 0;         // L4 : compteurs de séquence PERSISTÉS monotones (NC / factures / règlements) → jamais de réemploi de numéro
+if (typeof S.factureSeq !== 'number') S.factureSeq = 0;
+if (typeof S.reglementSeq !== 'number') S.reglementSeq = 0; // L8 : contrepassation
+if (!Array.isArray(S.reglements)) S.reglements = []; // L8 : règlements rectificatifs (contrepassation) — { id, numero, date, ymImpute, tourId, clientId, from, to, montantTTC, motif }
+if (typeof S.documentSeq !== 'number') S.documentSeq = 0; // L10 : compteur des documents indépendants
+if (!Array.isArray(S.documents)) S.documents = []; // L10 : factures de vente / notes de crédit INDÉPENDANTES — { id, numero, type:'facture'|'nc', clientId, date, lignes, montantTTC, statut, sentAt, tourId (rattachement), payment }
 // F-b : provisions analytiques (calculées sur les mois à démarche « encode » figée). Forme juridique + taux fiscaux paramétrables.
 // Valeurs possibles : BE physique|societe · FR micro|ei|societe_fr (validées/normalisées selon le pays dans renderProvisions).
 if (typeof S.formeJuridique !== 'string' || !S.formeJuridique) S.formeJuridique = (S.pays === 'fr') ? 'micro' : 'physique';
@@ -3442,7 +3448,7 @@ function bgSaveFlash() { // enregistrement local (instantané) : brève confirma
 // Collections id-clés DANS les réglages : elles doivent fusionner par enregistrement (union + tombstones) comme clients/tournées,
 // sinon un ajout/suppression fait sur un appareil est écrasé en bloc par l'autre appareil (perte de rappels, frais, écritures…).
 // L1-1d : 'adresses' et 'plancheTodo' AJOUTÉES → fusion par enregistrement AVEC tombstones (une suppression ne « ressuscite » plus après synchro).
-const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone', 'ecuries']; // #7a : plancheDone → fusion par enregistrement AVEC tombstones ; Lot 04-A : 'ecuries' → fusion par id + updatedAt (résolution de conflit correcte)
+const SETTINGS_COLLECTIONS = ['rappels', 'frais', 'fraisJournal', 'comptes', 'sousComptes', 'materiel', 'articlesCatalogue', 'provisions', 'journal', 'chargesAchat', 'contactMails', 'notesCredit', 'adresses', 'plancheTodo', 'plancheDone', 'ecuries', 'reglements', 'documents']; // #7a : plancheDone → fusion par enregistrement AVEC tombstones ; Lot 04-A : 'ecuries' → fusion par id + updatedAt ; L8 'reglements' (contrepassation) + L10 'documents' (factures de vente / NC indépendantes) → même motif de fusion par id
 // P1-9 : réglages PROPRES à l'appareil — SOURCE UNIQUE partagée par mergeSettings ET applyRemoteReplace (fin de la classe de bug « deux listes device-local divergentes » : calPush/calDureeMin manquaient côté applyRemoteReplace → bascule silencieuse du push agenda à l'adoption/restauration).
 const DEVICE_LOCAL_KEYS = ['googleClientId', 'syncMode', 'googleAutoSync', 'calPush', 'calDureeMin', 'logoBg', 'logoBgMobile', 'deviceName', 'deviceId'];
 // 100 % : champs de réglages EXCLUS de l'horodatage PAR CHAMP (ils sont déjà résolus autrement — maps unies, collections par enregistrement, thème/planche/setup à horodatage dédié, device-local). Tout le RESTE (tarifs de calcul, seuils, carburant, suppléments, véhicule…) est fusionné champ par champ selon sa propre date de modif.
@@ -3754,6 +3760,8 @@ function graftClosure(to, from) {
   if (from.autoClosedAt && !to.autoClosedAt) to.autoClosedAt = from.autoClosedAt;
   if (from.closed && !to.closed) to.closed = true;
   if (from.priceSnap && !to.priceSnap) to.priceSnap = JSON.parse(JSON.stringify(from.priceSnap)); // LOT 3 : le gel des tarifs suit la cloture                          // clôture = état terminal (aucun « déclôturage » dans l'app)
+  // L4 : factureIds (identité des factures émises) fusionné par client — union, jamais d'écrasement, le frozenAt le PLUS ANCIEN gagne (le 1ᵉʳ numéro émis fait foi). Sans ça, un gagnant LWW renumérotait une facture déjà émise.
+  if (from.factureIds) { to.factureIds = to.factureIds || {}; Object.keys(from.factureIds).forEach((cid) => { const f = from.factureIds[cid], t2 = to.factureIds[cid]; if (!t2 || !t2.numero) to.factureIds[cid] = f; else if (f && f.numero && (f.frozenAt || 0) < (t2.frozenAt || 0)) to.factureIds[cid] = f; }); }
   // P0-2 : greffer l'ÉTAT FINANCIER manquant. La greffe de clôture protégeait les jalons mais PAS les paiements : une tournée
   // pouvait devenir « clôturée » avec un encaissement perdu (le gagnant LWW n'avait pas les payments). On ne fait que COMPLÉTER
   // (jamais écraser un paiement présent sur `to`) → aucune régression d'une édition légitime du gagnant.
@@ -8528,8 +8536,8 @@ function recalcAllTours() {
   const monthsLive = new Set(allTours().map((t) => (t.date || '').slice(0, 7)).filter(Boolean));
   ['comptaRecu', 'comptaDemarche'].forEach((k) => { if (S[k]) Object.keys(S[k]).forEach((key) => { if (!tourIds.has(key.split(':')[0])) delete S[k][key]; }); });
   if (S.agendaImported) Object.keys(S.agendaImported).forEach((eid) => { const im = S.agendaImported[eid]; if (im && im.tourId && !tourIds.has(im.tourId)) delete S.agendaImported[eid]; });
-  if (S.comptaStatus) Object.keys(S.comptaStatus).forEach((ym) => { if (!monthsLive.has(ym)) delete S.comptaStatus[ym]; }); // verrou d'un mois sans aucune tournée → levé
-  if (Array.isArray(S.notesCredit)) S.notesCredit = S.notesCredit.filter((nc) => { if (!nc.tourId || tourIds.has(nc.tourId)) return true; if (nc.rembourse) { nc.tourDeleted = true; return true; } return false; }); // note orpheline NON remboursée → retirée ; remboursée → conservée détachée
+  if (S.comptaStatus) Object.keys(S.comptaStatus).forEach((ym) => { const st = S.comptaStatus[ym]; const declared = st && Object.keys(st).some((k) => st[k] === 'encode'); if (!monthsLive.has(ym) && !declared) delete S.comptaStatus[ym]; else if (!monthsLive.has(ym) && declared) logWrite({ f: 'recalcAllTours', entity: 'comptaStatus', id: ym, frozen: true, note: 'mois DÉCLARÉ sans tournée — verrou CONSERVÉ (jamais rouvert)' }); }); // L4 : ne JAMAIS lever le verrou d'un mois DÉCLARÉ (rouvrirait une période fermée) — seuls les mois non déclarés sont nettoyés
+  if (Array.isArray(S.notesCredit)) S.notesCredit.forEach((nc) => { if (nc.tourId && !tourIds.has(nc.tourId)) nc.tourDeleted = true; }); // L4 (règle 6) : une NC est ACTÉE → JAMAIS supprimée. Note orpheline (tournée disparue) = DÉTACHÉE (tourDeleted), remboursée ou non
   // 3) On NE recalcule PLUS les montants ici (ça pouvait casser une facture : déplacement/matériel qui sautaient).
   //    On rafraîchit seulement les listes de chevaux pour les stats (sanitizeTourStats ne touche jamais les montants)
   //    et on répare les arrondis caisse devenus aberrants. Pour recalculer une facture, ouvrez la tournée (recalcul complet à l'ouverture).
@@ -13378,7 +13386,18 @@ function renderComptePhoto() {
     list.appendChild(el);
   });
 }
-function deleteTourById(id) { const tt = allTours().find((x) => x.id === id); if (tt && (tt.closed || tt.endedAt)) { try { downloadSnapshot(); } catch (e) {} } /* M3 : sauvegarde de sécurité avant de supprimer une tournée CLÔTURÉE (données réelles/compta) */ purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive(); }
+function deleteTourById(id) {
+  const tt = allTours().find((x) => x.id === id);
+  // L4 (règle 7) : une tournée FIGÉE ne disparaît jamais — supprimable UNIQUEMENT si NON clôturée ET qu'AUCUN arrêt n'est clôturé (validatedAt). Ses factures/virements sont immuables.
+  const arretClos = tt && (tt.arrets || []).some((a) => typeof a.validatedAt === 'number');
+  if (tt && (tt.closed || tt.endedAt || arretClos)) {
+    logWrite({ f: 'deleteTourById', entity: 'tour', id, frozen: true, violation: 'suppression refusée (tournée/arrêt figé)' });
+    if (typeof alert === 'function') alert('🔒 Suppression impossible — cette tournée est clôturée ou a au moins un arrêt clôturé. Une pièce figée (facture/virement) ne disparaît jamais.\n\nPour retirer une facturation, utilisez « Annuler une facturation » (note de crédit).');
+    return false;
+  }
+  purgeTourData(id); tournees = tournees.filter((t) => t.id !== id); archive = archive.filter((t) => t.id !== id); saveTournees(); saveArchive();
+  return true;
+}
 // Section dédiée (au-dessus du Trajet du jour) : tournées dépassées non clôturées.
 // Démarrée inachevée → « Finaliser » (arrêts restants) ; jamais démarrée → « Reporter » (client par client) ou « Supprimer ».
 function renderBlockingArrets() {
@@ -13929,13 +13948,14 @@ function ncBreakdown(n) {
 }
 // Numéro de NC = préfixe APPAREIL (2-3 car. stables, device-local) + séquence propre à cet appareil → jamais de doublon même hors-ligne sur 2 appareils.
 function ncDevicePfx() { const d = (S.deviceId || '').replace(/[^a-z0-9]/gi, ''); return ((d.slice(-3) || 'x0') + '').toUpperCase(); }
-function nextNcNumero() { const pfx = ncDevicePfx(); const seq = (S.notesCredit || []).reduce((m, n) => { const s = String(n.numero == null ? '' : n.numero); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; return Math.max(m, v); } return m; }, 0) + 1; return pfx + '-' + seq; }
+function nextNcNumero() { const pfx = ncDevicePfx(); const derived = (S.notesCredit || []).reduce((m, n) => { const s = String(n.numero == null ? '' : n.numero); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; return Math.max(m, v); } return m; }, 0); const seq = Math.max(derived, S.ncSeq || 0) + 1; S.ncSeq = seq; return pfx + '-' + seq; } // L4 : compteur PERSISTÉ monotone (max(vivant, mémorisé)+1) → un numéro n'est jamais réemployé, même si une pièce manque temporairement à la fusion
 // ---------- Lot 02 — IDENTITÉ FACTURE PERSISTÉE ----------
 // Numéro par appareil (comme les NC), préfixe 'F' distinct → aucune collision NC/facture ni inter-appareils. Séquence = max existant + 1.
 function nextFactureNumero() {
   const pfx = 'F' + ncDevicePfx(); let max = 0;
   allTours().forEach((t) => { const fi = (t && t.factureIds) || {}; Object.keys(fi).forEach((cid) => { const s = String((fi[cid] && fi[cid].numero) || ''); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; if (v > max) max = v; } }); });
-  return pfx + '-' + (max + 1);
+  const seq = Math.max(max, S.factureSeq || 0) + 1; S.factureSeq = seq; // L4 : compteur PERSISTÉ monotone → jamais de réemploi de numéro de facture
+  return pfx + '-' + seq;
 }
 function factureOf(t, clientId) { return (t && t.factureIds && t.factureIds[clientId]) || null; }
 // ---------- Lot 03a — REGISTRE DES DÉCLARATIONS (identité, en MIROIR du verrou comptaStatus — n'en change PAS le comportement) ----------
@@ -14551,11 +14571,10 @@ function purgeTourData(id) {
   [S.comptaRecu, S.comptaDemarche].forEach((map) => { if (map) Object.keys(map).forEach((k) => { if (k.split(':')[0] === id) delete map[k]; }); });
   // Événement d'agenda récupéré vers cette tournée → il redevient disponible dans « Items ».
   Object.keys(S.agendaImported || {}).forEach((eid) => { if (S.agendaImported[eid] && S.agendaImported[eid].tourId === id) delete S.agendaImported[eid]; });
-  // M3 : notes de crédit de cette tournée. NON remboursée → supprimée avec la tournée (elle n'a jamais été un vrai remboursement).
-  // REMBOURSÉE → conservée comme pièce comptable détachée (marquée `tourDeleted`) — un remboursement réel ne disparaît pas.
-  if (Array.isArray(S.notesCredit)) S.notesCredit = S.notesCredit.filter((n) => { if (n.tourId !== id) return true; if (n.rembourse) { n.tourDeleted = true; return true; } return false; });
-  // M3 : dégeler le verrou de période si le mois de cette tournée n'a plus aucune AUTRE tournée (évite verrou fantôme + provisions faussées sur un mois vidé).
-  { const tt = allTours().find((x) => x.id === id); const ym = tt ? (tt.date || '').slice(0, 7) : ''; if (ym && S.comptaStatus && S.comptaStatus[ym] && !allTours().some((x) => x.id !== id && (x.date || '').slice(0, 7) === ym)) delete S.comptaStatus[ym]; }
+  // L4 (règle 6) : une note de crédit est ACTÉE → JAMAIS supprimée, même non remboursée. La tournée disparaît → la NC est DÉTACHÉE (tourDeleted).
+  if (Array.isArray(S.notesCredit)) S.notesCredit.forEach((n) => { if (n.tourId === id) n.tourDeleted = true; });
+  // L4 : dégeler le verrou de période UNIQUEMENT si le mois n'est PAS déclaré (un mois déclaré ne se rouvre jamais — règle 3/4).
+  { const tt = allTours().find((x) => x.id === id); const ym = tt ? (tt.date || '').slice(0, 7) : ''; const st = ym && S.comptaStatus && S.comptaStatus[ym]; const declared = st && Object.keys(st).some((k) => st[k] === 'encode'); if (ym && st && !declared && !allTours().some((x) => x.id !== id && (x.date || '').slice(0, 7) === ym)) delete S.comptaStatus[ym]; }
   deleteTourCalendar(id); // retire de Google Agenda les RDV poussés pour cette tournée (best-effort)
   saveSettings();
 }
