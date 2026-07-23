@@ -6873,6 +6873,7 @@ function archiveOldTours() {
 // drapeaux d'acte : il disparaissait de la facture alors que son montant y restait (« 0 ligne, TTC 114,29 »).
 function chevalKeptInResult(c) { return chevalBilled(c) || photoHasBillableStades(c && c.photo); }
 function sanitizeTourStats(t) {
+  if (statusOf(t) === 'cloturee') { logWrite({ f: 'sanitizeTourStats', entity: 'tour', id: t && t.id, frozen: true, skipped: 'tournée clôturée' }); return false; } // L2 : garde de gel PORTÉE PAR LA FONCTION → couvre AUSSI recalcAllTours (8538), qui contournait la garde de sanitizeAllTourStats
   const R = t.result; if (!R || !R.rows) return false;
   let changed = false; const faitByClient = {};
   (R.rows || []).forEach((r) => (r.clients || []).forEach((cl) => {
@@ -8383,7 +8384,7 @@ function rowFromArret(a, geo) {
         cancelledNoms: (cl.chevaux || []).filter((c) => !chevalCredited(c) && chevalCancelled(c) && !(chevalCancelSet(c) instanceof Set)).map((c) => norm(c.nom)), // cheval ENTIÈREMENT retiré (annulé-total OU reporté) → tous ses articles manuels retirés ; le partiel passe par artCancels
         artCancels,
         chevaux: (cl.chevaux || []).filter(keep).map((c) => {
-          const fiche = cli ? (cli.chevaux || []).find((h) => norm(h.nom) === norm(c.nom)) : null;
+          const fiche = cli ? (cli.chevaux || []).find((h) => (c.id != null && h.id === c.id) || norm(h.nom) === norm(c.nom)) : null; // L2 : jointure par ID d'abord (repli sur le nom) → un renommage ne fait plus disparaître la ligne « lourd » d'une facture
           const cSet = chevalCancelSet(c); const kill = (k) => !chevalCredited(c) && cSet instanceof Set && cSet.has(k); // 'ALL' déjà exclu par keep() ; ne masque que les annulations PARTIELLES ; un cheval CRÉDITÉ (virement, NC émise) reste PLEINEMENT facturé (la NC gère la réduction — pas de double)
           return { nom: c.nom, fourbure: !!c.fourbure && !kill('fourbure'), npas: !!c.npas && !kill('npas'), infection: !!c.infection && !kill('infection'), parage: !!c.parage && !kill('parage'), visite: !!c.visite && !kill('visite'), visiteArtId: c.visiteArtId || null, parageOffert: !!c.parageOffert, visiteOffert: !!c.visiteOffert, fourbureOffert: !!c.fourbureOffert, npasOffert: !!c.npasOffert, infectionOffert: !!c.infectionOffert, difficile: !!c.difficile && !kill('difficile'), difficileHT: c.difficileHT, difficileRemise: c.difficileRemise, difficileOffert: !!c.difficileOffert, lourd: !!(fiche && fiche.lourd) && !c.lourdOff && !kill('lourd'), lourdHT: fiche ? fiche.lourdHT : null, lourdRemise: fiche ? fiche.lourdRemise : undefined, photo: kill('photo') ? null : (c.photo || null) };
         }) }; }),
@@ -8408,7 +8409,10 @@ function refreshClientHeadTotals() {
     span.textContent = m ? ' · ' + eur(m.totalTTC + payArrondi(m, (currentTour.payments || {})[cid])) + ' TTC' : '';
   });
 }
+// L2 : une tournée FIGÉE (clôturée/terminée, hors « à revalider ») ne doit JAMAIS être re-tarifée par un recalcul — sa facture est émise.
+const tourFrozenEdit = (t) => !!t && (t.closed || t.endedAt) && !t._review;
 function recomputeMoney() {
+  if (tourFrozenEdit(currentTour)) { logWrite({ f: 'recomputeMoney', entity: 'tour', id: currentTour && currentTour.id, frozen: true, skipped: 'tournée figée' }); return; } // L2 : refus du re-tarif silencieux (appelé par saveSettings au moindre changement de réglage)
   const R = currentTour && currentTour.result;
   if (!R || !R.rows || R.rows.length !== currentTour.arrets.length) { if (currentTour && currentTour.arrets && currentTour.arrets.length) scheduleGeoRecalc(); return; } // géométrie absente/périmée → recalcul complet différé (la réduction/l'article sera alors reflété)
   const rows = currentTour.arrets.map((a, i) => rowFromArret(a, R.rows[i]));
@@ -8548,6 +8552,7 @@ async function calcTour(silent) {
   if (!currentTour) return; // tournée supprimée entre-temps → ne pas la ré-enregistrer
   const tour = currentTour; // P1-2 : capture l'identité — après les await réseau, on refuse d'écrire le résultat si l'utilisateur a changé de tournée entre-temps
   const st = $('edStatus'); if (!st) return; // éditeur retiré du DOM (navigation) → rien à calculer
+  if (tourFrozenEdit(tour)) { logWrite({ f: 'calcTour', entity: 'tour', id: tour.id, frozen: true, skipped: 'tournée figée' }); st.className = 'status'; return; } // L2 : ne recalcule NI la géométrie NI la date NI le result d'une tournée figée (edClose calcule AVANT de poser closed → non bloqué)
   st.className = 'status';
   currentTour.date = $('edDate').value;
   if (!currentTour.arrets.length) {
