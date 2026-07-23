@@ -562,9 +562,11 @@ Exemple — NC facture liquide de 30 € émise en juillet, client revu en août
 3. **Ne jamais compenser un avoir avec un impayé en silence** : si le client a à la fois un impayé (débit) et un
    avoir (crédit), les deux lignes apparaissent séparément sur la facture de la visite ; le net se lit, mais les
    deux pièces restent distinctes (règle 6, traçabilité).
-4. **Cas du montant négatif net** : si l'avoir dépasse le total de la visite suivante, le client ne paie rien et
-   le **reliquat d'avoir reste** (`collected` partiel — ou un nouvel avoir du solde). À trancher : reste-t-il un
-   avoir résiduel, ou l'app plafonne-t-elle ? (voir §5)
+4. **Avoir supérieur au total de la visite** ✅ **TRANCHÉ (propriétaire, 2026-07-23) : SOLDE TOTAL, jamais de
+   report.** Un avoir se rembourse **toujours en entier au premier RDV effectif**. Si la visite coûte moins que
+   l'avoir : la visite est **purgée** (le client ne paie rien) **ET** le reliquat est **rendu en cash sur place**,
+   tracé comme remboursement complémentaire. `im.collected` passe à `true` en une fois — **aucun reliquat
+   reporté**. Exemple : avoir 50 €, visite 30 € → visite à 0 € + 20 € rendus = 50 € soldés.
 
 ---
 
@@ -644,5 +646,5 @@ la correction des défauts connus refuserait en permanence.
 3. ~~**Décisions D2 et D3**~~ ✅ **TRANCHÉES.** D3 : tolérance de 24 h **refusée**, une facture cochée ne se
    décoche jamais. D2 : le virement jamais reçu reste au statut **« paiement en attente »** — il n'est ni une
    créance, ni un règlement rectificatif ; il se régularise par virement (règle du propriétaire, §3ter.0).
-4. **Reliquat d'avoir** (§3ter.5-4) : si l'avoir client dépasse le total de la visite suivante, le solde
-   restant demeure-t-il un avoir résiduel, ou l'app plafonne-t-elle la déduction ? **À trancher.**
+4. ~~**Reliquat d'avoir**~~ ✅ **TRANCHÉ** : jamais de report, solde total au 1ᵉʳ RDV (visite purgée + reliquat
+   rendu en cash). Voir §3ter.5-4.
