@@ -57,5 +57,28 @@ const api = new Function('S', 'clients', 'uid', 'todayStr', 'clientName', 'saveS
   ok('5b. aucun numéro réemployé', new Set(nums).size === nums.length, nums.join(','));
 }
 
+// 6. docLineRows : itemisation PDF (une ligne par prestation)
+{
+  const docLineRows = new Function('eur', grabFn('function docLineRows(doc)') + '\n; return docLineRows;')((n) => n.toFixed(2) + '€');
+  const rows = docLineRows({ lignes: [{ libelle: 'Parage', qte: 2, ttc: 110 }, { libelle: 'Déplacement (km)', qte: 1, ttc: 20 }], montantTTC: 130 });
+  ok('6. PDF itemisé : une ligne par prestation', rows.length === 2 && /Parage ×2/.test(rows[0].text) && /110/.test(rows[0].text), JSON.stringify(rows.map((x) => x.text)));
+  const rows2 = docLineRows({ lignes: [], motif: 'fers', montantTTC: 40 });
+  ok('6b. repli sur le motif si pas de lignes', rows2.length === 1 && /fers/.test(rows2[0].text));
+}
+
+// 7. createIndepDoc stocke les lignes détaillées + la tournée de référence (NC)
+{
+  const S2 = { documents: [], documentSeq: 0, deviceId: 'devABC' };
+  const clients2 = [{ id: 'c1', nom: 'D', impayes: [], avoirs: [] }];
+  const api2 = new Function('S', 'clients', 'uid', 'todayStr', 'clientName', 'saveSettings', 'saveClients', 'logWrite', 'setClientAvoir', 'ncDevicePfx',
+    grabFn('function nextDocumentNumero(type)') + '\n' + grabFn('function createIndepDoc(clientId, type, montantTTC, opts)') + '\n; return createIndepDoc;')(
+    S2, clients2, (() => { let n = 0; return () => 'id' + (++n); })(), () => '2026-08-05', () => 'D', () => {}, () => {}, () => {}, () => {}, () => 'BC');
+  const lignes = [{ libelle: 'Parage', ttc: 55 }, { libelle: 'Déplacement (km)', ttc: 20 }];
+  const doc = api2('c1', 'facture', 75, { method: 'virement', facture: true, lignes });
+  ok('7. lignes détaillées stockées', doc.lignes.length === 2 && doc.lignes[0].libelle === 'Parage', JSON.stringify(doc.lignes.map((l) => l.libelle)));
+  const nc = api2('c1', 'nc', 30, { method: 'liquide', refTourId: 't9', lignes: [{ libelle: 'X', ttc: 30 }] });
+  ok('7b. NC : tournée de référence stockée', nc.refTourId === 't9', nc.refTourId);
+}
+
 console.log('\n' + (fail === 0 ? '✅ ' : '❌ ') + pass + ' réussis, ' + fail + ' échoués\n');
 process.exit(fail === 0 ? 0 : 1);

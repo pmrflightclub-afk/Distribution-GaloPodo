@@ -14046,7 +14046,7 @@ function nextDocumentNumero(type) { const pfx = (type === 'facture' ? 'V' : 'N')
 function createIndepDoc(clientId, type, montantTTC, opts) {
   opts = opts || {};
   const c = clients.find((x) => x.id === clientId); if (!c) return null;
-  const doc = { id: uid(), numero: nextDocumentNumero(type), type, clientId, clientNom: clientName(clientId), date: todayStr(), montantTTC: Math.round((montantTTC || 0) * 100) / 100, lignes: opts.lignes || [], motif: opts.motif || '', method: opts.method || null, facture: !!opts.facture, statut: 'a-regler', sentAt: null, tourId: null, deviceId: S.deviceId || null };
+  const doc = { id: uid(), numero: nextDocumentNumero(type), type, clientId, clientNom: clientName(clientId), date: todayStr(), montantTTC: Math.round((montantTTC || 0) * 100) / 100, lignes: opts.lignes || [], motif: opts.motif || '', method: opts.method || null, facture: !!opts.facture, statut: 'a-regler', sentAt: null, tourId: null, refTourId: opts.refTourId || null, deviceId: S.deviceId || null };
   const isLiquide = opts.method === 'liquide';
   if (type === 'facture' && isLiquide) { // vente liquide → impayé (CA neuf reconnu à la collecte)
     if (!Array.isArray(c.impayes)) c.impayes = []; c.impayes.push({ id: uid(), sourceTourId: null, docId: doc.id, date: doc.date, ttc: doc.montantTTC, collected: false, collectedTourId: null, reporte: true }); saveClients();
@@ -14124,11 +14124,28 @@ function modalCorrigerReglement(t, cid, onDone) {
   });
   upd();
 }
-// L10 — REGISTRE des documents indépendants (factures de vente / NC) : statut, réglé, envoi, + bouton « Déclarer ».
+// L10 — PDF d'un document indépendant (itemisé par ligne). Réutilisé pour l'impression et l'email.
+function docLineRows(doc) { const rows = []; (doc.lignes || []).forEach((l) => rows.push({ text: (l.libelle || 'Ligne') + (l.qte > 1 ? ' ×' + l.qte : '') + ' : ' + eur(l.ttc || 0) + ' TTC', size: 11, gap: 14 })); if (!(doc.lignes || []).length && doc.motif) rows.push({ text: doc.motif + ' : ' + eur(doc.montantTTC) + ' TTC', size: 11, gap: 14 }); return rows; }
+function docPdfBlob(doc) {
+  return pdfFromText([
+    { text: doc.type === 'facture' ? 'Facture de vente' : 'Note de crédit (avoir)', size: 20, bold: true, gap: 24 },
+    { text: String(doc.numero || ''), size: 12, gap: 14 },
+    { text: doc.clientNom, size: 13, bold: true, gap: 16 },
+    { text: 'Emise le ' + fmtDateFr(doc.date), size: 11, gap: 20 },
+  ].concat(docLineRows(doc)).concat([
+    { text: (doc.type === 'facture' ? 'Total a payer : ' : 'Montant de l\'avoir : ') + eur(doc.montantTTC) + ' TTC', size: 14, bold: true, gap: 14 },
+    doc.motif ? { text: 'Motif : ' + doc.motif, size: 10, gap: 10 } : { text: '', size: 1, gap: 1 },
+  ]));
+}
+function docPrintHtml(doc) {
+  const lines = (doc.lignes || []).map((l) => `<tr><td>${esc(l.libelle || 'Ligne')}${l.qte > 1 ? ' ×' + l.qte : ''}</td><td style="text-align:right">${eur(l.ttc || 0)}</td></tr>`).join('') || `<tr><td>${esc(doc.motif || '—')}</td><td style="text-align:right">${eur(doc.montantTTC)}</td></tr>`;
+  printHtml((doc.type === 'facture' ? 'Facture de vente ' : 'Note de crédit ') + doc.numero, `<h1>${doc.type === 'facture' ? 'Facture de vente' : 'Note de crédit (avoir)'} ${esc(doc.numero)}</h1><h2>${esc(doc.clientNom)} — émise le ${esc(fmtDateFr(doc.date))}</h2><table><thead><tr><th>Désignation</th><th style="text-align:right">TTC</th></tr></thead><tbody>${lines}</tbody><tfoot><tr><td><b>${doc.type === 'facture' ? 'Total à payer' : 'Montant de l\'avoir'}</b></td><td style="text-align:right"><b>${eur(doc.montantTTC)}</b></td></tr></tfoot></table>${doc.motif ? '<p style="margin-top:8px;font-size:.9em;color:#555">' + esc(doc.motif) + '</p>' : ''}`);
+}
+// L10 — REGISTRE des documents indépendants (factures de vente / NC) : statut, réglé, PDF, email, + bouton « Déclarer ».
 function modalDocuments() {
   const render = () => {
     const docs = (S.documents || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    const rows = docs.length ? docs.map((d) => `<div class="li-item"><div class="li-main"><b>${d.type === 'facture' ? '🧾 Facture de vente' : '↩ Note de crédit'} ${esc(d.numero)} · ${esc(d.clientNom)}</b> <b class="li-amount">${eur(d.montantTTC)}</b><span class="li-sub">${esc(fmtDateFr(d.date))} · ${esc(d.method || '—')}${d.facture ? ' (facture)' : ''} · ${d.statut === 'regle' ? '✅ réglé' : '⏳ à régler'}${d.sentAt ? ' · 📧 envoyé' : ''}${d.motif ? ' · ' + esc(d.motif) : ''}</span></div><div class="li-act li-act-col">${d.statut !== 'regle' ? `<button class="btn small primary" data-reg="${d.id}">Marquer réglé</button>` : ''}</div></div>`).join('') : '<p class="empty">Aucun document indépendant.</p>';
+    const rows = docs.length ? docs.map((d) => `<div class="li-item"><div class="li-main"><b>${d.type === 'facture' ? '🧾 Facture de vente' : '↩ Note de crédit'} ${esc(d.numero)} · ${esc(d.clientNom)}</b> <b class="li-amount">${eur(d.montantTTC)}</b><span class="li-sub">${esc(fmtDateFr(d.date))} · ${esc(d.method || '—')}${d.facture ? ' (facture)' : ''} · ${d.statut === 'regle' ? '✅ réglé' : '⏳ à régler'}${d.sentAt ? ' · 📧 envoyé' : ''}${d.motif ? ' · ' + esc(d.motif) : ''}</span></div><div class="li-act li-act-col"><button class="btn small" data-pdf="${d.id}">🖨 PDF</button> <button class="btn small${d.sentAt ? ' done' : ''}" data-mail="${d.id}">📧 Email${d.sentAt ? ' ✓' : ''}</button>${d.statut !== 'regle' ? ` <button class="btn small primary" data-reg="${d.id}">Marquer réglé</button>` : ''}</div></div>`).join('') : '<p class="empty">Aucun document indépendant.</p>';
     return `<div class="modal-head"><b>📄 Documents indépendants</b><button class="x" id="mX">✕</button></div>
       <p class="hint">Factures de vente et notes de crédit HORS tournée. Réglées au prochain RDV du client (liquide fondu dans la facture ; virement en attente, bloquant la clôture).</p>
       <div class="actions" style="margin:6px 0"><button class="btn primary" id="docNew">＋ Déclarer un document</button></div>
@@ -14138,32 +14155,99 @@ function modalDocuments() {
     $('mX').addEventListener('click', closeModal);
     $('docNew').addEventListener('click', () => modalDeclarerDoc(null, () => { closeModal(); modalDocuments(); }));
     document.querySelectorAll('#docsList [data-reg]').forEach((b) => b.addEventListener('click', () => { const d = (S.documents || []).find((x) => x.id === b.dataset.reg); if (d) { d.statut = 'regle'; d.regleAt = todayStr(); saveSettings(); closeModal(); modalDocuments(); } }));
+    document.querySelectorAll('#docsList [data-pdf]').forEach((b) => b.addEventListener('click', () => { const d = (S.documents || []).find((x) => x.id === b.dataset.pdf); if (d) docPrintHtml(d); }));
+    document.querySelectorAll('#docsList [data-mail]').forEach((b) => b.addEventListener('click', () => { const d = (S.documents || []).find((x) => x.id === b.dataset.mail); if (!d) return; const cli = clients.find((c) => c.id === d.clientId); sendClientDoc(cli, docPdfBlob(d), (d.type === 'facture' ? 'facture-vente-' : 'note-credit-') + d.numero + '.pdf', d.type === 'facture' ? 'facture' : 'note de crédit', () => { d.sentAt = todayStr(); saveSettings(); closeModal(); modalDocuments(); }); }));
   };
   openModal(render()); wire();
 }
-// Modale de création d'un document indépendant (facture de vente / NC).
+// Toutes les prestations FACTURÉES d'un client dans une tournée (pour la NC indépendante par cochage). Réutilise chevalCancelItems.
+function tourClientBilledLines(t, cid) {
+  const out = [];
+  (t.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => { if (cl.clientId !== cid) return; (cl.chevaux || []).forEach((cv) => { (chevalCancelItems(t, cid, cv.nom) || []).forEach((it) => out.push(Object.assign({ cheval: cv.nom }, it))); }); }));
+  const R = t.result, m = R && R.parClient && R.parClient.find((x) => x.clientId === cid);
+  if (m) { const depHT = (m.deplacement || []).reduce((s, l) => s + (l.partHT || 0), 0); if (depHT > 0.005) out.push({ key: '__dep', cheval: '', label: 'Déplacement (km)', ht: depHT, matHT: 0, tva: depHT * rate(), ttc: depHT * (1 + rate()) }); }
+  return out;
+}
+// Modale de création d'un document indépendant. FACTURE DE VENTE = éditeur de lignes « comme un arrêt » (catalogue/actes/déplacement). NC = cochage d'articles d'une tournée de référence.
 function modalDeclarerDoc(preClientId, onDone) {
-  const opts = clients.slice().sort((a, b) => clientName(a.id).localeCompare(clientName(b.id))).map((c) => `<option value="${c.id}"${c.id === preClientId ? ' selected' : ''}>${esc(clientName(c.id))}</option>`).join('');
+  const r = rate();
+  const clientOpts = clients.slice().sort((a, b) => clientName(a.id).localeCompare(clientName(b.id))).map((c) => `<option value="${c.id}"${c.id === preClientId ? ' selected' : ''}>${esc(clientName(c.id))}</option>`).join('');
+  let lignes = []; // facture de vente : lignes { libelle, qte, prixHT, tvaPct, ht, tva, ttc, moHT, matHT, depHT }
+  let ncChecks = {}; // nc : key -> ligne cochée
+  // Catalogue pour la facture de vente : parage, pathologies, articles catalogue, ligne libre.
+  const catItems = [{ v: 'parage', lbl: 'Parage et équilibrage', ht: (S.parage && S.parage.prixHT) || 0, tva: (S.parage && S.parage.tvaPct) || S.tvaRate, kind: 'mo' }]
+    .concat((S.fourbureHT > 0 ? [{ v: 'fourbure', lbl: 'Fourbure', ht: S.fourbureHT, tva: S.tvaRate, kind: 'mo' }] : []))
+    .concat((S.npasHT > 0 ? [{ v: 'npas', lbl: 'NPAS', ht: S.npasHT, tva: S.tvaRate, kind: 'mo' }] : []))
+    .concat((S.infectionHT > 0 ? [{ v: 'infection', lbl: 'Infection', ht: S.infectionHT, tva: S.tvaRate, kind: 'mo' }] : []))
+    .concat(((S.articlesCatalogue || []).map((a) => ({ v: 'art:' + a.id, lbl: a.libelle, ht: a.prixHT || 0, tva: a.tvaPct != null ? a.tvaPct : S.tvaRate, kind: 'mo' }))))
+    .concat([{ v: 'libre', lbl: 'Ligne libre…', ht: 0, tva: S.tvaRate, kind: 'libre' }]);
   openModal(`<div class="modal-head"><b>📄 Déclarer un document</b><button class="x" id="mX">✕</button></div>
-    <label>Client<select id="dqClient">${opts}</select></label>
+    <label>Client<select id="dqClient">${clientOpts}</select></label>
     <label>Type<select id="dqType"><option value="facture">Facture de vente (le client vous doit)</option><option value="nc">Note de crédit (vous devez au client)</option></select></label>
-    <label>Montant TTC<input type="number" id="dqMontant" step="0.01" min="0" inputmode="decimal"/></label>
+    <div id="dqFactBox">
+      <p class="hint" style="margin:.3rem 0"><b>Lignes de la facture</b> (comme un arrêt : actes, articles, déplacement)</p>
+      <div id="dqLignes"></div>
+      <div class="pay-block" style="margin-top:4px"><label>Ajouter<select id="dqCat">${catItems.map((c) => `<option value="${c.v}">${esc(c.lbl)}${c.kind !== 'libre' ? ' (' + eur(c.ht * (1 + (c.tva || 0) / 100)) + ')' : ''}</option>`).join('')}</select></label>
+        <div id="dqLibre" style="display:none"><label>Libellé<input type="text" id="dqLibLbl"/></label><label>Prix HT<input type="number" id="dqLibHT" step="0.01" min="0"/></label></div>
+        <label>Quantité<input type="number" id="dqQte" step="1" min="1" value="1"/></label>
+        <button type="button" class="btn small" id="dqAdd">＋ Ajouter la ligne</button>
+      </div>
+      <label>Déplacement (km facturable, HT — facultatif)<input type="number" id="dqDep" step="0.01" min="0" placeholder="0"/></label>
+    </div>
+    <div id="dqNcBox" style="display:none">
+      <label>Tournée de référence<select id="dqNcTour"></select></label>
+      <p class="hint" style="margin:.3rem 0">Cochez les prestations à créditer :</p>
+      <div id="dqNcItems"></div>
+    </div>
     <label>Règlement<select id="dqMode"><option value="liquide">Liquide — au prochain RDV</option><option value="virement">Virement — en attente</option></select></label>
     <label class="chk2"><input type="checkbox" id="dqFac"/> Avec facture (pièce comptable)</label>
-    <label>Motif / description<input type="text" id="dqMotif" placeholder="ex. fers vendus au comptoir"/></label>
+    <label>Motif / note (facultatif)<input type="text" id="dqMotif" placeholder="ex. fers vendus au comptoir"/></label>
     <p class="hint" id="dqPrev"></p>
-    <div class="actions"><button class="btn primary block" id="dqOk">Créer le document</button></div>`);
-  const upd = () => { const ty = $('dqType').value, mode = $('dqMode').value; if ($('dqPrev')) $('dqPrev').innerHTML = ty === 'facture' ? (mode === 'liquide' ? 'Ajouté en LIGNE à la prochaine facture du client (réglé sur place).' : 'Paiement par VIREMENT en attente — bloque la clôture du client jusqu\'au règlement.') : (mode === 'liquide' ? 'AVOIR déduit du total à la prochaine visite (soldé en entier, reliquat rendu si besoin).' : 'Note de crédit remboursée par virement.'); };
-  ['dqType', 'dqMode'].forEach((id) => { const e = $(id); if (e) e.addEventListener('change', upd); });
+    <div class="actions"><button class="btn primary block" id="dqOk" disabled>Créer le document</button></div>`);
+  const ttcOf = (l) => (l.prixHT || 0) * (l.qte || 1) * (1 + (l.tvaPct || 0) / 100);
+  const factTotal = () => lignes.reduce((s, l) => s + (l.ttc || 0), 0) + Math.max(0, parseNum($('dqDep').value) || 0) * (1 + r);
+  const ncTotal = () => Object.values(ncChecks).reduce((s, it) => s + (it.ttc || 0), 0);
+  const renderLignes = () => { $('dqLignes').innerHTML = lignes.length ? lignes.map((l, i) => `<div class="li-item"><div class="li-main"><b>${esc(l.libelle)}${l.qte > 1 ? ' ×' + l.qte : ''}</b> <b class="li-amount">${eur(l.ttc)}</b></div><div class="li-act"><button class="btn small" data-rml="${i}">✕</button></div></div>`).join('') : '<p class="empty" style="font-size:.85em">Aucune ligne.</p>'; $('dqLignes').querySelectorAll('[data-rml]').forEach((b) => b.addEventListener('click', () => { lignes.splice(+b.dataset.rml, 1); renderLignes(); upd(); })); };
+  const renderNcItems = () => {
+    const cid = $('dqClient').value; const tid = $('dqNcTour').value; const t = allTours().find((x) => x.id === tid);
+    ncChecks = {};
+    const items = t ? tourClientBilledLines(t, cid) : [];
+    $('dqNcItems').innerHTML = items.length ? items.map((it, i) => `<label class="chk2"><input type="checkbox" class="dq-nc" data-i="${i}"/> ${it.cheval ? '🐴 ' + esc(it.cheval) + ' · ' : ''}${esc(it.label)} <span class="li-sub">${eur(it.ttc)}</span></label>`).join('') : '<p class="empty" style="font-size:.85em">Aucune prestation facturée sur cette tournée.</p>';
+    $('dqNcItems').querySelectorAll('.dq-nc').forEach((cb) => cb.addEventListener('change', () => { const it = items[+cb.dataset.i]; if (cb.checked) ncChecks[cb.dataset.i] = it; else delete ncChecks[cb.dataset.i]; upd(); }));
+  };
+  const fillNcTours = () => { const cid = $('dqClient').value; const ts = allTours().filter((t) => (t.closed || t.endedAt) && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === cid))).sort((a, b) => (b.date || '').localeCompare(a.date || '')); $('dqNcTour').innerHTML = ts.map((t) => `<option value="${t.id}">${esc(fmtDateFr(t.date))}${t.nom ? ' · ' + esc(t.nom) : ''}</option>`).join('') || '<option value="">— aucune tournée clôturée —</option>'; renderNcItems(); };
+  const upd = () => {
+    const ty = $('dqType').value, mode = $('dqMode').value;
+    $('dqFactBox').style.display = ty === 'facture' ? '' : 'none'; $('dqNcBox').style.display = ty === 'nc' ? '' : 'none';
+    const total = ty === 'facture' ? factTotal() : ncTotal();
+    if ($('dqPrev')) $('dqPrev').innerHTML = `Total : <b>${eur(total)}</b> TTC — ` + (ty === 'facture' ? (mode === 'liquide' ? 'ligne ajoutée à la prochaine facture du client (réglée sur place).' : 'virement en attente, bloque la clôture jusqu\'au règlement.') : (mode === 'liquide' ? 'avoir déduit à la prochaine visite (soldé en entier).' : 'remboursée par virement.'));
+    if ($('dqOk')) $('dqOk').disabled = !($('dqClient').value && total > 0.005);
+  };
+  $('dqCat').addEventListener('change', () => { $('dqLibre').style.display = $('dqCat').value === 'libre' ? '' : 'none'; });
+  $('dqAdd').addEventListener('click', () => {
+    const v = $('dqCat').value; const qte = Math.max(1, Math.round(parseNum($('dqQte').value) || 1));
+    let libelle, prixHT, tvaPct;
+    if (v === 'libre') { libelle = ($('dqLibLbl').value || 'Ligne').trim(); prixHT = Math.max(0, parseNum($('dqLibHT').value) || 0); tvaPct = S.tvaRate; if (prixHT <= 0) { alert('Prix HT requis pour une ligne libre.'); return; } }
+    else { const c = catItems.find((x) => x.v === v); libelle = c.lbl; prixHT = c.ht; tvaPct = c.tva; }
+    const l = { libelle, qte, prixHT, tvaPct }; l.ht = prixHT * qte; l.tva = l.ht * (tvaPct / 100); l.ttc = l.ht + l.tva; l.moHT = l.ht;
+    lignes.push(l); $('dqLibLbl') && ($('dqLibLbl').value = ''); $('dqLibHT') && ($('dqLibHT').value = ''); $('dqQte').value = '1'; renderLignes(); upd();
+  });
+  ['dqType', 'dqMode', 'dqDep'].forEach((id) => { const e = $(id); if (e) e.addEventListener('input', upd); if (e) e.addEventListener('change', upd); });
+  $('dqType').addEventListener('change', () => { if ($('dqType').value === 'nc') fillNcTours(); upd(); });
+  $('dqClient').addEventListener('change', () => { if ($('dqType').value === 'nc') fillNcTours(); upd(); });
   $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
   $('dqOk').addEventListener('click', () => {
-    const cid = $('dqClient').value; const type = $('dqType').value; const montant = Math.max(0, parseNum($('dqMontant').value) || 0); const method = $('dqMode').value; const facture = $('dqFac').checked; const motif = $('dqMotif').value.trim();
-    if (!cid || montant <= 0) { alert('Client et montant (> 0) obligatoires.'); return; }
-    const doc = createIndepDoc(cid, type, montant, { method, facture, motif, lignes: motif ? [{ libelle: motif, ttc: montant }] : [] });
+    if ($('dqOk').disabled) return;
+    const cid = $('dqClient').value; const type = $('dqType').value; const method = $('dqMode').value; const facture = $('dqFac').checked; const motif = $('dqMotif').value.trim();
+    let docLignes = [], montant = 0;
+    if (type === 'facture') { docLignes = lignes.slice(); const dep = Math.max(0, parseNum($('dqDep').value) || 0); if (dep > 0.005) docLignes.push({ libelle: 'Déplacement (km)', qte: 1, prixHT: dep, tvaPct: r * 100, ht: dep, tva: dep * r, ttc: dep * (1 + r), depHT: dep }); montant = docLignes.reduce((s, l) => s + (l.ttc || 0), 0); }
+    else { docLignes = Object.values(ncChecks).map((it) => ({ libelle: (it.cheval ? it.cheval + ' · ' : '') + it.label, qte: 1, ht: it.ht || 0, tva: it.tva || 0, ttc: it.ttc || 0, matHT: it.matHT || 0, moHT: (it.ht || 0) - (it.matHT || 0) })); montant = docLignes.reduce((s, l) => s + (l.ttc || 0), 0); }
+    if (!cid || montant <= 0.005) { alert('Client et au moins une ligne (> 0) obligatoires.'); return; }
+    const doc = createIndepDoc(cid, type, montant, { method, facture, motif, lignes: docLignes, refTourId: type === 'nc' ? $('dqNcTour').value : null });
     closeModal(); if (onDone) onDone();
-    if (doc) alert('✅ Document ' + doc.numero + ' créé' + (method === 'liquide' ? ' — sera réglé au prochain RDV du client.' : ' — virement en attente.'));
+    if (doc) alert('✅ Document ' + doc.numero + ' créé' + (method === 'liquide' ? ' — réglé au prochain RDV du client.' : ' — virement en attente.'));
   });
-  upd();
+  renderLignes(); upd();
 }
 // F2 : découpage HT/TVA RÉEL d'un cheval facturé — main d'œuvre (articles/actes : parage, visite, patho, difficile/lourd) VS matériel.
 // Le DÉPLACEMENT est EXCLU (jamais crédité — le pro s'est déplacé). Sert à ventiler l'extourne d'un avoir précisément par poste/sous-compte (provisions justes).
