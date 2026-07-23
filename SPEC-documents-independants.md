@@ -99,15 +99,11 @@ La demande veut une NC possible sur **les quatre modes**, dont le **liquide sans
   `modalCancelBilling`). Le liquide sans facture se corrige par avoir. **À confirmer**, car la demande dit
   explicitement « les quatre modes ».
 
-### F3 — Redondance NC indépendante ↔ avoir (module E)
-Une **NC sur facture liquide** produit un **remboursement** que le **module E** transforme déjà en **avoir**
-soldé au prochain RDV. Une **NC indépendante** ferait la même chose. → risque de **deux chemins** qui créent deux
-crédits pour un même geste.
-
-→ **Recommandation d'unification** : **une NC (d'où qu'elle vienne) alimente le compte client** ; le module E
-(avoir) devient le **mécanisme de solde** de ce compte, pas un dispositif séparé. Un seul crédit, une seule ligne
-au prochain RDV. **Ça simplifie**, mais ça veut dire coder E et la NC indépendante **ensemble** (même lot), pas
-E d'abord puis la NC.
+### F3 — NC ↔ avoir : PAS d'unification, choix à la création ✅ TRANCHÉ
+~~Recommandation d'unification~~ **écartée par le propriétaire.** À la création d'une NC, on **choisit la
+méthode de remboursement** : **virement → la pièce reste une NC** (remboursée par virement, listée « à
+rembourser ») ; **liquide → avoir** (module E, déduit au prochain RDV). Les deux mécanismes restent **distincts
+et complémentaires** ; la méthode est indépendante de l'origine du paiement. Détail en §4 (précision D-c).
 
 ### F4 — « Facture de vente comme un arrêt complet » : le déplacement n'a pas de géométrie
 La demande veut actes + articles + **déplacement**, « comme un arrêt complet ». Mais le déplacement d'un arrêt
@@ -124,13 +120,31 @@ déjà prévu ». Ce problème est **identique** à celui du module C (gel par c
 porte le paiement » (v1.7.90) : l'ordre des arrêts est **mutable** (`sortTourByHeure` 6997, ajout d'arrêt), donc
 « le premier RDV » peut **changer** après coup.
 
-→ Contraintes à respecter :
-- le document doit viser la **tournée** (par date/ordre), pas un arrêt figé ; se **re-cibler** si un RDV
-  antérieur est ajouté ;
-- interaction avec le **blocage de clôture** : si le document est rattaché à la tournée T et qu'on ajoute une
-  tournée T′ antérieure pour ce client, le blocage doit **suivre** vers T′ ;
-- le mécanisme `c.impayes` actuel réinjecte « au moment où le client est ajouté à un arrêt » (7757) — il **ne
-  gère pas** le blocage ni le recibage. → **à étendre**, ce n'est pas gratuit.
+→ **Cause racine du problème** : le code actuel **lie trop tôt**. `addClientToTour` (7757-7761) pose
+`im.collected = true` et `im.collectedTourId` **au moment où le client est ajouté** à un arrêt (7761) — pas au
+moment où la tournée est **effectivement clôturée**. Donc dès qu'on ajoute le client à une tournée T, la créance
+s'y **fige** ; créer ensuite une tournée T′ **antérieure** ne la déplace pas.
+
+→ **Ma proposition — lier à la CLÔTURE, pas à l'ajout** :
+1. Une créance / un avoir / un document reste **« en attente » (non lié)** tant qu'aucune tournée du client
+   n'est clôturée.
+2. Il s'**affiche** sur la tournée **non clôturée la plus ancienne** du client (par date) — recalculé à la volée,
+   donc il **suit** automatiquement si une tournée antérieure apparaît (aucun état figé à déplacer).
+3. Il ne se **lie définitivement** (`collected = true`, `collectedTourId`) qu'à la **clôture effective** de
+   l'arrêt-client qui le porte.
+4. `tourFinalizeBlock` (7288) refuse la clôture d'un arrêt-client tant qu'un document en attente le concerne et
+   n'est pas validé (F6).
+
+→ **Effets sur l'existant** :
+- `addClientToTour` (7761) : **ne plus poser `collected` à l'ajout** — seulement afficher la ligne (dérivée).
+  Le passage à `collected` migre vers `closeClientFully` / `closeClientAt` (7280-7282).
+- **Idempotence** : la ligne « Impayé/Avoir/Doc du … » est **dérivée** de l'état en attente, jamais dupliquée
+  (garde par `impayeId`/`docId`, déjà le motif de 7758).
+- **Cohérence avec le module C (gel)** et la règle « dernier arrêt porte le paiement » : le point de liaison est
+  le **même** que celui du gel du client → **coder F5 et le module C ensemble** garantit un seul point de vérité
+  pour « ce client est clôturé sur cette tournée ».
+- Ce changement **corrige aussi** un défaut actuel du liquide (une créance liée trop tôt à une tournée qui
+  finalement n'a pas lieu reste « collected » à tort).
 
 ### F6 — Paiement scindé rangé dans `t.payments[arrêt-client]` : un modèle à deux paiements
 Aujourd'hui `t.payments[clientId]` porte **UN** paiement par client. La demande veut **deux** paiements distincts
@@ -162,16 +176,55 @@ enregistrable). ✅ faisable.
 
 ---
 
-## 4. SYNTHÈSE DES DÉCISIONS À PRENDRE
+## 4. DÉCISIONS DU PROPRIÉTAIRE (2026-07-23)
 
-| # | Décision | Ma recommandation |
+| # | Décision | Tranché |
 |---|---|---|
-| D-a | Documents indépendants **remplacent** ou **s'ajoutent** au règlement rectificatif (module B) ? | S'ajoutent ; B devient secondaire |
-| D-b | NC possible sur **liquide sans facture** ? (rouvre une décision fermée) | **Non** — liquide = avoir, pas NC |
-| D-c | Unifier NC + avoir (module E) en **un seul compte client** ? | **Oui** — un crédit, une ligne, coder E avec la NC |
-| D-d | Déplacement d'une facture de vente = **montant libre** (pas calculé) ? | Oui (seule option cohérente) |
-| D-e | Deux paiements sur un même client d'arrêt : sous-structure `p.docPayments` ? | Oui, mais **cadrage prudent** (F6) — cœur du modèle |
-| D-f | Ordre des lots : documents indépendants **après** L4 (numéros) et avec E | Oui |
+| D-a | Documents indépendants **s'ajoutent** au règlement rectificatif (module B) | ✅ B secondaire, conservé |
+| D-b | NC **jamais** sur liquide sans facture | ✅ liquide sans facture = avoir (module E) |
+| D-c | NC + avoir **PAS unifiés** : à la création d'une NC, on **choisit la méthode de remboursement** — **virement → NC conservée** (remboursée par virement) ; **liquide → avoir** (déduit au prochain RDV) | ✅ |
+| D-d | Déplacement d'une facture de vente = **kilométrage facturable saisi** (montant libre) | ✅ |
+| D-e | Deux paiements sur un même client d'arrêt | ⏸️ **en discussion** — voir §6, le propriétaire veut comprendre avant de trancher |
+| D-f | Documents indépendants **après** L4 ; module E **séparé** (pas fusionné, cf. D-c) | ✅ |
+
+### Précision D-c — le remboursement d'une NC se choisit à la création
+La NC et l'avoir ne fusionnent pas : ce sont **deux voies de remboursement**, choisies dans la modale de
+création de la NC.
+- **Remboursement par virement** → la pièce reste une **note de crédit** : listée « à rembourser par virement »,
+  le professionnel fait le virement plus tard et coche « ✓ Remboursée » (comportement actuel `renderComptaNC`
+  10478). `p.rembourse` **non** utilisé.
+- **Remboursement liquide** → **avoir** (module E `c.avoirs[]`) : déduit du total du prochain RDV effectif, soldé
+  en entier (visite purgée + reliquat cash si l'avoir dépasse la visite).
+
+La méthode de remboursement est **indépendante** de la méthode de paiement d'origine (on peut créditer par
+virement un client qui avait payé en liquide, et inversement). Le code actuel **dérive** cette méthode de
+l'origine (virement→NC, facture liquide→rembourse app.js:14157) → **à transformer en choix explicite**.
+
+### §6 — F6 : ce que le propriétaire veut comprendre avant de trancher (détail)
+Rappel de la demande : pour **virement / facture virement**, le document se paie **individuellement** (paiement
+séparé). Pour **liquide / facture liquide**, il est **fondu** dans la facture de l'arrêt (une ligne, un seul
+paiement). Dans les deux cas, tant qu'un document indépendant est listé pour ce client, sa validation est
+**bloquante** pour la clôture de l'arrêt-client.
+
+**Ce que fait le code aujourd'hui** : `t.payments[clientId]` = **UN** objet paiement par client et par tournée.
+La clôture est bloquée par `tourFinalizeBlock` (7288) qui, pour chaque arrêt, vérifie acte + `a.validatedAt` +
+`clientPaiementIssue` (7294) — lequel lit **ce paiement unique**. Toute la compta (`comptaData` 9611) itère
+`parClient` : **un client = une entrée = un paiement**.
+
+**Deux implémentations possibles** (à trancher, §6 du corps ci-dessous) :
+- **Option 1 — ligne dans la facture (liquide) / pièce à part (virement)** : le doc liquide devient une **ligne**
+  de la facture de l'arrêt (comme la ligne « Impayé du … », modèle éprouvé) → **un seul paiement**, aucune
+  structure neuve. Le doc virement vit dans la collection de documents avec **son propre état de paiement**, et
+  `tourFinalizeBlock` gagne **une** vérification « doc virement lié non validé → bloque ». `t.payments` **reste
+  intact** (un paiement par client).
+- **Option 2 — `p.docPayments[]`** : une sous-structure dans `t.payments[clientId]` portant les paiements de
+  documents. Plus fidèle à « ranger dans les paiements de cet arrêt-client », mais **transverse** : toute lecture
+  de `t.payments` (compta, factures, fusion, immutabilité) doit distinguer les deux → **risque pour A→E**.
+
+**Ma recommandation : Option 1.** Elle donne exactement le comportement demandé (liquide fondu / virement
+individuel, blocage dans les deux cas) **sans toucher au cœur `t.payments`**, donc sans déstabiliser les modules
+d'immutabilité. Le « rangé dans les paiements de l'arrêt » se lit comme « bloque la clôture de l'arrêt », ce que
+l'option 1 fait via `tourFinalizeBlock`.
 
 ## 5. IMPACT SUR L'ORDRE DE CODAGE
 
