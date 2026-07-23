@@ -6238,7 +6238,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
       // (adresse propre : reprise/édition/ajout câblées PAR ENTRÉE plus bas)
       row.querySelector('[data-lourd]').addEventListener('change', (e) => { h.lourd = e.target.checked; if (!e.target.checked) delete h.lourdHT; renderCh(); saveDraft(); });
       { const lh = row.querySelector('[data-lourdht]'); if (lh) lh.addEventListener('input', (e) => { const v = parseFloat(e.target.value); h.lourdHT = (e.target.value === '' || isNaN(v)) ? null : Math.max(0, v); saveDraft(); }); }
-      row.querySelector('[data-del]').addEventListener('click', () => { if (!confirm('Supprimer ce cheval ?')) return; if (h.id) { w.chDel = w.chDel || {}; w.chDel[h.id] = Date.now(); } w.chevaux.splice(i, 1); renderCh(); saveDraft(); }); // tombstone → pas de résurrection à la synchro
+      row.querySelector('[data-del]').addEventListener('click', () => { if (chevalInFrozenTour(w.id, h)) { alert('🔒 Suppression impossible — ce cheval figure sur une tournée CLÔTURÉE (pièce facturée figée). Rendez-le plutôt INACTIF (il disparaît des listes sans casser les factures émises).'); return; } if (!confirm('Supprimer ce cheval ?')) return; if (h.id) { w.chDel = w.chDel || {}; w.chDel[h.id] = Date.now(); } w.chevaux.splice(i, 1); renderCh(); saveDraft(); }); // L5 : garde d'intégrité (cheval référencé par une facture figée) + tombstone anti-résurrection
       row.querySelector('[data-src]').addEventListener('change', (e) => { h.addrSource = e.target.value; renderCh(); saveDraft(); });
       { const pv = row.querySelector('[data-priv]'); if (pv) pv.addEventListener('change', (e) => { h.addrPrivee = e.target.checked; renderCh(); saveDraft(); }); }
       // Badge de statut du LIEU sur la section adresse du cheval (à l'endroit exact où l'adresse refusée est détectée).
@@ -6317,6 +6317,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
   });
   $('cSave').addEventListener('click', () => {
     if (!(w.nom || '').trim() && !(w.prenom || '').trim()) { $('cErr').textContent = 'Le nom (ou le prénom) est obligatoire.'; return; }
+    { const anon = (w.chevaux || []).filter((h) => !(h.nom || '').trim()); if (anon.length) { $('cErr').textContent = '🐴 Le nom de chaque cheval est obligatoire (' + anon.length + ' cheval(aux) sans nom) — deux chevaux sans nom seraient confondus dans les factures.'; return; } } // L5 : nom de cheval obligatoire → deux chevaux au nom vide ne peuvent plus s'apparier (norm('')===norm('')) dans les jointures de facture
     if (!addrStr(w.addr).trim()) { $('cErr').textContent = 'L\'adresse du client est obligatoire.'; return; }
     // Avertissement : adresse(s) en liste noire repérée(s) sur ce client / ses chevaux.
     const noirs = []; const chk = (a, lbl) => { if (a && addrStr(a).trim() && isAddrNoir(a)) noirs.push(lbl + ' — ' + addrStr(a)); };
@@ -8419,6 +8420,11 @@ function refreshClientHeadTotals() {
 }
 // L2 : une tournée FIGÉE (clôturée/terminée, hors « à revalider ») ne doit JAMAIS être re-tarifée par un recalcul — sa facture est émise.
 const tourFrozenEdit = (t) => !!t && (t.closed || t.endedAt) && !t._review;
+// L5 : le cheval (par id, repli nom) est-il référencé par une tournée CLÔTURÉE (facture figée) ? → sa suppression casserait une pièce émise.
+function chevalInFrozenTour(clientId, h) {
+  const nom = norm(h && h.nom); const hid = h && h.id;
+  return allTours().some((t) => (t.closed || t.endedAt) && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === clientId && (cl.chevaux || []).some((c) => (hid != null && c.id === hid) || (nom && norm(c.nom) === nom)))));
+}
 function recomputeMoney() {
   if (tourFrozenEdit(currentTour)) { logWrite({ f: 'recomputeMoney', entity: 'tour', id: currentTour && currentTour.id, frozen: true, skipped: 'tournée figée' }); return; } // L2 : refus du re-tarif silencieux (appelé par saveSettings au moindre changement de réglage)
   const R = currentTour && currentTour.result;
@@ -15368,7 +15374,7 @@ function bindSettings() {
 function toggleKeyRow() { $('keyRow').style.display = S.provider === 'geoapify' ? 'block' : 'none'; }
 // Sauvegarde / restauration : exporte réglages + articles + frais + données, ou importe une sauvegarde.
 // Marque les tournées importées « à revalider » (_review) → éditables même clôturées jusqu'à re-validation.
-function markToursReview(tours) { (tours || []).forEach((t) => { t._review = true; }); return tours; }
+function markToursReview(tours) { (tours || []).forEach((t) => { if (t.closed || t.endedAt) { logWrite({ f: 'markToursReview', entity: 'tour', id: t.id, frozen: true, skipped: 'clôturée — _review non posé' }); return; } t._review = true; }); return tours; } // L5 : ne JAMAIS poser _review sur une tournée clôturée (cela déverrouillait son éditeur → recalcul possible d'une facture émise)
 function factoryReset() {
   if (!confirm('RETOUR RÉGLAGES D\'USINE : efface TOUTES vos données et réglages de cet appareil et repart à zéro. Faites d\'abord un export/sauvegarde ! Continuer ?')) return;
   if (!confirm('Êtes-vous vraiment sûr ? Cette action est irréversible.')) return;
