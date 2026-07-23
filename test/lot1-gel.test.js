@@ -38,6 +38,7 @@ function buildCtx(code, over = {}) {
     uid: (() => { let n = 0; return () => 'uid' + (++n); })(),
     hashStr: (s) => { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return String(h); },
     norm: (s) => String(s == null ? '' : s).trim().toLowerCase(),
+    journalRing: (key, cap, entry) => { const a = JSON.parse(localStorage.getItem(key) || '[]'); a.push(entry); localStorage.setItem(key, JSON.stringify(a)); }, // L1 : stub fidèle du journal (syncStamp trace ftr.stampGuard)
     statusOf: (t) => (t && t.closed ? 'cloturee' : 'avenir'),
     markSyncDirty: () => {},
     bgSaveFlash: () => {},
