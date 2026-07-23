@@ -30,7 +30,7 @@ console.log('\n── L3 : argent acté ──');
     saveClients: () => {},
     recomputeTourLocal: () => {},
     tourComptaLocked: () => false,
-    logWrite: () => {},
+    logWrite: () => {}, comptaSectionKey: (mp) => mp && mp.method ? (mp.method === 'liquide' ? (mp.facture ? 'facliq' : 'liquide') : (mp.facture ? 'facvir' : 'virement')) : null, paiementActe: () => false,
     tournees: [], archive: [],
     saveTournees: () => {}, saveArchive: () => {},
   };
@@ -51,7 +51,7 @@ console.log('\n── L3 : argent acté ──');
   let capt = null;
   const ctx = {
     tourById: (id) => (capt = { id, payments: { c1: { method: 'liquide', facture: false, rectifie: 100, partiel: false, impaye: null, resteMode: null, rembourse: 0 } } }),
-    setClientImpaye: (t, cid, v) => calls.push(v), saveClients: () => {}, recomputeTourLocal: () => {}, tourComptaLocked: () => false, logWrite: () => {}, tournees: [], archive: [], saveTournees: () => {}, saveArchive: () => {},
+    setClientImpaye: (t, cid, v) => calls.push(v), saveClients: () => {}, recomputeTourLocal: () => {}, tourComptaLocked: () => false, logWrite: () => {}, tournees: [], archive: [], saveTournees: () => {}, saveArchive: () => {}, comptaSectionKey: (mp) => mp && mp.method ? (mp.method === 'liquide' ? (mp.facture ? 'facliq' : 'liquide') : (mp.facture ? 'facvir' : 'virement')) : null, paiementActe: () => false,
   };
   const keys = Object.keys(ctx);
   const setComptaPayment = new Function(...keys, src + '\n; return setComptaPayment;')(...keys.map((k) => ctx[k]));

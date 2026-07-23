@@ -8364,7 +8364,10 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     const totalHT = m.htDep + m.htMat + htArt;
     const totalTVA = (m.htDep + m.htMat) * stdRate + tvaArt;
     const pleinHT = m.htDep + m.htMat + htArtBrut, pleinTVA = (m.htDep + m.htMat) * stdRate + tvaArtBrut;
-    return Object.assign(m, { reducPct: rpct, htArt, tvaArt, totalHT, totalTVA, totalTTC: totalHT + totalTVA, pleinHT, pleinTVA, pleinTTC: pleinHT + pleinTVA });
+    // L8 (MODULE E, solde total) : si un AVOIR dépasse le reste de la facture, le total ne peut pas être négatif → borné à 0 et le RELIQUAT (cash à rendre sur place) est tracé. « On rembourse toujours l'avoir en entier, jamais de report » (propriétaire).
+    let tHT = totalHT, tTVA = totalTVA, tTTC = totalHT + totalTVA, avoirReliquat = 0;
+    if (tTTC < -0.005 && (m.articles || []).some((a) => a.avoir)) { avoirReliquat = Math.round(-tTTC); tHT = 0; tTVA = 0; tTTC = 0; }
+    return Object.assign(m, { reducPct: rpct, htArt, tvaArt, totalHT: tHT, totalTVA: tTVA, totalTTC: tTTC, avoirReliquat, pleinHT, pleinTVA, pleinTTC: pleinHT + pleinTVA });
   });
   const totalHT = parClient.reduce((s, m) => s + m.totalHT, 0);
   const totalTVA = parClient.reduce((s, m) => s + m.totalTVA, 0);
@@ -9692,6 +9695,8 @@ function setComptaPayment(tourId, clientId, method) {
   const t = tourById(tourId); if (!t) return;
   if (!t.payments) t.payments = {};
   const prev = t.payments[clientId] || {};
+  // L8 (MODULE B) — un paiement ACTÉ ne se RECLASSE jamais (immuable). Si la méthode change, on REFUSE : la correction passe par un règlement rectificatif (contrepassation), qui compense sans réécrire la pièce.
+  { const newKey = comptaSectionKey({ method: (method === 'facliq' || method === 'liquide') ? 'liquide' : (method === 'facvir' || method === 'virement') ? 'virement' : null, facture: method === 'facliq' || method === 'facvir' }); const prevKey = comptaSectionKey(prev); if (prevKey && newKey && newKey !== prevKey && paiementActe(t, clientId)) { logWrite({ f: 'setComptaPayment', entity: 'payment', id: tourId + ':' + clientId, frozen: true, violation: 'reclassement refusé (paiement acté) → règlement rectificatif requis' }); return false; } }
   const keepLiq = { rectifie: prev.rectifie != null ? prev.rectifie : (prev.montantPaye != null && !prev.partiel ? prev.montantPaye : null), partiel: !!prev.partiel, impaye: prev.impaye != null ? prev.impaye : null, resteMode: prev.resteMode || null, comptaPeriod: prev.comptaPeriod || null, rembourse: prev.rembourse || 0 };
   if (method === 'liquide') t.payments[clientId] = Object.assign({ method: 'liquide', facture: false }, keepLiq);
   else if (method === 'facliq') t.payments[clientId] = Object.assign({ method: 'liquide', facture: true }, keepLiq); // facture pro payée en liquide
@@ -9784,11 +9789,16 @@ function comptaData(ym) {
   const ncTourMonth = (S.notesCredit || []).filter((n) => ncComptaMonth(n) === ym);
   let ncMO = 0, ncMat = 0, ncDep = 0, ncTVA = 0;
   ncTourMonth.forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncDep += b.depHT || 0; ncTVA += b.tva; });
+  // L8 (MODULE B) — règlements rectificatifs du mois : ajustent la VENTILATION entre sections (from − / to +), JAMAIS le CA (calculé sur parClient). Somme des deux jambes = 0 → CA/TVA/bases inchangés.
+  const regMonth = (S.reglements || []).filter((r) => r.ymImpute === ym);
+  const secAdj = { liquide: { ht: 0, tva: 0, ttc: 0 }, virement: { ht: 0, tva: 0, ttc: 0 }, facliq: { ht: 0, tva: 0, ttc: 0 }, facvir: { ht: 0, tva: 0, ttc: 0 } };
+  regMonth.forEach((reg) => { const fromK = comptaSectionKey(reg.from), toK = comptaSectionKey(reg.to); if (secAdj[fromK]) { secAdj[fromK].ht -= reg.ht; secAdj[fromK].tva -= reg.tva; secAdj[fromK].ttc -= reg.montantTTC; } const toTTC = reglementToNet(reg), toHT = toTTC / (1 + rr); if (secAdj[toK]) { secAdj[toK].ht += toHT; secAdj[toK].tva += (toTTC - toHT); secAdj[toK].ttc += toTTC; } });
+  const withAdj = (base, k) => ({ ht: base.ht + secAdj[k].ht, tva: base.tva + secAdj[k].tva, ttc: base.ttc + secAdj[k].ttc });
   const facliqBrut = sum(factureLiqClients);
-  const factureLiqTotal = { ht: facliqBrut.ht - rembHT, tva: facliqBrut.tva - rembTVA, ttc: facliqBrut.ttc - rembTTC }; // L7 : caisse facliq NETTE des remboursements cash
+  const factureLiqTotal = withAdj({ ht: facliqBrut.ht - rembHT, tva: facliqBrut.tva - rembTVA, ttc: facliqBrut.ttc - rembTTC }, 'facliq'); // L7 : NET des remboursements ; L8 : + rectifications d'imputation
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
-    liquidePosts: Object.values(posts), liquideDetail: postDetail, liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
-    factureLiqTotal, factureLiqBrut: facliqBrut, remboursementsCaisse, remboursementsTotal, factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
+    liquidePosts: Object.values(posts), liquideDetail: postDetail, liquideTotal: withAdj(sum(liquideClients), 'liquide'), virementTotal: withAdj(sum(virementClients), 'virement'),
+    factureLiqTotal, factureLiqBrut: facliqBrut, remboursementsCaisse, remboursementsTotal, reglements: regMonth, factureVirTotal: withAdj(sum(factureVirClients), 'facvir'), aclasserTotal: sum(aclasserClients),
     notesCredit: ncMonth, notesCreditTotal, offertTTC: offertM, remiseTTC: remiseM,
     baseMainOeuvreHT: Math.max(0, baseMO - ncMO), baseMaterielHT: Math.max(0, baseMat - ncMat), baseDeplacementHT: Math.max(0, baseDep - ncDep), tvaCollectee: Math.max(0, tvaCol - ncTVA) };
 }
@@ -10708,13 +10718,15 @@ function comptaSectionsHtml(ym) {
   const ncTbl = d.notesCredit.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Cheval</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(ncContentText(n))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucune.</p>';
   const ncSec = `<section class="card"><div class="card-head"><h3 style="margin:0">↩ Notes de crédit (réduction du CA)</h3><button class="btn small" data-print="nc" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.notesCreditTotal)}</p>${ncTbl}</section>`;
   const orSec = ((d.offertTTC || 0) >= 0.005 || (d.remiseTTC || 0) >= 0.005) ? `<section class="card"><div class="card-head"><h3 style="margin:0">🎁 Offert / Remises du mois</h3></div><p class="hint">Offert : <b>${eur(d.offertTTC)}</b> TTC · Remises accordées : <b>${eur(d.remiseTTC)}</b> TTC. Valeur commerciale consentie — <b>info hors chiffre d'affaires</b> (déjà déduite des montants facturés).</p></section>` : '';
+  // L8 : carte des règlements rectificatifs (contrepassation) — CA inchangé, seule la ventilation bouge.
+  const regSec = (d.reglements && d.reglements.length) ? `<section class="card"><div class="card-head"><h3 style="margin:0">⇄ Corrections d'imputation</h3></div><p class="hint">Le CA ne change pas — seule la répartition entre sections est corrigée (contrepassation).</p><div class="table-wrap"><table><thead><tr><th>Pièce</th><th>Client</th><th>De → Vers</th><th>Montant</th></tr></thead><tbody>${d.reglements.map((r) => `<tr><td>${esc(r.numero)}</td><td>${esc(r.clientNom)}</td><td>${esc(SECT_LBL[comptaSectionKey(r.from)] || '')} → ${esc(SECT_LBL[comptaSectionKey(r.to)] || '')}</td><td>${eur(r.montantTTC)}</td></tr>`).join('')}</tbody></table></div></section>` : '';
   // L7 : bloc de réconciliation de la caisse facture-liquide (Encaissé brut · − Remboursements · = Net).
   const facliqRecon = (d.remboursementsCaisse && d.remboursementsCaisse.length) ? `<p class="hint" style="margin-top:6px">Encaissé brut : <b>${eur(d.factureLiqBrut.ttc)}</b> · ↩ Remboursements (${d.remboursementsCaisse.length} pièce${d.remboursementsCaisse.length > 1 ? 's' : ''}) : <b>${eur(d.remboursementsTotal.ttc)}</b> · = <b>Net encaissé ${eur(d.factureLiqTotal.ttc)}</b><br><span class="li-sub">${d.remboursementsCaisse.map((r) => 'NC ' + (r.numero || '') + ' · ' + esc(r.nom) + ' · −' + eur(r.ttc)).join(' — ')}</span></p>` : '';
   return liquideSec
     + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients)
     + section('🧾 Facture pro — liquide', 'facliq', d.factureLiqTotal, clientTbl(d.factureLiqClients) + facliqRecon, d.factureLiqClients)
     + section('🧾 Facture pro — virement', 'facvir', d.factureVirTotal, clientTbl(d.factureVirClients), d.factureVirClients)
-    + ncSec + orSec;
+    + ncSec + regSec + orSec;
 }
 // Sous-onglet « Tournée à venir » : clients de toute tournée calculée sans mode de paiement choisi (à classer), toutes périodes.
 function renderComptaAvenir() {
@@ -10734,7 +10746,7 @@ function renderComptaAvenir() {
 function comptaWire(container, rerender) {
   container.querySelectorAll('[data-status]').forEach((el) => el.addEventListener('change', (e) => { const ym = el.dataset.ym; S.comptaStatus[ym] = S.comptaStatus[ym] || {}; S.comptaStatus[ym][el.dataset.status] = e.target.value; syncDeclaration(ym, el.dataset.status, e.target.value); saveSettings(); rerender(); })); // Lot 03a — objet déclaration (id) en miroir du verrou
   container.querySelectorAll('[data-dem]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaDemarche = S.comptaDemarche || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaDemarche[k] = true; else delete S.comptaDemarche[k]; saveSettings(); rerender(); }));
-  container.querySelectorAll('[data-mode]').forEach((el) => el.addEventListener('change', () => { setComptaPayment(el.dataset.tour, el.dataset.cid, el.value); rerender(); }));
+  container.querySelectorAll('[data-mode]').forEach((el) => el.addEventListener('change', () => { const r = setComptaPayment(el.dataset.tour, el.dataset.cid, el.value); if (r === false) { const t = tourById(el.dataset.tour); if (t && confirm('🔒 Ce paiement est acté (immuable) — il ne peut pas être reclassé.\n\nCorriger une erreur d\'imputation ? Un RÈGLEMENT RECTIFICATIF (contrepassation) sera créé : la pièce d\'origine reste intacte, une correction lui fait face.')) { modalCorrigerReglement(t, el.dataset.cid, () => rerender()); return; } } rerender(); }));
   container.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaRecu[k] = true; else delete S.comptaRecu[k]; saveSettings(); rerender(); }));
   container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => comptaPrint(btn.dataset.ym, btn.dataset.print)));
   container.querySelectorAll('[data-detail]').forEach((btn) => btn.addEventListener('click', () => modalLiquideDetail(btn.dataset.ym)));
@@ -13956,6 +13968,80 @@ function comptaLocked(tour, clientId) {
 }
 // M2 : une tournée est « verrouillée compta » si l'un de ses clients l'est (démarche validée ou mois liquide encodé). Sert à figer définitivement une pièce déclarée.
 function tourComptaLocked(t) { return !!t && (t.arrets || []).some((a) => (a.clients || []).some((cl) => comptaLocked(t, cl.clientId))); }
+// L8 (MODULE B) — un paiement est ACTÉ (immuable, aucun reclassement) dès qu'une méthode est choisie ET que la pièce est figée :
+// tournée close, OU mois déclaré, OU client entièrement clôturé et payé. Motif : recoverTour clôture SANS méthode → on ne fige qu'une fois la méthode posée.
+function paiementActe(t, cid) {
+  const p = (t.payments || {})[cid]; if (!p || !p.method) return false;
+  if (t.closed || t.endedAt) return true;
+  if (comptaLocked(t, cid)) return true;
+  const arr = clientArrets(t, cid); if (arr.length && arr.every((x) => clientValidated(x.cl)) && clientPaiementDone(t, cid)) return true;
+  return false;
+}
+// L8 — numéro de règlement rectificatif : préfixe 'C' + appareil, distinct de '' (NC) et 'F' (facture). Compteur PERSISTÉ monotone.
+function nextReglementNumero() { const pfx = 'C' + ncDevicePfx(); const derived = (S.reglements || []).reduce((m, r) => { const s = String(r.numero || ''); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; return Math.max(m, v); } return m; }, 0); const seq = Math.max(derived, S.reglementSeq || 0) + 1; S.reglementSeq = seq; return pfx + '-' + seq; }
+// Section comptable d'une méthode {method, facture} : liquide / virement / facliq / facvir.
+function comptaSectionKey(mp) { if (!mp || !mp.method) return null; return mp.method === 'liquide' ? (mp.facture ? 'facliq' : 'liquide') : (mp.facture ? 'facvir' : 'virement'); }
+// L8 — RÈGLEMENT RECTIFICATIF (contrepassation) : corrige une IMPUTATION erronée (méthode/facture), le MONTANT étant juste.
+// Ne touche JAMAIS t.payments. Deux jambes de signes opposés (from −, to +) que comptaData somme EN PLUS. Marque le virement erroné « reçu ».
+// opts : { toMethod, toFacture, recu, partiel, impaye, motif }. La jambe liquide réutilise le module D (arrondi + impayé).
+function createReglement(t, cid, opts) {
+  opts = opts || {};
+  const p = (t.payments || {})[cid] || {};
+  const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === cid);
+  const montantTTC = m ? (m.totalTTC || 0) : 0; // jambe FROM = montant viré exact (décimales comprises)
+  const r = rate(); const fromHT = montantTTC / (1 + r);
+  const toLiquide = opts.toMethod === 'liquide';
+  const liq = toLiquide ? liquideFromRecu(opts.recu != null ? opts.recu : Math.round(montantTTC), montantTTC, { partiel: opts.partiel, impaye: opts.impaye }) : { rectifie: null, partiel: false, impaye: null };
+  const ymImpute = comptaLocked(t, cid) ? todayStr().slice(0, 7) : (t.date || '').slice(0, 7); // FIGÉ à la création (mois de la tournée sauf si déjà déclaré → mois courant)
+  const reg = { id: uid(), numero: nextReglementNumero(), date: todayStr(), ymImpute, tourId: t.id, clientId: cid, clientNom: clientName(cid), type: 'imputation', from: { method: p.method, facture: !!p.facture }, to: { method: opts.toMethod, facture: !!opts.toFacture, rectifie: liq.rectifie, partiel: liq.partiel, impaye: liq.impaye }, montantTTC, ht: fromHT, tva: montantTTC - fromHT, motif: opts.motif || '', deviceId: S.deviceId || null, annuleId: null };
+  S.reglements.push(reg);
+  if (p.method === 'virement') { S.comptaRecu = S.comptaRecu || {}; S.comptaRecu[t.id + ':' + cid] = true; } // L8/§2.3ter : le virement erroné est marqué REÇU (l'argent est entré en cash) → plus de créance fantôme
+  saveSettings();
+  logWrite({ f: 'createReglement', entity: 'reglement', id: reg.numero, note: comptaSectionKey(reg.from) + '→' + comptaSectionKey(reg.to) });
+  return reg;
+}
+// Montant NET de la jambe « to » d'un règlement (cash reçu si liquide, sinon le montant plein).
+function reglementToNet(reg) { const to = reg.to || {}; if (to.method === 'liquide') { const rect = (to.rectifie != null) ? to.rectifie : (reg.montantTTC || 0); return rect - (to.partiel && to.impaye != null ? to.impaye : 0); } return reg.montantTTC || 0; }
+const SECT_LBL = { liquide: 'Liquide', facliq: 'Facture liquide', virement: 'Virement', facvir: 'Facture virement' };
+// L8 — modale de correction d'imputation (contrepassation). Crée un règlement rectificatif ; ne touche jamais t.payments.
+function modalCorrigerReglement(t, cid, onDone) {
+  const p = (t.payments || {})[cid] || {};
+  const m = t.result && t.result.parClient && t.result.parClient.find((x) => x.clientId === cid);
+  const montant = m ? (m.totalTTC || 0) : 0;
+  const fromKey = comptaSectionKey(p);
+  const ym = comptaLocked(t, cid) ? todayStr().slice(0, 7) : (t.date || '').slice(0, 7);
+  openModal(`<div class="modal-head"><b>⇄ Corriger l'imputation — ${esc(clientName(cid))}</b><button class="x" id="mX">✕</button></div>
+    <p class="hint">Imputation actuelle (figée) : <b>${SECT_LBL[fromKey] || '—'}</b> · ${eur(montant)} TTC. La pièce d'origine reste INTACTE ; une correction lui fait face (les deux se somment en compta).</p>
+    <label>Imputation correcte<select id="crMode"><option value="liquide">Liquide</option><option value="facliq">Facture liquide</option><option value="virement">Virement</option><option value="facvir">Facture virement</option></select></label>
+    <div id="crCash" class="pay-cash"><label>Montant liquide reçu (à l'euro)<input type="number" id="crRecu" step="1" min="0" value="${Math.round(montant)}"/></label><p class="hint" id="crDiff"></p></div>
+    <label>Motif (obligatoire)<input type="text" id="crMotif" placeholder="ex. réglé en espèces sur place, pas par virement"/></label>
+    <p class="hint" id="crPreview"></p>
+    <div class="actions"><button class="btn primary block" id="crOk" disabled>Créer le règlement rectificatif</button></div>`);
+  const stateOf = () => { const mode = $('crMode').value; return { tm: (mode === 'liquide' || mode === 'facliq') ? 'liquide' : 'virement', tf: (mode === 'facliq' || mode === 'facvir') }; };
+  const upd = () => {
+    const { tm, tf } = stateOf();
+    $('crCash').style.display = tm === 'liquide' ? '' : 'none';
+    const recu = tm === 'liquide' ? Math.max(0, Math.round(parseNum($('crRecu').value) || 0)) : montant;
+    const liq = tm === 'liquide' ? liquideFromRecu(recu, montant, { auto: true }) : { impaye: null };
+    const net = tm === 'liquide' ? (recu - (liq.impaye || 0)) : montant;
+    if ($('crDiff')) $('crDiff').innerHTML = (tm === 'liquide' && liq.impaye) ? `Impayé (créance à percevoir) : <b>${eur(liq.impaye)}</b>` : '';
+    const toKey = comptaSectionKey({ method: tm, facture: tf });
+    if ($('crPreview')) $('crPreview').innerHTML = `Deux jambes, mois <b>${ym}</b> : <b>−${eur(montant)}</b> en ${SECT_LBL[fromKey]} · <b>+${eur(net)}</b> en ${SECT_LBL[toKey]}`;
+    if ($('crOk')) $('crOk').disabled = !$('crMotif').value.trim() || toKey === fromKey;
+  };
+  ['crMode', 'crRecu', 'crMotif'].forEach((id) => { const e = $(id); if (e) { e.addEventListener('input', upd); e.addEventListener('change', upd); } });
+  $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
+  $('crOk').addEventListener('click', () => {
+    if ($('crOk').disabled) return;
+    const { tm, tf } = stateOf();
+    const recu = tm === 'liquide' ? Math.max(0, Math.round(parseNum($('crRecu').value) || 0)) : null;
+    const liq = tm === 'liquide' ? liquideFromRecu(recu, montant, { auto: true }) : {};
+    createReglement(t, cid, { toMethod: tm, toFacture: tf, recu, partiel: liq.partiel, impaye: liq.impaye, motif: $('crMotif').value.trim() });
+    closeModal(); if (onDone) onDone();
+    alert('✅ Règlement rectificatif créé. La compta somme la pièce d\'origine et la correction (le CA ne bouge pas).');
+  });
+  upd();
+}
 // F2 : découpage HT/TVA RÉEL d'un cheval facturé — main d'œuvre (articles/actes : parage, visite, patho, difficile/lourd) VS matériel.
 // Le DÉPLACEMENT est EXCLU (jamais crédité — le pro s'est déplacé). Sert à ventiler l'extourne d'un avoir précisément par poste/sous-compte (provisions justes).
 function chevalInvoicedSplit(tour, clientId, chevalNom) {
@@ -14307,6 +14393,7 @@ function modalCancelBilling(t) {
   html += `</div>
     <label>Motif</label><div class="seg" id="cbReason"><button type="button" class="seg-btn on" data-rs="client">Client</button><button type="button" class="seg-btn" data-rs="pro">Professionnel</button></div>
     <label>Note (facultatif)<input type="text" id="cbNote" placeholder="ex. erreur de facturation, geste commercial…"/></label>
+    <label class="chk2" title="Facture liquide : remboursement en cash à la PROCHAINE visite (avoir déduit) plutôt qu'immédiatement"><input type="checkbox" id="cbAvoir"/> Facture liquide → rembourser à la prochaine visite (avoir), pas maintenant</label>
     <p class="hint" id="cbRecap"></p>
     <div class="actions"><button class="btn danger block" id="cbOk" disabled>Émettre les notes de crédit</button></div>`;
   openModal(html);
@@ -14333,7 +14420,8 @@ function modalCancelBilling(t) {
         else { const gk = chid || nom; (chevalKeys[gk] = chevalKeys[gk] || { chid, nom, services: [], articles: [] }); if (key.indexOf('art:') === 0) chevalKeys[gk].articles.push(key.slice(4)); else chevalKeys[gk].services.push(key); } // clé par ID cheval (multi-arrêts d'un même client)
       });
       const p = (t.payments || {})[cid] || {}; const isFacLiq = p.method === 'liquide' && p.facture;
-      const nc = createClientCreditNote(cid, t, lines, { motif: reason, note, cashRefunded: isFacLiq }); nNC++;
+      const useAvoir = isFacLiq && $('cbAvoir') && $('cbAvoir').checked; // L8/D-c : facture liquide → rembourser à la prochaine visite (AVOIR) plutôt qu'en cash maintenant
+      const nc = createClientCreditNote(cid, t, lines, { motif: reason, note, cashRefunded: isFacLiq && !useAvoir }); nNC++;
       Object.keys(chevalKeys).forEach((gk) => { // marquage : cheval crédité + services NC'd + n° NC ; tournée figée (credited → reste facturé)
         const add = chevalKeys[gk]; const cv = findCvInTour(t, cid, add.nom, add.chid); if (!cv) return;
         if (chevalCancelled(cv)) { cv.cancel.services = (cv.cancel.services || []).concat(add.services); cv.cancel.articles = (cv.cancel.articles || []).concat(add.articles); }
@@ -14344,7 +14432,7 @@ function modalCancelBilling(t) {
         cv.cancel.items = (cv.cancel.items || []).concat(its);
       });
       if (depChecked) { p.depCredited = true; p.depCreditNoteNum = nc.numero; }
-      if (isFacLiq) { const amt = lines.reduce((s, l) => s + (l.ttc || 0), 0); p.rembourse = (p.rembourse || 0) + amt; refundTotal += amt; } // facture liquide : remboursement cash TRACÉ (p.rembourse, hors CA/caisse) ; rectifie INCHANGÉ → la tournée reste figée (full) et la NC réduit le CA UNE SEULE fois (comme le virement)
+      if (isFacLiq) { const amt = lines.reduce((s, l) => s + (l.ttc || 0), 0); if (useAvoir) { setClientAvoir(t, cid, amt, { motif: 'NC ' + nc.numero, ncId: nc.id }); refundTotal += amt; } else { p.rembourse = (p.rembourse || 0) + amt; refundTotal += amt; } } // facture liquide : soit AVOIR (déduit prochaine visite, L8/D-c), soit remboursement cash TRACÉ (p.rembourse, poste L7). NC réduit le CA UNE fois (tournée figée).
       p._ts = Date.now(); t.payments[cid] = p; // FIABILITÉ : date de saisie du paiement (fusion par le plus récent)
     });
     if (!nNC) { submitted = false; alert('Aucune facturation annulée (période comptable verrouillée entre-temps).'); return; }
