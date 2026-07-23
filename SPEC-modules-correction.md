@@ -194,8 +194,8 @@ Nouvelle collection `S.reglements[]`. **Aucune collision** : le nom n'existe nul
   tourId, clientId, clientNom,
   type: 'imputation',
   from: { method, facture },     // imputation erronée (copie, pas une référence)
-  to:   { method, facture },     // imputation correcte
-  montantTTC, ht, tva,           // ventilation par cashSplit, taux effectif de la facture
+  to:   { method, facture, rectifie, partiel, impaye, resteMode }, // imputation correcte — voir §2.3bis
+  montantTTC, ht, tva,           // montant de la jambe `from` (virement, décimales possibles)
   motif,                         // OBLIGATOIRE, non vide
   note,
   deviceId,
@@ -224,12 +224,37 @@ séquence du **vivant** → un numéro est réemployable si une pièce disparaî
 **persisté et monotone** dès le premier jour : `S.reglementSeq = max(S.reglementSeq, dérivé) + 1`. Le lot L4
 appliquera le même traitement rétroactivement aux deux séquences existantes.
 
+### 2.3bis Le montant des deux jambes n'est PAS forcément le même (règle propriétaire, 2026-07-23)
+
+Un **virement** peut porter des **décimales** (240,50 €). Le **liquide** est **arrondi à l'euro** (le client a
+donné 240 € en billets) et peut être **partiel** (il a donné 200 €, reste 40 €). La correction virement→liquide
+n'est donc **pas** un simple miroir du même montant :
+
+- **jambe `from`** (virement erroné) = le montant viré **exact**, décimales comprises : `montantTTC`.
+- **jambe `to`** (liquide réel) = le **cash réellement reçu**, arrondi à l'euro, avec **arrondi caisse** et
+  **paiement partiel** possibles — exactement le modèle du paiement liquide normal.
+
+→ La modale `modalCorrigerReglement` réutilise **le module D** (§3bis) pour la saisie de la jambe liquide :
+champ « Montant liquide reçu », impayé auto ≥ 1 € d'écart, « paiement partiel » auto-coché. L'écart
+virement↔liquide (arrondi + éventuel impayé) est **matérialisé**, jamais absorbé en silence.
+
+### 2.3ter Marquer le virement erroné « reçu » (règle propriétaire, 2026-07-23)
+
+Un virement encodé vit comme une **créance à recevoir** tant que sa case « Reçu » (`S.comptaRecu[tourId:cid]`,
+app.js:10612) n'est pas cochée. Mais si la réalité est un **paiement liquide encaissé à la visite**, l'argent
+**est** entré — il ne faut pas que le virement erroné traîne comme une créance en attente.
+
+→ La correction virement→liquide **coche `S.comptaRecu[tourId:cid]`** pour le virement d'origine (l'argent a
+bien été reçu, en espèces). C'est une écriture **« compléter »** (pose d'un flag jamais renseigné), autorisée.
+Sans ça, la page « Impayés / à recevoir » afficherait un virement fantôme jamais encaissé.
+
 ### 2.6 Lecture par `comptaData`
 
 Après la boucle sur les tournées, itérer `S.reglements` où `ymImpute === ym` et pousser **deux entrées dérivées** :
 
 - dans la section de `from` : `{ nom: nom + ' — rectif. ' + numero, ttc: −montantTTC, derived: true, piece: numero }`
-- dans la section de `to` : `{ …, ttc: +montantTTC, derived: true, piece: numero }`
+- dans la section de `to` (liquide) : `{ …, ttc: +cashReçu, derived: true, piece: numero }` où `cashReçu` = la
+  jambe liquide (arrondi appliqué, impayé déduit — §2.3bis).
 
 Le drapeau `derived: true` existe déjà (app.js:9631, ligne « reste impayé ») et neutralise le sélecteur de mode et
 la case « Reçu » dans `clientTbl` — c'est l'idiome à réutiliser.
@@ -238,11 +263,11 @@ la case « Reçu » dans `clientTbl` — c'est l'idiome à réutiliser.
 
 | Grandeur | Effet attendu |
 |---|---|
-| CA total du mois | **zéro** (les deux jambes s'annulent) |
-| `baseMainOeuvreHT` / `baseMaterielHT` / `baseDeplacementHT` | **zéro** |
-| `tvaCollectee` | **zéro** |
-| Total de la section `from` | −montantTTC |
-| Total de la section `to` | +montantTTC |
+| CA total du mois | **≈ zéro** — les deux jambes se compensent au CENTIME PRÈS de la jambe virement ; l'écart d'arrondi liquide passe en **« Arrondi caisse »** (poste existant, 9648), et un éventuel impayé reste une créance (module D) |
+| `baseMainOeuvreHT` / `baseMaterielHT` / `baseDeplacementHT` / `tvaCollectee` | **zéro** (aucune prestation neuve — pure ré-imputation) |
+| Total de la section `from` (virements) | −montantTTC (décimales exactes) |
+| Total de la section `to` (liquide) | +cash reçu (arrondi, net d'impayé) |
+| `S.comptaRecu[tourId:cid]` du virement d'origine | **coché** (§2.3ter) |
 
 ### 2.7 Une pièce ne se supprime jamais
 

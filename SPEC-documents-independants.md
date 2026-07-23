@@ -184,7 +184,7 @@ enregistrable). ✅ faisable.
 | D-b | NC **jamais** sur liquide sans facture | ✅ liquide sans facture = avoir (module E) |
 | D-c | NC + avoir **PAS unifiés** : à la création d'une NC, on **choisit la méthode de remboursement** — **virement → NC conservée** (remboursée par virement) ; **liquide → avoir** (déduit au prochain RDV) | ✅ |
 | D-d | Déplacement d'une facture de vente = **kilométrage facturable saisi** (montant libre) | ✅ |
-| D-e | Deux paiements sur un même client d'arrêt | ⏸️ **en discussion** — voir §6, le propriétaire veut comprendre avant de trancher |
+| D-e | **HYBRIDE par mode** : liquide/facture liquide = **ligne fondue** au prochain arrêt (impayé/avoir, F5) ; virement/facvir = **paiement sur le document**, en attente. `t.payments` **jamais touché** (`p.docPayments` abandonné) | ✅ tranché |
 | D-f | Documents indépendants **après** L4 ; module E **séparé** (pas fusionné, cf. D-c) | ✅ |
 
 ### Précision D-c — le remboursement d'une NC se choisit à la création
@@ -200,7 +200,7 @@ La méthode de remboursement est **indépendante** de la méthode de paiement d'
 virement un client qui avait payé en liquide, et inversement). Le code actuel **dérive** cette méthode de
 l'origine (virement→NC, facture liquide→rembourse app.js:14157) → **à transformer en choix explicite**.
 
-### §6 — F6 : ce que le propriétaire veut comprendre avant de trancher (détail)
+### §6 — F6 : modèle de paiement du document ✅ TRANCHÉ (hybride, voir corps §F6)
 Rappel de la demande : pour **virement / facture virement**, le document se paie **individuellement** (paiement
 séparé). Pour **liquide / facture liquide**, il est **fondu** dans la facture de l'arrêt (une ligne, un seul
 paiement). Dans les deux cas, tant qu'un document indépendant est listé pour ce client, sa validation est
@@ -211,20 +211,34 @@ La clôture est bloquée par `tourFinalizeBlock` (7288) qui, pour chaque arrêt,
 `clientPaiementIssue` (7294) — lequel lit **ce paiement unique**. Toute la compta (`comptaData` 9611) itère
 `parClient` : **un client = une entrée = un paiement**.
 
-**Deux implémentations possibles** (à trancher, §6 du corps ci-dessous) :
-- **Option 1 — ligne dans la facture (liquide) / pièce à part (virement)** : le doc liquide devient une **ligne**
-  de la facture de l'arrêt (comme la ligne « Impayé du … », modèle éprouvé) → **un seul paiement**, aucune
-  structure neuve. Le doc virement vit dans la collection de documents avec **son propre état de paiement**, et
-  `tourFinalizeBlock` gagne **une** vérification « doc virement lié non validé → bloque ». `t.payments` **reste
-  intact** (un paiement par client).
-- **Option 2 — `p.docPayments[]`** : une sous-structure dans `t.payments[clientId]` portant les paiements de
-  documents. Plus fidèle à « ranger dans les paiements de cet arrêt-client », mais **transverse** : toute lecture
-  de `t.payments` (compta, factures, fusion, immutabilité) doit distinguer les deux → **risque pour A→E**.
+✅ **TRANCHÉ (propriétaire, 2026-07-23) — modèle HYBRIDE par mode de règlement.** Confirmé en deux temps : le
+document est une **pièce indépendante** (numérotée, dans le registre) dans tous les cas, mais **la façon de
+collecter son paiement dépend du mode** :
 
-**Ma recommandation : Option 1.** Elle donne exactement le comportement demandé (liquide fondu / virement
-individuel, blocage dans les deux cas) **sans toucher au cœur `t.payments`**, donc sans déstabiliser les modules
-d'immutabilité. Le « rangé dans les paiements de l'arrêt » se lit comme « bloque la clôture de l'arrêt », ce que
-l'option 1 fait via `tourFinalizeBlock`.
+| Mode du document | Collecte du paiement | Mécanisme |
+|---|---|---|
+| **Liquide / facture liquide** | **fondu** au prochain arrêt du client — une **ligne** de sa facture, réglée avec son paiement liquide unique | **impayé/avoir déjà validé** (F5), `addClientToTour` |
+| **Virement / facture virement** | **paiement individuel** propre au document, **en attente** (le client vire) | **paiement sur le document** (ci-dessous) |
+
+Mots du propriétaire : *« pour le liquide, ta proposition est la bonne : si impayé en liquide, il est ajouté lors
+du prochain arrêt de ce client, comme on l'a validé ensemble »* et *« pour le virement, le paiement se fait par
+virement en attente »*.
+
+**Ce que ça donne — et c'est la plus SÛRE des options** :
+
+- **`t.payments` n'est JAMAIS touché** (un paiement par client). Ni sous-structure `p.docPayments`, ni second
+  paiement dans la map. Les modules A→E ne sont pas déstabilisés. → l'option `p.docPayments` est **abandonnée**.
+- **Document liquide** = exactement le mécanisme impayé/avoir : une ligne « Doc du … » (facture de vente = +,
+  NC = −) ajoutée au prochain arrêt effectif du client (F5), réglée dans son paiement liquide global. Remise
+  20 % **exclue** sur la ligne facture de vente (`remiseLiquide:false`, déjà en place). Bloque la clôture via
+  la présence de la ligne non réglée.
+- **Document virement** = le paiement vit **sur le document** (objet `{ method:'virement', facture, reçu }` dans
+  la collection de documents). `comptaData` lit `t.payments` **et** les documents → le doc virement a **sa
+  propre ligne** dans la section Virements, avec sa case « Reçu ». `tourFinalizeBlock` (7288) refuse la clôture
+  de l'arrêt-client rattaché tant que le doc virement n'est pas validé.
+
+Autrement dit : **liquide = ligne dans la facture** (jamais un paiement séparé) ; **virement = pièce à part avec
+son paiement en attente**. Le « bloquant pour la clôture » vaut dans les deux cas.
 
 ## 5. IMPACT SUR L'ORDRE DE CODAGE
 
