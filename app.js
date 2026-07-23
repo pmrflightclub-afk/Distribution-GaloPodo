@@ -6491,7 +6491,7 @@ function renderChevAddresses() {
     const el = document.createElement('div'); el.className = 'list-item stack-act' + (st !== 'actif' ? ' item-off' : '');
     el.innerHTML = `<div class="li-main"><b>👤 ${esc(fullName(c))}${c.societe ? ' — ' + esc(c.societe) : ''}${badge}</b>${body}</div>`;
     wireSt(el, addrList);
-    el.querySelectorAll('[data-def]').forEach((b) => b.addEventListener('click', () => { const grp = groupList[+b.dataset.def]; if (!grp) return; grp.chevaux.forEach((x) => setChevalDefaultAddr(x.h, grp.addr)); saveClients(); reconcileActiveTours(); renderChevAddresses(); }));
+    el.querySelectorAll('[data-def]').forEach((b) => b.addEventListener('click', () => { const grp = groupList[+b.dataset.def]; if (!grp) return; grp.chevaux.forEach((x) => { setChevalDefaultAddr(x.h, grp.addr); relinkChevalEcurie(c, x.h); }); saveClients(); reconcileActiveTours(); renderChevAddresses(); })); // AUDIT-fix A-1 : relinkChevalEcurie manquait → « Définir par défaut » (page Gestion « par client ») revenait à l'ancienne adresse (h.ecurieId périmé résolu en priorité par chevalAddr)
     el.querySelectorAll('[data-nom]').forEach((inp) => { const it = specInputs[+inp.dataset.nom]; inp.addEventListener('input', (ev) => { setAddrNomForAddr(it.h, it.addr, ev.target.value); saveClients(); }); inp.addEventListener('change', () => renderChevAddresses()); });
     box.appendChild(el);
   });
