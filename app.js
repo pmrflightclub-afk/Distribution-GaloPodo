@@ -3843,6 +3843,13 @@ function mergeOneClient(a, b) {
     (b.impayes || []).forEach(put); (a.impayes || []).forEach(put);
     base.impayes = Object.values(byId).filter((im) => !(base.impayeDel && base.impayeDel[im.id])); // une créance tombstonée ne réapparaît pas (id unique par création → ne bloque jamais une nouvelle créance)
   }
+  // MODULE E (L0b) : AVOIRS (crédits client) fusionnés par id — même motif que les impayés (fusion par id, « collecté » gagne, tombstone anti-résurrection).
+  base.avoirDel = mergeTomb(b.avoirDel, a.avoirDel);
+  if (Array.isArray(a.avoirs) || Array.isArray(b.avoirs)) {
+    const byId = {}; const put = (av) => { if (!av || !av.id) return; const cur = byId[av.id]; if (!cur) { byId[av.id] = av; return; } if (av.collected && !cur.collected) byId[av.id] = av; };
+    (b.avoirs || []).forEach(put); (a.avoirs || []).forEach(put);
+    base.avoirs = Object.values(byId).filter((av) => !(base.avoirDel && base.avoirDel[av.id]));
+  }
   return base;
 }
 function mergeClients(localArr, remoteArr, tomb) {
@@ -4522,7 +4529,7 @@ function reinjectTour(rt, snap) {
   (isArch ? archive : tournees).push(merged);
   // Bucket B : réinjecter AUSSI les dépendances comptables liées à cette tournée (recâblage) — sinon facture réinjectée sans sa créance / sa note de crédit.
   if (snap) {
-    (Array.isArray(snap.clients) ? snap.clients : []).forEach((sc) => { const c = clients.find((x) => x.id === sc.id); if (!c) return; if (!Array.isArray(c.impayes)) c.impayes = []; (sc.impayes || []).forEach((im) => { if ((im.sourceTourId === rt.id || im.collectedTourId === rt.id) && !c.impayes.some((x) => x.id === im.id)) { if (c.impayeDel) delete c.impayeDel[im.id]; c.impayes.push(JSON.parse(JSON.stringify(im))); } }); }); // créances nées de / perçues par cette tournée (réinjection explicite → on lève le tombstone pour ne pas re-supprimer à la fusion)
+    (Array.isArray(snap.clients) ? snap.clients : []).forEach((sc) => { const c = clients.find((x) => x.id === sc.id); if (!c) return; if (!Array.isArray(c.impayes)) c.impayes = []; (sc.impayes || []).forEach((im) => { if ((im.sourceTourId === rt.id || im.collectedTourId === rt.id) && !c.impayes.some((x) => x.id === im.id)) { if (c.impayeDel) delete c.impayeDel[im.id]; c.impayes.push(JSON.parse(JSON.stringify(im))); } }); if (!Array.isArray(c.avoirs)) c.avoirs = []; (sc.avoirs || []).forEach((av) => { if ((av.sourceTourId === rt.id || av.collectedTourId === rt.id) && !c.avoirs.some((x) => x.id === av.id)) { if (c.avoirDel) delete c.avoirDel[av.id]; c.avoirs.push(JSON.parse(JSON.stringify(av))); } }); }); // créances nées de / perçues par cette tournée (réinjection explicite → on lève le tombstone pour ne pas re-supprimer à la fusion) ; idem AVOIRS (module E)
     const snapNC = (snap.settings && Array.isArray(snap.settings.notesCredit)) ? snap.settings.notesCredit : [];
     if (!Array.isArray(S.notesCredit)) S.notesCredit = [];
     snapNC.forEach((n) => { if (n.tourId === rt.id && !S.notesCredit.some((x) => x.id === n.id)) { const nn = JSON.parse(JSON.stringify(n)); delete nn.tourDeleted; S.notesCredit.push(nn); } }); // note de crédit recâblée (le cv.cancel.creditNoteId de la tournée pointe de nouveau vers elle)
@@ -4883,6 +4890,7 @@ function importSyncFile(file, statusEl) {
     if (c.entrepriseNum === undefined) c.entrepriseNum = '';
     if (c.societeMemeAdresse === undefined) c.societeMemeAdresse = true;
     if (!Array.isArray(c.impayes)) c.impayes = []; // restes reportés (paiement partiel liquide)
+    if (!Array.isArray(c.avoirs)) c.avoirs = []; // MODULE E (L0b) : avoirs (crédits client) déduits du total au prochain RDV effectif — miroir de c.impayes
     c.societeAddr = toAddr(c.societeAddr);
     (c.chevaux || []).forEach((h) => {
       if (!h.id) h.id = uid();
@@ -7760,6 +7768,13 @@ function addClientToTour(c, chevaux) {
     currentTour.articles.push({ id: uid(), clientId: c.id, chevalNoms: [], chevalIds: [], libelle: 'Impayé du ' + fmtDateFr(im.date), prixHT: ht, tvaPct: S.tvaRate, impaye: true, impayeId: im.id, reporte: !!im.reporte }); // F1 : conserver le flag « reporté » → à la collecte, un RDV REPORTÉ (non facturé au mois source) est un CA NEUF ; un impayé partiel (déjà facturé au source) ne l'est pas
     im.collected = true; im.collectedTourId = currentTour.id; addedImpaye = true;
   });
+  // MODULE E : AVOIRS (crédits) du client → ligne NÉGATIVE « Avoir du … » déduite du total de cette tournée.
+  (c.avoirs || []).filter((av) => !av.collected).forEach((av) => {
+    if (currentTour.articles.some((a) => a.avoirId === av.id)) return;
+    const r = rate(); const ht = -(av.ttc || 0) / (1 + r); // NÉGATIF → déduit du total
+    currentTour.articles.push({ id: uid(), clientId: c.id, chevalNoms: [], chevalIds: [], libelle: 'Avoir du ' + fmtDateFr(av.date), prixHT: ht, tvaPct: S.tvaRate, avoir: true, avoirId: av.id });
+    av.collected = true; av.collectedTourId = currentTour.id; addedImpaye = true;
+  });
   if (addedImpaye) saveClients();
   invalidateTourRoute(oldAddrs, currentTour); persistCurrentTour(); // composition modifiée → segments/heures suivantes périmés (rien si arrêt existant)
   return { placements, preExisting: oldAddrs.length > 0 };
@@ -8274,18 +8289,19 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
   }));
   // Articles (lignes manuelles) — TVA par ligne
   (articles || []).forEach((a) => {
+    const sp = !!(a.impaye || a.avoir); // MODULE E : impayé (+) et avoir (−) = lignes SPÉCIALES sans cheval, quantité 1, jamais remisées
     const orig = a.chevalNoms || [];
-    if (!a.impaye && !orig.length) return; // article normal : lié à ≥1 cheval ; impayé : sans cheval, quantité 1
+    if (!sp && !orig.length) return; // article normal : lié à ≥1 cheval ; spécial : sans cheval, quantité 1
     // Quantité PAR cheval (chevalQtes id→qté) ; à défaut 1/cheval. Carte nom→qté pour la répartition dans les stats.
-    const qByNom = {}; if (!a.impaye) orig.forEach((n, idx) => { const id = (a.chevalIds || [])[idx]; qByNom[n] = Math.max(1, (a.chevalQtes && id != null && a.chevalQtes[id]) || 1); });
+    const qByNom = {}; if (!sp) orig.forEach((n, idx) => { const id = (a.chevalIds || [])[idx]; qByNom[n] = Math.max(1, (a.chevalQtes && id != null && a.chevalQtes[id]) || 1); });
     const cancelSet = cancelByClient[a.clientId], artSet = artCancelByClient[a.clientId];
-    const noms = a.impaye ? orig : orig.filter((n) => !(cancelSet && cancelSet.has(norm(n))) && !(artSet && artSet.has(norm(n) + '|' + a.id))); // retire les chevaux ENTIÈREMENT annulés + les annulations d'article ciblées (par service)
-    if (!a.impaye && !noms.length) return; // toutes les cibles annulées → ligne retirée
-    const qte = a.impaye ? 1 : noms.reduce((s, n) => s + (qByNom[n] || 1), 0);
-    const off = !a.impaye && !!a.offert; // « Offrir » : ligne mise à 0 (prixHT conservé pour les stats)
-    const lineHT = off ? 0 : (a.prixHT || 0) * qte, rr = pctRate(a.tvaPct);
+    const noms = sp ? orig : orig.filter((n) => !(cancelSet && cancelSet.has(norm(n))) && !(artSet && artSet.has(norm(n) + '|' + a.id))); // retire les chevaux ENTIÈREMENT annulés + les annulations d'article ciblées (par service)
+    if (!sp && !noms.length) return; // toutes les cibles annulées → ligne retirée
+    const qte = sp ? 1 : noms.reduce((s, n) => s + (qByNom[n] || 1), 0);
+    const off = !sp && !!a.offert; // « Offrir » : ligne mise à 0 (prixHT conservé pour les stats)
+    const lineHT = off ? 0 : (a.prixHT || 0) * qte, rr = pctRate(a.tvaPct); // avoir : prixHT négatif → lineHT/tva/ttc négatifs (déduction)
     const m = getC(a.clientId, clientName(a.clientId));
-    m.articles.push({ libelle: a.libelle, chevaux: a.impaye ? [] : noms, qte, qtesByNom: a.impaye ? null : qByNom, prixHT: a.prixHT || 0, tvaPct: effPct(a.tvaPct), ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, offert: off, remiseOff: !!(a.remiseOff || a.impaye), remiseProduit: a.impaye ? false : (a.remiseProduit !== false), remiseLiquide: a.impaye ? false : (a.remiseLiquide !== false) }); // impayé (créance) jamais remisé
+    m.articles.push({ libelle: a.libelle, chevaux: sp ? [] : noms, qte, qtesByNom: sp ? null : qByNom, prixHT: a.prixHT || 0, tvaPct: effPct(a.tvaPct), ht: lineHT, tva: lineHT * rr, ttc: lineHT * (1 + rr), impaye: !!a.impaye, avoir: !!a.avoir, offert: off, remiseOff: !!(a.remiseOff || sp), remiseProduit: sp ? false : (a.remiseProduit !== false), remiseLiquide: sp ? false : (a.remiseLiquide !== false) }); // impayé/avoir jamais remisé
     m.htArt += lineHT; m.tvaArt += lineHT * rr;
   });
   const parClient = Object.values(cmap).map((m) => {
@@ -8465,10 +8481,17 @@ function recalcAllTours() {
     c.impayes.forEach((im) => { if (im.sourceTourId && !tourIds.has(im.sourceTourId)) { c.impayeDel = c.impayeDel || {}; c.impayeDel[im.id] = Date.now(); } }); // tombstone → la créance orpheline ne ressuscite pas à la fusion
     c.impayes = c.impayes.filter((im) => !im.sourceTourId || tourIds.has(im.sourceTourId));
     c.impayes.forEach((im) => { if (im.collectedTourId && !tourIds.has(im.collectedTourId)) { im.collected = false; im.collectedTourId = null; } });
+    // MODULE E : mêmes règles pour les AVOIRS (source disparue → tombstone/retrait ; collecté par une tournée disparue → redevient à déduire).
+    if (Array.isArray(c.avoirs)) {
+      c.avoirs.forEach((av) => { if (av.sourceTourId && !tourIds.has(av.sourceTourId)) { c.avoirDel = c.avoirDel || {}; c.avoirDel[av.id] = Date.now(); } });
+      c.avoirs = c.avoirs.filter((av) => !av.sourceTourId || tourIds.has(av.sourceTourId));
+      c.avoirs.forEach((av) => { if (av.collectedTourId && !tourIds.has(av.collectedTourId)) { av.collected = false; av.collectedTourId = null; } });
+    }
   });
   // 2) Articles d'impayé orphelins (référencent un impayé qui n'existe plus) → retirés de toutes les tournées.
   const live = new Set(); clients.forEach((c) => (c.impayes || []).forEach((im) => live.add(im.id)));
-  allTours().forEach((t) => { if (Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !a.impaye || (a.impayeId && live.has(a.impayeId))); });
+  const liveAv = new Set(); clients.forEach((c) => (c.avoirs || []).forEach((av) => liveAv.add(av.id))); // MODULE E : avoirs vivants
+  allTours().forEach((t) => { if (Array.isArray(t.articles)) t.articles = t.articles.filter((a) => (!a.impaye || (a.impayeId && live.has(a.impayeId))) && (!a.avoir || (a.avoirId && liveAv.has(a.avoirId)))); });
   // 2bis) M3 — GC GLOBAL des références orphelines (tourId/mois disparu). Filet PERMANENT qui rattrape les chemins ne passant PAS par purgeTourData
   //       (imports « Remplace tout »/« Données seules », réinjection, fusion). Sans lui, une clé compta/agenda/note de crédit peut pointer une tournée absente.
   const monthsLive = new Set(allTours().map((t) => (t.date || '').slice(0, 7)).filter(Boolean));
@@ -9534,7 +9557,7 @@ function financeStats() {
       const c = cmap[m.clientId] = cmap[m.clientId] || { nom: m.nom, dep: 0, mat: 0, art: 0, arrondi: 0, impaye: 0, rembourse: 0, offert: 0, remise: 0, chevaux: {} };
       const dep = (m.deplacement || []).reduce((s, l) => s + l.partTTC, 0);
       const mat = (m.materiel || []).reduce((s, x) => s + x.ttc, 0);
-      const art = (m.articles || []).reduce((s, a) => s + ((a.impaye && !a.reporte) ? 0 : a.ttc), 0); // remise déjà appliquée ligne par ligne ; P1-3/F1 : exclut la ligne « Impayé du … » d'un PARTIEL (déjà compté au mois d'origine) mais garde un REPORTÉ (CA neuf)
+      const art = (m.articles || []).reduce((s, a) => s + (((a.impaye && !a.reporte) || a.avoir) ? 0 : a.ttc), 0); // remise déjà appliquée ligne par ligne ; P1-3/F1 : exclut la ligne « Impayé du … » d'un PARTIEL (déjà compté au mois d'origine) mais garde un REPORTÉ (CA neuf). MODULE E : exclut aussi l'AVOIR (crédit déjà acté à la source)
       // Chevaux crédités (note de crédit) → on retire des VENTES le montant RÉELLEMENT crédité (mat+art de la NC), pas le cheval entier (un crédit peut être PARTIEL depuis le modèle NC par prestation). Le DÉPLACEMENT reste acquis dans les stats (gardé même s'il est crédité côté CA — le pro s'est déplacé).
       let credTTC = 0; (t.arrets || []).forEach((a2) => (a2.clients || []).forEach((cl2) => { if (cl2.clientId !== m.clientId) return; (cl2.chevaux || []).forEach((cv2) => { if (chevalCredited(cv2)) credTTC += (cv2.cancel.items || []).filter((it) => it.key !== '__dep').reduce((s, it) => s + (it.ttc || 0), 0); }); }));
       c.dep += dep; c.mat += mat; c.art += art - credTTC;
@@ -9630,8 +9653,8 @@ function comptaData(ym) {
         const depHT = (m.deplacement || []).reduce((s, l) => s + (l.partHT || 0), 0);
         const matHT = m.htMat || 0;
         // P1-3 : une ligne « Impayé du … » réinjectée est la COLLECTE d'un CA déjà accru le mois d'origine, pas un CA neuf → l'exclure de la base analytique (sinon double-comptage → provisions social/TVA surévaluées).
-        const impHT = (m.articles || []).reduce((s, a) => s + ((a.impaye && !a.reporte) ? (a.ht || 0) : 0), 0);  // F1 : n'exclure que les impayés PARTIELS (déjà facturés au mois source) ; un impayé REPORTÉ = CA neuf à reconnaître à la collecte
-        const impTVA = (m.articles || []).reduce((s, a) => s + ((a.impaye && !a.reporte) ? (a.tva || 0) : 0), 0);
+        const impHT = (m.articles || []).reduce((s, a) => s + (((a.impaye && !a.reporte) || a.avoir) ? (a.ht || 0) : 0), 0);  // F1 : n'exclure que les impayés PARTIELS (déjà facturés au mois source) ; un impayé REPORTÉ = CA neuf. MODULE E : l'AVOIR (ht négatif) est exclu du CA de collecte (déjà réduit à la source par la NC) → il baisse la caisse, pas le CA
+        const impTVA = (m.articles || []).reduce((s, a) => s + (((a.impaye && !a.reporte) || a.avoir) ? (a.tva || 0) : 0), 0);
         baseMat += matHT; baseDep += depHT; baseMO += (m.totalHT || 0) - matHT - depHT - impHT; tvaCol += (m.totalTVA || 0) - impTVA;
         const orM = offRemOfClient(m); offertM += orM.offert; remiseM += orM.remise; // L5 : offert/remise du mois (info, hors CA)
       }
@@ -14457,6 +14480,17 @@ function setClientImpaye(t, cid, resteTTC) {
   c.impayes = c.impayes.filter((im) => !(im.sourceTourId === t.id && !im.collected)); // recrée l'impayé non perçu de cette tournée
   if (resteTTC > 0.005) c.impayes.push({ id: uid(), sourceTourId: t.id, date: t.date, ttc: resteTTC, collected: false, collectedTourId: null });
 }
+// MODULE E (L0b) — crée un AVOIR (crédit client) rattaché à une tournée source. `ttc` POSITIF (déduit à la collecte).
+// opts : { motif, ncId }. Miroir de setClientImpaye : tombstone l'ancien avoir non collecté de cette source, en recrée un neuf.
+function setClientAvoir(t, cid, ttc, opts) {
+  opts = opts || {};
+  const c = clients.find((x) => x.id === cid); if (!c) return null;
+  if (!Array.isArray(c.avoirs)) c.avoirs = [];
+  if (ttc <= 0.005) return null;
+  const av = { id: uid(), sourceTourId: t ? t.id : null, date: (t && t.date) || todayStr(), ttc: Math.round(ttc * 100) / 100, motif: opts.motif || '', ncId: opts.ncId || null, collected: false, collectedTourId: null };
+  c.avoirs.push(av); saveClients();
+  return av;
+}
 // Remet un impayé « à percevoir » (ex. si on retire sa ligne d'article d'une tournée).
 function uncollectImpaye(impayeId) {
   clients.forEach((c) => (c.impayes || []).forEach((im) => { if (im.id === impayeId) { im.collected = false; im.collectedTourId = null; } }));
@@ -14470,8 +14504,14 @@ function purgeTourData(id) {
     c.impayes.forEach((im) => { if (im.sourceTourId === id) { removed.add(im.id); c.impayeDel = c.impayeDel || {}; c.impayeDel[im.id] = Date.now(); } }); // tombstone → pas de résurrection à la fusion
     c.impayes = c.impayes.filter((im) => im.sourceTourId !== id);                    // créance NÉE de cette tournée → disparaît avec elle
     c.impayes.forEach((im) => { if (im.collectedTourId === id) { im.collected = false; im.collectedTourId = null; } }); // impayé PERÇU par cette tournée → redevient « à percevoir »
+    // MODULE E : mêmes règles pour les AVOIRS liés à la tournée supprimée.
+    if (Array.isArray(c.avoirs)) {
+      c.avoirs.forEach((av) => { if (av.sourceTourId === id) { removed.add(av.id); c.avoirDel = c.avoirDel || {}; c.avoirDel[av.id] = Date.now(); } });
+      c.avoirs = c.avoirs.filter((av) => av.sourceTourId !== id);
+      c.avoirs.forEach((av) => { if (av.collectedTourId === id) { av.collected = false; av.collectedTourId = null; } });
+    }
   });
-  if (removed.size) { allTours().forEach((t) => { if (t.id !== id && Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !(a.impaye && a.impayeId && removed.has(a.impayeId))); }); saveTournees(); saveArchive(); } // article d'impayé orphelin (référence un impayé supprimé) → retiré
+  if (removed.size) { allTours().forEach((t) => { if (t.id !== id && Array.isArray(t.articles)) t.articles = t.articles.filter((a) => !(a.impaye && a.impayeId && removed.has(a.impayeId)) && !(a.avoir && a.avoirId && removed.has(a.avoirId))); }); saveTournees(); saveArchive(); } // article d'impayé/avoir orphelin (référence une pièce supprimée) → retiré
   saveClients();
   // Clés de suivi Compta orphelines (« tourId:clientId » et « …:reste »).
   [S.comptaRecu, S.comptaDemarche].forEach((map) => { if (map) Object.keys(map).forEach((k) => { if (k.split(':')[0] === id) delete map[k]; }); });
