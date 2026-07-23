@@ -3762,6 +3762,8 @@ function graftClosure(to, from) {
   if (from.priceSnap && !to.priceSnap) to.priceSnap = JSON.parse(JSON.stringify(from.priceSnap)); // LOT 3 : le gel des tarifs suit la cloture                          // clôture = état terminal (aucun « déclôturage » dans l'app)
   // L4 : factureIds (identité des factures émises) fusionné par client — union, jamais d'écrasement, le frozenAt le PLUS ANCIEN gagne (le 1ᵉʳ numéro émis fait foi). Sans ça, un gagnant LWW renumérotait une facture déjà émise.
   if (from.factureIds) { to.factureIds = to.factureIds || {}; Object.keys(from.factureIds).forEach((cid) => { const f = from.factureIds[cid], t2 = to.factureIds[cid]; if (!t2 || !t2.numero) to.factureIds[cid] = f; else if (f && f.numero && (f.frozenAt || 0) < (t2.frozenAt || 0)) to.factureIds[cid] = f; }); }
+  // L6 : frozenClients (blocs de répartition figés par client) — union par client, le gel le PLUS ANCIEN gagne (1ᵉʳ gel fait foi), jamais écrasé.
+  if (from.frozenClients) { to.frozenClients = to.frozenClients || {}; Object.keys(from.frozenClients).forEach((cid) => { const f = from.frozenClients[cid], t2 = to.frozenClients[cid]; if (!t2) to.frozenClients[cid] = f; else if (f && (f.frozenAt || 0) < (t2.frozenAt || 0)) to.frozenClients[cid] = f; }); }
   // P0-2 : greffer l'ÉTAT FINANCIER manquant. La greffe de clôture protégeait les jalons mais PAS les paiements : une tournée
   // pouvait devenir « clôturée » avec un encaissement perdu (le gagnant LWW n'avait pas les payments). On ne fait que COMPLÉTER
   // (jamais écraser un paiement présent sur `to`) → aucune régression d'une édition légitime du gagnant.
@@ -4607,7 +4609,7 @@ function replayTour(t) {
   const nt = JSON.parse(JSON.stringify(t));
   nt.id = uid(); nt.date = todayStr(); nt.nom = ((t.nom || '').trim() ? t.nom.trim() + ' ' : '') + '(rejeu)'; nt.closed = false; delete nt.endedAt; delete nt.startedAt; delete nt._review; delete nt.updatedAt;
   nt.recovered = true; // Point 2 : rejeu = modèle « durées » (comme une tournée récupérée) → « Compléter les stats » disponible pour saisir route/consultation/retour À LA MAIN (Temps de travail/trajet), sans refaire la tournée en temps réel (les horodatages absolus startedAt/validatedAt ne sont pas reproductibles au bureau)
-  nt.payments = {}; nt.result = null; nt.createdAt = Date.now(); delete nt.autoClosedAt; // rejeu = tournée neuve : pas de clôture auto héritée
+  nt.payments = {}; nt.result = null; nt.createdAt = Date.now(); delete nt.autoClosedAt; delete nt.frozenClients; // rejeu = tournée neuve : pas de clôture auto ni de gel client hérités (L6)
   nt.articles = (nt.articles || []).filter((art) => !art.impaye); // ne PAS re-facturer une créance déjà encaissée (l'impayé appartient à la tournée d'origine)
   (nt.arrets || []).forEach((a) => { delete a.validatedAt; delete a.rdvDone; (a.clients || []).forEach((cl) => { delete cl.validatedAt; delete cl.rdvDone; delete cl.aPrevenir; delete cl.heureAncienne; delete cl.heureStale; (cl.chevaux || []).forEach((cv) => { delete cv.cancel; }); }); }); // clôtures/RDV à refaire (on garde actes, articles, heures, realMin) ; annulations remises à zéro (l'annulation n'est pas un acte) ; drapeaux de suivi d'heure périmés effacés
   tournees.push(nt); saveTournees();
@@ -7002,7 +7004,7 @@ function reconcileTour(tour) {
   if ((tour.articles || []).length !== na) changed = true;
   // P1-5 : purge des PAIEMENTS orphelins — un client retiré de tous les arrêts ET articles laissait un `payments[cid]` inatteignable
   // (rembourse / impaye / comptaPeriod invisibles des comptes car plus aucun `parClient` ne le porte).
-  if (tour.payments) { const liveCids = new Set(); (tour.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => liveCids.add(cl.clientId))); (tour.articles || []).forEach((ar) => { if (ar.clientId) liveCids.add(ar.clientId); }); Object.keys(tour.payments).forEach((cid) => { if (!liveCids.has(cid)) { delete tour.payments[cid]; changed = true; } }); }
+  if (tour.payments) { const liveCids = new Set(); (tour.arrets || []).forEach((a) => (a.clients || []).forEach((cl) => liveCids.add(cl.clientId))); (tour.articles || []).forEach((ar) => { if (ar.clientId) liveCids.add(ar.clientId); }); Object.keys(tour.payments).forEach((cid) => { if (!liveCids.has(cid) && !(tour.frozenClients && tour.frozenClients[cid])) { delete tour.payments[cid]; changed = true; } }); } // L6 : ne JAMAIS purger le paiement d'un client FIGÉ (son bloc est acté même s'il n'apparaît plus dans les arrêts)
   if (changed) saveTournees();
   return changed;
 }
@@ -7322,7 +7324,7 @@ function clientActeMissingArrets(t, cid) { return clientArrets(t, cid).filter((x
 // Clôture « en attente » d'un arrêt intermédiaire (actes requis, PAS de paiement). Renvoie true si posée.
 function closeClientPending(t, a, cl) { if (cl && clientActeOK(a, cl) && !clientValidated(cl)) { cl.validatedAt = Date.now(); syncArretValidated(a); return true; } return false; }
 // Clôture DÉFINITIVE de TOUS les arrêts d'un client (au dernier arrêt, paiement fait) : exige acte PARTOUT et paiement complet. Renvoie true si ≥1 clôture posée.
-function closeClientFully(t, cid) { if (!clientPaiementDone(t, cid) || clientActeMissingArrets(t, cid).length) return false; let any = false; clientArrets(t, cid).forEach((x) => { if (!clientValidated(x.cl)) { x.cl.validatedAt = Date.now(); any = true; } syncArretValidated(x.a); }); return any; }
+function closeClientFully(t, cid) { if (!clientPaiementDone(t, cid) || clientActeMissingArrets(t, cid).length) return false; let any = false; clientArrets(t, cid).forEach((x) => { if (!clientValidated(x.cl)) { x.cl.validatedAt = Date.now(); any = true; } syncArretValidated(x.a); }); freezeClientBlock(t, cid); return any; } // L6/F5 : gel du bloc client à SA clôture DÉFINITIVE (paiement fait, garanti par la garde en tête) — liaison à la clôture, pas à l'ajout
 // Clôture un client À cet arrêt : dernier arrêt → clôture globale (paiement) ; arrêt intermédiaire → clôture en attente (actes seuls). Renvoie true si une clôture a été faite.
 function closeClientAt(t, a, cl) { if (!cl) return false; return isClientLastArret(t, cl.clientId, a) ? closeClientFully(t, cl.clientId) : closeClientPending(t, a, cl); }
 // Un client est « finalisé » à cet arrêt = acte fait + clôturé ; le paiement n'est requis qu'au DERNIER arrêt du client (les intermédiaires débloquent la suite sans paiement).
@@ -8425,6 +8427,27 @@ function chevalInFrozenTour(clientId, h) {
   const nom = norm(h && h.nom); const hid = h && h.id;
   return allTours().some((t) => (t.closed || t.endedAt) && (t.arrets || []).some((a) => (a.clients || []).some((cl) => cl.clientId === clientId && (cl.chevaux || []).some((c) => (hid != null && c.id === hid) || (nom && norm(c.nom) === nom)))));
 }
+// L6 (MODULE C) — GEL PAR CLIENT (D1) : à SA clôture définitive, le bloc de répartition d'un client est PHOTOGRAPHIÉ et ne bouge plus,
+// même si la composition de la tournée change ensuite. Champ de PREMIER NIVEAU `t.frozenClients` (hors _HASH_SKIP → survit à la synchro,
+// greffé dans graftClosure). Monotone : jamais ré-écrit une fois posé.
+function freezeClientBlock(t, cid) {
+  if (!t || !t.result || !Array.isArray(t.result.parClient)) return;
+  const m = t.result.parClient.find((x) => x.clientId === cid); if (!m) return;
+  t.frozenClients = t.frozenClients || {};
+  if (t.frozenClients[cid]) return; // déjà figé → jamais ré-écrit (le 1ᵉʳ gel fait foi)
+  t.frozenClients[cid] = { frozenAt: Date.now(), deviceId: S.deviceId || null, m: JSON.parse(JSON.stringify(m)) };
+  logWrite({ f: 'freezeClientBlock', entity: 'frozenClient', id: t.id + ':' + cid, note: 'bloc client figé (D1)' });
+}
+// Applique les blocs figés sur un result fraîchement recalculé : chaque client figé retrouve SON bloc photographié ; les totaux de
+// tournée sont re-dérivés comme Σ des parts (invariant Σ parts = total, dont dépend la compta, préservé — le total peut ne plus
+// coller à la géométrie si l'itinéraire a changé après le gel : c'est le prix assumé de l'immuabilité, D1).
+function applyFrozenClients(t, R) {
+  if (!t || !t.frozenClients || !R || !Array.isArray(R.parClient)) return R;
+  let touched = false;
+  R.parClient = R.parClient.map((m) => { const fz = t.frozenClients[m.clientId]; if (fz && fz.m) { touched = true; return JSON.parse(JSON.stringify(fz.m)); } return m; });
+  if (touched) { R.totalHT = R.parClient.reduce((s, m) => s + (m.totalHT || 0), 0); R.totalTVA = R.parClient.reduce((s, m) => s + (m.totalTVA || 0), 0); R.totalTTC = R.parClient.reduce((s, m) => s + (m.totalTTC || 0), 0); }
+  return R;
+}
 function recomputeMoney() {
   if (tourFrozenEdit(currentTour)) { logWrite({ f: 'recomputeMoney', entity: 'tour', id: currentTour && currentTour.id, frozen: true, skipped: 'tournée figée' }); return; } // L2 : refus du re-tarif silencieux (appelé par saveSettings au moindre changement de réglage)
   const R = currentTour && currentTour.result;
@@ -8437,6 +8460,7 @@ function recomputeMoney() {
   currentTour.result = computeResultMoney(rows, geom);
   currentTour.result.providerMin = prov;
   currentTour.result.routeGeo = geo || [];
+  applyFrozenClients(currentTour, currentTour.result); // L6 : les clients déjà figés retrouvent leur bloc photographié
   persistCurrentTour();
   renderResultUI(currentTour.result);
   refreshClientHeadTotals(); // en-tête client toujours aligné sur la facture (arrondi liquide inclus)
@@ -8497,6 +8521,7 @@ function recomputeTourLocal(t) {
     const res = computeResultMoney(rows, geom, t.articles, t.reductions, t.parageRemiseOff, t.payments);
     res.providerMin = prov; res.routeGeo = R.routeGeo || [];
     t.result = res;
+    applyFrozenClients(t, t.result); // L6 : gel par client
     return true;
   });
 }
@@ -8607,6 +8632,7 @@ async function calcTour(silent) {
     currentTour.result = computeResultMoney(rows, geom);
     currentTour.result.providerMin = rt.totalMin || totalMin; // durée brute du service de carte (conservée)
     currentTour.result.routeGeo = rt.geo || [];
+    applyFrozenClients(currentTour, currentTour.result); // L6 : gel par client (calcTour)
     persistCurrentTour();
     renderResultUI(currentTour.result);
     renderMap(rows.map((r) => ({ lat: r.lat, lon: r.lon, label: r.label })), home, currentTour.result.routeGeo, arrXY);
@@ -8641,6 +8667,7 @@ async function recomputeTourGeo(t) {
     const totalMin = (S.dureeAuto && rt.totalMin) ? rt.totalMin : (rt.totalKm * 60 / (S.vitesseKmh || 90));
     t.result = computeResultMoney(rows, { totalKm: rt.totalKm, kmHomeFirst: legs.length ? legs[0] : 0, kmLastHome: legs.length ? legs[legs.length - 1] : 0, totalMin }, t.articles, t.reductions, t.parageRemiseOff, t.payments);
     t.result.providerMin = rt.totalMin || totalMin; t.result.routeGeo = rt.geo || [];
+    applyFrozenClients(t, t.result); // L6 : gel par client (recomputeTourGeo)
     saveTournees(); scheduleCalPush(t);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
