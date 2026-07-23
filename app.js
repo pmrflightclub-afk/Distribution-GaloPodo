@@ -3802,7 +3802,7 @@ function graftClosure(to, from) {
     });
   }
   // Articles d'IMPAYÉ (créances) présents seulement côté `from` → récupérés (sinon la créance disparaît de la facture après fusion).
-  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.impaye && a.impayeId && !to.articles.some((x) => x.impaye && x.impayeId === a.impayeId)) to.articles.push(a); }); }
+  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.impaye && a.impayeId && !to.articles.some((x) => x.impaye && x.impayeId === a.impayeId)) to.articles.push(a); if (a && a.avoir && a.avoirId && !to.articles.some((x) => x.avoir && x.avoirId === a.avoirId)) to.articles.push(a); }); } // AUDIT-fix : greffer AUSSI les lignes d'AVOIR (miroir de l'impayé) — sinon un crédit client disparaît d'une tournée clôturée fusionnée
   const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } }; // apparie les arrêts par adresse (robuste au réordonnancement)
   const fromByKey = {}; (from.arrets || []).forEach((a) => { const k = key(a); if (k) fromByKey[k] = a; });
   (to.arrets || []).forEach((a) => {
@@ -3831,7 +3831,7 @@ function deepMergeTourBody(to, from) {
   const _fu = from.updatedAt || 0; const tombOk = (map, k) => !(map && map[k] && map[k] >= _fu); // ajout autorisé seulement si l'élément n'a PAS été supprimé après la dernière édition de la copie perdante
   if (from.reductions) { to.reductions = to.reductions || {}; Object.keys(from.reductions).forEach((cid) => { const v = to.reductions[cid]; if (v == null || v === '') to.reductions[cid] = from.reductions[cid]; }); }
   if (!(to.returnRealMin > 0) && from.returnRealMin > 0) to.returnRealMin = from.returnRealMin; // temps de retour réel : garder si le gagnant n'en a pas
-  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.id && !a.impaye && tombOk(to.artDel, a.id) && !to.articles.some((x) => x.id === a.id)) to.articles.push(JSON.parse(JSON.stringify(a))); }); } // article saisi sur l'autre appareil → conservé, SAUF s'il a été supprimé (tombstone artDel). Impayés EXCLUS (graftClosure).
+  if (Array.isArray(from.articles)) { to.articles = to.articles || []; from.articles.forEach((a) => { if (a && a.id && !a.impaye && !a.avoir && tombOk(to.artDel, a.id) && !to.articles.some((x) => x.id === a.id)) to.articles.push(JSON.parse(JSON.stringify(a))); }); } // article saisi sur l'autre appareil → conservé, SAUF s'il a été supprimé (tombstone artDel). Impayés ET AVOIRS EXCLUS (union par id → double déduction si 2 appareils collectent le même avoirId ; propagés comme les impayés via c.avoirs + graftClosure).
   // Un cheval du perdant n'est réajouté QUE s'il est ACTIF dans la fiche (même autorité que reconcileTour) → un cheval devenu inactif/supprimé de la fiche (donc retiré des tournées) ne « ressuscite » plus avec ses actes.
   const chevalActive = (cid, cv) => { const c = clients.find((x) => x.id === cid); return !!(c && (typeof activeChevaux === 'function' ? activeChevaux(c) : (c.chevaux || [])).some((h) => (h.id != null && cv.id != null && h.id === cv.id) || (norm(cv.nom) && norm(h.nom) === norm(cv.nom)))); };
   const key = (a) => { try { return norm(addrStr(a.addr)); } catch { return ''; } };
@@ -4672,7 +4672,7 @@ function applyClientRevue(local, imp, choices, addChevalIds) {
   const addSet = addChevalIds ? new Set(addChevalIds) : null;
   clientRevueNewChevaux(local, imp).forEach((h) => { if (!addSet || addSet.has(h.id)) { local.chevaux = local.chevaux || []; local.chevaux.push(JSON.parse(JSON.stringify(h))); } });
   const union = (key) => { local[key] = local[key] || []; ((imp && imp[key]) || []).forEach((x) => { if (!x || x.id == null) return; if (!local[key].some((y) => y && y.id === x.id)) local[key].push(JSON.parse(JSON.stringify(x))); }); };
-  union('prets'); union('impayes'); // jamais écrasés : union par id, le local prime
+  union('prets'); union('impayes'); union('avoirs'); // jamais écrasés : union par id, le local prime. AUDIT-fix : 'avoirs' ajouté (était oublié → avoir perdu à la revue d'import)
   return local;
 }
 // Modale de revue : n'affiche QUE les clients en conflit (au moins un champ divergent ou un cheval en plus).
@@ -8383,10 +8383,20 @@ function computeResultMoney(rows, geom, articles, reducs, parageNoRemise, paymen
     const totalHT = m.htDep + m.htMat + htArt;
     const totalTVA = (m.htDep + m.htMat) * stdRate + tvaArt;
     const pleinHT = m.htDep + m.htMat + htArtBrut, pleinTVA = (m.htDep + m.htMat) * stdRate + tvaArtBrut;
-    // L8 (MODULE E, solde total) : si un AVOIR dépasse le reste de la facture, le total ne peut pas être négatif → borné à 0 et le RELIQUAT (cash à rendre sur place) est tracé. « On rembourse toujours l'avoir en entier, jamais de report » (propriétaire).
+    // L8 (MODULE E, solde total) : si un AVOIR dépasse le reste de la facture, le total ne peut pas être négatif. « On rembourse toujours l'avoir en entier, jamais de report » (propriétaire) → on PLAFONNE la ligne d'avoir au montant des charges (total = 0) et le RELIQUAT (cash à rendre sur place) est tracé.
+    let hArt = htArt, tArt = tvaArt; // AUDIT-fix : recalculés si l'avoir est plafonné (sinon la ligne d'avoir NON plafonnée fausse le CA via impHT)
     let tHT = totalHT, tTVA = totalTVA, tTTC = totalHT + totalTVA, avoirReliquat = 0;
-    if (tTTC < -0.005 && (m.articles || []).some((a) => a.avoir)) { avoirReliquat = Math.round(-tTTC); tHT = 0; tTVA = 0; tTTC = 0; }
-    return Object.assign(m, { reducPct: rpct, htArt, tvaArt, totalHT: tHT, totalTVA: tTVA, totalTTC: tTTC, avoirReliquat, pleinHT, pleinTVA, pleinTTC: pleinHT + pleinTVA });
+    if (tTTC < -0.005 && (m.articles || []).some((a) => a.avoir)) {
+      const avLines = m.articles.filter((a) => a.avoir);
+      const avTTC = avLines.reduce((s, a) => s + (a.ttc || 0), 0); // négatif
+      avoirReliquat = Math.round(-tTTC); // cash à RENDRE (avoir > charges) — soldé en entier, jamais reporté
+      const chargesTTC = tTTC - avTTC; // charges hors avoir (positif)
+      if (Math.abs(avTTC) > 0.005) { const factor = Math.max(0, chargesTTC) / Math.abs(avTTC); avLines.forEach((a) => { a.ht *= factor; a.tva *= factor; a.ttc *= factor; }); } // plafonne l'avoir → total = 0, ET la ligne (négative) reste COHÉRENTE avec le CA (impHT ne surévalue plus)
+      hArt = m.articles.reduce((s, a) => s + a.ht, 0); tArt = m.articles.reduce((s, a) => s + a.tva, 0);
+      tHT = m.htDep + m.htMat + hArt; tTVA = (m.htDep + m.htMat) * stdRate + tArt; tTTC = tHT + tTVA;
+      if (Math.abs(tTTC) < 0.5) tTTC = 0;
+    }
+    return Object.assign(m, { reducPct: rpct, htArt: hArt, tvaArt: tArt, totalHT: tHT, totalTVA: tTVA, totalTTC: tTTC, avoirReliquat, pleinHT, pleinTVA, pleinTTC: pleinHT + pleinTVA });
   });
   const totalHT = parClient.reduce((s, m) => s + m.totalHT, 0);
   const totalTVA = parClient.reduce((s, m) => s + m.totalTVA, 0);
@@ -8428,7 +8438,7 @@ function rowFromArret(a, geo) {
 // n'a dérivé de son snapshot (applyFrozenClients aurait dû le rétablir). Toute dérive = écriture ayant contourné le gel → journalisée.
 function checkFrozenWrite(t) {
   if (!t || !t.frozenClients || !t.result || !Array.isArray(t.result.parClient)) return;
-  Object.keys(t.frozenClients).forEach((cid) => { const fz = t.frozenClients[cid]; const m = t.result.parClient.find((x) => x.clientId === cid); if (fz && fz.m && m && Math.abs((m.totalTTC || 0) - (fz.m.totalTTC || 0)) > 0.005) logWrite({ f: 'checkFrozenWrite', entity: 'frozenClient', id: t.id + ':' + cid, frozen: true, violation: 'bloc figé dérivé du snapshot', snap: fz.m.totalTTC, live: m.totalTTC }); });
+  Object.keys(t.frozenClients).forEach((cid) => { const fz = t.frozenClients[cid]; if (!fz || !fz.m) return; const m = t.result.parClient.find((x) => x.clientId === cid); if (!m) { logWrite({ f: 'checkFrozenWrite', entity: 'frozenClient', id: t.id + ':' + cid, frozen: true, violation: 'client figé ABSENT de parClient (revenu menacé)', snap: fz.m.totalTTC }); return; } if (Math.abs((m.totalTTC || 0) - (fz.m.totalTTC || 0)) > 0.005) logWrite({ f: 'checkFrozenWrite', entity: 'frozenClient', id: t.id + ':' + cid, frozen: true, violation: 'bloc figé dérivé du snapshot', snap: fz.m.totalTTC, live: m.totalTTC }); }); // AUDIT-fix : détecte AUSSI la disparition d'un client figé (le cas le plus grave), plus seulement la dérive
 }
 // Enregistre currentTour dans le bon store (actif ou archive) sans jamais créer de doublon.
 function persistCurrentTour() {
@@ -8473,7 +8483,10 @@ function freezeClientBlock(t, cid) {
 function applyFrozenClients(t, R) {
   if (!t || !t.frozenClients || !R || !Array.isArray(R.parClient)) return R;
   let touched = false;
-  R.parClient = R.parClient.map((m) => { const fz = t.frozenClients[m.clientId]; if (fz && fz.m) { touched = true; return JSON.parse(JSON.stringify(fz.m)); } return m; });
+  const present = new Set();
+  R.parClient = R.parClient.map((m) => { present.add(m.clientId); const fz = t.frozenClients[m.clientId]; if (fz && fz.m) { touched = true; return JSON.parse(JSON.stringify(fz.m)); } return m; });
+  // AUDIT-fix : RÉ-INJECTER un client figé qui a DISPARU de parClient (fiche supprimée, arrêt retiré sur une tournée non close) — sinon son CA gelé s'évapore alors que son paiement subsiste (revenu perdu).
+  Object.keys(t.frozenClients).forEach((cid) => { const fz = t.frozenClients[cid]; if (fz && fz.m && !present.has(cid)) { R.parClient.push(JSON.parse(JSON.stringify(fz.m))); touched = true; logWrite({ f: 'applyFrozenClients', entity: 'frozenClient', id: t.id + ':' + cid, frozen: true, note: 'client figé absent de parClient → ré-injecté (protection revenu)' }); } });
   if (touched) { R.totalHT = R.parClient.reduce((s, m) => s + (m.totalHT || 0), 0); R.totalTVA = R.parClient.reduce((s, m) => s + (m.totalTVA || 0), 0); R.totalTTC = R.parClient.reduce((s, m) => s + (m.totalTTC || 0), 0); }
   return R;
 }
@@ -8595,6 +8608,8 @@ function recalcAllTours() {
   //       (imports « Remplace tout »/« Données seules », réinjection, fusion). Sans lui, une clé compta/agenda/note de crédit peut pointer une tournée absente.
   const monthsLive = new Set(allTours().map((t) => (t.date || '').slice(0, 7)).filter(Boolean));
   ['comptaRecu', 'comptaDemarche'].forEach((k) => { if (S[k]) Object.keys(S[k]).forEach((key) => { if (!tourIds.has(key.split(':')[0])) delete S[k][key]; }); });
+  // AUDIT-fix : règlements/documents dont la tournée de référence a disparu → DÉTACHÉS (jamais supprimés — pièce actée). Ils restent auto-portants (ymImpute/montants figés).
+  [S.reglements, S.documents].forEach((coll) => { if (Array.isArray(coll)) coll.forEach((p) => { if (p.tourId && !tourIds.has(p.tourId)) p.tourDeleted = true; }); });
   if (S.agendaImported) Object.keys(S.agendaImported).forEach((eid) => { const im = S.agendaImported[eid]; if (im && im.tourId && !tourIds.has(im.tourId)) delete S.agendaImported[eid]; });
   if (S.comptaStatus) Object.keys(S.comptaStatus).forEach((ym) => { const st = S.comptaStatus[ym]; const declared = st && Object.keys(st).some((k) => st[k] === 'encode'); if (!monthsLive.has(ym) && !declared) delete S.comptaStatus[ym]; else if (!monthsLive.has(ym) && declared) logWrite({ f: 'recalcAllTours', entity: 'comptaStatus', id: ym, frozen: true, note: 'mois DÉCLARÉ sans tournée — verrou CONSERVÉ (jamais rouvert)' }); }); // L4 : ne JAMAIS lever le verrou d'un mois DÉCLARÉ (rouvrirait une période fermée) — seuls les mois non déclarés sont nettoyés
   if (Array.isArray(S.notesCredit)) S.notesCredit.forEach((nc) => { if (nc.tourId && !tourIds.has(nc.tourId)) nc.tourDeleted = true; }); // L4 (règle 6) : une NC est ACTÉE → JAMAIS supprimée. Note orpheline (tournée disparue) = DÉTACHÉE (tourDeleted), remboursée ou non
@@ -9798,7 +9813,7 @@ function comptaData(ym) {
   const ncTTC = ncMonth.reduce((s, n) => s + (n.montantTTC || 0), 0);
   const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
   // L7 (MODULE A) — POSTE « REMBOURSEMENTS » de la caisse FACTURE-LIQUIDE : une NC dont le client a payé en facture liquide = cash physiquement RENDU. Imputé au mois du remboursement. Réduit la CAISSE facliq (jamais le CA — la NC le réduit déjà). Pas d'impact sur les bases analytiques (l'extourne NC les réduit déjà → sinon double comptage).
-  const facliqNC = (n) => { const tt = allTours().find((x) => x.id === n.tourId); const pp = tt && tt.payments && tt.payments[n.clientId]; return !!(pp && pp.method === 'liquide' && pp.facture); };
+  const facliqNC = (n) => { const tt = allTours().find((x) => x.id === n.tourId); const pp = tt && tt.payments && tt.payments[n.clientId]; return !!(pp && pp.method === 'liquide' && pp.facture && n.rembourse); }; // AUDIT-fix : exiger `n.rembourse` (cash RÉELLEMENT rendu). Une NC remboursée en AVOIR (rembourse:false, déduit à la prochaine visite) ne doit PAS baisser la caisse ici (sinon double baisse : ici + à la collecte de l'avoir).
   const remboursementsCaisse = (S.notesCredit || []).filter((n) => facliqNC(n) && ((n.rembourseAt || n.date) || '').slice(0, 7) === ym).map((n) => { const b = ncBreakdown(n); const ttc = n.montantTTC || 0; return { ncId: n.id, numero: n.numero, clientId: n.clientId, nom: n.clientNom, date: n.rembourseAt || n.date, ht: (b.moHT || 0) + (b.matHT || 0) + (b.depHT || 0), tva: b.tva || 0, ttc }; });
   const rembHT = remboursementsCaisse.reduce((s, r) => s + r.ht, 0), rembTVA = remboursementsCaisse.reduce((s, r) => s + r.tva, 0), rembTTC = remboursementsCaisse.reduce((s, r) => s + r.ttc, 0);
   const remboursementsTotal = { ht: -rembHT, tva: -rembTVA, ttc: -rembTTC }; // négatif
@@ -10680,14 +10695,15 @@ function impayePdfBlob(c, im) {
 }
 // PDF (Blob) d'une note de crédit — ne contient QUE les données de ce client (confidentialité).
 function ncPdfBlob(n) {
-  const r = rate(), ht = n.montantTTC / (1 + r);
+  // AUDIT-fix : ventilation HT/TVA cohérente avec creditNotePdf → via ncBreakdown (taux effectif par ligne) au lieu du taux standard global (divergence en multi-taux).
+  const b = ncBreakdown(n); const ht = (b.moHT || 0) + (b.matHT || 0) + (b.depHT || 0); const tva = (b.tva != null) ? b.tva : Math.max(0, (n.montantTTC || 0) - ht);
   return pdfFromText([
     { text: 'Note de crédit (avoir)', size: 20, bold: true, gap: 30 },
     { text: n.clientNom, size: 13, bold: true, gap: 18 },
     { text: 'Emise le ' + fmtDateFr(n.date), size: 11, gap: 24 },
     { text: 'Annulation du RDV du ' + fmtDateFr(n.tourDate) + ' - ' + ncContentText(n), size: 12, gap: 26 },
     { text: 'Avoir HT : ' + eur(ht), gap: 16 },
-    { text: 'TVA : ' + eur(n.montantTTC - ht), gap: 16 },
+    { text: 'TVA : ' + eur(tva), gap: 16 },
     { text: 'Montant a rembourser TTC : ' + eur(n.montantTTC), size: 14, bold: true },
   ]);
 }
@@ -13095,6 +13111,7 @@ function blockingTours() {
 }
 // Persiste une tournée dans le bon store (actif/archive) sans doublon.
 function persistTourAnywhere(t) {
+  checkFrozenWrite(t); // AUDIT-fix : le filet L9 couvre aussi cette porte de persistance (recoverTour/modalRecoverStats), plus seulement persistCurrentTour
   const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); return; }
   const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); return; }
   tournees.push(t); saveTournees();
@@ -14039,6 +14056,7 @@ function createReglement(t, cid, opts) {
   const reg = { id: uid(), numero: nextReglementNumero(), date: todayStr(), ymImpute, tourId: t.id, clientId: cid, clientNom: clientName(cid), type: 'imputation', from: { method: p.method, facture: !!p.facture }, to: { method: opts.toMethod, facture: !!opts.toFacture, rectifie: liq.rectifie, partiel: liq.partiel, impaye: liq.impaye }, montantTTC, ht: fromHT, tva: montantTTC - fromHT, motif: opts.motif || '', deviceId: S.deviceId || null, annuleId: null };
   S.reglements.push(reg);
   if (p.method === 'virement') { S.comptaRecu = S.comptaRecu || {}; S.comptaRecu[t.id + ':' + cid] = true; } // L8/§2.3ter : le virement erroné est marqué REÇU (l'argent est entré en cash) → plus de créance fantôme
+  if (toLiquide && liq.partiel && liq.impaye > 0) { setClientImpaye(t, cid, liq.impaye); } // AUDIT-fix : un impayé sur la jambe LIQUIDE (le cash reçu < montant viré) doit devenir une CRÉANCE réclamée à la prochaine visite — sinon du CA reconnu jamais encaissé ni réclamé
   saveSettings();
   logWrite({ f: 'createReglement', entity: 'reglement', id: reg.numero, note: comptaSectionKey(reg.from) + '→' + comptaSectionKey(reg.to) });
   return reg;
