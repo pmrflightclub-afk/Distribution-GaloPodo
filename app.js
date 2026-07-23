@@ -11,10 +11,29 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '2.0.0';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '2.0.0', date: '2026-07-23',
+    ajouts: [
+      'FIABILITÉ COMPTABLE (refonte majeure) — une facture clôturée, un paiement fait, un mois déclaré sont désormais IMMUABLES : ils ne se re-tarifent, ne se reclassent et ne se suppriment plus jamais (les corrections passent par des pièces neuves). Toutes les causes de perte d\'argent/compta identifiées à l\'audit sont fermées.',
+      'PAIEMENT LIQUIDE — le champ devient « Montant liquide reçu » : un manque d\'au moins 1 € coche automatiquement « paiement partiel » et pré-remplit l\'impayé ; un écart de moins d\'1 € reste un arrondi. Fini la fausse « remise ».',
+      'GEL PAR CLIENT — dès qu\'un client est clôturé et payé, son montant est figé : il ne bouge plus même si la tournée change (ajout/retrait d\'arrêt, recalcul d\'itinéraire).',
+      'AVOIR CLIENT — un remboursement (annulation d\'une facture liquide) peut être reporté à la prochaine visite (avoir déduit du total, soldé en entier, reliquat rendu en cash si besoin).',
+      'CORRECTION D\'IMPUTATION (contrepassation) — si un paiement acté a été mal classé (ex. saisi virement, réglé en espèces), un « règlement rectificatif » le compense sans réécrire la pièce d\'origine ; le CA ne bouge pas, seule la ventilation se corrige. Gère l\'arrondi et l\'impayé de la jambe liquide, et marque le virement erroné « reçu ».',
+      'COMPTA — poste « Remboursements » : la caisse « Facture pro liquide » est nette des remboursements en espèces, avec réconciliation à l\'écran et dans le PDF (Encaissé brut − Remboursements = Net).',
+      'DOCUMENTS INDÉPENDANTS — nouveau registre (Compta → Documents) pour facturer ou créditer un client HORS tournée : réglé au prochain RDV (liquide fondu dans la facture, virement en attente bloquant la clôture).',
+      'SUPPRESSION — une tournée clôturée (ou à arrêt clôturé) ne peut plus être supprimée ; un cheval figurant sur une facture émise non plus (le rendre inactif). Le nom de chaque cheval est désormais obligatoire.',
+    ],
+    corrections: [
+      'La purge d\'un « arrondi caisse aberrant » n\'efface plus l\'encaissement (c\'était la cause de pertes de montants) : l\'écart est seulement signalé.',
+      'Un mois comptable déclaré ne se rouvre plus jamais ; une note de crédit n\'est plus jamais supprimée (détachée si sa tournée disparaît) ; les numéros de pièces ne sont plus jamais réemployés.',
+      'Un renommage de cheval ne fait plus disparaître la ligne « lourd » d\'une facture émise (jointure par identifiant).',
+      'Traçabilité : journal local des écritures sensibles (borné, non synchronisé) pour diagnostiquer sans jamais mettre les données en péril.',
+    ],
+  },
   {
     version: '1.7.97', date: '2026-07-19',
     ajouts: [
