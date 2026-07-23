@@ -2756,6 +2756,8 @@ const LS = {
       const quota = e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014);
       if (quota) {
         try {
+          // L1 : les anneaux de traçabilité sont les PREMIERS jetés (avant ftr.syncmeta, jamais avant ftr.tomb) → le journal ne peut jamais causer la perte qu'il documente.
+          try { localStorage.removeItem('ftr.wlog'); localStorage.removeItem('ftr.wlogFrozen'); } catch (e0) {}
           let old = {}, durable = {};
           try { old = JSON.parse(localStorage.getItem('ftr.syncmeta') || '{}') || {}; } catch (e0) {}
           try { durable = JSON.parse(localStorage.getItem('ftr.tomb') || '{}') || {}; } catch (e0) {}
@@ -2784,6 +2786,31 @@ const LS = {
   },
 };
 const uid = () => 'id' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); // robustesse : ~8 caractères aléatoires (36^8) au lieu de 1e6 → plus de collision d'id en création groupée (import/réinjection créant clients+chevaux dans le même tick)
+
+// ---------- L1 : TRAÇABILITÉ des écritures (journal local, non synchronisé) ----------
+// Deux anneaux bornés en OCTETS réels : ftr.wlog (toutes écritures instrumentées) et ftr.wlogFrozen (écritures touchant du figé / refus).
+// RÈGLES DE SÛRETÉ (spec) : jamais dans S ; jamais une SETTINGS_COLLECTION ; jamais via LS.set (écriture localStorage DIRECTE →
+// aucune cascade de purge quota) ; purgés AVANT ftr.syncmeta et JAMAIS avant ftr.tomb (cf. LS.set) → la traçabilité ne peut pas
+// devenir la cause de la perte qu'elle documente. `withOrigin` étiquette l'origine d'un bloc SYNCHRONE (fusion/gc/import/restore…).
+let _originStack = [];
+function withOrigin(o, fn) { _originStack.push(o); try { return fn(); } finally { _originStack.pop(); } }
+function currentOrigin() { return _originStack.length ? _originStack[_originStack.length - 1] : 'user'; }
+function journalRing(key, capBytes, entry) {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    let arr = []; try { arr = JSON.parse(localStorage.getItem(key) || '[]') || []; } catch (e0) { arr = []; }
+    arr.push(entry);
+    let s = JSON.stringify(arr);
+    while (s.length > capBytes && arr.length > 1) { arr.shift(); s = JSON.stringify(arr); } // borne en octets réels (FIFO)
+    localStorage.setItem(key, s); // DIRECT — jamais LS.set (pas de cascade quota)
+  } catch (e) { /* jamais bloquant */ }
+}
+// rec : { f (fonction), entity, id, frozen?, violation?, before?, after?, … }. `frozen`/`violation` → aussi dans l'anneau « figé ».
+function logWrite(rec) {
+  const e = Object.assign({ at: Date.now(), o: currentOrigin(), v: APP_VERSION }, rec || {});
+  journalRing('ftr.wlog', 128 * 1024, e);
+  if (rec && (rec.frozen || rec.violation)) journalRing('ftr.wlogFrozen', 64 * 1024, e);
+}
 
 // ---------- Brouillons : mémoire par formulaire/modale des saisies non encore enregistrées ----------
 // Clé par page/modale. Effacer un brouillon ne touche pas les autres.
@@ -3601,7 +3628,7 @@ function syncStamp(kind, arr) {
   // C'est le sens sûr : une édition non propagée est récupérable, un écrasement du coffre ne l'est pas.
   const _known = arr.reduce((n, r) => n + ((r && r.id && Object.prototype.hasOwnProperty.call(m.hash[kind], r.id)) ? 1 : 0), 0);
   const _baselineLost = arr.length >= 3 && _known === 0; // aucune référence alors qu'on a du contenu = référence perdue, pas N éditions simultanées
-  if (_baselineLost) { try { const j = LS.get('ftr.stampGuard', []); j.push({ at: now, kind, n: arr.length, v: APP_VERSION }); LS.set('ftr.stampGuard', j.slice(-50)); } catch (e) {} } // trace : ces épisodes doivent être visibles, pas silencieux
+  if (_baselineLost) { journalRing('ftr.stampGuard', 32 * 1024, { at: now, kind, n: arr.length, v: APP_VERSION }); } // L1 : écriture DIRECTE (plus via LS.set → plus de cascade quota déclenchée par la trace elle-même)
   arr.forEach((rec) => {
     if (!rec.id) rec.id = uid(); seen[rec.id] = true;
     const h = hashRec(rec);
