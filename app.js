@@ -7338,7 +7338,7 @@ function tourFinalizeBlock(t) {
     const lbl = (i + 1) + '. ' + (labelFor(a) || 'arrêt');
     if (!arretActeOK(a)) { out.push(lbl + ' : aucun cheval coché (Parage ou Visite obligatoire)'); return; }
     if (typeof a.validatedAt !== 'number') { out.push(lbl + ' : arrêt non clôturé (💶 Paiement & clôture à valider)'); return; }
-    (a.clients || []).forEach((cl) => { const iss = clientPaiementIssue(t, cl.clientId); if (iss) out.push(lbl + ' — ' + clientName(cl.clientId) + ' : ' + iss); });
+    (a.clients || []).forEach((cl) => { const iss = clientPaiementIssue(t, cl.clientId); if (iss) out.push(lbl + ' — ' + clientName(cl.clientId) + ' : ' + iss); const docs = clientPendingDocs(cl.clientId); if (docs.length) out.push(lbl + ' — ' + clientName(cl.clientId) + ' : ' + docs.length + ' document(s) indépendant(s) à régler (virement) — voir Compta → Documents'); }); // L10 : un document virement indépendant non réglé bloque la clôture du client
   });
   return out;
 }
@@ -10720,13 +10720,16 @@ function comptaSectionsHtml(ym) {
   const orSec = ((d.offertTTC || 0) >= 0.005 || (d.remiseTTC || 0) >= 0.005) ? `<section class="card"><div class="card-head"><h3 style="margin:0">🎁 Offert / Remises du mois</h3></div><p class="hint">Offert : <b>${eur(d.offertTTC)}</b> TTC · Remises accordées : <b>${eur(d.remiseTTC)}</b> TTC. Valeur commerciale consentie — <b>info hors chiffre d'affaires</b> (déjà déduite des montants facturés).</p></section>` : '';
   // L8 : carte des règlements rectificatifs (contrepassation) — CA inchangé, seule la ventilation bouge.
   const regSec = (d.reglements && d.reglements.length) ? `<section class="card"><div class="card-head"><h3 style="margin:0">⇄ Corrections d'imputation</h3></div><p class="hint">Le CA ne change pas — seule la répartition entre sections est corrigée (contrepassation).</p><div class="table-wrap"><table><thead><tr><th>Pièce</th><th>Client</th><th>De → Vers</th><th>Montant</th></tr></thead><tbody>${d.reglements.map((r) => `<tr><td>${esc(r.numero)}</td><td>${esc(r.clientNom)}</td><td>${esc(SECT_LBL[comptaSectionKey(r.from)] || '')} → ${esc(SECT_LBL[comptaSectionKey(r.to)] || '')}</td><td>${eur(r.montantTTC)}</td></tr>`).join('')}</tbody></table></div></section>` : '';
+  // L10 : accès au registre des documents indépendants (factures de vente / NC hors tournée).
+  const nDocsAttente = (S.documents || []).filter((x) => x.statut === 'a-regler').length;
+  const docSec = `<section class="card"><div class="card-head"><h3 style="margin:0">📄 Documents indépendants</h3><button class="btn small" id="comptaDocsBtn">Ouvrir le registre${nDocsAttente ? ' (' + nDocsAttente + ' à régler)' : ''}</button></div><p class="hint">Facturer ou créditer un client HORS tournée (réglé au prochain RDV).</p></section>`;
   // L7 : bloc de réconciliation de la caisse facture-liquide (Encaissé brut · − Remboursements · = Net).
   const facliqRecon = (d.remboursementsCaisse && d.remboursementsCaisse.length) ? `<p class="hint" style="margin-top:6px">Encaissé brut : <b>${eur(d.factureLiqBrut.ttc)}</b> · ↩ Remboursements (${d.remboursementsCaisse.length} pièce${d.remboursementsCaisse.length > 1 ? 's' : ''}) : <b>${eur(d.remboursementsTotal.ttc)}</b> · = <b>Net encaissé ${eur(d.factureLiqTotal.ttc)}</b><br><span class="li-sub">${d.remboursementsCaisse.map((r) => 'NC ' + (r.numero || '') + ' · ' + esc(r.nom) + ' · −' + eur(r.ttc)).join(' — ')}</span></p>` : '';
   return liquideSec
     + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients)
     + section('🧾 Facture pro — liquide', 'facliq', d.factureLiqTotal, clientTbl(d.factureLiqClients) + facliqRecon, d.factureLiqClients)
     + section('🧾 Facture pro — virement', 'facvir', d.factureVirTotal, clientTbl(d.factureVirClients), d.factureVirClients)
-    + ncSec + regSec + orSec;
+    + ncSec + regSec + docSec + orSec;
 }
 // Sous-onglet « Tournée à venir » : clients de toute tournée calculée sans mode de paiement choisi (à classer), toutes périodes.
 function renderComptaAvenir() {
@@ -10748,6 +10751,7 @@ function comptaWire(container, rerender) {
   container.querySelectorAll('[data-dem]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaDemarche = S.comptaDemarche || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaDemarche[k] = true; else delete S.comptaDemarche[k]; saveSettings(); rerender(); }));
   container.querySelectorAll('[data-mode]').forEach((el) => el.addEventListener('change', () => { const r = setComptaPayment(el.dataset.tour, el.dataset.cid, el.value); if (r === false) { const t = tourById(el.dataset.tour); if (t && confirm('🔒 Ce paiement est acté (immuable) — il ne peut pas être reclassé.\n\nCorriger une erreur d\'imputation ? Un RÈGLEMENT RECTIFICATIF (contrepassation) sera créé : la pièce d\'origine reste intacte, une correction lui fait face.')) { modalCorrigerReglement(t, el.dataset.cid, () => rerender()); return; } } rerender(); }));
   container.querySelectorAll('[data-recu]').forEach((cb) => cb.addEventListener('change', (e) => { S.comptaRecu = S.comptaRecu || {}; const k = cb.dataset.key; if (e.target.checked) S.comptaRecu[k] = true; else delete S.comptaRecu[k]; saveSettings(); rerender(); }));
+  { const db = container.querySelector('#comptaDocsBtn'); if (db) db.addEventListener('click', () => modalDocuments()); } // L10 : registre des documents indépendants
   container.querySelectorAll('[data-print]').forEach((btn) => btn.addEventListener('click', () => comptaPrint(btn.dataset.ym, btn.dataset.print)));
   container.querySelectorAll('[data-detail]').forEach((btn) => btn.addEventListener('click', () => modalLiquideDetail(btn.dataset.ym)));
 }
@@ -13979,6 +13983,26 @@ function paiementActe(t, cid) {
 }
 // L8 — numéro de règlement rectificatif : préfixe 'C' + appareil, distinct de '' (NC) et 'F' (facture). Compteur PERSISTÉ monotone.
 function nextReglementNumero() { const pfx = 'C' + ncDevicePfx(); const derived = (S.reglements || []).reduce((m, r) => { const s = String(r.numero || ''); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; return Math.max(m, v); } return m; }, 0); const seq = Math.max(derived, S.reglementSeq || 0) + 1; S.reglementSeq = seq; return pfx + '-' + seq; }
+// L10 — DOCUMENTS INDÉPENDANTS (facture de vente / note de crédit hors tournée). Numéro : facture de vente = 'V'+appareil, NC indépendante = 'N'+appareil. Compteur PERSISTÉ monotone.
+function nextDocumentNumero(type) { const pfx = (type === 'facture' ? 'V' : 'N') + ncDevicePfx(); const derived = (S.documents || []).reduce((m, d) => { const s = String(d.numero || ''); if (s.indexOf(pfx + '-') === 0) { const v = parseInt(s.slice(pfx.length + 1), 10) || 0; return Math.max(m, v); } return m; }, 0); const seq = Math.max(derived, S.documentSeq || 0) + 1; S.documentSeq = seq; return pfx + '-' + seq; }
+// Crée un document indépendant et l'ATTACHE au prochain RDV du client : liquide → ligne dans la facture (impayé si VENTE = CA neuf, avoir si NC) ; virement → paiement propre sur le document (en attente, bloquant la clôture). opts : { method:'liquide'|'virement', facture, lignes, motif }.
+function createIndepDoc(clientId, type, montantTTC, opts) {
+  opts = opts || {};
+  const c = clients.find((x) => x.id === clientId); if (!c) return null;
+  const doc = { id: uid(), numero: nextDocumentNumero(type), type, clientId, clientNom: clientName(clientId), date: todayStr(), montantTTC: Math.round((montantTTC || 0) * 100) / 100, lignes: opts.lignes || [], motif: opts.motif || '', method: opts.method || null, facture: !!opts.facture, statut: 'a-regler', sentAt: null, tourId: null, deviceId: S.deviceId || null };
+  const isLiquide = opts.method === 'liquide';
+  if (type === 'facture' && isLiquide) { // vente liquide → impayé (CA neuf reconnu à la collecte)
+    if (!Array.isArray(c.impayes)) c.impayes = []; c.impayes.push({ id: uid(), sourceTourId: null, docId: doc.id, date: doc.date, ttc: doc.montantTTC, collected: false, collectedTourId: null, reporte: true }); saveClients();
+  } else if (type === 'nc' && isLiquide) { // NC liquide → avoir (déduit à la prochaine visite)
+    setClientAvoir({ id: null, date: doc.date }, clientId, doc.montantTTC, { motif: 'Doc ' + doc.numero });
+  }
+  // virement/facvir : le paiement vit sur le document (statut 'a-regler') → tourFinalizeBlock bloque, réglé via le registre.
+  S.documents.push(doc); saveSettings();
+  logWrite({ f: 'createIndepDoc', entity: 'document', id: doc.numero, note: type + '/' + (opts.method || '?') });
+  return doc;
+}
+// Documents indépendants NON réglés rattachés à un client (bloquent la clôture de son arrêt). Le virement/facvir bloque tant que non « réglé ».
+function clientPendingDocs(clientId) { return (S.documents || []).filter((d) => d.clientId === clientId && d.statut === 'a-regler' && (d.method === 'virement')); }
 // Section comptable d'une méthode {method, facture} : liquide / virement / facliq / facvir.
 function comptaSectionKey(mp) { if (!mp || !mp.method) return null; return mp.method === 'liquide' ? (mp.facture ? 'facliq' : 'liquide') : (mp.facture ? 'facvir' : 'virement'); }
 // L8 — RÈGLEMENT RECTIFICATIF (contrepassation) : corrige une IMPUTATION erronée (méthode/facture), le MONTANT étant juste.
@@ -14039,6 +14063,47 @@ function modalCorrigerReglement(t, cid, onDone) {
     createReglement(t, cid, { toMethod: tm, toFacture: tf, recu, partiel: liq.partiel, impaye: liq.impaye, motif: $('crMotif').value.trim() });
     closeModal(); if (onDone) onDone();
     alert('✅ Règlement rectificatif créé. La compta somme la pièce d\'origine et la correction (le CA ne bouge pas).');
+  });
+  upd();
+}
+// L10 — REGISTRE des documents indépendants (factures de vente / NC) : statut, réglé, envoi, + bouton « Déclarer ».
+function modalDocuments() {
+  const render = () => {
+    const docs = (S.documents || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const rows = docs.length ? docs.map((d) => `<div class="li-item"><div class="li-main"><b>${d.type === 'facture' ? '🧾 Facture de vente' : '↩ Note de crédit'} ${esc(d.numero)} · ${esc(d.clientNom)}</b> <b class="li-amount">${eur(d.montantTTC)}</b><span class="li-sub">${esc(fmtDateFr(d.date))} · ${esc(d.method || '—')}${d.facture ? ' (facture)' : ''} · ${d.statut === 'regle' ? '✅ réglé' : '⏳ à régler'}${d.sentAt ? ' · 📧 envoyé' : ''}${d.motif ? ' · ' + esc(d.motif) : ''}</span></div><div class="li-act li-act-col">${d.statut !== 'regle' ? `<button class="btn small primary" data-reg="${d.id}">Marquer réglé</button>` : ''}</div></div>`).join('') : '<p class="empty">Aucun document indépendant.</p>';
+    return `<div class="modal-head"><b>📄 Documents indépendants</b><button class="x" id="mX">✕</button></div>
+      <p class="hint">Factures de vente et notes de crédit HORS tournée. Réglées au prochain RDV du client (liquide fondu dans la facture ; virement en attente, bloquant la clôture).</p>
+      <div class="actions" style="margin:6px 0"><button class="btn primary" id="docNew">＋ Déclarer un document</button></div>
+      <div id="docsList">${rows}</div>`;
+  };
+  const wire = () => {
+    $('mX').addEventListener('click', closeModal);
+    $('docNew').addEventListener('click', () => modalDeclarerDoc(null, () => { closeModal(); modalDocuments(); }));
+    document.querySelectorAll('#docsList [data-reg]').forEach((b) => b.addEventListener('click', () => { const d = (S.documents || []).find((x) => x.id === b.dataset.reg); if (d) { d.statut = 'regle'; d.regleAt = todayStr(); saveSettings(); closeModal(); modalDocuments(); } }));
+  };
+  openModal(render()); wire();
+}
+// Modale de création d'un document indépendant (facture de vente / NC).
+function modalDeclarerDoc(preClientId, onDone) {
+  const opts = clients.slice().sort((a, b) => clientName(a.id).localeCompare(clientName(b.id))).map((c) => `<option value="${c.id}"${c.id === preClientId ? ' selected' : ''}>${esc(clientName(c.id))}</option>`).join('');
+  openModal(`<div class="modal-head"><b>📄 Déclarer un document</b><button class="x" id="mX">✕</button></div>
+    <label>Client<select id="dqClient">${opts}</select></label>
+    <label>Type<select id="dqType"><option value="facture">Facture de vente (le client vous doit)</option><option value="nc">Note de crédit (vous devez au client)</option></select></label>
+    <label>Montant TTC<input type="number" id="dqMontant" step="0.01" min="0" inputmode="decimal"/></label>
+    <label>Règlement<select id="dqMode"><option value="liquide">Liquide — au prochain RDV</option><option value="virement">Virement — en attente</option></select></label>
+    <label class="chk2"><input type="checkbox" id="dqFac"/> Avec facture (pièce comptable)</label>
+    <label>Motif / description<input type="text" id="dqMotif" placeholder="ex. fers vendus au comptoir"/></label>
+    <p class="hint" id="dqPrev"></p>
+    <div class="actions"><button class="btn primary block" id="dqOk">Créer le document</button></div>`);
+  const upd = () => { const ty = $('dqType').value, mode = $('dqMode').value; if ($('dqPrev')) $('dqPrev').innerHTML = ty === 'facture' ? (mode === 'liquide' ? 'Ajouté en LIGNE à la prochaine facture du client (réglé sur place).' : 'Paiement par VIREMENT en attente — bloque la clôture du client jusqu\'au règlement.') : (mode === 'liquide' ? 'AVOIR déduit du total à la prochaine visite (soldé en entier, reliquat rendu si besoin).' : 'Note de crédit remboursée par virement.'); };
+  ['dqType', 'dqMode'].forEach((id) => { const e = $(id); if (e) e.addEventListener('change', upd); });
+  $('mX').addEventListener('click', () => { closeModal(); if (onDone) onDone(); });
+  $('dqOk').addEventListener('click', () => {
+    const cid = $('dqClient').value; const type = $('dqType').value; const montant = Math.max(0, parseNum($('dqMontant').value) || 0); const method = $('dqMode').value; const facture = $('dqFac').checked; const motif = $('dqMotif').value.trim();
+    if (!cid || montant <= 0) { alert('Client et montant (> 0) obligatoires.'); return; }
+    const doc = createIndepDoc(cid, type, montant, { method, facture, motif, lignes: motif ? [{ libelle: motif, ttc: montant }] : [] });
+    closeModal(); if (onDone) onDone();
+    if (doc) alert('✅ Document ' + doc.numero + ' créé' + (method === 'liquide' ? ' — sera réglé au prochain RDV du client.' : ' — virement en attente.'));
   });
   upd();
 }
