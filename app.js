@@ -8642,6 +8642,18 @@ function payImpaye(m, p) {
   return 0;
 }
 function payRecu(m, p) { return payRectifie(m, p) - payImpaye(m, p); }  // liquide réellement reçu (rectifié − impayé)
+// MODULE D (L0) — dérive (rectifie, partiel, impaye) d'un encaissement liquide à partir du CASH RÉELLEMENT REÇU.
+// Règle propriétaire : un reçu inférieur au total d'AU MOINS 1 € = IMPAYÉ (partiel auto) ; sous 1 € = arrondi (cadeau/supplément).
+// Invariant : payRecu = rectifie − impaye = recu (le champ saisi est le cash en main, pas le total). rectifie = recu + impaye.
+// opts : { partiel:bool (case cochée à la validation), impaye:number|null (champ impayé), auto:bool (mode suggestion à la frappe) }.
+function liquideFromRecu(recu, ttc, opts) {
+  opts = opts || {};
+  recu = Math.max(0, Math.round(recu || 0));
+  const totalR = Math.round(ttc || 0);
+  if (opts.partiel) { const impaye = Math.max(0, opts.impaye != null ? Math.round(opts.impaye) : (totalR - recu)); return { rectifie: recu + impaye, partiel: true, impaye }; } // partiel explicite → impayé fourni ou déduit
+  if (opts.auto && (ttc || 0) - recu >= 1) { const impaye = Math.max(0, totalR - recu); return { rectifie: recu + impaye, partiel: true, impaye }; } // suggestion : manque ≥ 1 € → impayé
+  return { rectifie: recu, partiel: false, impaye: null }; // arrondi (écart < 1 € ou supplément)
+}
 function payArrondi(m, p) { if (!p || p.method !== 'liquide') return 0; const d = payRectifie(m, p) - (m ? m.totalTTC : 0); return Math.abs(d) < 0.005 ? 0 : d; }
 // Arrondi caisse d'un client : { has, ht, tva, ttc } — différence (+/−) à intégrer dans la facture (s'applique aussi en partiel).
 function cashRounding(m, payment) {
@@ -14223,17 +14235,18 @@ function modalAdjustArrondi(t, list, msg) {
   list.forEach((c, i) => {
     const m = (t.result && t.result.parClient || []).find((x) => x.clientId === c.clientId);
     const dep = m ? m.htDep * (1 + stdRate) : 0, mat = m ? m.htMat * (1 + stdRate) : 0, art = m ? Math.max(0, m.totalTTC - (m.htDep + m.htMat) * (1 + stdRate)) : 0;
-    const p = (t.payments || {})[c.clientId] || {}; const oldEnc = (p.rectifie != null) ? p.rectifie : (p.montantPaye != null ? p.montantPaye : null);
+    const p = (t.payments || {})[c.clientId] || {}; const curImp = (p.partiel && p.impaye != null) ? p.impaye : 0; const oldEnc = (p.rectifie != null) ? (p.rectifie - curImp) : (p.montantPaye != null ? p.montantPaye : null);
+    const recuDef = Math.max(0, Math.round(c.total) - curImp); // MODULE D : cash attendu = total − impayé déjà noté
     html += `<div class="pay-block"><h3 style="font-size:.95rem;margin:.3rem 0">${esc(c.nom)}</h3>
-      <p class="hint" style="margin:.2rem 0"><b>Total recalculé : ${eur(c.total)}</b><br><span class="li-sub">déplacement ${eur(dep)} · matériel ${eur(mat)} · articles ${eur(art)}${oldEnc != null ? ' · ancien encaissé ' + eur(oldEnc) : ''}</span></p>
-      <label>Montant liquide encaissé (arrondi à l'euro)<input type="number" step="1" min="0" inputmode="numeric" data-aj="${i}" value="${Math.round(c.total)}"/></label></div>`;
+      <p class="hint" style="margin:.2rem 0"><b>Total recalculé : ${eur(c.total)}</b><br><span class="li-sub">déplacement ${eur(dep)} · matériel ${eur(mat)} · articles ${eur(art)}${curImp > 0 ? ' · impayé noté ' + eur(curImp) : ''}${oldEnc != null ? ' · ancien reçu ' + eur(oldEnc) : ''}</span></p>
+      <label>Montant liquide reçu (à l'euro)<input type="number" step="1" min="0" inputmode="numeric" data-aj="${i}" value="${recuDef}"/></label></div>`;
   });
   html += `</div><div class="actions"><button class="btn primary block" id="ajOk">Enregistrer</button></div>`;
   openModal(html);
   const done = () => { closeModal(); refreshEverywhere(); openEditor(); };
   $('mX').addEventListener('click', done);
   $('ajOk').addEventListener('click', () => {
-    $('ajList').querySelectorAll('[data-aj]').forEach((inp) => { const c = list[+inp.dataset.aj]; const p = (t.payments || {})[c.clientId]; if (p) { const v = parseFloat(inp.value); p.rectifie = isFinite(v) ? v : Math.round(c.total); p.montantPaye = null; if (p.partiel && p.impaye != null) p.impaye = Math.min(Math.max(0, p.impaye), Math.round(p.rectifie)); } }); // #5 : impayé clampé au nouvel encaissé (jamais > rectifié)
+    $('ajList').querySelectorAll('[data-aj]').forEach((inp) => { const c = list[+inp.dataset.aj]; const p = (t.payments || {})[c.clientId]; if (p) { const curImp = (p.partiel && p.impaye != null) ? p.impaye : 0; const v = parseFloat(inp.value); const recu = isFinite(v) ? Math.max(0, Math.round(v)) : Math.max(0, Math.round(c.total) - curImp); p.rectifie = recu + curImp; p.montantPaye = null; } }); // MODULE D : champ = cash reçu ; rectifie = reçu + impayé (impayé inchangé)
     currentTour = t; persistCurrentTour();
     done(); if (msg) alert(msg + ' Stats mises à jour.');
   });
@@ -14308,11 +14321,12 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
   const invTTC = (cid) => { const m = (t.result && t.result.parClient) ? t.result.parClient.find((x) => x.clientId === cid) : null; return m ? m.totalTTC : 0; };
   const persist = () => { const i = tournees.findIndex((x) => x.id === t.id); if (i >= 0) { tournees[i] = t; saveTournees(); return; } const ai = archive.findIndex((x) => x.id === t.id); if (ai >= 0) { archive[ai] = t; saveArchive(); return; } tournees.push(t); saveTournees(); };
   recomputeTourLocal(t); // reflète la réduction liquide couplée dans les totaux affichés
-  let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div><p class="hint">Choisissez le mode de paiement (obligatoire pour clôturer). En <b>liquide</b>, saisissez le <b>montant décimal rectifié</b> : le total arrondi à l\'euro que vous encaissez (la différence + ou − passe en facture).</p>';
+  let html = '<div class="modal-head"><b>💶 Paiement de l\'arrêt</b><button class="x" id="mX">✕</button></div><p class="hint">Choisissez le mode de paiement (obligatoire pour clôturer). En <b>liquide</b>, saisissez le <b>montant réellement reçu</b> (à l\'euro) : un écart de moins d\'1 € passe en arrondi, un manque d\'au moins 1 € devient un <b>impayé</b> (paiement partiel coché automatiquement).</p>';
   clientsAt.forEach((cid) => {
     const p = t.payments[cid] || { method: null, facture: false, rectifie: null, partiel: false, impaye: null }; // par défaut : aucun mode choisi (neutre)
     const ttc = invTTC(cid);
-    const rectVal = p.rectifie != null ? p.rectifie : (p.montantPaye != null && !p.partiel ? p.montantPaye : '');
+    // MODULE D : le champ affiche le CASH REÇU = rectifié − impayé (plus le « total rectifié »). En arrondi (sans impayé), reçu = rectifié.
+    const rectVal = p.rectifie != null ? (p.rectifie - (p.partiel && p.impaye != null ? p.impaye : 0)) : (p.montantPaye != null && !p.partiel ? p.montantPaye : '');
     html += `<div class="pay-block" data-cid="${cid}">
       <h3 style="font-size:.9rem;margin:.4rem 0">${esc(clientName(cid))} <span class="li-sub">— facture <span data-facture>${eur(ttc)}</span> TTC</span></h3>
       <div class="pay-actrow"><button type="button" class="btn small" data-pactes="${cid}">🐴 Actes / articles</button> <button type="button" class="btn small" data-carte="${cid}">🗺️ Carte client</button> <button type="button" class="btn small" data-rdv="${cid}">📅 Fixer RDV</button></div>
@@ -14322,7 +14336,7 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
       </div>
       <label class="chk2"><input type="checkbox" data-fac ${p.facture ? 'checked' : ''}/> Facture nécessaire</label>
       <div class="pay-cash" style="${p.method === 'liquide' ? '' : 'display:none'}">
-        <label>Montant décimal rectifié (TTC, arrondi à l'euro)<input type="number" data-rectifie step="1" min="0" inputmode="numeric" value="${rectVal}" placeholder="${ttc ? Math.round(ttc) : ''}"/></label>
+        <label>Montant liquide reçu (TTC, à l'euro)<input type="number" data-rectifie step="1" min="0" inputmode="numeric" value="${rectVal}" placeholder="${ttc ? Math.round(ttc) : ''}"/></label>
         <p class="hint" data-diff></p>
         <label class="chk2"><input type="checkbox" data-partiel ${p.partiel ? 'checked' : ''}/> Paiement partiel (reste impayé)</label>
         <div class="pay-reste" style="${p.partiel ? '' : 'display:none'}">
@@ -14341,8 +14355,8 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
     const on = block.querySelector('.pay-method .seg-btn.on'); const method = on ? on.dataset.m : null;
     if (method !== 'liquide' && method !== 'virement') return 'mode de paiement non choisi';
     if (method === 'liquide') {
-      if (block.querySelector('[data-rectifie]').value === '') return 'montant liquide non renseigné';
-      if (block.querySelector('[data-partiel]').checked) { const iv = block.querySelector('[data-impaye]').value; if (iv === '' || Math.round(parseNum(iv)) <= 0) return 'montant impayé non renseigné'; const rv = block.querySelector('[data-rectifie]').value; if (rv !== '' && Math.round(parseNum(iv)) > Math.round(parseNum(rv))) return 'montant impayé supérieur au montant encaissé'; } // M4 : garde impayé ≤ rectifié → encaissé jamais négatif
+      if (block.querySelector('[data-rectifie]').value === '') return 'montant liquide reçu non renseigné';
+      if (block.querySelector('[data-partiel]').checked) { const iv = block.querySelector('[data-impaye]').value; if (iv === '' || Math.round(parseNum(iv)) <= 0) return 'montant impayé non renseigné'; } // MODULE D : reçu et impayé sont indépendants (le reçu peut être < impayé) → plus de garde « impayé ≤ reçu »
     }
     return null;
   };
@@ -14359,15 +14373,27 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
     const rectInt = () => { const v = block.querySelector('[data-rectifie]').value; return v === '' ? null : Math.max(0, Math.round(parseNum(v))); };
     const impInt = () => { const v = block.querySelector('[data-impaye]').value; return v === '' ? 0 : Math.max(0, Math.round(parseNum(v))); };
     const refreshFacture = () => { const ttc = invTTC(cid); const f = block.querySelector('[data-facture]'); if (f) f.textContent = eur(ttc); const ri = block.querySelector('[data-rectifie]'); if (ri) ri.placeholder = ttc ? Math.round(ttc) : ''; };
+    // MODULE D : à la frappe du montant reçu, l'app suggère l'impayé (manque ≥ 1 €) et coche « paiement partiel ». L'utilisateur peut décocher (= arrondi/cadeau) ou ajuster l'impayé.
+    let autoManaged = true; // tant que l'utilisateur n'a pas touché « partiel » à la main, le reçu pilote l'impayé
+    const applyAuto = () => {
+      if (!autoManaged) return;
+      const ttc = invTTC(cid); const recu = rectInt(); if (recu == null) return;
+      const d = liquideFromRecu(recu, ttc, { auto: true });
+      const pt = block.querySelector('[data-partiel]'); const pr = block.querySelector('.pay-reste'); const impF = block.querySelector('[data-impaye]');
+      if (pt) pt.checked = d.partiel; if (pr) pr.style.display = d.partiel ? '' : 'none';
+      if (impF) impF.value = d.partiel && d.impaye ? String(d.impaye) : '';
+    };
     const upd = () => {
-      const ttc = invTTC(cid); const rect = rectInt();
+      const ttc = invTTC(cid); const recu = rectInt();
       const diffEl = block.querySelector('[data-diff]');
+      const partiel = block.querySelector('[data-partiel]').checked; const imp = impInt();
       if (diffEl) {
-        if (rect == null) diffEl.innerHTML = `Facture <b>${eur(ttc)}</b> TTC — arrondissez à l'euro (vers le haut ou le bas).`;
-        else { const d = rect - ttc; diffEl.innerHTML = `Différence (arrondi) : <b>${eur(d)}</b> TTC ${d < -0.004 ? '(remise)' : d > 0.004 ? '(supplément)' : ''}`; }
+        if (recu == null) diffEl.innerHTML = `Facture <b>${eur(ttc)}</b> TTC — saisissez le montant reçu (à l'euro).`;
+        else if (partiel) diffEl.innerHTML = `Total facturé <b>${eur(ttc)}</b> · reçu <b>${eur(recu)}</b> · <b>impayé ${eur(imp)}</b> TTC`;
+        else { const d = recu - ttc; diffEl.innerHTML = `Total facturé <b>${eur(ttc)}</b> · reçu <b>${eur(recu)}</b> — arrondi <b>${eur(d)}</b> ${d < -0.004 ? '(cadeau)' : d > 0.004 ? '(supplément)' : ''}`; }
       }
       const recuEl = block.querySelector('[data-recu]');
-      if (recuEl) { const base = rect != null ? rect : ttc; const imp = impInt(); recuEl.innerHTML = `Montant réellement reçu : <b>${eur(base - imp)}</b> TTC <span class="li-sub">(rectifié ${eur(base)} − impayé ${eur(imp)})</span>`; }
+      if (recuEl) { const base = recu != null ? recu + imp : ttc; recuEl.innerHTML = `Reste à percevoir : <b>${eur(imp)}</b> TTC <span class="li-sub">(sur ${eur(base)} facturé, reçu ${eur(recu != null ? recu : 0)})</span>`; }
       refreshValidity();
     };
     // Bascule de méthode : couple la réduction LIQUIDE en direct (recalcul de la facture).
@@ -14377,11 +14403,12 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
       t.payments[cid] = Object.assign({}, t.payments[cid], { method: b.dataset.m }); // méthode provisoire → recalcul
       recomputeTourLocal(t); refreshFacture(); upd();
     }));
-    const pt = block.querySelector('[data-partiel]'); if (pt) pt.addEventListener('change', () => { const pr = block.querySelector('.pay-reste'); if (pr) pr.style.display = pt.checked ? '' : 'none'; upd(); });
+    const pt = block.querySelector('[data-partiel]'); if (pt) pt.addEventListener('change', () => { autoManaged = false; const pr = block.querySelector('.pay-reste'); if (pr) pr.style.display = pt.checked ? '' : 'none'; if (pt.checked) { const impF = block.querySelector('[data-impaye]'); if (impF && impF.value === '') { const d = liquideFromRecu(rectInt() || 0, invTTC(cid), { auto: true, partiel: true }); impF.value = d.impaye ? String(d.impaye) : ''; } } upd(); }); // l'utilisateur reprend la main sur l'impayé
     // « Facture » = pièce comptable : confirmation à la COCHE (conséquences : avoir à l'annulation, section Compta « Facture pro »). Décocher ne demande rien.
     const fac = block.querySelector('[data-fac]'); if (fac) fac.addEventListener('change', () => { if (fac.checked && !confirm('Cocher « Facture nécessaire » : une facture (pièce comptable) sera émise pour ' + clientName(cid) + '.\n\n• À l\'annulation d\'une prestation de ce client, un AVOIR (note de crédit) sera créé.\n• En Compta, ce paiement passe en section « Facture pro » (liquide ou virement).\n\nConfirmer ?')) fac.checked = false; });
     // Champs à l'euro : recalcul en direct + normalisation (aucune décimale) à la sortie du champ.
-    ['[data-rectifie]', '[data-impaye]'].forEach((sel) => { const i = block.querySelector(sel); if (i) { i.addEventListener('input', upd); i.addEventListener('blur', () => { if (i.value !== '') i.value = String(Math.max(0, Math.round(parseNum(i.value)))); }); } });
+    const recF = block.querySelector('[data-rectifie]'); if (recF) { recF.addEventListener('input', () => { applyAuto(); upd(); }); recF.addEventListener('blur', () => { if (recF.value !== '') recF.value = String(Math.max(0, Math.round(parseNum(recF.value)))); }); }
+    const impF2 = block.querySelector('[data-impaye]'); if (impF2) { impF2.addEventListener('input', () => { autoManaged = false; upd(); }); impF2.addEventListener('blur', () => { if (impF2.value !== '') impF2.value = String(Math.max(0, Math.round(parseNum(impF2.value)))); }); } // saisie manuelle de l'impayé → l'utilisateur reprend la main
     upd();
   });
   refreshValidity();
@@ -14393,9 +14420,15 @@ function modalPayment(t, arret, after, onCommit, onlyClientId) {
       const facture = block.querySelector('[data-fac]').checked;
       let rectifie = null, partiel = false, impaye = null, resteMode = null;
       if (method === 'liquide') {
-        const rv = block.querySelector('[data-rectifie]').value; rectifie = rv !== '' ? Math.max(0, Math.round(parseNum(rv))) : null;
-        partiel = block.querySelector('[data-partiel]').checked;
-        if (partiel) { const iv = block.querySelector('[data-impaye]').value; impaye = iv !== '' ? Math.max(0, Math.round(parseNum(iv))) : 0; resteMode = block.querySelector('[data-restemode]').value; }
+        const rv = block.querySelector('[data-rectifie]').value; // MODULE D : le champ = CASH REÇU
+        if (rv !== '') {
+          const recu = Math.max(0, Math.round(parseNum(rv)));
+          const partielChecked = block.querySelector('[data-partiel]').checked;
+          const iv = block.querySelector('[data-impaye]').value;
+          const d = liquideFromRecu(recu, invTTC(cid), { partiel: partielChecked, impaye: iv !== '' ? Math.max(0, Math.round(parseNum(iv))) : null });
+          rectifie = d.rectifie; partiel = d.partiel; impaye = d.impaye; // rectifie = reçu + impayé ; payRecu = reçu
+          if (partiel) resteMode = block.querySelector('[data-restemode]').value;
+        }
       }
       const prevP = t.payments[cid] || {}; // M1 : préserver le remboursé (traçabilité annulation) et le rattachement de période caisse à la ré-saisie du paiement
       t.payments[cid] = { method, facture, rectifie, partiel, impaye, resteMode, rembourse: prevP.rembourse || 0, comptaPeriod: prevP.comptaPeriod || null, _ts: Date.now() }; // FIABILITÉ : date de saisie (fusion par le plus récent)
