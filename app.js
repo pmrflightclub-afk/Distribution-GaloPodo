@@ -8869,7 +8869,7 @@ function clientInvoiceHtml(m, payment, fact) {
   return `<div class="inv-head"><span>${esc(m.nom)}</span><span class="inv-amt">${eur(netTTC)} TTC</span></div>${numHtml}
     <div class="table-wrap"><table class="inv-tbl"><thead><tr><th>Poste</th><th>Prix unitaire</th><th>Base HT</th><th>TVA</th><th>TTC</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot>${rowNR(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${rowNR('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}${(payment && payment.rembourse > 0) ? `<tr class="inv-reduc"><td colspan="4">↩ Remboursé au client (annulation liquide — à votre charge)</td><td>${eur(payment.rembourse)}</td></tr>` : ''}</tfoot></table></div>${tvaMentionHtml()}`;
+    <tfoot>${rowNR(arr.has ? 'Sous-total (rectifié)' : 'Sous-total', '', netHT, netTVA, netTTC, 'inv-total-row')}${rowNR('Tarif plein', '', (m.pleinHT != null ? m.pleinHT : m.totalHT), (m.pleinTVA != null ? m.pleinTVA : m.totalTVA), (m.pleinTTC != null ? m.pleinTTC : m.totalTTC), 'inv-brut-row')}${ppRows}${(payment && payment.rembourse > 0) ? `<tr class="inv-reduc"><td colspan="4">↩ Remboursé au client (annulation liquide — à votre charge)</td><td>${eur(payment.rembourse)}</td></tr>` : ''}${(m.avoirReliquat > 0) ? `<tr class="inv-reduc"><td colspan="4">↩ Reliquat d'avoir à RENDRE en cash (avoir &gt; facture — à votre charge)</td><td>${eur(m.avoirReliquat)}</td></tr>` : ''}</tfoot></table></div>${tvaMentionHtml()}`;
 }
 
 // Récap ANONYMISÉ (texte) : ni noms, ni adresses, ni chevaux — juste la répartition.
@@ -8924,6 +8924,7 @@ function invoiceTextForClient(m, payment) {
   const pp = partialPay(m, payment);
   if (pp) { L.push(`Montant réellement reçu (liquide) : ${eur(pp.paid)} TTC`); L.push(`Montant impayé (${pp.mode}) : ${eur(pp.reste)} TTC`); }
   if (payment && payment.rembourse > 0) L.push(`Remboursé au client (annulation liquide) : ${eur(payment.rembourse)} TTC`); // #6 : traçabilité remboursement sur le ticket (comme la facture)
+  if (m.avoirReliquat > 0) L.push(`Reliquat d'avoir à rendre en cash : ${eur(m.avoirReliquat)} TTC`); // avoir > facture — à votre charge, hors caisse
   if (payment && payment.method) L.push(`Paiement : ${payment.method === 'liquide' ? 'liquide' : 'virement'}${payment.facture ? ' · facture demandée' : ''}`);
   return L.join('\n');
 }
