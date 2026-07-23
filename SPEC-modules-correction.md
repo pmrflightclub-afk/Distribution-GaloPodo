@@ -485,71 +485,86 @@ pré-rempli et d'une case cochée. Aucun troisième type de pièce n'est nécess
 
 ---
 
-## 3ter. MODULE E — Le virement jamais reçu devient une CRÉANCE
+## 3ter. RÈGLE DU PROPRIÉTAIRE (2026-07-23) — SÉPARER RAPPEL D'IMPAYÉ (débit client) ET AVOIR (crédit client)
 
-> Décision du propriétaire, 2026-07-22, sur D2. **Écarte le règlement rectificatif pour ce cas** : un virement
-> qui n'arrive pas n'est pas une erreur de saisie, c'est une **créance impayée**.
+> Correction du propriétaire, 2026-07-23. **Le MODULE E « virement jamais reçu → créance » est SUPPRIMÉ.**
+> Ma recommandation était fausse. Trois règles nettes la remplacent.
 
-### 3ter.1 Le manque
+### 3ter.0 Ce qui était faux
 
-Un virement n'exige **aucun montant** à la clôture (app.js:7237 — cocher « Virement » suffit) ; l'arrivée réelle
-de l'argent se coche séparément dans la Compta (`S.comptaRecu`, app.js:10612). Entre les deux, il n'existe
-**aucune façon de dire « ce virement n'arrivera jamais »**. L'impayé (`p.partiel` / `p.impaye`) est réservé au
-liquide (app.js:7238-7241). La créance n'est représentable nulle part.
+J'avais proposé qu'un virement jamais reçu devienne une créance rappelée aux tournées suivantes. **Non.**
+Un virement est **indépendant** : il se régularise par un **virement**. S'il n'arrive pas, il reste au statut
+**« paiement en attente »**, point. Il n'est **jamais** rappelé comme impayé sur une tournée. Aucun bouton
+« Jamais reçu », aucune conversion, `p.virementNonRecu` n'existe pas.
 
-### 3ter.2 Pourquoi la créance, et pas le règlement rectificatif
+### 3ter.1 RÈGLE 1 — Seul le LIQUIDE est rappelé en impayé (débit client)
 
-| | Créance (retenu) | Règlement rectificatif (écarté) |
+Le rappel automatique d'un impayé sur les tournées suivantes du client (`addClientToTour` app.js:7757) ne
+concerne **que le liquide** : **paiement liquide** (sans facture) **et facture liquide**, les deux. Jamais le
+virement, jamais la facture-virement.
+
+C'est **déjà le cas dans le code** : `p.partiel` / `p.impaye` n'existent que pour `method === 'liquide'`
+(app.js:7238-7241), et l'unique autre créateur d'impayé est le **report de RDV** (app.js:14063), qui n'est
+ouvert qu'aux clients non payés / liquide (app.js:13946 refuse virement et facture). → **Rien à coder ; à
+verrouiller par un test de non-régression** garantissant qu'aucun chemin virement ne pose de `c.impayes`.
+
+### 3ter.2 RÈGLE 2 — Les remboursements liquide deviennent un AVOIR déduit à la visite suivante (crédit client)
+
+Symétrique de l'impayé. Deux sources, un seul mécanisme :
+
+| Source | Aujourd'hui | Règle du propriétaire |
 |---|---|---|
-| Ce que la pièce raconte | « la prestation a été faite en juin, l'argent est rentré en août » — **vrai** | « ce n'était pas un virement mais du liquide » — **faux**, le virement était réel au moment de la saisie |
-| Mois d'origine | garde son CA (prestation rendue, facture émise) | inchangé aussi, mais une ligne **négative** de virement apparaît au mois de correction |
-| Mécanique | **existe déjà** (`c.impayes[]` + collecte automatique) | pièce neuve à créer |
+| **Annulation d'un paiement liquide** (sans facture) | `p.rembourse` tracé, remboursement « à votre charge » (app.js:14254) | remboursement fait **sur place**, **déduit du montant total à payer de cette visite** |
+| **Note de crédit sur facture liquide** | `p.rembourse += montant`, « à votre charge » (app.js:14209) | remboursé **lors des prochaines visites** (crédit reporté) |
 
-### 3ter.3 Le geste
+→ Nouveau : un **avoir client** `c.avoirs[]`, miroir de `c.impayes[]`. À la tournée suivante du client,
+`addClientToTour` y ajoute une ligne **NÉGATIVE** « Avoir du … » qui **réduit le total à payer**.
 
-Dans la Compta, sur une ligne de virement dont la case « Reçu » n'est **pas** cochée : bouton
-**« ⚠ Jamais reçu »** → petite modale (montant, pré-rempli au TTC de la facture · motif obligatoire).
+### 3ter.3 Modèle de l'avoir
 
-Effet, en **deux écritures seulement** :
-1. `setClientImpaye(t, cid, montant)` (app.js:14420) → crée la créance sur la fiche client :
-   `{ id: uid(), sourceTourId, date, ttc, collected: false, collectedTourId: null }`.
-2. Un marqueur sur le paiement : `p.virementNonRecu = { at, montant, motif }`.
+```js
+c.avoirs = [ { id: uid(), sourceTourId, date, ttc, motif,       // ttc POSITIF, déduit à la collecte
+               ncId: null,                                        // si issu d'une NC facture liquide
+               collected: false, collectedTourId: null } ]
+```
 
-**`p.method` n'est PAS touché.** Aucun reclassement, la règle 1 est intacte. Poser `virementNonRecu` est une
-écriture **« compléter un champ jamais renseigné »**, donc autorisée par la règle du §1 de `PLAN-finalisation.md`.
+Mêmes garanties de synchro que `c.impayes` : fusion **par id** (motif app.js:3841-3844), tombstone `avoirDel`
+sur le modèle de `impayeDel` (app.js:14424), réinjection sur le modèle app.js:4525. `c.avoirs` **suit une fiche
+client** — il voyage donc avec `saveClients()`, comme `c.impayes`, **pas** dans `SETTINGS_COLLECTIONS`.
 
-### 3ter.4 La collecte est automatique — rien à coder
+### 3ter.4 Effet comptable de la collecte d'un avoir — SANS impact sur le CA de la visite
 
-À la visite suivante, `addClientToTour` (app.js:7757-7761) réintègre **toute** créance non collectée sous forme
-d'une ligne d'article « Impayé du … », et marque `im.collected = true`. Le mécanisme est déjà générique : il ne
-regarde que `c.impayes`, jamais la méthode de paiement d'origine.
+À la collecte, l'avoir est **cash-only** : il réduit ce que le client paie, **il ne réduit PAS le CA de la
+tournée de collecte**. Exactement le miroir d'un impayé `reporte:false` (§ ci-dessous). Raison : le CA a **déjà**
+été corrigé à la source —
+- annulation liquide → la tournée a été recalculée, prestations retirées, CA déjà baissé ;
+- NC facture liquide → la NC a déjà réduit le CA au mois d'émission (app.js:9657).
 
-⚠️ **Point comptable décisif** : la créance doit être créée **sans** le drapeau `reporte`. À la collecte,
-app.js:7760 recopie `reporte: !!im.reporte`, et app.js:9621-9622 exclut de la base analytique les impayés
-`impaye && !reporte`. Motif : le CA a **déjà** été reconnu au mois de la tournée d'origine (le virement figure
-dans `virementClients` dès `tourYm`, app.js:9628) — le recompter à la collecte le doublerait.
-`setClientImpaye` ne pose pas `reporte` → comportement correct par défaut, **à verrouiller par test**.
+Le recompter à la collecte le baisserait **deux fois**. La ligne « Avoir du … » doit donc être **exclue de la
+base analytique** de la tournée de collecte — même filtre que les impayés `!reporte` (app.js:9525, 9621-9622),
+étendu aux avoirs.
 
-Résultat sur l'exemple (300 € promis en juin, encaissés en espèces en août) :
+Exemple — NC facture liquide de 30 € émise en juillet, client revu en août (services 100 €) :
 
-| | Juin | Août |
+| | Juillet | Août |
 |---|---|---|
-| CA / base analytique | **+300 €** (virement, prestation rendue) | **0** (exclu — déjà reconnu) |
-| Caisse | 0 | **+300 €** (l'argent est physiquement rentré) |
-| Case « Reçu » du virement de juin | reste **décochée** | reste décochée |
+| CA | −30 € (NC) | +100 € (services d'août) — **l'avoir n'y touche pas** |
+| Caisse | 0 | **+70 €** (100 encaissés − 30 d'avoir rendu) |
 
 ### 3ter.5 Points de vigilance
 
-1. **Réversible tant que la créance n'est pas collectée.** S'il finit par virer l'argent, retirer le marqueur
-   et la créance est légitime — rien n'a encore été acté. Dès que `im.collected === true`, c'est figé.
-2. **Autorisé même sur un mois déclaré.** Le geste **ne modifie aucun chiffre du mois d'origine** — il constate
-   un fait postérieur. Ne pas le brider sur `comptaLocked`, ce serait un faux positif.
-3. **Ne pas cocher « Reçu » automatiquement.** La case dit que l'argent est arrivé **par virement** ; il n'est
-   jamais arrivé. Elle doit rester décochée pour que la ligne se lise comme une créance.
-4. **À vérifier au codage** : le PDF de déclaration multi-mois (`comptaPrintFull` app.js:10646) additionne les
-   sections sur une plage. Sur une plage couvrant juin **et** août, les 300 € apparaissent en virement (juin) et
-   en caisse (août). Cette propriété **existe déjà** pour les impayés liquides actuels — ce module ne l'introduit
-   pas, mais elle doit être vérifiée et documentée, pas découverte à la déclaration.
+1. **`p.rembourse` reste tracé** (traçabilité + poste « Remboursements » du module A). L'avoir ne le remplace
+   pas : il ajoute le **report** du remboursement à la visite suivante. Les deux coexistent — un est la trace
+   comptable, l'autre le geste concret de déduction.
+2. **Annulation liquide « sur place » vs NC « prochaines visites »** : même objet `c.avoirs`, seule la mention
+   d'origine (`motif`, `ncId`) diffère. Si le client n'a pas de visite prévue, l'avoir attend (il ne se périme
+   pas), comme un impayé.
+3. **Ne jamais compenser un avoir avec un impayé en silence** : si le client a à la fois un impayé (débit) et un
+   avoir (crédit), les deux lignes apparaissent séparément sur la facture de la visite ; le net se lit, mais les
+   deux pièces restent distinctes (règle 6, traçabilité).
+4. **Cas du montant négatif net** : si l'avoir dépasse le total de la visite suivante, le client ne paie rien et
+   le **reliquat d'avoir reste** (`collected` partiel — ou un nouvel avoir du solde). À trancher : reste-t-il un
+   avoir résiduel, ou l'app plafonne-t-elle ? (voir §5)
 
 ---
 
@@ -595,8 +610,9 @@ C'est le contrôle de réconciliation qui **n'existe nulle part aujourd'hui** (c
 L0  Saisie liquide    MODULE D — « Montant liquide reçu » + impayé auto ≥ 1 € + partiel auto-coché.
                       EN PREMIER : ne dépend de rien, et c'est la PRÉVENTION qui rend le verrouillage
                       de p.rectifie (L3/L8) acceptable — plus de saisie muette à rattraper.
-L0b Virement non reçu MODULE E — bouton « ⚠ Jamais reçu » → créance via setClientImpaye ; collecte
-                      automatique déjà en place. p.method jamais touché.
+L0b Avoir client      MODULE E — c.avoirs[] (miroir de c.impayes) : remboursement liquide (annulation +
+                      NC facture liquide) déduit du total à la visite suivante. Exclu du CA de collecte.
+                      + test de non-régression : aucun chemin VIREMENT ne pose de c.impayes.
 L1  Traçabilité       withOrigin + 2 anneaux + les 30 sites (table §6.a à remplacer, cf. §0.3)
 L2  Recalculs gelés   recomputeMoney · calcTour · sanitizeTourStats · rowFromArret (id) · nom client figé
 L3  Argent acté       purge d'arrondi · setComptaPayment (partiel/créance orpheline)
@@ -626,8 +642,7 @@ la correction des défauts connus refuserait en permanence.
    uniquement (bloc de réconciliation `Total facturé − impayés − remboursements = Net encaissé`). Voir §3quater.
    La section Virements garde son comportement actuel.
 3. ~~**Décisions D2 et D3**~~ ✅ **TRANCHÉES.** D3 : tolérance de 24 h **refusée**, une facture cochée ne se
-   décoche jamais. D2 : le virement jamais reçu **n'est PAS un cas du module B** — c'est une **créance**
-   (module E, §3ter). *Correction de ma propre recommandation antérieure : le règlement rectificatif aurait
-   raconté une erreur de saisie là où le virement était réel au moment où il a été noté.*
-
-**Il ne reste aucune question ouverte sur la conception de la Phase 3.**
+   décoche jamais. D2 : le virement jamais reçu reste au statut **« paiement en attente »** — il n'est ni une
+   créance, ni un règlement rectificatif ; il se régularise par virement (règle du propriétaire, §3ter.0).
+4. **Reliquat d'avoir** (§3ter.5-4) : si l'avoir client dépasse le total de la visite suivante, le solde
+   restant demeure-t-il un avoir résiduel, ou l'app plafonne-t-elle la déduction ? **À trancher.**

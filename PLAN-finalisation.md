@@ -165,8 +165,8 @@ Contenu par entrée : horodatage · origine · entité · id · champs modifiés
 ```
 L0  Saisie liquide   MODULE D — champ « Montant liquide reçu », impayé auto dès 1 € d'écart,
                      « paiement partiel » coché automatiquement (fin de la fausse « remise »)
-L0b Virement non reçu MODULE E — bouton « ⚠ Jamais reçu » → créance (setClientImpaye) ;
-                     collecte automatique à la visite suivante, déjà en place. p.method intact.
+L0b Avoir client     MODULE E — c.avoirs[] (miroir c.impayes) : remboursement liquide (annulation +
+                     NC facture liquide) déduit du total à la visite suivante, hors CA de collecte.
 L1  Traçabilité      withOrigin + les 2 anneaux + les 30 sites d'écriture de paiement
                      (⚠ la table SPEC §6.a en annonce 18 et en oublie 8 — cf. SPEC-modules-correction §0.3)
 L2  Recalculs gelés  recomputeMoney · calcTour · sanitizeTourStats
@@ -253,19 +253,22 @@ contre un itinéraire qui a pu changer depuis. → **MODULE C**, `SPEC-modules-c
 ⚠️ Contrainte découverte : un drapeau posé dans `t.result` **ne survivrait pas à une synchro** (trois raisons
 cumulées, §3.2). Le gel doit être un champ de premier niveau `t.frozenClients`, greffé dans `graftClosure`.
 
-### D2 — Un virement annoncé mais jamais reçu, finalement payé en espèces ✅ TRANCHÉ : c'est une CRÉANCE
-La tolérance proposée (autoriser `virement → liquide` tant que la réception n'est pas cochée) est **écartée** :
-elle contredit la règle 1. Mais le **règlement rectificatif est écarté aussi** — il raconterait une erreur de
-saisie là où le virement était **réel au moment où il a été noté**.
+### D2 — Un virement annoncé mais jamais reçu ✅ TRANCHÉ : reste « paiement en attente »
+Toutes les conversions sont **écartées** — ni bascule `virement → liquide`, ni règlement rectificatif, ni
+créance. **Un virement est indépendant : il se régularise par un virement.** S'il n'arrive pas, il reste au
+statut **« paiement en attente »**. Il n'est **jamais** rappelé en impayé sur une tournée (règle du
+propriétaire, 2026-07-23).
 
-**Décision : le virement jamais reçu devient une créance impayée** (module E, `SPEC-modules-correction.md`
-§3ter). Le mois d'origine garde son CA (la prestation a été rendue) ; l'argent encaissé plus tard en espèces
-est la **collecte de cette créance**, mécanisme que l'app possède déjà (`c.impayes[]` + `addClientToTour`
-app.js:7757). `p.method` n'est jamais touché.
+*Correction de mes deux recommandations antérieures (règlement rectificatif, puis créance) : les deux étaient
+fausses.*
 
-⚠️ Manque fonctionnel à combler : aujourd'hui l'impayé n'existe **que pour le liquide** (app.js:7238-7241) ;
-sur un virement il n'y a qu'une case « Reçu » cochée ou non. Rien ne permet de dire « ce virement n'arrivera
-jamais ».
+### D5 — Rappel d'impayé vs avoir client ✅ TRANCHÉ (2026-07-23, nouveau)
+Deux règles symétriques du propriétaire (détail `SPEC-modules-correction.md` §3ter) :
+- **Débit client (impayé rappelé)** : SEUL le liquide (paiement liquide + facture liquide) est rappelé aux
+  tournées suivantes. Jamais le virement. **Déjà le cas dans le code**, à verrouiller par test.
+- **Crédit client (avoir)** : un remboursement liquide — annulation d'un paiement liquide **ou** note de crédit
+  sur facture liquide — devient un **avoir `c.avoirs[]`** déduit du total à payer de la visite suivante (miroir
+  de `c.impayes[]`). Cash-only : **n'affecte pas le CA** de la tournée de collecte. → **MODULE E**, lot L0b.
 
 ### D3 — Décocher « Facture nécessaire » juste après clôture ✅ TRANCHÉ : refusé
 Tolérance de 24 h **explicitement refusée par le propriétaire**. Une facture cochée ne se décoche jamais ;

@@ -199,6 +199,14 @@ Conception complète dans **`SPEC-modules-correction.md`**. Résumé :
 > `t.payments` ; il y en a **30**, et 8 manquent à la table — dont `replayTour` (4568) et `modalPayment` (14338),
 > qui écrasent des paiements en bloc. À remplacer au lot L1.
 
+### D2 + D5 (user, 2026-07-23) — impayé vs avoir
+- **Virement jamais reçu** = reste « paiement en attente », se régularise par virement. **JAMAIS** rappelé en
+  impayé. (J'avais proposé règlement rectificatif puis créance : les deux étaient fausses.)
+- **Débit client (impayé rappelé)** : SEUL le liquide (paiement liquide + facture liquide). Déjà le cas → test.
+- **Crédit client (avoir)** = **MODULE E** : un remboursement liquide (annulation liquide + NC facture liquide)
+  devient un **avoir `c.avoirs[]`** déduit du total de la visite suivante, **hors CA de collecte**. Miroir de
+  `c.impayes[]`. Détail : `SPEC-modules-correction.md` §3ter.
+
 ---
 
 ## 7. AUDITS FINAUX EXIGÉS — APRÈS que tous les lots soient codés
