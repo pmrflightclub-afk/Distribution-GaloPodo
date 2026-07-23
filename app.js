@@ -8402,8 +8402,15 @@ function rowFromArret(a, geo) {
     segKm: geo.segKm, directKm: geo.directKm };
 }
 
+// L9 — FILET FINAL d'OBSERVATION (phase observation, ne bloque pas) : à la persistance, vérifie qu'aucun bloc de client FIGÉ
+// n'a dérivé de son snapshot (applyFrozenClients aurait dû le rétablir). Toute dérive = écriture ayant contourné le gel → journalisée.
+function checkFrozenWrite(t) {
+  if (!t || !t.frozenClients || !t.result || !Array.isArray(t.result.parClient)) return;
+  Object.keys(t.frozenClients).forEach((cid) => { const fz = t.frozenClients[cid]; const m = t.result.parClient.find((x) => x.clientId === cid); if (fz && fz.m && m && Math.abs((m.totalTTC || 0) - (fz.m.totalTTC || 0)) > 0.005) logWrite({ f: 'checkFrozenWrite', entity: 'frozenClient', id: t.id + ':' + cid, frozen: true, violation: 'bloc figé dérivé du snapshot', snap: fz.m.totalTTC, live: m.totalTTC }); });
+}
 // Enregistre currentTour dans le bon store (actif ou archive) sans jamais créer de doublon.
 function persistCurrentTour() {
+  checkFrozenWrite(currentTour); // L9 : filet d'observation à la persistance
   const ai = archive.findIndex((t) => t.id === currentTour.id);
   if (ai >= 0) { archive[ai] = currentTour; saveArchive(); return; }
   const i = tournees.findIndex((t) => t.id === currentTour.id); if (i >= 0) tournees[i] = currentTour; else tournees.push(currentTour);
