@@ -11,9 +11,9 @@ const grabFn = (sig) => { const s0 = at(sig); const e0 = LINES.findIndex((l, k) 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail) => { if (cond) { pass++; console.log('  ✅ ' + name); } else { fail++; console.log('  ❌ ' + name + (detail ? '\n       ' + detail : '')); } };
 
-const api = new Function('S', 'logWrite',
+const api = new Function('S', 'logWrite', 'rate',
   grabFn('function freezeClientBlock(t, cid)') + '\n' + grabFn('function applyFrozenClients(t, R)') +
-  '\n; return { freezeClientBlock, applyFrozenClients };')({ deviceId: 'devX' }, () => {});
+  '\n; return { freezeClientBlock, applyFrozenClients };')({ deviceId: 'devX' }, () => {}, () => 0.2);
 
 console.log('\n── L6 : gel par client (D1) ──');
 
@@ -43,6 +43,20 @@ console.log('\n── L6 : gel par client (D1) ──');
   const c2 = R.parClient.find((m) => m.clientId === 'c2');
   ok('2b. client NON figé garde sa part courante (60)', c2.totalTTC === 60);
   ok('2c. total tournée re-dérivé = Σ des parts (150 + 60 = 210)', R.totalTTC === 210, String(R.totalTTC));
+}
+
+// 2ter. PARTAGE DU RESTE (kmGel) : les non-figés se répartissent le déplacement restant
+{
+  // Tournée A(figé)/B/C : déplacement 30 chacun (TTC), total 90. A figé à 30. On « ajoute » un 4e client D → recalcul répartit 90 sur 4 = 22,5 chacun.
+  const t = { id: 't1', frozenClients: { A: { frozenAt: 1, m: { clientId: 'A', deplacement: [{ partHT: 25, partTTC: 30 }], htDep: 25, htMat: 0, htArt: 0, tvaArt: 0, totalHT: 25, totalTVA: 5, totalTTC: 30 } } } };
+  const mk = (id, dep) => ({ clientId: id, deplacement: [{ partHT: dep / 1.2, partTTC: dep }], htDep: dep / 1.2, htMat: 0, htArt: 0, tvaArt: 0, totalHT: dep / 1.2, totalTVA: dep - dep / 1.2, totalTTC: dep });
+  const R = { parClient: [mk('A', 22.5), mk('B', 22.5), mk('C', 22.5), mk('D', 22.5)], totalTTC: 90 };
+  api.applyFrozenClients(t, R);
+  const A = R.parClient.find((m) => m.clientId === 'A');
+  ok('2ter. A figé garde son déplacement 30 (pas 22,5)', Math.abs(A.totalTTC - 30) < 0.5, String(A.totalTTC));
+  const rest = R.parClient.filter((m) => m.clientId !== 'A').reduce((s, m) => s + (m.deplacement[0].partTTC || 0), 0);
+  ok('2ter-b. B/C/D se partagent le RESTE (90 − 30 = 60)', Math.abs(rest - 60) < 0.5, String(rest));
+  ok('2ter-c. total tournée = géométrie réelle (90)', Math.abs(R.totalTTC - 90) < 0.5, String(R.totalTTC));
 }
 
 // 3. Pas de frozenClients → applyFrozenClients ne touche à rien

@@ -37,7 +37,7 @@ console.log('\n── AUDIT : correctifs post-audit ──');
 
 // 4. applyFrozenClients RÉ-INJECTE un client figé disparu
 {
-  const api = new Function('logWrite', grabFn('function applyFrozenClients(t, R)') + '\n; return applyFrozenClients;')(() => {});
+  const api = new Function('logWrite', 'rate', grabFn('function applyFrozenClients(t, R)') + '\n; return applyFrozenClients;')(() => {}, () => 0.21);
   const t = { id: 't1', frozenClients: { c1: { m: { clientId: 'c1', totalTTC: 150, totalHT: 124, totalTVA: 26 } } } };
   const R = { parClient: [{ clientId: 'c2', totalTTC: 60, totalHT: 50, totalTVA: 10 }] }; // c1 a DISPARU
   api(t, R);

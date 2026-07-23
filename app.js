@@ -8482,12 +8482,27 @@ function freezeClientBlock(t, cid) {
 // coller à la géométrie si l'itinéraire a changé après le gel : c'est le prix assumé de l'immuabilité, D1).
 function applyFrozenClients(t, R) {
   if (!t || !t.frozenClients || !R || !Array.isArray(R.parClient)) return R;
-  let touched = false;
+  const frozenIds = new Set(Object.keys(t.frozenClients).filter((cid) => t.frozenClients[cid] && t.frozenClients[cid].m));
+  if (!frozenIds.size) return R;
+  const depOf = (m) => (m.deplacement || []).reduce((s, l) => s + (l.partTTC || 0), 0);
+  const depTotalTTC = R.parClient.reduce((s, m) => s + depOf(m), 0); // déplacement TTC total (géométrie COURANTE) avant override
+  // 1) override des clients figés par leur snapshot + ré-injection des figés disparus de parClient (protection revenu).
   const present = new Set();
-  R.parClient = R.parClient.map((m) => { present.add(m.clientId); const fz = t.frozenClients[m.clientId]; if (fz && fz.m) { touched = true; return JSON.parse(JSON.stringify(fz.m)); } return m; });
-  // AUDIT-fix : RÉ-INJECTER un client figé qui a DISPARU de parClient (fiche supprimée, arrêt retiré sur une tournée non close) — sinon son CA gelé s'évapore alors que son paiement subsiste (revenu perdu).
-  Object.keys(t.frozenClients).forEach((cid) => { const fz = t.frozenClients[cid]; if (fz && fz.m && !present.has(cid)) { R.parClient.push(JSON.parse(JSON.stringify(fz.m))); touched = true; logWrite({ f: 'applyFrozenClients', entity: 'frozenClient', id: t.id + ':' + cid, frozen: true, note: 'client figé absent de parClient → ré-injecté (protection revenu)' }); } });
-  if (touched) { R.totalHT = R.parClient.reduce((s, m) => s + (m.totalHT || 0), 0); R.totalTVA = R.parClient.reduce((s, m) => s + (m.totalTVA || 0), 0); R.totalTTC = R.parClient.reduce((s, m) => s + (m.totalTTC || 0), 0); }
+  R.parClient = R.parClient.map((m) => { present.add(m.clientId); if (frozenIds.has(m.clientId)) return JSON.parse(JSON.stringify(t.frozenClients[m.clientId].m)); return m; });
+  frozenIds.forEach((cid) => { if (!present.has(cid)) { R.parClient.push(JSON.parse(JSON.stringify(t.frozenClients[cid].m))); logWrite({ f: 'applyFrozenClients', entity: 'frozenClient', id: t.id + ':' + cid, frozen: true, note: 'client figé absent → ré-injecté' }); } });
+  // 2) PARTAGE DU RESTE (kmGel implicite) : les clients NON figés se répartissent le déplacement RESTANT = total courant − Σ déplacement figé.
+  const std = rate();
+  const frozenDep = R.parClient.filter((m) => frozenIds.has(m.clientId)).reduce((s, m) => s + depOf(m), 0);
+  const nonFrozen = R.parClient.filter((m) => !frozenIds.has(m.clientId));
+  const nfDep = nonFrozen.reduce((s, m) => s + depOf(m), 0);
+  const remaining = depTotalTTC - frozenDep;
+  if (nfDep > 0.005) {
+    if (remaining < -0.005) logWrite({ f: 'applyFrozenClients', entity: 'tour', id: t.id, frozen: true, note: 'déplacement figé > déplacement total (itinéraire rétréci) — reste des non-figés clampé à 0', frozenDep, depTotal: depTotalTTC });
+    const factor = Math.max(0, remaining) / nfDep; // clamp à 0 si le figé dépasse le total (§3.5)
+    nonFrozen.forEach((m) => { (m.deplacement || []).forEach((l) => { l.partHT = (l.partHT || 0) * factor; l.partTTC = (l.partTTC || 0) * factor; }); const newHtDep = (m.deplacement || []).reduce((s, l) => s + (l.partHT || 0), 0); m.htDep = newHtDep; m.totalHT = newHtDep + (m.htMat || 0) + (m.htArt || 0); m.totalTVA = (newHtDep + (m.htMat || 0)) * std + (m.tvaArt || 0); m.totalTTC = m.totalHT + m.totalTVA; });
+  }
+  // 3) totaux de tournée re-dérivés = Σ des parts (Σ = géométrie réelle : frozenDep + remaining = depTotal).
+  R.totalHT = R.parClient.reduce((s, m) => s + (m.totalHT || 0), 0); R.totalTVA = R.parClient.reduce((s, m) => s + (m.totalTVA || 0), 0); R.totalTTC = R.parClient.reduce((s, m) => s + (m.totalTTC || 0), 0);
   return R;
 }
 function recomputeMoney() {
