@@ -11,10 +11,17 @@
 'use strict';
 
 // ---------- Version & mise à jour ----------
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.0.1';
 const UPDATE_REPO = 'pmrflightclub-afk/Distribution-GaloPodo'; // dépôt GitHub des releases (vérif MAJ au lancement)
 // Journal des versions (message de passage de version). Concis : quelques puces max par version.
 const CHANGELOG = [
+  {
+    version: '2.0.1', date: '2026-07-23',
+    ajouts: [
+      'FICHE CLIENT — nouveau champ « Note » (sous Prénom / Nom) : une note interne (ex. tarif, repère) visible UNIQUEMENT dans la fiche du client, jamais sur les tickets, factures, tournées ou arrêts.',
+    ],
+    corrections: [],
+  },
   {
     version: '2.0.0', date: '2026-07-23',
     ajouts: [
@@ -6160,6 +6167,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
     <div class="form-sec">
       <div class="form-sec-h">Contact &amp; société</div>
       <div class="row"><label style="flex:0 0 90px">Civilité<select id="cCivilite"><option value="">—</option><option value="Mr"${w.civilite === 'Mr' ? ' selected' : ''}>Mr</option><option value="Mme"${w.civilite === 'Mme' ? ' selected' : ''}>Mme</option></select></label><label class="grow">Prénom<input type="text" id="cPrenom" value="${esc(w.prenom || '')}" /></label><label class="grow">Nom<input type="text" id="cNom" value="${esc(w.nom)}" /></label></div>
+      <label>Note<input type="text" id="cNote" value="${esc(w.note || '')}" placeholder="note interne — non visible sur tickets/tournées" /></label>
       <div class="row"><label class="grow">Email<input type="email" id="cEmail" value="${esc(w.email || '')}" placeholder="contact@exemple.be" /></label><label class="grow">Téléphone<input type="text" id="cTel" value="${esc(w.tel || '')}" /></label></div>
       <label>Société<input type="text" id="cSociete" value="${esc(w.societe)}" placeholder="Raison sociale (facultatif)" /></label>
       <label class="chk2"><input type="checkbox" id="cActif" ${w.actif !== false && !w.blacklist ? 'checked' : ''}/> Client actif</label>
@@ -6318,6 +6326,7 @@ function editClient(existing, onSaved, prefillNom, prefill, draftKey) {
   if (draft && $('cDraftReset')) $('cDraftReset').addEventListener('click', () => { DRAFTS.clear(key); closeModal(); editClient(existing, onSaved, prefillNom, prefill, draftKey); }); // efface le brouillon MAIS repart de l'état pré-rempli (mail) et de la même clé
   $('cPrenom').addEventListener('input', (e) => { w.prenom = e.target.value; saveDraft(); });
   $('cNom').addEventListener('input', (e) => { w.nom = e.target.value; saveDraft(); });
+  if ($('cNote')) $('cNote').addEventListener('input', (e) => { w.note = e.target.value; saveDraft(); });
   if ($('cEmail')) $('cEmail').addEventListener('input', (e) => { w.email = e.target.value; saveDraft(); });
   if ($('cTel')) $('cTel').addEventListener('input', (e) => { w.tel = e.target.value; saveDraft(); });
   $('cSociete').addEventListener('input', (e) => { w.societe = e.target.value; updateLegalState(); saveDraft(); });
