@@ -9763,18 +9763,25 @@ function comptaData(ym) {
   // Notes de crédit du mois (émission) → réduisent le CA (montant négatif).
   const rr = rate();
   const ncMonth = (S.notesCredit || []).filter((n) => (n.date || '').startsWith(ym));
-  // Modèle B : les avoirs DOCUMENTAIRES (facture payée en liquide) ne réduisent PAS le CA — les actes sont déjà retirés de la facture et le liquide remboursé via la caisse. On les liste (pièces) mais on les exclut de l'extourne comptable.
-  const ncTTC = ncMonth.filter((n) => !n.documentaire).reduce((s, n) => s + (n.montantTTC || 0), 0);
+  // L7 : le champ `documentaire` n'était JAMAIS écrit (createClientCreditNote ne le pose pas) → le filtre « modèle B » ne filtrait rien. Retiré. Toute NC du mois réduit le CA UNE fois (la tournée reste figée, la NC porte la réduction). Le remboursement CASH d'une facture liquide est un mouvement de CAISSE distinct → voir « remboursementsCaisse » ci-dessous.
+  const ncTTC = ncMonth.reduce((s, n) => s + (n.montantTTC || 0), 0);
   const notesCreditTotal = { ht: -ncTTC / (1 + rr), tva: -(ncTTC - ncTTC / (1 + rr)), ttc: -ncTTC };
+  // L7 (MODULE A) — POSTE « REMBOURSEMENTS » de la caisse FACTURE-LIQUIDE : une NC dont le client a payé en facture liquide = cash physiquement RENDU. Imputé au mois du remboursement. Réduit la CAISSE facliq (jamais le CA — la NC le réduit déjà). Pas d'impact sur les bases analytiques (l'extourne NC les réduit déjà → sinon double comptage).
+  const facliqNC = (n) => { const tt = allTours().find((x) => x.id === n.tourId); const pp = tt && tt.payments && tt.payments[n.clientId]; return !!(pp && pp.method === 'liquide' && pp.facture); };
+  const remboursementsCaisse = (S.notesCredit || []).filter((n) => facliqNC(n) && ((n.rembourseAt || n.date) || '').slice(0, 7) === ym).map((n) => { const b = ncBreakdown(n); const ttc = n.montantTTC || 0; return { ncId: n.id, numero: n.numero, clientId: n.clientId, nom: n.clientNom, date: n.rembourseAt || n.date, ht: (b.moHT || 0) + (b.matHT || 0) + (b.depHT || 0), tva: b.tva || 0, ttc }; });
+  const rembHT = remboursementsCaisse.reduce((s, r) => s + r.ht, 0), rembTVA = remboursementsCaisse.reduce((s, r) => s + r.tva, 0), rembTTC = remboursementsCaisse.reduce((s, r) => s + r.ttc, 0);
+  const remboursementsTotal = { ht: -rembHT, tva: -rembTVA, ttc: -rembTTC }; // négatif
   // Extourne des BASES analytiques (provisions) ventilée par poste (main d'œuvre / matériel / déplacement crédité) selon la composition réelle des NC — ATTRIBUÉE AU MOIS DE LA TOURNÉE créditée (là où le CA a été accru), pas au mois d'émission de la NC → sinon la base du mois de tournée n'est pas réduite et celle du mois d'émission est clampée à 0 (sur-provisionnement).
   // Lot 03b-1 : l'extourne de base d'une NC suit le MÊME mois effectif que le CA du client crédité (comptaPeriod si liquide-sans-facture rattaché, sinon mois de tournée) — sinon la base migrerait sans sa réduction (perte au source clampée à 0 + sur-évaluation à la cible).
   const ncComptaMonth = (n) => { const tt = allTours().find((x) => x.id === n.tourId); const pp = tt && tt.payments && tt.payments[n.clientId]; return (pp && pp.method === 'liquide' && !pp.facture && pp.comptaPeriod) ? pp.comptaPeriod : (n.tourDate || '').slice(0, 7); };
-  const ncTourMonth = (S.notesCredit || []).filter((n) => !n.documentaire && ncComptaMonth(n) === ym);
+  const ncTourMonth = (S.notesCredit || []).filter((n) => ncComptaMonth(n) === ym);
   let ncMO = 0, ncMat = 0, ncDep = 0, ncTVA = 0;
   ncTourMonth.forEach((n) => { const b = ncBreakdown(n); ncMO += b.moHT; ncMat += b.matHT; ncDep += b.depHT || 0; ncTVA += b.tva; });
+  const facliqBrut = sum(factureLiqClients);
+  const factureLiqTotal = { ht: facliqBrut.ht - rembHT, tva: facliqBrut.tva - rembTVA, ttc: facliqBrut.ttc - rembTTC }; // L7 : caisse facliq NETTE des remboursements cash
   return { liquideClients, virementClients, factureLiqClients, factureVirClients, aclasserClients,
     liquidePosts: Object.values(posts), liquideDetail: postDetail, liquideTotal: sum(liquideClients), virementTotal: sum(virementClients),
-    factureLiqTotal: sum(factureLiqClients), factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
+    factureLiqTotal, factureLiqBrut: facliqBrut, remboursementsCaisse, remboursementsTotal, factureVirTotal: sum(factureVirClients), aclasserTotal: sum(aclasserClients),
     notesCredit: ncMonth, notesCreditTotal, offertTTC: offertM, remiseTTC: remiseM,
     baseMainOeuvreHT: Math.max(0, baseMO - ncMO), baseMaterielHT: Math.max(0, baseMat - ncMat), baseDeplacementHT: Math.max(0, baseDep - ncDep), tvaCollectee: Math.max(0, tvaCol - ncTVA) };
 }
@@ -10694,9 +10701,11 @@ function comptaSectionsHtml(ym) {
   const ncTbl = d.notesCredit.length ? `<div class="table-wrap"><table><thead><tr><th>Client</th><th>Cheval</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(ncContentText(n))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Aucune.</p>';
   const ncSec = `<section class="card"><div class="card-head"><h3 style="margin:0">↩ Notes de crédit (réduction du CA)</h3><button class="btn small" data-print="nc" data-ym="${ym}">🖨 PDF</button></div><p class="hint">${tot(d.notesCreditTotal)}</p>${ncTbl}</section>`;
   const orSec = ((d.offertTTC || 0) >= 0.005 || (d.remiseTTC || 0) >= 0.005) ? `<section class="card"><div class="card-head"><h3 style="margin:0">🎁 Offert / Remises du mois</h3></div><p class="hint">Offert : <b>${eur(d.offertTTC)}</b> TTC · Remises accordées : <b>${eur(d.remiseTTC)}</b> TTC. Valeur commerciale consentie — <b>info hors chiffre d'affaires</b> (déjà déduite des montants facturés).</p></section>` : '';
+  // L7 : bloc de réconciliation de la caisse facture-liquide (Encaissé brut · − Remboursements · = Net).
+  const facliqRecon = (d.remboursementsCaisse && d.remboursementsCaisse.length) ? `<p class="hint" style="margin-top:6px">Encaissé brut : <b>${eur(d.factureLiqBrut.ttc)}</b> · ↩ Remboursements (${d.remboursementsCaisse.length} pièce${d.remboursementsCaisse.length > 1 ? 's' : ''}) : <b>${eur(d.remboursementsTotal.ttc)}</b> · = <b>Net encaissé ${eur(d.factureLiqTotal.ttc)}</b><br><span class="li-sub">${d.remboursementsCaisse.map((r) => 'NC ' + (r.numero || '') + ' · ' + esc(r.nom) + ' · −' + eur(r.ttc)).join(' — ')}</span></p>` : '';
   return liquideSec
     + section('🏦 Virements', 'virement', d.virementTotal, clientTbl(d.virementClients), d.virementClients)
-    + section('🧾 Facture pro — liquide', 'facliq', d.factureLiqTotal, clientTbl(d.factureLiqClients), d.factureLiqClients)
+    + section('🧾 Facture pro — liquide', 'facliq', d.factureLiqTotal, clientTbl(d.factureLiqClients) + facliqRecon, d.factureLiqClients)
     + section('🧾 Facture pro — virement', 'facvir', d.factureVirTotal, clientTbl(d.factureVirClients), d.factureVirClients)
     + ncSec + orSec;
 }
@@ -10748,7 +10757,7 @@ function comptaPrint(ym, k) {
     : `<h1>${titre}</h1><h2>${sousTitre}</h2><p>${vide}</p>`;
   if (k === 'liquide') printHtml('Caisse liquide — ' + ml, `<h1>Caisse / paiements liquide</h1><h2>${ml} — postes globalisés (sans nom de client)</h2>` + (d.liquidePosts.length ? postTbl(d.liquidePosts).replace('</tbody>', '</tbody>' + foot(d.liquideTotal)) : '<p>Aucun paiement liquide ce mois.</p>'));
   else if (k === 'virement') printHtml('Virements — ' + ml, detailPdf(d.virementClients, d.virementTotal, 'Virements bancaires — détail', ml + ' — par client et par cheval', 'Aucun virement ce mois.'));
-  else if (k === 'facliq') printHtml('Factures pro liquide — ' + ml, detailPdf(d.factureLiqClients, d.factureLiqTotal, 'Factures pro payées en liquide', ml + ' — par client et par cheval', 'Aucune facture liquide ce mois.'));
+  else if (k === 'facliq') { const recon = (d.remboursementsCaisse && d.remboursementsCaisse.length) ? `<h2 style="margin-top:10px">Réconciliation caisse</h2><table><tbody><tr><td>Total facturé (encaissé brut)</td><td>${eur(d.factureLiqBrut.ttc)}</td></tr><tr><td>− Remboursements (${d.remboursementsCaisse.length})</td><td>${eur(d.remboursementsTotal.ttc)}</td></tr><tr><td><b>= Net encaissé</b></td><td><b>${eur(d.factureLiqTotal.ttc)}</b></td></tr></tbody></table><p style="font-size:.85em;color:#555">${d.remboursementsCaisse.map((r) => 'NC ' + (r.numero || '') + ' · ' + esc(r.nom) + ' du ' + esc(fmtDateFr(r.date)) + ' : −' + eur(r.ttc)).join('<br>')}</p>` : ''; printHtml('Factures pro liquide — ' + ml, detailPdf(d.factureLiqClients, d.factureLiqBrut, 'Factures pro payées en liquide', ml + ' — par client et par cheval', 'Aucune facture liquide ce mois.') + recon); } // L7 : le corps liste les factures (brut), la réconciliation explique le passage au NET
   else if (k === 'facvir') printHtml('Factures pro virement — ' + ml, detailPdf(d.factureVirClients, d.factureVirTotal, 'Factures pro payées par virement', ml + ' — par client et par cheval', 'Aucune facture virement ce mois.'));
   else if (k === 'nc') printHtml('Notes de crédit — ' + ml, `<h1>Notes de crédit (avoirs)</h1><h2>${ml} — réduction du chiffre d'affaires</h2>` + (d.notesCredit.length ? `<table><thead><tr><th>Client</th><th>Cheval</th><th>Émise le</th><th>TTC</th></tr></thead><tbody>${d.notesCredit.map((n) => `<tr><td>${esc(n.clientNom)}</td><td>${esc(ncContentText(n))}</td><td>${esc(fmtDateFr(n.date))}</td><td>−${eur(n.montantTTC)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Total</td><td></td><td></td><td>${eur(d.notesCreditTotal.ttc)}</td></tr></tfoot></table>` : '<p>Aucune note de crédit ce mois.</p>'));
 }
