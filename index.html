@@ -344,7 +344,7 @@
       <button class="subnav-current" type="button" aria-expanded="false"><span class="subnav-label">Clients</span><span class="nav-caret">▾</span></button>
       <div class="subtabs-list">
         <button class="subtab" data-gsub="adresses">Configuration activité</button>
-        <button class="subtab" data-gsub="adrchev">Adresses chevaux</button>
+        <button class="subtab" data-gsub="adrchev">Carnet d'adresses</button>
         <button class="subtab active" data-gsub="clients">Clients</button>
         <button class="subtab" data-gsub="articles">Articles</button>
         <button class="subtab" data-gsub="materiel">Frais matériel</button>
@@ -394,6 +394,7 @@
     </div>
 
     <div id="gsub-adrchev" class="subpanel">
+      <div class="seg" id="adrChevVueSeg"><button type="button" class="seg-btn on" data-av="client">👤 Par client</button><button type="button" class="seg-btn" data-av="ecurie">🏠 Par écurie</button></div>
       <div class="seg" id="adrChevFilterSeg"><button type="button" class="seg-btn on" data-af="actives">Actives</button><button type="button" class="seg-btn" data-af="inactifs">Inactives</button><button type="button" class="seg-btn" data-af="noir">Liste noire</button></div>
       <section class="card">
         <p class="hint">Adresses des chevaux répertoriées (domicile du client, société, adresses spécifiques). Passez une adresse en <b>liste noire</b> pour être averti lorsqu'elle réapparaît (nouveau client, arrêt de tournée).</p>

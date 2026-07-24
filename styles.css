@@ -862,3 +862,7 @@ th.pl-mem.pl-after { background: rgba(59,130,196,.12); }
 /* Accès direct actes/articles depuis le Trajet du jour : bref surlignage du bloc client dans l'éditeur. */
 .reveal-hi { animation: revealHi 1.6s ease-out; border-radius: 8px; }
 @keyframes revealHi { 0%, 100% { background: transparent; } 18% { background: rgba(232,114,42,.30); } }
+
+/* Lot 02b — identité de la facture : numéro en tête + référence par ligne (dérivée, jamais écrite dans le figé). */
+.inv-num { font-size: .82rem; opacity: .85; margin: 2px 0 6px; }
+.inv-lref { font-size: .72rem; opacity: .55; white-space: nowrap; }
