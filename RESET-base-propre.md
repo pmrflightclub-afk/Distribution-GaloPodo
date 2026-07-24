@@ -4,6 +4,52 @@
 > effaçant toutes les données comptables et de tournées, pour ré-encoder les tournées à la main.
 > **Établi après l'audit du 2026-07-23.** Trois pièges CRITIQUES ont été identifiés — les ignorer détruit la base propre.
 
+---
+
+# ★ PROCÉDURE ACTUELLE (2026-07-24) — déploiement v2.0.1 + base consolidée
+
+> **C'est CELLE-CI à suivre.** La méthode `clean-snapshot.js` plus bas est conservée pour référence, mais on ne
+> l'utilise plus : la base est déjà consolidée ET corrigée dans **`_SAUVEGARDES-PROTEGEES/SainSabot BDconsolidee.json`**
+> (32 clients · 45 chevaux · 23 tournées dont 13 closes — **les tournées sont GARDÉES avec leurs données**, aucun
+> ré-encodage à la main). Toutes les corrections (noms, écuries, géocodage, temps, impayés, dates, champ Note) y sont.
+
+## PHASE 1 — Déploiement du code (v2.0.1)
+
+1. **✅ FAIT** : merge `migration-identite-v2` → `main` + `git push origin main` (commit `025b048`). Le **site** est en v2.0.1.
+   Les **apps installées ne bougent pas encore** (seule la Release les met à jour — voulu, pour tester d'abord).
+2. **RECETTE sur PC** — pas besoin de Release : ouvrir `https://pmrflightclub-afk.github.io/Distribution-GaloPodo/`
+   dans un **onglet navigateur** (pas la PWA installée) → **Ctrl+Shift+R**. Vérifier `APP_VERSION` = `2.0.1` (console F12).
+   Tester : **champ « Note » fiche client**, Compta → Documents / Remboursements / ⇄ Corriger l'imputation, gel par client.
+3. **PUBLIER LA RELEASE `v2.0.1`** (déclenche la MàJ des téléphones) : GitHub → `Distribution-GaloPodo` → Releases →
+   Draft a new release → tag `v2.0.1` → Publish. (ou `gh release create v2.0.1`.) Le téléphone se met à jour au lancement suivant.
+
+## PHASE 2 — Remise à zéro des données (APRÈS que PC + téléphone soient en v2.0.1)
+
+> 🔑 **Règle d'or** : un appareil ne doit JAMAIS synchroniser tant qu'il a l'ancienne base. On le rend propre, puis on ne le reconnecte qu'après.
+
+**4. PC — créer le coffre propre** (enchaîner sans traîner) :
+   - a. Ouvrir l'app PC (elle synchronise avec l'ancien coffre — sans danger).
+   - b. **Vider le coffre Drive** : drive.google.com → ⚙️ Paramètres → **Gérer les applications** → GaloPodo → **Supprimer les données d'application masquées**.
+   - c. 💾 Sauvegarde → coller **`SainSabot BDconsolidee.json`** → **« ⚠ Remplace tout »**.
+   - d. **Resynchroniser** → le coffre neuf reçoit la base propre. ✅
+
+**5. Téléphone — le rendre propre sans contaminer** :
+   - a. **📴 Mode avion** → ouvrir l'app.
+   - b. 💾 **Export de sécurité** (marche hors ligne).
+   - c. **« ⚠ Remplace tout »** avec `SainSabot BDconsolidee.json`.
+   - d. **Rallumer le réseau** → il synchronise avec le coffre neuf (propre). ✅
+
+**6. Vérifier sur les deux** : **32 clients · 45 chevaux · 23 tournées (13 closes)** · Sedan au **01/08** · tournées du 24/07 closes.
+
+## ⚠️ Les 3 pièges de cette procédure
+1. **Mode avion sur le téléphone** (étape 5) — non négociable : sinon il repart avec l'ancienne base et recontamine le coffre neuf.
+2. **Ne pas ouvrir le téléphone EN LIGNE** entre la Release (3) et son reset (5) — le laisser fermé, ou passer direct en mode avion.
+3. Étape 4 : enchaîner **vider le coffre → Remplace tout → resync** promptement (pour que le PC ne re-pousse pas l'ancienne base entre-temps).
+
+---
+
+# (Référence — ancienne méthode clean-snapshot, NON utilisée pour ce reset)
+
 ## ⚠️ Les 3 pièges à ne PAS oublier
 
 ### 1. Le coffre Drive ressuscite les anciennes données (CRITIQUE)
