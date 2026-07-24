@@ -33,11 +33,15 @@
    - c. 💾 Sauvegarde → coller **`SainSabot BDconsolidee.json`** → **« ⚠ Remplace tout »**.
    - d. **Resynchroniser** → le coffre neuf reçoit la base propre. ✅
 
-**5. Téléphone — le rendre propre sans contaminer** :
+**5. Téléphone — le rendre propre (récupère la base depuis le coffre, PAS de collage 4 Mo sur mobile)** :
    - a. **📴 Mode avion** → ouvrir l'app.
-   - b. 💾 **Export de sécurité** (marche hors ligne).
-   - c. **« ⚠ Remplace tout »** avec `SainSabot BDconsolidee.json`.
-   - d. **Rallumer le réseau** → il synchronise avec le coffre neuf (propre). ✅
+   - b. 💾 **Export de sécurité** (optionnel, marche hors ligne).
+   - c. **🏭 Retour usine** → le téléphone est vidé (il redémarre, **toujours hors ligne**, ne synchronise pas).
+   - d. **Rallumer le réseau** → il synchronise → **télécharge la base propre** depuis le coffre neuf (créé par le PC à l'étape 4). ✅
+
+   > Pourquoi retour usine et pas « Remplace tout » ici : sur mobile, l'import se fait en **collant** le JSON (~4 Mo)
+   > dans un champ texte — impraticable. Le retour usine + resync laisse le PC faire l'import lourd, le tel ne fait que tirer.
+   > (Les deux méthodes laissent les tombstones locaux ; sans effet grâce au coffre neuf.) *Alternative desktop : « Remplace tout » avec le fichier.*
 
 **6. Vérifier sur les deux** : **32 clients · 45 chevaux · 23 tournées (13 closes)** · Sedan au **01/08** · tournées du 24/07 closes.
 
