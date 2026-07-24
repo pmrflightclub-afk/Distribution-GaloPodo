@@ -37,7 +37,12 @@
    - a. **📴 Mode avion** → ouvrir l'app.
    - b. 💾 **Export de sécurité** (optionnel, marche hors ligne).
    - c. **🏭 Retour usine** → le téléphone est vidé (il redémarre, **toujours hors ligne**, ne synchronise pas).
-   - d. **Rallumer le réseau** → il synchronise → **télécharge la base propre** depuis le coffre neuf (créé par le PC à l'étape 4). ✅
+   - d. **Rallumer le réseau**.
+   - e. **Réglages → Synchro → re-saisir l'ID client Google** (le retour usine l'a effacé, et il est indispensable pour lire le coffre —
+     œuf/poule : impossible de le récupérer DEPUIS le coffre). Puis **mode Drive** + **reconnecter le compte Google** (re-consentement).
+   - f. **Synchroniser** → **télécharge la base propre** depuis le coffre neuf (créé par le PC à l'étape 4). ✅
+
+   > ⚠️ L'**ID client Google** (OAuth, `…apps.googleusercontent.com`) est dans les réglages → **effacé par le retour usine**. Note-le AVANT (il est dans n'importe quelle sauvegarde, champ `settings.googleClientId`). Le PC le garde (« Remplace tout » restaure les réglages).
 
    > Pourquoi retour usine et pas « Remplace tout » ici : sur mobile, l'import se fait en **collant** le JSON (~4 Mo)
    > dans un champ texte — impraticable. Le retour usine + resync laisse le PC faire l'import lourd, le tel ne fait que tirer.
